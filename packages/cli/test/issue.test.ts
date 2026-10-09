@@ -205,7 +205,7 @@ describe("mstar issue CLI bundle", () => {
     expect(operationConflict.exitCode).toBe(1);
     expect(jsonOf(operationConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
     expect(String(jsonOf(operationConflict).message)).toContain(
-      "Recovery: Run mstar issue show to inspect the issue, then either replay the original request unchanged or retry with a fresh operation id.",
+      "Recovery: Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh `--operation-id`.",
     );
 
     const closeIdConflict = runBundle("node", [
@@ -217,7 +217,7 @@ describe("mstar issue CLI bundle", () => {
     expect(closeIdConflict.exitCode).toBe(1);
     expect(jsonOf(closeIdConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
     expect(String(jsonOf(closeIdConflict).message)).toContain(
-      "Recovery: Run mstar issue show to inspect the issue, then either replay the original request unchanged or retry with a fresh operation id.",
+      "Recovery: Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh `--operation-id`.",
     );
 
     const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
@@ -248,7 +248,7 @@ describe("mstar issue CLI bundle", () => {
     expect(jsonOf(openRefusal)).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
     expect(String(jsonOf(openRefusal).message)).toContain("Only terminal→open is accepted; open cannot transition to open");
     expect(String(jsonOf(openRefusal).message)).toContain("Help: mstar issue reopen --help");
-    expect(String(jsonOf(openRefusal).message)).toContain("Recovery: Run mstar issue show");
+    expect(String(jsonOf(openRefusal).message)).toContain("Recovery: Run `mstar issue show --id I-000001`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.");
 
     const stale = runBundle("node", [
       "issue", "reopen", "--id", created.issueId, "--payload", JSON.stringify({ reason: "stale attempt" }),
@@ -258,7 +258,7 @@ describe("mstar issue CLI bundle", () => {
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
     expect(String(jsonOf(stale).message)).toContain(
-      "Recovery: Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.",
+      "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
     );
     const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
@@ -303,13 +303,22 @@ describe("mstar issue CLI bundle", () => {
     expect(jsonOf(result).data).toMatchObject({ revision: Number(expectedRevision) + 1 });
     const stale = runBundle("bun-shebang", [
       "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
-      "--operation-id", "link-stale", "--actor", "project-manager", "--harness", harness,
+      "--operation-id", "link-stale-revision", "--actor", "project-manager", "--harness", harness,
     ], root);
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
     expect(String(jsonOf(stale).message)).toContain(
-      "Recovery: Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.",
+      "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
     );
+    const replay = runBundle("bun-shebang", [
+      "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
+      "--operation-id", "link-related", "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(replay.exitCode).toBe(0);
+    expect(jsonOf(replay).data).toEqual(jsonOf(result).data);
+    const afterStale = runBundle("bun-shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
+    expect(afterStale.exitCode).toBe(0);
+    expect(jsonOf(afterStale).data).toMatchObject({ revision: Number(expectedRevision) + 1 });
   });
 
   test("capture reports every missing payload field in one refusal", async () => {
@@ -545,8 +554,17 @@ describe("mstar issue CLI bundle", () => {
     expect(listed.exitCode).toBe(2);
     expect(jsonOf(listed).code).toBe("command.invalid-input");
     const add = runBundle("node", ["issue", "add", "--harness", harness, "--actor", "project-manager", "--operation-id", "x"], root);
-    expect(add.exitCode).toBe(1);
-    expect(jsonOf(add).status).toBe("refused");
+    expect(add.exitCode).toBe(2);
+    expect(jsonOf(add)).toMatchObject({
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      details: {
+        helpRoute: expect.any(String),
+        recovery: expect.any(String),
+        diagnostics: expect.arrayContaining([expect.objectContaining({ path: expect.any(String), code: expect.any(String) })]),
+      },
+    });
   });
 
   test("below-floor Node refuses with actionable upgrade guidance", async () => {

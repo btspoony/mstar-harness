@@ -24,6 +24,8 @@ import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
+import { engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
@@ -38,37 +40,31 @@ const inputSchema = z.object({
   plans: z.string().optional(), workflow: z.string().optional(), deliveryKind: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), harness: z.string().optional(),
   path: z.string().optional(),
 });
-const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean }[]; effects: readonly CommandEffect[]; description: string }> = {
-  scaffold: { args: [{ key: "findings", required: false, variadic: false }], options: [
-    { key: "dir", flags: "--dir <out-dir>", required: false }, { key: "sha", flags: "--sha <commit>", required: false },
-    { key: "date", flags: "--date <YYYY-MM-DD>", required: false }, { key: "repo", flags: "--repo <name>", required: false },
-  ], effects: ["read", "write"], description: "Scaffold audit plan artifacts in the declared output directory." },
-  promote: { args: [{ key: "path", required: false, variadic: false }], options: [
-    { key: "plans", flags: "--plans <ids>", required: false }, { key: "workflow", flags: "--workflow <id>", required: false },
-    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: false }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
+const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandEffect[]; description: string }> = {
+  scaffold: { args: [{ key: "findings", required: true, variadic: false }], options: [
+    { key: "dir", flags: "--dir <out-dir>", required: false, help: "Defaults to audit-<date> under the current directory." }, { key: "sha", flags: "--sha <commit>", required: false, help: "Defaults to the current Git HEAD short SHA; uses unknown if Git cannot resolve it." },
+    { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to today's UTC date." }, { key: "repo", flags: "--repo <name>", required: false },
+  ], effects: ["read", "write"], description: "Scaffold audit plan artifacts from a JSON findings array or {findings:[...]}; each finding requires non-empty title and description plus valid priority, effort, risk and category. Confidence defaults to MED and evidence defaults to []." },
+  promote: { args: [{ key: "path", required: true, variadic: false }], options: [
+    { key: "plans", flags: "--plans <ids>", required: false, help: "May be inferred only when the audit directory contains one plan; when it contains multiple plans, select explicitly." }, { key: "workflow", flags: "--workflow <id>", required: false },
+    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: true, help: `One of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}.` }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
     { key: "branchTarget", flags: "--branch-target <branch>", required: false }, { key: "completionPolicy", flags: "--completion-policy <text>", required: false },
     { key: "harness", flags: "--harness <dir>", required: false },
-  ], effects: ["read", "write"], description: "Promote selected audit plans into a declared v2 workflow lifecycle." },
-  "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values." },
-  "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root." },
+  ], effects: ["read", "write"], description: "Promote selected audit plans; development requires branchSource and branchTarget, while verification/report-only requires completionPolicy." },
+  "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values; path defaults to the current directory." },
+  "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root; path defaults to the current directory." },
 };
 function idFor(verb: Verb): string { return `audit.${verb}`; }
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SddScriptError && error.exitCode === 2) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
-  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  const details = error !== null && typeof error === "object" && "details" in error
-    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
-    ? error.details as Record<string, unknown>
-    : undefined;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "audit.scaffold"
-        ? "Choose a writable audit output directory and valid source paths. Run mstar audit scaffold."
-        : id === "audit.promote"
-          ? "Correct the selected plan and findings inputs so promotion validation succeeds. Run mstar audit promote."
-          : id === "audit.secret-scan"
-            ? "Resolve the reported Git checkout, file-access, or scanner failure. Run mstar audit secret-scan."
-            : "Correct the reported source or dependency metadata issue. Run mstar audit supply-chain."});
+  const { code, details, recovery } = engineErrorFacts(error);
+  return refusalEnvelope({
+    command: id, status: "refused", code: code ?? `${id}.refused`, exitCode: 1, message,
+    details: details ?? {},
+    recovery: recovery ?? "Correct the reported audit input or source problem, then rerun the command.",
+  });
 }
 function required(value: string | undefined, label: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${label} is required`, 2);
@@ -193,9 +189,33 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const auditDir = resolvePath(context.cwd, required(input.path, "audit-dir"));
       if (!existsSync(auditDir)) throw new Error(`audit dir not found: ${auditDir}`);
       const selected = input.plans === undefined ? listAuditPlanIds(auditDir) : parseCsv(input.plans);
-      if (selected.length === 0) throw new SddScriptError(input.plans === undefined ? `no audit plans found in ${auditDir}` : "--plans must select at least one plan", 2);
+      if (selected.length === 0) {
+        return refusalEnvelope({
+          command: id,
+          status: "usage",
+          code: "command.invalid-input",
+          exitCode: 2,
+          message: "Invalid input.",
+          diagnostics: [{
+            path: "--plans",
+            code: "required",
+            message: input.plans === undefined ? "select an audit plan with --plans" : "--plans must select at least one plan",
+          }],
+        });
+      }
       if (input.plans === undefined && selected.length > 1) {
-        throw new SddScriptError(`--plans is a required decision because ${selected.length} audit plans are available: ${selected.join(", ")}`, 2);
+        return refusalEnvelope({
+          command: id,
+          status: "usage",
+          code: "command.invalid-input",
+          exitCode: 2,
+          message: "Invalid input.",
+          diagnostics: [{
+            path: "--plans",
+            code: "required",
+            message: `--plans is required because ${selected.length} audit plans are available`,
+          }],
+        });
       }
       const deliveryKind = required(input.deliveryKind, "--delivery-kind");
       if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) throw new SddScriptError(`--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`, 2);
@@ -240,11 +260,40 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
   const id = idFor(verb);
   const fields = [...contract.args.map(({ key }) => key), ...contract.options.map(({ key }) => key)];
   const input = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never);
+  const routes = ["cli", "mcp"] as const;
+  const requirements = routes.flatMap((route) => {
+    if (verb === "scaffold") return [
+      { name: "findings", ownership: "caller" as const, route, required: true, constraint: "JSON array or object with findings array; each finding needs title, description, priority, effort, risk and category; confidence defaults to MED and evidence to []" },
+      { name: "date", ownership: "derivable" as const, route, required: false, constraint: "defaults to today's UTC date" },
+      { name: "dir", ownership: "derivable" as const, route, required: false, constraint: "defaults to audit-<date> under cwd" },
+      { name: "sha", ownership: "derivable" as const, route, required: false, constraint: "defaults to current Git HEAD short SHA or unknown if unavailable" },
+    ];
+    if (verb === "promote") return [
+      { name: "path", ownership: "caller" as const, route, required: true, constraint: "audit output directory" },
+      { name: "deliveryKind", ownership: "caller" as const, route, required: true, constraint: `one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
+      { name: "plans", ownership: "caller" as const, route, required: false, constraint: "inferred only for exactly one plan; explicit selection required when multiple plans exist" },
+      { name: "branchSource", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "source branch for development delivery" },
+      { name: "branchTarget", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "target branch for development delivery" },
+      { name: "completionPolicy", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "verification/report-only" }, constraint: "registered alternative-completion policy for report-only delivery" },
+      { name: "workflow", ownership: "derivable" as const, route, required: false, constraint: "if omitted, defaults to the basename of audit output directory" },
+    ];
+    return [{ name: "path", ownership: "derivable" as const, route, required: false, constraint: "defaults to current working directory" }];
+  });
   return {
     id,
     cli: { path: ["audit", verb], aliases: [], arguments: contract.args, options: contract.options },
     input, output: commandEnvelopeSchema, effects: contract.effects, description: contract.description,
-    async execute(raw, context) { const parsed = input.safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message }); },
+    requirements,
+    async execute(raw, context) {
+      const parsed = input.safeParse(raw);
+      return parsed.success
+        ? execute(verb, parsed.data, context)
+        : refusalEnvelope({
+            command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
+            message: "Invalid input.",
+            diagnostics: decodeInputDiagnostics(parsed.error, raw),
+          });
+    },
   };
 }
 

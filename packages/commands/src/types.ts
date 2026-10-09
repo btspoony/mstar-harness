@@ -25,6 +25,7 @@ export type CommandTokenKind = "root" | "workflow" | "plan" | "revision" | "none
 
 export type CommandRequirementRoute = "cli" | "mcp";
 
+export type CommandRequirementAlternative = Readonly<{ name: string; whenTrue?: boolean }>;
 /**
  * One verified route-specific ownership fact for an input field, recorded by a
  * consumer that has checked how `route` obtains the value: `caller` fields are
@@ -33,6 +34,9 @@ export type CommandRequirementRoute = "cli" | "mcp";
  * schema's own `required` array remains the enforcement fact, `unknown` makes
  * no requiredness or omission claim, and an absent entry means unknown.
  */
+export type CommandRequirementCardinality = "exactly-one" | "at-least-one" | "at-most-one";
+export type CommandRequirementPrimitive = string | boolean | number;
+
 export type CommandRequirement = Readonly<{
   name: string;
   ownership: CommandRequirementOwnership;
@@ -40,8 +44,14 @@ export type CommandRequirement = Readonly<{
   help?: string;
   tokenKind?: CommandTokenKind;
   constraint?: string;
+  required?: boolean;
+  condition?: Readonly<{ field: string; present?: boolean; equals?: string | boolean | number }>;
+  allowedValues?: readonly CommandRequirementPrimitive[];
+  alternatives?: Readonly<{
+    cardinality: CommandRequirementCardinality;
+    members: readonly CommandRequirementAlternative[];
+  }>;
 }>;
-
 export type CommandEffect = "read" | "validate" | "write" | "stdin" | "process" | "service" | "browser";
 
 export type SurfaceVersions = Readonly<{

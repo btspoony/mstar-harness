@@ -76,16 +76,26 @@ describe("judgment command family", () => {
     });
   });
 
-  test("preserves invalid provider result boundary through the shared usage envelope", async () => {
+  test("preserves invalid provider code, message, details, and recovery", async () => {
     const invalid = {
       ...result,
       status: "invalid" as const,
       code: "jev.pack-invalid",
+      message: "Pack differs from the declared contract",
+      details: { field: "pack.digest", observed: "mismatch" },
+      recovery: "Regenerate the pack and retry review-advice.",
     };
     const envelope = await definition(async () => invalid)
       .execute({ file: "pack.json", pilot: "pilot.json" }, context());
 
-    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope).toMatchObject({
+      status: "error",
+      code: "jev.pack-invalid",
+      exitCode: 1,
+      message: invalid.message,
+      details: invalid.details,
+      recovery: invalid.recovery,
+    });
   });
 
   test("documents the active review-advice route instead of historical submit", () => {

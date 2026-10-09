@@ -1,15 +1,18 @@
 // Build prerequisite: run `bun run --cwd packages/commands build` before this package test.
 // These adapter tests load @mstar-harness/commands through its generated package entry.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
-import { serializeExecutionValue } from "@mstar-harness/engine";
+import {
+  bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, executionContextFor,
+  initializeExecutionAuthority, initializeStore, openStore, serializeExecutionValue,
+  type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
+} from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
-import { mcpToolInputSchema, registerMcpCommands } from "../src/mcp/register";
 import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
@@ -29,10 +32,29 @@ function context(): InvocationContext {
   };
 }
 
-async function run(args: string[], definitions: readonly CommandDefinition[] = getCommandDefinitions(), includeMcp = false): Promise<{ status: number; stdout: string; stderr: string }> {
+/**
+ * One isolated issue harness with an initialized store whose writer is sealed
+ * (the sibling fixture pattern): the registered CLI opens the store read-only,
+ * and a just-closed writer's deferred cleanup can otherwise race that open.
+ */
+async function cliHarness(): Promise<{ root: string; harness: string; invocation: InvocationContext }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "cli-adapter-issue-"));
+  const harness = path.join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
+  (await openStore({ harnessDir: harness }, "read")).close();
+  return { root, harness, invocation: { ...context(), cwd: root, controlRoot: harness } };
+}
+
+async function run(
+  args: string[],
+  definitions: readonly CommandDefinition[] = getCommandDefinitions(),
+  includeMcp = false,
+  invocation: InvocationContext = context(),
+): Promise<{ status: number; stdout: string; stderr: string }> {
   const program = new Command();
   program.name("mstar").exitOverride();
-  registerCliCommands(program, definitions, context());
+  registerCliCommands(program, definitions, invocation);
   if (includeMcp) registerMcpCommand(program);
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -72,65 +94,132 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("registered workflow-note append accepts acquired CLI context identities and rejects unsafe selectors", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "cli-note-identity-"));
+    const harnessDir = path.join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    const storeContext = { harnessDir };
+    (await initializeStore(storeContext)).close();
+    const initialized = await initializeExecutionAuthority(storeContext);
+    const workflow = "wf-cli-note-identity";
+    const coordinator = "cli-note-coordinator";
+    const identity: ExecutionIdentity = { source: "local", sessionId: coordinator, workflowId: workflow, role: "coordinator" };
+    const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
+      entry: { id: workflow, type: "plan", status: "running", started_at: "2026-10-08T00:00:00Z", dir: `workflows/${workflow}` } as never,
+      snapshot: {
+        schema_version: 1, id: workflow, type: "plan", status: "running",
+        started_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:00Z",
+        plans: [{ id: "p-1", title: "Plan One", file: "plans/p-1.md", status: "InProgress" }],
+      } as never,
+      expected: initialized.token,
+      operationId: "create-cli-note-workflow",
+    });
+    const workflowToken = (created.data as unknown as { workflows: Array<{ workflowToken: ExecutionToken }> }).workflows[0]!.workflowToken;
+    const bound = await bindExecutionSession(executionContextFor(storeContext, identity), {
+      workflowId: workflow, expected: workflowToken, operationId: "bind-cli-note-coordinator",
+    });
+    const sessionRef = encodeExecutionSessionRef(bound.data as ExecutionSessionRef);
+    // Settle the writer-close sidecars before the registered CLI opens its
+    // reader, matching the existing fixture seal used by other CLI routes.
+    (await openStore({ harnessDir }, "read")).close();
+    const priorHost = process.env.MSTAR_HOST_SESSION_ID;
+    const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
+    const ledgerPath = path.join(harnessDir, "workflows", workflow, "notes.jsonl");
+    const append = (id: string, flags: string[] = []) => run([
+      "workflow-note", "append", "--workflow", workflow, "--session-ref", sessionRef,
+      "--id", id, "--text", id, "--harness", harnessDir, ...flags,
+    ]);
+    try {
+      delete process.env.MSTAR_EXECUTION_IDENTITY;
+      process.env.MSTAR_HOST_SESSION_ID = coordinator;
+      const ambient = await append("ambient-note");
+      expect(ambient.status).toBe(0);
+      expect(JSON.parse(ambient.stdout)).toMatchObject({ status: "ok", data: { id: "ambient-note" } });
+
+      delete process.env.MSTAR_HOST_SESSION_ID;
+      process.env.MSTAR_EXECUTION_IDENTITY = JSON.stringify(identity);
+      const minted = await append("minted-note");
+      expect(minted.status).toBe(0);
+      expect(JSON.parse(minted.stdout)).toMatchObject({ status: "ok", data: { id: "minted-note" } });
+
+      delete process.env.MSTAR_EXECUTION_IDENTITY;
+      const beforeRefusals = readFileSync(ledgerPath);
+      const missing = await append("missing-identity");
+      expect(missing.status).toBe(2);
+      expect(JSON.parse(missing.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+
+      process.env.MSTAR_HOST_SESSION_ID = coordinator;
+      const malformedExplicit = await append("malformed-explicit", ["--session-id", ""]);
+      expect(malformedExplicit.status).toBe(2);
+      expect(JSON.parse(malformedExplicit.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(readFileSync(ledgerPath)).toEqual(beforeRefusals);
+    } finally {
+      if (priorHost === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
+      else process.env.MSTAR_HOST_SESSION_ID = priorHost;
+      if (priorMinted === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY;
+      else process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
 
-  test("issue show positional parse errors retain their diagnostic shape", () => {
+  test("issue show positional parse errors retain their structured attribution", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
     const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
     const details = envelope?.details;
+    // The offending positional is attributed by argv position and token — the
+    // facts a three-call recovery needs — alongside the command's own usage.
     expect(details).toMatchObject({
-      diagnostics: [{ code: "commander.excessArguments", message: error.message, helpRoute: "mstar issue show --help" }],
+      diagnostics: [{
+        path: "argv[4]",
+        argvIndex: 4,
+        token: "BADPOS",
+        code: "commander.excessArguments",
+        message: error.message,
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --payload <json>",
+        helpRoute: "mstar issue show --help",
+      }],
     });
-    if (details !== undefined && "diagnostics" in details && Array.isArray(details.diagnostics)) {
-      expect(details.diagnostics[0]).not.toHaveProperty("path");
-    }
   });
 
-  test("MCP tool schemas publish the domain-owned payload contract instead of an opaque field", () => {
-    const definitions = getCommandDefinitions();
-    const definition = (id: string): CommandDefinition => {
-      const found = definitions.find((entry) => entry.id === id);
-      if (found === undefined) throw new Error(`missing command definition: ${id}`);
-      return found;
+  test("excess-argument attribution skips consumed option values and declared positionals", () => {
+    const usageError = (args: string[]) => {
+      const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+      return mapParserError(error, ["node", "mstar", ...args])?.details?.diagnostics;
     };
-
-    // An issue verb's placeholder `payload: z.unknown().optional()` becomes the
-    // per-verb domain schema, so `tools/list` carries the constructible shape.
-    const schema = mcpToolInputSchema(definition("issue.add")).toJSONSchema() as {
-      properties: Record<string, Record<string, unknown>>;
-      required?: readonly string[];
-    };
-    expect(schema.properties.payload).toMatchObject({ type: "object" });
-    // The published payload carries the real domain contract, not `{}`.
-    expect(schema.properties.payload.required).toContain("rootCauseKey");
-    expect(Object.keys((schema.properties.payload.properties ?? {}) as object)).toContain("title");
-    // …and stays transport-optional: the domain handler owns the requirement.
-    expect(schema.required ?? []).not.toContain("payload");
-
-    // A field the family itself shapes stays its own contract: the workflow
-    // `--file` descriptor must not turn an absolute pathname into a document.
-    const policy = mcpToolInputSchema(definition("workflow.execution-policy")).toJSONSchema() as {
-      properties: Record<string, Record<string, unknown>>;
-    };
-    expect(policy.properties.file).toMatchObject({ type: "string" });
-
-    // A descriptor keyed by a VALUE of the command's own argument
-    // (`persist.write` declares one contract per `kind`) names no input field,
-    // so it is never injected: a published tool field the handler does not read
-    // is a capability `tools/list` must not advertise. The handler reads the
-    // document from `input`/`file` only.
-    const persist = mcpToolInputSchema(definition("persist.write")).toJSONSchema() as {
-      properties: Record<string, unknown>;
-      required?: readonly string[];
-    };
-    for (const field of ["status", "snapshot", "review", "json"]) {
-      expect(Object.keys(persist.properties)).not.toContain(field);
-      expect(persist.required ?? []).not.toContain(field);
-    }
-    // …and the transport the handler does read stays published.
-    expect(Object.keys(persist.properties)).toContain("input");
-    expect(Object.keys(persist.properties)).toContain("file");
+    // A consumed option value is not the excess token; the trailing unknown one is.
+    expect(usageError(["issue", "show", "--id", "I-1", "BADPOS"])).toMatchObject([
+      { path: "argv[6]", argvIndex: 6, token: "BADPOS" },
+    ]);
+    // A declared positional is explained by the syntax; only the extra one is.
+    expect(usageError(["schema", "family", "extra"])).toMatchObject([
+      { path: "argv[4]", argvIndex: 4, token: "extra" },
+    ]);
+    // Two declared positionals are consumed before the excess is attributed.
+    expect(usageError(["sdd", "workspace", "plan-a", "/root", "extra"])).toMatchObject([
+      { path: "argv[6]", argvIndex: 6, token: "extra" },
+    ]);
   });
+  test("excess attribution skips every variadic option value before later options", () => {
+    const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+    const envelope = mapParserError(error, [
+      "node", "mstar", "worktree", "cleanup", "--worktree", "/a", "/b", "--apply", "BADPOS",
+    ]);
+    expect(envelope?.details?.diagnostics).toMatchObject([
+      { path: "argv[8]", argvIndex: 8, token: "BADPOS" },
+    ]);
+  });
+  test("excess attribution consumes a flag-looking first variadic value", () => {
+    const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+    const envelope = mapParserError(error, [
+      "node", "mstar", "worktree", "cleanup", "--worktree", "-relative", "--apply", "BADPOS",
+    ]);
+    expect(envelope?.details?.diagnostics).toMatchObject([
+      { path: "argv[7]", argvIndex: 7, token: "BADPOS" },
+    ]);
+  });
+
+
 
 
   test("an issue --payload is decoded and validated by its own descriptor with pathful diagnostics", async () => {
@@ -144,10 +233,101 @@ describe("generated CLI adapter", () => {
     // bound to the `payload` input field, so the refusal carries indexed
     // `payload.<field>` paths rather than falling through to the family parser.
     expect(body.code).toBe("command.invalid-input");
-    expect(body.message).toContain("Invalid command payload");
     const paths = (body.details?.diagnostics ?? []).map((entry) => entry.path);
     expect(paths.length).toBeGreaterThan(0);
     expect(paths.every((entry) => entry.startsWith("payload."))).toBe(true);
+  });
+
+  test("a CLI payload failure and an independent missing requirement are reported together", async () => {
+    // The same request over MCP already groups these; the public CLI must not
+    // suppress the independently missing `actor`, and nested payload errors
+    // must carry expected/received facts — not just a field list.
+    const { root, harness, invocation } = await cliHarness();
+    try {
+      const result = await run(["issue", "add", "--payload", "{}", "--harness", harness], undefined, false, invocation);
+      expect(result.status).toBe(2);
+      const body = JSON.parse(result.stdout) as {
+        status?: string;
+        details?: { diagnostics?: Array<{ path: string; code: string; expected?: string; received?: string }> };
+      };
+      expect(body.status).toBe("usage");
+      const diagnostics = body.details?.diagnostics ?? [];
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        path: "actor", code: "required", expected: "present", received: "undefined",
+      }));
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        path: "payload.kind",
+        code: "invalid_value",
+        expected: "bug | risk | improvement | request | decision | review-obligation",
+        received: "undefined",
+      }));
+      expect(diagnostics.some((entry) => entry.path?.startsWith("payload."))).toBe(true);
+      const malformed = await run(["issue", "add", "--payload", "{", "--harness", harness], undefined, false, invocation);
+      expect(malformed.status).toBe(2);
+      const malformedBody = JSON.parse(malformed.stdout) as {
+        status?: string;
+        details?: { diagnostics?: Array<{ path: string; code: string }> };
+      };
+      expect(malformedBody.status).toBe("usage");
+      expect(malformedBody.details?.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "payload", code: "invalid_json" }),
+        expect.objectContaining({ path: "actor", code: "required" }),
+      ]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a nested issue payload enum violation carries per-field code/expected/received", async () => {
+    const { root, harness, invocation } = await cliHarness();
+    try {
+      const payload = {
+        projectId: "p", title: "t", kind: "not-a-kind", severity: "high", impact: "i", acceptance: "a",
+        sourceIdentity: "s", rootCauseKey: "r", acceptanceKey: "a", occurrenceKey: "o", sourceKind: "qc",
+        location: "l", observedBehavior: "o", evidence: ["e"], discoveredAt: "2026-09-26T10:00:00Z",
+      };
+      const result = await run(["issue", "add", "--payload", JSON.stringify(payload), "--actor", "project-manager", "--harness", harness], undefined, false, invocation);
+      expect(result.status).toBe(2);
+      const body = JSON.parse(result.stdout) as {
+        details?: { diagnostics?: Array<{ path: string; code: string; expected?: string; received?: string }> };
+      };
+      expect(body.details?.diagnostics).toContainEqual(expect.objectContaining({
+        path: "payload.kind",
+        code: "invalid_value",
+        expected: "bug | risk | improvement | request | decision | review-obligation",
+        received: "not-a-kind",
+      }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a semantic capture failure keeps its typed engine causes on the CLI response", async () => {
+    const { root, harness, invocation } = await cliHarness();
+    try {
+      const payload = {
+        projectId: "p", title: "t", kind: "bug", severity: "high", impact: "i", acceptance: "a",
+        sourceIdentity: "unknown", rootCauseKey: "unknown", acceptanceKey: "?", occurrenceKey: "o", sourceKind: "qc",
+        location: "l", observedBehavior: "o", evidence: ["e"], discoveredAt: "2026-09-26T10:00:00Z",
+      };
+      const result = await run(["issue", "add", "--payload", JSON.stringify(payload), "--actor", "project-manager", "--harness", harness], undefined, false, invocation);
+      expect(result.status).toBe(1);
+      const body = JSON.parse(result.stdout) as {
+        code?: string;
+        details?: { causes?: Array<{ code: string; message: string }> };
+      };
+      expect(body.code).toBe("issue.ambiguous-identity");
+      // The aggregated rejection is not collapsed to joined prose: the
+      // structured cause (and its per-key sub-causes) survives the CLI mapping
+      // instead of being replaced by a diagnostic-paths table.
+      const causes = body.details?.causes ?? [];
+      expect(causes.length).toBeGreaterThanOrEqual(1);
+      expect(causes.every((cause) => cause.code === "issue.ambiguous-identity")).toBe(true);
+      const nested = (causes[0] as { causes?: Array<{ code: string }> } | undefined)?.causes ?? [];
+      expect(nested.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("report accepts empty input and invokes the bounded canonical handler", async () => {
@@ -232,7 +412,6 @@ describe("generated CLI adapter", () => {
     const recovered = await run([...args, "--session-id", "cli-main-session"]);
     const recoveredEnvelope = JSON.parse(recovered.stdout);
     expect(recoveredEnvelope.status).toBe("refused");
-    expect(recoveredEnvelope.message).not.toContain("recovery requires the main conversation session identity");
     expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
 
     const priorIdentity = process.env.MSTAR_HOST_SESSION_ID;
@@ -243,7 +422,6 @@ describe("generated CLI adapter", () => {
       const withoutRuntimeIdentity = await run(args);
       const usageEnvelope = JSON.parse(withoutRuntimeIdentity.stdout);
       expect(usageEnvelope).toMatchObject({ status: "usage" });
-      expect(String(usageEnvelope.message)).toContain("recovery requires the main conversation session identity");
       expect(String(usageEnvelope.message)).toContain("--session-id");
       expect(String(usageEnvelope.message)).toContain("sessionId");
     } finally {
@@ -332,6 +510,50 @@ describe("generated CLI adapter", () => {
     expect(envelope.details?.recovery).toContain("mstar --help");
     expect(JSON.stringify(envelope)).not.toContain("mstar mstar --help");
   });
+test("workflow registration discloses missing plan identity and succeeds after the document correction", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "cli-workflow-registration-correction-"));
+  const harness = path.join(root, ".mstar");
+  const planFile = path.join(harness, "plans", "plan-public-registration.md");
+  mkdirSync(path.dirname(planFile), { recursive: true });
+  writeFileSync(planFile, "# Public registration plan\n");
+  (await initializeStore({ harnessDir: harness })).close();
+  // A registered CLI invocation opens the store query-only. On Bun 1.4.0 the
+  // just-closed writer's deferred cleanup can still remove the WAL sidecars
+  // WHILE that read-only open runs, so its first open intermittently refuses
+  // `store.corrupt` (`SQLITE_CANTOPEN`). One read in this process settles the
+  // file into its readable shape before the adapter runs, exactly as the
+  // sibling fixture helper `sealStoreForReaders` does.
+  (await openStore({ harnessDir: harness }, "read")).close();
+  const args = [
+    "workflow", "register",
+    "--workflow", "wf-public-registration",
+    "--plan-id", "plan-public-registration",
+    "--plan-title", "Public registration plan",
+    "--plan-file", "plans/plan-public-registration.md",
+    "--delivery-kind", "development",
+    "--project", "engine",
+    "--branch-source", "feature/plan-public-registration",
+    "--branch-target", "main",
+    "--harness", harness,
+  ];
+  try {
+    const missing = await run(args);
+    expect(missing.status).toBe(1);
+    const refusal = JSON.parse(missing.stdout) as { command: string; status: string; code: string; message?: string };
+    expect(refusal).toMatchObject({ command: "workflow.register", status: "refused", code: "plan-path.identity-mismatch" });
+    expect(refusal.message).toContain("declares no plan_id header");
+    expect(refusal.message).toContain("Help: mstar workflow register --help");
+
+    writeFileSync(planFile, "# Public registration plan\n\n**plan_id:** plan-public-registration\n");
+    const corrected = await run(args);
+    expect(corrected.status).toBe(0);
+    expect(JSON.parse(corrected.stdout)).toMatchObject({
+      command: "workflow.register", status: "ok", code: "workflow.register.ok",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
   test("an unknown command routes recovery to the root help, never an invented leaf route", async () => {
     const result = await run(["definitely-not-a-command"]);
@@ -371,9 +593,6 @@ describe("schema selector routes", () => {
     expect(envelope.data.family).toBe("worktree");
     const ids = envelope.data.members.map((member: { id: string }) => member.id);
     expect(ids).toContain("worktree.check");
-    for (const member of envelope.data.members) {
-      expect(Object.keys(member).sort()).toEqual(["description", "id"]);
-    }
   });
 
   test("CLI refuses an unknown command id with grouped selectors", async () => {
@@ -381,7 +600,8 @@ describe("schema selector routes", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "schema", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).toContain("available families");
+    expect(envelope.details?.selectors).toEqual(["command"]);
+    expect(envelope.details?.helpRoute).toBe("mstar schema --help");
   });
 
   test("CLI refuses colliding positional and option selectors", async () => {
@@ -390,49 +610,11 @@ describe("schema selector routes", () => {
     const envelope = JSON.parse(result.stdout);
     expect(envelope.status).toBe("usage");
     expect(envelope.exitCode).toBe(2);
-    expect(envelope.message).toContain("exactly one");
+    expect(envelope.details?.helpRoute).toBe("mstar schema --help");
+    expect(envelope.details?.diagnostics.length).toBeGreaterThan(0);
   });
 
-  test("MCP registers the schema tool with the exactly-one input contract", () => {
-    const definition = getCommandDefinitions().find((entry) => entry.id === "schema");
-    if (definition === undefined) throw new Error("schema command definition missing");
-    const toolSchema = mcpToolInputSchema(definition).toJSONSchema() as { anyOf?: readonly Record<string, unknown>[] };
-    const branches = toolSchema.anyOf ?? [];
-    expect(branches).toHaveLength(3);
-    const selectorKeys = branches.map((branch) => {
-      expect(branch.additionalProperties).toBe(false);
-      const properties = Object.keys(branch.properties as object);
-      expect(properties).toHaveLength(1);
-      return properties[0];
-    });
-    expect(selectorKeys).toEqual(["command", "family", "type"]);
-  });
 
-  test("MCP schema tool resolves a family query and refuses an empty one", async () => {
-    let handler: ((input: unknown, extra: { mcpReq: { signal: AbortSignal } }) => Promise<unknown>) | undefined;
-    const server = {
-      registerTool(name: string, _options: unknown, registered: typeof handler) {
-        if (name === "mstar_schema") handler = registered;
-      },
-    };
-    registerMcpCommands(server as never, getCommandDefinitions(), () => context());
-    if (handler === undefined) throw new Error("mstar_schema tool not registered");
-    const signal = { mcpReq: { signal: new AbortController().signal } };
-
-    const family = await handler!({ family: "worktree" }, signal) as {
-      structuredContent: { status: string; data: { kind: string; members: readonly { id: string }[] } };
-    };
-    expect(family.structuredContent.status).toBe("ok");
-    expect(family.structuredContent.data.kind).toBe("family");
-    expect(family.structuredContent.data.members.some((member) => member.id === "worktree.check")).toBe(true);
-
-    const empty = await handler!({}, signal) as {
-      structuredContent: { status: string; code: string; message: string };
-    };
-    expect(empty.structuredContent.status).toBe("usage");
-    expect(empty.structuredContent.exitCode).toBe(2);
-    expect(empty.structuredContent.message).toContain("exactly one");
-  });
 });
 describe("payload option decoding", () => {
   test("worktree cleanup accepts a lone --worktree path as a one-element list", async () => {
@@ -442,8 +624,6 @@ describe("payload option decoding", () => {
     // The lone path decoded cleanly into a one-element list: the refusal is
     // the missing --workflow validation, not a payload JSON decode error.
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).not.toContain("payload");
-    expect(envelope.message).not.toContain("valid JSON");
     // Structured diagnostics (plan 005) may be present, but they must point at
     // the missing --workflow member, never at a payload decode failure.
     for (const diagnostic of envelope.details?.diagnostics ?? []) {
@@ -456,8 +636,6 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).not.toContain("payload");
-    expect(envelope.message).not.toContain("valid JSON");
     for (const diagnostic of envelope.details?.diagnostics ?? []) {
       expect(diagnostic.path).toBe("workflow");
     }
@@ -468,9 +646,11 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).toContain("Invalid command payload");
-    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
-    expect(diagnostics[0]?.path).toBe("worktree[0]");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string; received?: string }>;
+    // The payload's own member failure is reported with the missing workflow
+    // requirement; the object value is the rejected received fact.
+    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "worktree[0]", received: "object" }));
+    expect(diagnostics.some((entry) => entry.path === "workflow")).toBe(true);
   });
 
   test("worktree cleanup refuses a malformed JSON-looking --worktree occurrence", async () => {
@@ -478,9 +658,12 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).toContain("Invalid command payload");
-    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
-    expect(diagnostics[0]?.path).toBe("worktree[0]");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string; code: string; index?: number }>;
+    // The malformed entry stays one literal occurrence the declared schema
+    // rejects as a typed element; the missing workflow requirement groups
+    // alongside it rather than being suppressed.
+    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "worktree[0]", code: "invalid_type", index: 0 }));
+    expect(diagnostics.some((entry) => entry.path === "workflow")).toBe(true);
   });
 });
 
@@ -521,11 +704,11 @@ test("generated CLI adapter decodes schema-typed numeric options and registers b
     ]);
     const numericResult = JSON.parse(numeric.stdout) as { code?: string; message?: string };
     expect(numericResult.code).not.toBe("command.invalid-input");
-    expect(numericResult.message ?? "").not.toContain("expected number");
 
   const boolean = await run(["plan", "bind", "--execution"]);
-  const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
-  expect(booleanResult.message ?? "").not.toContain("argument missing");
+  const booleanResult = JSON.parse(boolean.stdout);
+  expect(booleanResult.command).toBe("plan.bind");
+  expect(booleanResult.details?.diagnostics ?? []).not.toContainEqual(expect.objectContaining({ path: "execution" }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

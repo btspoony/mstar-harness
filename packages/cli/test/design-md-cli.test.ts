@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
-import { cliEnvelope, violationCodes } from "./support/cli-assertions";
+import { cliEnvelope, expectUsageDiagnostic, violationCodes } from "./support/cli-assertions";
 import { DESIGN_LEVEL1 } from "./support/cli-content-fixtures";
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,6 @@ describe("mstar design-md validate — tokens / parity / completeness", () => {
   test("missing <dir> arg → usage, exit 2", () => {
     const result = runCli(["design-md", "validate"]);
     expect(result.exitCode).toBe(2);
-    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'dir'");
+    expectUsageDiagnostic(result, "dir");
   });
 });

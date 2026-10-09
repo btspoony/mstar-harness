@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
+import { engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
@@ -27,22 +29,35 @@ const inputSchema = z.object({
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(),
 });
-const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false }], effects: ["read", "validate"], description: "Compute PR-review tally and verdict from accepted findings." },
-  "report-path": { args: [], options: [{ key: "reportsDir", flags: "--reports-dir <dir>", required: true }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false }, { key: "slug", flags: "--slug <domain-seat>", required: false }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false }], effects: ["read"], description: "Resolve a local PR-review report path without writing." },
-  "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report." },
-  post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a GitHub PR review through the admitted gh process effect." },
-  "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false }], effects: ["read", "write", "process"], description: "Remove a recorded PR-review worktree after its report is saved." },
-  size: { args: [], options: [{ key: "base", flags: "--base <ref>", required: true }, { key: "head", flags: "--head <ref>", required: true }, { key: "largestFileTotal", flags: "--largest-file-total <n>", required: false }], effects: ["read", "process"], description: "Classify a PR-review changeset and derive tier and seats." },
-  "seat-prompt": { args: [], options: [{ key: "stage", flags: "--stage <1|2>", required: true }, { key: "domain", flags: "--domain <d>", required: true }, { key: "seat", flags: "--seat <id>", required: true }, { key: "worktree", flags: "--worktree <path>", required: true }, { key: "security", flags: "--security", required: false }, { key: "skillRoot", flags: "--skill-root <dir>", required: false }, { key: "recon", flags: "--recon <facts...>", required: false }, { key: "tier", flags: "--tier <quick|default|deep>", required: false }, { key: "diffFile", flags: "--diff-file <path>", required: false }, { key: "collectFolded", flags: "--collect-folded", required: false }], effects: ["read"], description: "Generate a read-only PR-review seat prompt." },
+const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; all counts default to zero and are limited to 0–50." },
+  "report-path": { args: [], options: [{ key: "reportsDir", flags: "--reports-dir <dir>", required: true }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path from reportsDir, PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
+  "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
+  post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
+  "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false, help: "Only true is an explicit saved-report assertion; otherwise the recorded sidecar must already say true." }], effects: ["read", "write", "process"], description: "Remove the recorded PR-review worktree and branch only when --report-saved=true or the recorded sidecar says reportSaved=true, and only when the supplied branch matches its recorded branch." },
+  size: { args: [], options: [{ key: "base", flags: "--base <ref>", required: true }, { key: "head", flags: "--head <ref>", required: true }, { key: "largestFileTotal", flags: "--largest-file-total <n>", required: false, help: "If omitted, derive the largest touched-file line count from Git at head." }], effects: ["read", "process"], description: "Classify base...head changes from Git; derive largest touched-file total from the referenced head when --largest-file-total is omitted." },
+  "seat-prompt": { args: [], options: [{ key: "stage", flags: "--stage <1|2>", required: true, help: "Must be 1 or 2; collect-folded=true further restricts this value to 2." }, { key: "domain", flags: "--domain <d>", required: true }, { key: "seat", flags: "--seat <id>", required: true }, { key: "worktree", flags: "--worktree <path>", required: false, help: "Defaults to the invocation current working directory." }, { key: "security", flags: "--security", required: false, defaultValue: false, help: "Defaults to false; collect-folded=true forbids a security seat." }, { key: "skillRoot", flags: "--skill-root <dir>", required: false, defaultValue: "skills/mstar-audit" }, { key: "recon", flags: "--recon <facts...>", required: false, defaultValue: [] }, { key: "tier", flags: "--tier <quick|default|deep>", required: false, defaultValue: "default" }, { key: "diffFile", flags: "--diff-file <path>", required: false, help: "Required when --collect-folded is true." }, { key: "collectFolded", flags: "--collect-folded", required: false, defaultValue: false, help: "Defaults to false; true requires --stage 2 and --diff-file, and cannot be used for a security seat." }], effects: ["read"], description: "Generate a read-only PR-review seat prompt; worktree defaults to invocation cwd, skillRoot to skills/mstar-audit, recon to [], security and collectFolded to false, and tier to default." },
   budget: { args: [], options: [], effects: ["read"], description: "Print PR-review tier budgets." },
 };
 const idFor = (verb: Verb) => `pr-review.${verb}`;
 const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data });
-const failure = (id: string, error: unknown): CommandEnvelope<never> => {
+/**
+ * Map one error to this family's refusal without rewriting an engine-authored
+ * one: a typed engine error keeps its own `code`, `details` and `recovery`
+ * verbatim (the wrapper may add routing facts, never replace), an untyped
+ * internal failure stays the family's own `error` envelope, and a supplied
+ * value error is a usage refusal.
+ */
+export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
-  return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+  const { code, details, recovery } = engineErrorFacts(error);
+  if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+  return refusalEnvelope({
+    command: id, status: "refused", code, exitCode: 1, message,
+    details: details ?? {},
+    recovery: recovery ?? "Correct the reported review input or source condition, then rerun the command.",
+  });
 };
 class UsageError extends Error {}
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
@@ -212,11 +227,48 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
   return verbs.map((verb) => {
     const contract = contracts[verb]; const id = idFor(verb);
     const fields = [...contract.args.map(({ key }) => key), ...contract.options.map(({ key }) => key)];
+    const requirements = (["cli", "mcp"] as const).flatMap((route) => [
+      ...contract.args.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
+      ...contract.options.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
+      ...(verb === "report-path" ? [
+        { name: "stage", ownership: "caller" as const, route, required: true, condition: { field: "slug", present: true }, constraint: "stage and slug must be supplied together" },
+        { name: "slug", ownership: "caller" as const, route, required: true, condition: { field: "stage", present: true }, constraint: "stage and slug must be supplied together" },
+        { name: "date", ownership: "caller" as const, route, required: false, constraint: "defaults to local calendar date" },
+      ] : []),
+      ...(verb === "worktree-cleanup" ? [
+        { name: "reportSaved", ownership: "caller" as const, route, required: false, constraint: "true is an explicit saved-report assertion; if omitted, the recorded sidecar must say true" },
+      ] : []),
+      ...(verb === "size" ? [
+        { name: "largestFileTotal", ownership: "caller" as const, route, required: false, constraint: "when omitted, derive from touched files at head using Git" },
+      ] : []),
+      ...(verb === "seat-prompt" ? [
+        { name: "worktree", ownership: "derivable" as const, route, required: false, constraint: "defaults to invocation cwd; resolved to an absolute path" },
+        { name: "skillRoot", ownership: "derivable" as const, route, required: false, constraint: "defaults to skills/mstar-audit, resolved against cwd" },
+        { name: "recon", ownership: "derivable" as const, route, required: false, constraint: "defaults to an empty list" },
+        { name: "tier", ownership: "derivable" as const, route, required: false, constraint: "defaults to default" },
+        { name: "security", ownership: "derivable" as const, route, required: false, constraint: "defaults to false" },
+        { name: "collectFolded", ownership: "derivable" as const, route, required: false, constraint: "defaults to false; when true requires stage 2 and diffFile and cannot be a security seat" },
+        { name: "stage", ownership: "caller" as const, route, required: false, allowedValues: ["1", "2"] },
+        { name: "stage", ownership: "caller" as const, route, required: true, condition: { field: "collectFolded", equals: true }, allowedValues: ["2"] },
+        { name: "diffFile", ownership: "caller" as const, route, required: true, condition: { field: "collectFolded", equals: true } },
+        { name: "security", ownership: "caller" as const, route, required: false, condition: { field: "collectFolded", equals: true }, allowedValues: [false] },
+      ] : []),
+    ]);
     return {
       id, cli: { path: ["pr-review", verb], aliases: [], arguments: contract.args, options: contract.options },
       input: inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never), output: commandEnvelopeSchema,
-      effects: contract.effects, description: contract.description,
-      async execute(raw, context) { const parsed = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never).safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : failure(id, new UsageError(parsed.error.message)); },
+      requirements,
+      effects: contract.effects,
+      description: contract.description,
+      async execute(raw, context) {
+        const parsed = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never).safeParse(raw);
+        if (parsed.success) return execute(verb, parsed.data, context);
+        return refusalEnvelope({
+          command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
+          message: "Invalid input.",
+          diagnostics: decodeInputDiagnostics(parsed.error, raw),
+        });
+      },
     };
   });
 }

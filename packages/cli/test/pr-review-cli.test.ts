@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine";
+import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -237,7 +238,7 @@ describe("mstar pr-review report-path", () => {
         "1",
       ]);
       expect(result.exitCode).toBe(2);
-      expect(message(result)).toContain("--stage and --slug go together");
+      expectUsageDiagnostic(result, "slug");
     });
   });
 

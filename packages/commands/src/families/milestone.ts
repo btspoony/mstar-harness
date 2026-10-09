@@ -1,3 +1,4 @@
+import { engineErrorFacts } from "./family-refusal.js";
 import { refusalEnvelope } from "../envelope.js";
 import { addMilestone, assignIssueMilestone, queryMilestones, resolveProcessHarnessDir, updateMilestone, withStoreRead, type MilestonePatch, type MutationContext, type StoreContext } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -16,21 +17,16 @@ function context(input: Input, invocation: InvocationContext): StoreContext { co
 function envelope(id: string, data: unknown): CommandEnvelope { return { version:1, command:id, status:"ok", code:`${id}.ok`, exitCode:0, data }; }
 export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof UsageError) {
-    return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id } });
-  }
-  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : `${id}.internal-error`;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id }, recovery: id === "milestone.add"
-      ? "Set a unique milestone name, project ordinal, and current store revision. Run mstar milestone add --project <project> --name <name> --ordinal <ordinal> --expect-store <revision> --operation <operation-id>."
-      : id === "milestone.update"
-        ? "Read the current milestone and store revision and retain only the intended patch. Run mstar milestone update --project <project> --id <id> --expect-store <revision> --operation <operation-id>."
-        : id === "milestone.assign"
-          ? "Verify the issue and milestone ids and current issue and store revisions. Run mstar milestone assign --project <project> --issue <issue-id> --reason <reason> --expect-issue <revision> --expect-store <revision> --operation <operation-id> --session <session-id> --actor <actor>."
-          : id === "milestone.list"
-            ? "Select an existing project and resolve the reported store-read cause. Run mstar milestone list --project <project>."
-            : "Select an existing milestone in the project and resolve the reported store-read cause. Run mstar milestone status --project <project> --id <id>." });
+  const { code, details, recovery } = engineErrorFacts(error);
+  const fallbackRecovery = id === "milestone.add"
+    ? "Set a unique milestone name and project ordinal. Run mstar milestone add --project project-id --name milestone-name --ordinal 1 --expect-store 0 --operation retry-id."
+    : id === "milestone.update"
+      ? "Read the current milestone and store revision, then retain only the intended patch. Run mstar milestone update --project project-id --id milestone-id --expect-store 0 --operation retry-id."
+      : id === "milestone.assign"
+        ? "Verify the issue and milestone ids and revisions. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --session session-path --actor project-manager."
+        : "Select the existing milestone project and retry the requested read.";
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery: fallbackRecovery });
+  return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: recovery ?? fallbackRecovery });
 }
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {
@@ -51,4 +47,54 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
   return envelope(id,await assignIssueMilestone(store,requireValue(input.issue,"--issue"),{projectId,milestoneId:input.clear ? null : requireValue(input.id,"--id"),reason:requireValue(input.reason,"--reason")},mutation));
  } catch(error) { return failure(id, error); }
 }
-export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] { const descriptions: Record<(typeof verbs)[number],string> = { add:"Add a milestone record to the project store; its name, target and ordinal are authoritative.", update:"Update stored milestone fields using the observed store revision; roadmap document text is unchanged.", assign:"Assign or unassign an issue from a stored milestone with expected issue revision and a reason.", list:"List the project's stored milestones and linked-issue rollups.", status:"Show one milestone and linked issue rollup." }; return verbs.map(verb => { const id=`milestone.${verb}`; const opts=options[verb]; return { id,cli:{path:["milestone",verb],aliases:[],arguments:[],options:opts.map(key=>({key,flags:flags[key],required:required[verb].includes(key)}))},input:schema.pick(Object.fromEntries(opts.map(key=>[key,true])) as never),output:commandEnvelopeSchema,effects:verb === "list"||verb === "status" ? ["read"] : ["write"],description:descriptions[verb],execute:(input:Input,invocation:InvocationContext)=>run(id,input,invocation) }; }); }
+export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
+  const descriptions: Record<(typeof verbs)[number], string> = {
+    add: "Add a milestone record to the project store; its name, target and ordinal are authoritative.",
+    update: "Update stored milestone fields using the observed store revision; roadmap document text is unchanged.",
+    assign: "Assign or unassign an issue from a stored milestone with expected issue revision and a reason.",
+    list: "List the project's stored milestones and linked-issue rollups.",
+    status: "Show one milestone and linked issue rollup.",
+  };
+  return verbs.map((verb) => {
+    const id = `milestone.${verb}`;
+    const opts = options[verb];
+    const requirements = (["cli", "mcp"] as const).flatMap((route) => [
+      ...required[verb].map((name) => ({
+        name,
+        ownership: "caller" as const,
+        route,
+        required: true,
+        ...(name === "expectStore" || name === "expectIssue" ? { tokenKind: "revision" as const } : {}),
+      })),
+      ...(verb === "update" ? [
+        { name: "name", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-least-one" as const, members: [{ name: "name" }, { name: "ordinal" }, { name: "status" }, { name: "target" }, { name: "clearTarget", whenTrue: true }] }, constraint: "at least one patch value is required; target is optional and clearTarget selects only when true" },
+        { name: "ordinal", ownership: "caller" as const, route, required: false },
+        { name: "status", ownership: "caller" as const, route, required: false },
+        { name: "target", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-most-one" as const, members: [{ name: "target" }, { name: "clearTarget", whenTrue: true }] }, constraint: "optional patch; supplying target and clearTarget=true is refused" },
+        { name: "clearTarget", ownership: "caller" as const, route, required: false, constraint: "only true selects clear; false does not select a patch" },
+      ] : []),
+      ...(verb === "assign" ? [
+        { name: "id", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "exactly-one" as const, members: [{ name: "id" }, { name: "clear", whenTrue: true }] }, constraint: "exactly one of id or clear=true is required" },
+        { name: "clear", ownership: "caller" as const, route, required: false, constraint: "only true selects unassignment; false does not select this alternative" },
+      ] : []),
+    ]);
+    return {
+      id,
+      cli: {
+        path: ["milestone", verb], aliases: [], arguments: [],
+        options: opts.map((key) => ({
+          key, flags: flags[key], required: required[verb].includes(key),
+          ...(verb === "update" && key === "clearTarget" ? { help: "Optional: only true clears target, and it cannot be combined with --target. False does not select a patch." } : {}),
+          ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target=true." } : {}),
+          ...(verb === "assign" && key === "clear" ? { help: "Only true selects unassignment; exactly one of --id and --clear=true is required." } : {}),
+        })),
+      },
+      input: schema.pick(Object.fromEntries(opts.map((key) => [key, true])) as never),
+      output: commandEnvelopeSchema,
+      effects: verb === "list" || verb === "status" ? ["read"] : ["write"],
+      description: descriptions[verb],
+      requirements,
+      execute: (input: Input, invocation: InvocationContext) => run(id, input, invocation),
+    };
+  });
+}

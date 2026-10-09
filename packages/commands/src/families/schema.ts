@@ -24,6 +24,8 @@ export type CommandSchemaDescriptor = {
   effects: readonly CommandEffect[];
   cli: CommandDefinition["cli"];
   requirements: readonly CommandRequirement[];
+  required: readonly string[];
+  defaults: Readonly<Record<string, unknown>>;
   input: unknown;
   payloadSchemas: Readonly<Record<string, unknown>>;
 };
@@ -131,13 +133,36 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
 
 function commandSchemaDescriptor(definition: CommandDefinition): CommandSchemaDescriptor {
   const jsonSchema = definition.input.toJSONSchema() as Record<string, unknown>;
+  const requiredFields = [
+    ...(Array.isArray(jsonSchema.required) ? jsonSchema.required.filter((field): field is string => typeof field === "string") : []),
+    ...definition.cli.arguments.filter((entry) => entry.required).map((entry) => entry.key),
+    ...definition.cli.options.filter((entry) => entry.required).map((entry) => entry.key),
+    ...(definition.requirements ?? []).filter((entry) => entry.required && entry.condition === undefined).map((entry) => entry.name),
+  ];
+  const required = [...new Set(requiredFields)];
+  const requirements = commandRequirements(definition);
+  const input = { ...jsonSchema, required, "x-mstar-requirements": requirements };
+  const properties = jsonSchema.properties !== null && typeof jsonSchema.properties === "object"
+    ? Object.entries(jsonSchema.properties)
+    : [];
+  const schemaDefaults = properties.flatMap(([key, property]) =>
+    property !== null && typeof property === "object" && Object.hasOwn(property, "default")
+      ? [[key, Reflect.get(property, "default")]]
+      : [],
+  );
+  const defaults = Object.fromEntries([
+    ...schemaDefaults,
+    ...definition.cli.options.flatMap((option) => option.defaultValue === undefined ? [] : [[option.key, option.defaultValue]]),
+  ]);
   return {
     id: definition.id,
     description: definition.description,
     effects: definition.effects,
     cli: definition.cli,
-    requirements: commandRequirements(definition),
-    input: jsonSchema,
+    requirements,
+    required,
+    defaults,
+    input,
     payloadSchemas: Object.fromEntries(
       Object.entries(definition.payloads ?? {}).map(([name, descriptor]) => [name, descriptor.schema.toJSONSchema()]),
     ),

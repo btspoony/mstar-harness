@@ -1,7 +1,7 @@
 import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
-import { redactSecrets } from "@mstar-harness/engine/src/audit";
+import { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
 import { z } from "zod";
-import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
+import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
 import { getCoordinationChecksCommandDefinitions } from "./families/coordination-checks.js";
 import { getPersistCommandDefinitions } from "./families/persist.js";
@@ -20,11 +20,11 @@ import { getAuditCommandDefinitions } from "./families/audit.js";
 import { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 import { getJudgmentCommandDefinitions } from "./families/judgment.js";
 import { getProcessCommandDefinitions } from "./families/process.js";
-
+import { getExecutionLedgerCommandDefinitions } from "./families/execution-ledgers.js";
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
 import { getLocalCommandDefinitions } from "./families/local.js";
 import { getReportCommandDefinitions } from "./families/report.js";
-import { getSchemaCommandDefinitions } from "./families/schema.js";
+import { getCommandSchemas, getSchemaCommandDefinitions, type CommandSchemaDescriptor } from "./families/schema.js";
 
 
 const failureEnvelopeSchema = z.object({
@@ -70,6 +70,33 @@ export class CommandDefinitionError extends Error {
     super(message);
     this.name = "CommandDefinitionError";
   }
+}
+
+/**
+ * True when a declaration left a field as the permissive `z.unknown()`
+ * placeholder a payload contract replaces. A field the family already shaped
+ * (its own transport contract) is never a placeholder, so composition is
+ * idempotent and a second pass over a composed schema is a no-op.
+ */
+export function isPayloadPlaceholder(field: z.core.$ZodType | undefined): boolean {
+  return field instanceof z.ZodUnknown || (field instanceof z.ZodOptional && field.unwrap() instanceof z.ZodUnknown);
+}
+
+/**
+ * The one composition from a declaration's payload contracts to the schema a
+ * transport validates: every placeholder payload field gains its declared
+ * domain shape, optional (the requirement table still owns whether the field
+ * itself is required). The MCP route validates this same object; the CLI's
+ * pre-admission uses it so both routes report identical nested diagnostics for
+ * one payload instead of one route collapsing them to prose.
+ */
+export function payloadComposedSchema(definition: CommandDefinition, schema: z.ZodType = definition.input): z.ZodType {
+  if (!(schema instanceof z.ZodObject)) return schema;
+  const composed: Record<string, z.core.$ZodType> = {};
+  for (const [field, payload] of Object.entries(definition.payloads ?? {})) {
+    if (isPayloadPlaceholder(schema.shape[field])) composed[field] = payload.schema.optional();
+  }
+  return Object.keys(composed).length === 0 ? schema : schema.safeExtend(composed);
 }
 
 function validateOne(definition: CommandDefinition): void {
@@ -153,6 +180,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getCatalogCommandDefinitions(),
   ...getRoadmapCommandDefinitions(),
   ...getStoreCommandDefinitions(),
+  ...getExecutionLedgerCommandDefinitions(),
   ...getExecutionCommandDefinitions(),
   ...getSddCommandDefinitions(),
   ...getAuditCommandDefinitions(),
@@ -166,166 +194,104 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getReportCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
+const commandSchemasById = new Map(getCommandSchemas(canonicalDefinitions).map((descriptor) => [descriptor.id, descriptor] as const));
 
 export function getCommandDefinitions(): readonly CommandDefinition[] {
   return canonicalDefinitions;
 }
+function inputConditionMatches(
+  condition: NonNullable<CommandRequirement["condition"]>,
+  input: Readonly<Record<string, unknown>>,
+): boolean {
+  const trigger = input[condition.field];
+  return condition.equals !== undefined
+    ? trigger === condition.equals
+    : condition.present === false ? trigger === undefined : trigger !== undefined;
+}
+
 
 /**
- * One safe structured fact per schema violation, in the CLI payload decoder's
- * diagnostic shape: field path, stable issue code, message and the first array
- * index where relevant. Never carries submitted values.
+ * A successfully admitted request, bound to the definition that admitted it.
+ *
+ * The capability (not the caller) owns the binding: `definition`, its
+ * `contract`, the identity the definition's own selector resolved, the required
+ * names the contract computed and the value parsed from the caller's input are
+ * fixed when admission runs, and `execute` runs that same definition's
+ * `execute` against them. There is no public function that accepts a
+ * caller-assembled definition/contract/admission triple, and no
+ * post-admission mutator, so a success-shaped object or an admission for a
+ * different schema cannot select a handler or an identity: the only way to
+ * obtain an executable capability is `admitCommandInput`.
+ *
+ * The parsed value is not republished: no property, getter or parameter hands
+ * the parsed object back, and `execute` closes over the value admission
+ * produced, so a caller holding this capability cannot swap the admitted value
+ * for one of its own before execution. Ownership of the values *inside* that
+ * parsed object is the schema's business, not this capability's: where a field
+ * schema preserves a caller reference (`z.unknown()`, a `z.record()` value, a
+ * passthrough extra), the handler observes that same caller-owned value, and
+ * mutating it through the original input is visible to the handler. Admission
+ * validates the value; it does not deep-copy, freeze, or snapshot it.
+ *
+ * The capability publishes only `execute` and the immutable primitive facts a
+ * transport needs before execution (the resolved session selector and a
+ * command's stdin content).
  */
-function redactInputScalar(value: string): string {
-  return redactSecrets(value).text
-    .replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
-}
+export type AdmittedCommand = Readonly<{
+  /**
+   * The session-selector value this admission validated, present only when the
+   * definition declares a `sessionId` context selector and the input supplied
+   * a non-empty string. An immutable primitive context fact, not handler data.
+   */
+  readonly sessionId?: string;
+  /**
+   * The caller-supplied `input` string: the content a command's `stdin` effect
+   * reads (the MCP route sends it in the call's `input` field). A primitive
+   * copy, never the parsed handler value.
+   */
+  readonly stdinText?: string;
+  /** Execute the admitted request once against the bound definition. */
+  execute(context: InvocationContext): Promise<CommandEnvelope>;
+}>;
 
-/**
- * Every scalar submitted anywhere in the input. An issue message can quote a
- * value that is NOT the one at the issue path — an `unrecognized_keys` issue
- * names the unknown key, a refinement quotes its own input — so sanitizing only
- * the value at the path leaves those copies in the emitted message. Object keys
- * are collected too: a strict object reports the offending key by name.
- */
-function submittedScalars(input: unknown): string[] {
-  const scalars: string[] = [];
-  const visit = (value: unknown): void => {
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      scalars.push(String(value));
-    } else if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-    } else if (value !== null && typeof value === "object") {
-      for (const [key, item] of Object.entries(value)) {
-        scalars.push(key);
-        visit(item);
-      }
-    }
-  };
-  visit(input);
-  return scalars;
-}
+export type CommandAdmission =
+  | ({ readonly success: true } & AdmittedCommand)
+  | { readonly success: false; readonly envelope: CommandEnvelope<never> };
 
-/**
- * A schema issue message with every submitted secret-shaped scalar replaced by
- * its redacted form. Benign scalars (numbers, ordinary words) redact to
- * themselves, so the message keeps its diagnostic value while a custom token
- * the pattern-based redactor does not recognize is never echoed to the caller.
- */
-function issueMessageSanitizer(input: unknown): (message: string) => string {
-  const replacements: Record<string, string> = {};
-  for (const scalar of submittedScalars(input)) {
-    const redacted = redactInputScalar(scalar);
-    if (redacted !== scalar && replacements[scalar] === undefined) replacements[scalar] = redacted;
-  }
-  const scalars = Object.keys(replacements);
-  const pattern = scalars.length === 0 ? undefined : new RegExp(scalars.map((scalar) =>
-    scalar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  ).join("|"), "g");
-  return (message) => {
-    const text = redactSecrets(message).text;
-    return pattern === undefined ? text : text.replace(pattern, (scalar) => replacements[scalar] ?? scalar);
-  };
-}
+type AdmittedBindings = Readonly<{
+  definition: CommandDefinition;
+  contract: CommandSchemaDescriptor;
+  data: unknown;
+  required: readonly string[];
+  sessionId?: string;
+  stdinText?: string;
+}>;
 
-function inputDiagnostic(issue: z.ZodError["issues"][number], sanitize: (message: string) => string): RefusalDiagnostic {
-  const path = issue.path.reduce((path: string, part: string | number | symbol) =>
-    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
-  "");
-  const index = issue.path.find((part) => typeof part === "number");
-  const message = sanitize(issue.message);
-  return {
-    path,
-    code: issue.code,
-    message,
-    ...(typeof index === "number" ? { index } : {}),
-  };
-}
-
-
-function inputValueAtPath(input: unknown, path: readonly (string | number | symbol)[]): unknown {
-  return path.reduce<unknown>((value, part) =>
-    value !== null && typeof value === "object" ? (value as Record<PropertyKey, unknown>)[part] : undefined,
-  input);
-}
-
-function inputPath(issue: z.ZodError["issues"][number]): string {
-  return issue.path.reduce((path: string, part: string | number | symbol) =>
-    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
-  "");
-}
-
-function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { path: string; expected: string; received: string } {
-  const expected = issue.code === "invalid_type"
-    ? issue.expected
-    : issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values)
-      ? issue.values.map(String).join(" | ")
-      : issue.code === "too_small" && "minimum" in issue
-        ? `${issue.origin} ${issue.inclusive ? ">=" : ">"} ${String(issue.minimum)}`
-        : issue.code === "too_big" && "maximum" in issue
-          ? `${issue.origin} ${issue.inclusive ? "<=" : "<"} ${String(issue.maximum)}`
-          : issue.code === "unrecognized_keys"
-            ? "recognized keys"
-            : "valid value";
-  const value = inputValueAtPath(input, issue.path);
-  const received = value === undefined ? "undefined" : value === null ? "null" :
-    typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
-      redactInputScalar(String(value));
-  return { path: inputPath(issue), expected, received };
-}
-
-export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
-  const definition = canonicalDefinitions.find((entry) => entry.id === id);
-  if (definition === undefined) {
-    return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
-  }
-  const rawInput = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
-  const selector = definition.cli.options.find((option) => option.context === "sessionId");
-  const selectorValue = selector === undefined ? undefined : rawInput[selector.key];
-  if (selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "")) {
-    return refusalEnvelope({
-      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: `${selector?.flags.split(/[ <]/)[0] ?? selector?.key} must be a non-empty string`,
-      rejected: {
-        path: selector?.flags.split(/[ <]/)[0] ?? selector?.key ?? "session",
-        expected: "non-empty string",
-        received: typeof selectorValue === "string" ? JSON.stringify(selectorValue) : typeof selectorValue,
-      },
-    });
-  }
-  const parsed = definition.input.safeParse(input);
-  if (!parsed.success) {
-    const sanitize = issueMessageSanitizer(input);
-    const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, sanitize));
-    const hasMoreIssues = parsed.error.issues.length > 20;
-    const joinedMessage = hasMoreIssues
-      ? `${parsed.error.issues.slice(0, 20).map((entry) => entry.message).join("; ")}\n…and ${parsed.error.issues.length - 20} more issues — full diagnostics in details.diagnostics.`
-      : parsed.error.issues.map((entry) => entry.message).join("; ");
-    const issue = parsed.error.issues[0];
-    const facts = rejectionFacts(issue, input);
-    const optionKey = issue.path.map(String).join(".");
-    const option = definition.cli.options.find((entry) => entry.key === optionKey);
-    const rejected = !hasMoreIssues && facts.path !== "" ? {
-      path: option?.flags.split(/[ <]/)[0] ?? facts.path,
-      expected: facts.expected,
-      received: facts.received,
-    } : undefined;
-    const message = hasMoreIssues
-      ? `Rejected ${option?.flags.split(/[ <]/)[0] ?? facts.path}: expected ${facts.expected}; received ${facts.received}\n${sanitize(joinedMessage)}`
-      : sanitize(joinedMessage);
-    return refusalEnvelope({
-      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message,
-      diagnostics,
-      ...(rejected === undefined ? {} : { rejected }),
-    });
-  }
-  const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;
+/** Execute one admission-produced capability, retaining the definition's own execution outcome. */
+async function runAdmitted(bindings: AdmittedBindings, context: InvocationContext): Promise<CommandEnvelope> {
+  const { definition, contract, data, required, sessionId } = bindings;
+  const id = definition.id;
+  // Overlay the admitted selector on a fresh frozen context: the caller's
+  // object is never mutated, and the top-level context stays frozen.
+  const request = sessionId === undefined ? context : Object.freeze({ ...context, sessionId });
   try {
-    const envelope = await definition.execute(parsed.data, request);
+    const envelope = await definition.execute(data, request);
     if (!definition.output.safeParse(envelope).success) {
       return { version: 1, command: id, status: "error", code: "command.output-invalid", exitCode: 1, message: "handler returned an invalid envelope" };
+    }
+    if (envelope.status === "usage" || envelope.status === "refused") {
+      return {
+        ...envelope,
+        details: {
+          ...envelope.details,
+          required,
+          defaults: contract.defaults,
+          requirements: contract.requirements,
+          conditionalRequirements: contract.requirements.filter((entry) =>
+            entry.condition !== undefined || entry.alternatives !== undefined || entry.allowedValues !== undefined
+          ),
+        },
+      };
     }
     return envelope;
   } catch (error) {
@@ -334,4 +300,184 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     }
     return { version: 1, command: id, status: "error", code: "command.internal", exitCode: 1, message: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * The one capability factory. The returned object's `execute` closes over the
+ * bindings it was created from, so its behaviour is admission's, not the
+ * caller's: nothing outside this module can produce an object the library
+ * treats as an admitted request. The handler value itself is never copied onto
+ * the returned object, so no caller can hand execution a different object after
+ * admission. This is object-level privacy, not a deep snapshot: nested values a
+ * field schema preserves by reference stay caller-owned (see `AdmittedCommand`).
+ */
+function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
+  return Object.freeze({
+    ...(bindings.sessionId === undefined ? {} : { sessionId: bindings.sessionId }),
+    ...(bindings.stdinText === undefined ? {} : { stdinText: bindings.stdinText }),
+    execute(context: InvocationContext): Promise<CommandEnvelope> {
+      return runAdmitted(bindings, context);
+    },
+  });
+}
+
+/**
+ * Shared admission, including transport-composed schemas, without executing
+ * effects.
+ *
+ * `shape` is the transport's handler-value projection (the MCP route removes
+ * its context selectors and maps the judgment document to stdin). It runs once,
+ * at admission, on the schema-validated value, and only its result is handed to
+ * the definition as the private handler value — so the executed value is always
+ * derived from the one parse this admission performed, never swapped out
+ * afterwards. It cannot change the definition, the contract or the resolved
+ * identity.
+ */
+export function admitCommandInput(
+  definition: CommandDefinition,
+  input: unknown,
+  contract: CommandSchemaDescriptor,
+  schema: z.ZodType = definition.input,
+  shape: (data: unknown) => unknown = (data) => data,
+  context?: Pick<InvocationContext, "sessionId">,
+): CommandAdmission {
+  const isInputObject = input !== null && typeof input === "object" && !Array.isArray(input);
+  const rawInput = isInputObject ? input as Record<string, unknown> : {};
+  let effectiveInput: unknown = input;
+  if (isInputObject) {
+    let effectiveObject = rawInput;
+    for (const [key, value] of Object.entries(contract.defaults)) {
+      if (effectiveObject[key] === undefined) {
+        if (effectiveObject === rawInput) effectiveObject = { ...rawInput };
+        effectiveObject[key] = value;
+      }
+    }
+    effectiveInput = effectiveObject;
+  }
+  const effectiveRecord = isInputObject ? effectiveInput as Record<string, unknown> : {};
+  const parsed = schema.safeParse(effectiveInput);
+  const diagnostics = parsed.success ? [] : decodeInputDiagnostics(parsed.error, effectiveInput);
+  const selector = definition.cli.options.find((option) => option.context === "sessionId");
+  const selectorValue = selector === undefined ? undefined : effectiveRecord[selector.key];
+  const selectorInvalid = selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "");
+  const selectorDiagnostic = selectorInvalid && selector !== undefined && !diagnostics.some((entry) => entry.path === selector.key)
+    ? [{
+        path: selector.key,
+        code: "invalid_session_id",
+        message: `${selector.flags.split(/[ <]/)[0]} must be a non-empty string`,
+        expected: "non-empty string",
+        received: typeof selectorValue === "string" ? JSON.stringify(selectorValue) : typeof selectorValue,
+      }]
+    : [];
+  const conditionalRequired = contract.requirements.filter((entry) =>
+    entry.required === true &&
+    entry.condition !== undefined &&
+    inputConditionMatches(entry.condition, effectiveRecord)
+  );
+  const required = [...new Set([...contract.required, ...conditionalRequired.map((entry) => entry.name)])];
+  const resolvedSelector = selector !== undefined &&
+    typeof context?.sessionId === "string" && context.sessionId.trim() !== "";
+  const missing = required.filter((key) =>
+    effectiveRecord[key] === undefined &&
+    !(resolvedSelector && selector?.key === key) &&
+    !diagnostics.some((entry) => entry.path === key)
+  );
+  const requiredDiagnostics = missing.map((key) => ({
+    path: key,
+    code: "required",
+    message: `${key} is required`,
+    expected: "present",
+    received: "undefined",
+  }));
+  const allowedValueFacts = new Set<string>();
+  const allowedValueDiagnostics = contract.requirements.flatMap((entry) => {
+    const value = effectiveRecord[entry.name];
+    if (entry.allowedValues === undefined || value === undefined ||
+      (entry.condition !== undefined && !inputConditionMatches(entry.condition, effectiveRecord))) return [];
+    const fact = JSON.stringify([entry.name, entry.condition, entry.allowedValues]);
+    if (allowedValueFacts.has(fact)) return [];
+    allowedValueFacts.add(fact);
+    if (entry.allowedValues.includes(value as string | boolean | number)) return [];
+    const expected = entry.allowedValues.map((allowed) => JSON.stringify(allowed)).join(" | ");
+    return [{ path: entry.name, code: "not_allowed", message: `${entry.name} must be one of ${expected}`, expected, received: safeReceivedValue(value) }];
+  });
+  const alternativeGroups = new Set<string>();
+  const alternativeDiagnostics = contract.requirements.flatMap((entry) => {
+    const alternatives = entry.alternatives;
+    if (alternatives === undefined ||
+      (entry.condition !== undefined && !inputConditionMatches(entry.condition, effectiveRecord))) return [];
+    const signature = JSON.stringify([entry.condition, alternatives]);
+    if (alternativeGroups.has(signature)) return [];
+    alternativeGroups.add(signature);
+    const selected = alternatives.members.filter((member) => {
+      const value = effectiveRecord[member.name];
+      return member.whenTrue === true ? value === true : value !== undefined;
+    });
+    const invalid = alternatives.cardinality === "exactly-one" ? selected.length !== 1
+      : alternatives.cardinality === "at-least-one" ? selected.length === 0 : selected.length > 1;
+    if (!invalid) return [];
+    const members = alternatives.members.map((member) => `${member.name}${member.whenTrue === true ? "=true" : ""}`);
+    const expected = alternatives.cardinality === "exactly-one" ? `exactly one of ${members.join(" | ")}`
+      : alternatives.cardinality === "at-least-one" ? `at least one of ${members.join(" | ")}` : `at most one of ${members.join(" | ")}`;
+    const received = selected.map((member) => `${member.name}${member.whenTrue === true ? "=true" : ""}`).join(" | ") || "none";
+    return [{ path: members.join("|"), code: alternatives.cardinality === "at-most-one" ? "exclusive" : "alternative-required", message: `${expected}; received ${received}`, expected, received }];
+  });
+  const allDiagnostics = [...diagnostics, ...requiredDiagnostics, ...allowedValueDiagnostics, ...alternativeDiagnostics, ...selectorDiagnostic];
+  const conditionalRequirementFacts = contract.requirements.filter((entry) =>
+    entry.condition !== undefined || entry.alternatives !== undefined || entry.allowedValues !== undefined
+  );
+  if (!parsed.success || missing.length > 0 || allowedValueDiagnostics.length > 0 || alternativeDiagnostics.length > 0 || selectorInvalid) {
+    const first = allDiagnostics[0];
+    const facts = first?.path === undefined || first.expected === undefined || first.received === undefined
+      ? undefined
+      : { path: first.path, expected: first.expected, received: first.received };
+    const option = definition.cli.options.find((entry) => entry.key === facts?.path);
+    const rejected = facts !== undefined && facts.path !== "" ? {
+      path: option?.flags.split(/[ <]/)[0] ?? facts.path,
+      expected: facts.expected,
+      received: facts.received,
+    } : selectorDiagnostic[0] !== undefined ? {
+      path: selector?.flags.split(/[ <]/)[0] ?? selectorDiagnostic[0].path,
+      expected: selectorDiagnostic[0].expected,
+      received: selectorDiagnostic[0].received,
+    } : missing.length === 1 ? { path: missing[0]!, expected: "present", received: "undefined" } : undefined;
+    return { success: false, envelope: refusalEnvelope({
+      command: definition.id, status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: allDiagnostics.length === 1 ? allDiagnostics[0]!.message : "Invalid command input",
+      diagnostics: allDiagnostics,
+      details: {
+        required,
+        defaults: contract.defaults,
+        requirements: contract.requirements,
+        conditionalRequirements: conditionalRequirementFacts,
+      },
+      ...(rejected === undefined ? {} : { rejected }),
+    }) };
+  }
+  const parsedRecord = parsed.data !== null && typeof parsed.data === "object" ? parsed.data as Record<string, unknown> : {};
+  const stdinText = definition.effects.includes("stdin") && typeof parsedRecord.input === "string"
+    ? parsedRecord.input : undefined;
+  return {
+    success: true,
+    ...admittedCommand({
+      definition, contract, data: shape(parsed.data), required,
+      ...(typeof selectorValue === "string" ? { sessionId: selectorValue } : {}),
+      ...(stdinText === undefined ? {} : { stdinText }),
+    }),
+  };
+}
+
+export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
+  const definition = canonicalDefinitions.find((entry) => entry.id === id);
+  if (definition === undefined) {
+    return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
+  }
+  const contract = commandSchemasById.get(definition.id)!;
+  // The declared payload contract is part of the input contract on BOTH
+  // transports, so the CLI entry validates the composed schema exactly as the
+  // MCP route does: one payload failure and one missing requirement are
+  // reported together, with the same nested per-field facts.
+  const admitted = admitCommandInput(definition, input, contract, payloadComposedSchema(definition), undefined, context);
+  if (!admitted.success) return admitted.envelope;
+  return admitted.execute(context);
 }

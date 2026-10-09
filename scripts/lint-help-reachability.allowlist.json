@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/issue.ts:0a2d162ea797",
+    "justification": "The selected issue verb and issue-id option value are runtime inputs; refusal recovery uses the registered issue show/reopen verbs, and issue command tests pin the reachable emitted text.",
+    "trackingIssue": "Rule #341"
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/issue.ts:5cb8fe0ab00c",
+    "justification": "The family adapter dispatches a runtime-selected issue command id; engine-authored recovery is transported verbatim and command behavior is covered by issue family tests.",
+    "trackingIssue": "Rule #341"
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/workflow.ts:751a9919ef73",
+    "justification": "The selected workflow verb determines the recovery route; each branch is a registered command and workflow command tests cover the runtime-selected path.",
+    "trackingIssue": "Rule #341"
+  }
+]

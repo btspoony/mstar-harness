@@ -72,6 +72,10 @@ import {
   type WorkflowEntry,
 } from "./status.js";
 import {
+  validateActivationAttestation,
+  type ActivationAttestation,
+} from "./store-activation.js";
+import {
   openStore,
   StoreError,
   storeDbPath,
@@ -1887,24 +1891,72 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
  * Adopt a terminal header that was imported without ACTIVE registry membership.
  * This is deliberately not a close: the terminal state is unchanged and no
  * registry membership is created.
+ *
+ * A terminal header may still hold ACTIVE coordinator session rows at the
+ * current epoch — a crashed or replaced writer whose binding was never
+ * revoked. Such rows are settled INSIDE this same adoption transaction, and
+ * only against the operator's stop attestation: a valid `ActivationAttestation`
+ * whose `stoppedSessions` name EVERY addressed ACTIVE session as
+ * stopped/reloaded, revoking exactly those rows, never the identity making the
+ * call. The attested stop is the trust boundary (the engine cannot observe a
+ * dead process), so an unattested holder is never silently revoked, an
+ * explicitly supplied malformed proof refuses before any store access, and a
+ * changed proof under a committed operation id is an operation conflict rather
+ * than a silent replay. An omitted expectedRevision is resolved from the
+ * addressed row inside this transaction; an explicit expectedRevision remains
+ * a strict CAS. The committed receipt records the settled targets and the
+ * approving operator/attestation provenance.
  */
 export async function adoptTerminalWorkflow(
   context: ExecutionContext,
-  input: { workflowId: string; expectedRevision: number; reason: string; operationId: string },
+  input: {
+    workflowId: string;
+    expectedRevision?: number;
+    reason: string;
+    operationId: string;
+    /** The operator's stopped-owner/operator proof; required exactly when the addressed header holds a current-epoch ACTIVE coordinator session. */
+    attestation?: ActivationAttestation;
+  },
 ): Promise<ExecutionReceipt<ExecutionState>> {
   const caller = context.caller;
   if (caller.role !== "coordinator" || caller.workflowId !== input.workflowId || !isNonEmptyString(caller.sessionId)) {
     throw new ExecutionError("execution.scope-mismatch", "terminal adoption requires an acquired coordinator identity addressing the selected workflow");
   }
-  if (!isNonEmptyString(input.workflowId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1 ||
+  if (!isNonEmptyString(input.workflowId) || (input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)) ||
       !isNonEmptyString(input.reason) || !isNonEmptyString(input.operationId)) {
-    throw new ExecutionError("execution.adoption-invalid", "workflowId, positive expectedRevision, non-empty reason, and operationId are required");
+    throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
+  }
+  // An explicitly supplied proof document is validated by the SAME validator
+  // the activation barrier and coordinator recovery use, BEFORE any store
+  // access: a malformed, incomplete or credential-bearing document refuses
+  // here instead of being silently ignored, and the projected declared shape is
+  // what the request fingerprint and the receipt carry.
+  const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
+  // Self-settlement is refused exactly as coordinator recovery refuses it: the
+  // identity that invokes the settlement must not be one the document declares
+  // stopped, so the attested stop always comes from a distinct observer.
+  if (attestation !== undefined && attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+    throw new ExecutionError(
+      "execution.adoption-refused",
+      `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; terminal adoption ` +
+        `settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come from a ` +
+        `distinct operator identity. Rerun from a session id other than the one this document names stopped, with a stop list ` +
+        `covering only the addressed workflow's ACTIVE holder(s).`,
+      { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" },
+    );
   }
   const requestHash = semanticRequestHash({
     operation: "workflow.adopt-terminal",
     address: { workflowId: input.workflowId },
     caller,
-    intent: { expectedRevision: input.expectedRevision, reason: input.reason },
+    intent: {
+      expectedRevision: input.expectedRevision ?? "current",
+      reason: input.reason,
+      // The proof document is part of the request's semantic selection: a retry
+      // carrying a DIFFERENT attestation is a different intent — an operation
+      // conflict, never a silent replay of the first settlement.
+      ...(attestation === undefined ? {} : { attestation }),
+    },
   });
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -1917,14 +1969,20 @@ export async function adoptTerminalWorkflow(
       planId: null,
       token: { kind: "root", key: [] },
     });
-    if (replay !== null) return replay;
+    if (replay !== null) {
+      // The persisted read envelope carries a settlement under its stored
+      // `operationRecovery` name; the public receipt exposes it as `recovery`,
+      // the same field a first commit returns, so a replay is shape-identical.
+      const { operationRecovery, ...recorded } = replay;
+      return { ...recorded, ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }) };
+    }
     const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?")
       .get(input.workflowId) as { revision?: unknown; state_json?: unknown } | undefined;
     if (row === undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no terminal header to adopt; register the workflow through the supported workflow registration route`);
     }
     const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
-    if (revision !== input.expectedRevision) {
+    if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
       throw new ExecutionError("execution.header-revision-conflict", `workflow ${input.workflowId} header revision is ${revision}, not expected revision ${input.expectedRevision}; re-read status validate and retry with its listed revision`);
     }
     const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(input.workflowId);
@@ -1938,14 +1996,62 @@ export async function adoptTerminalWorkflow(
     if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.stop_reason)) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason`);
     }
-    const activeSession = tx.db.prepare(
-      "select session_id from execution_sessions where workflow_id = ? and epoch = ? and state = 'active' limit 1",
-    ).get(input.workflowId, tx.epoch);
-    if (activeSession !== undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has an ACTIVE coordinator session at the current epoch; no supported exit exists for a terminal header holding an ACTIVE session at the current epoch`);
-    }
+    // The terminal-adoption record is checked BEFORE the settlement: a header
+    // whose close receipt already exists is a read-back case, never a reason to
+    // demand or perform another settlement.
     if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
+    }
+    // §2.3 the settlement: read EVERY current-epoch ACTIVE coordinator row the
+    // guard addresses (never only the first), require stop proof for all of
+    // them, then revoke exactly those rows. The partial unique index caps one
+    // workflow at a single ACTIVE coordinator row today, but the read stays
+    // cardinality-agnostic so a multi-row state has a supported recovery —
+    // complete proof for every listed target — rather than an unrecoverable
+    // count limit. Coverage is validated for the whole set BEFORE any row is
+    // revoked, and the transaction frame rolls the writes back on any refusal.
+    const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator")
+      .filter((row) => row.state === "active" && row.ref.epoch === tx.epoch)
+      .map((row) => row.ref.sessionId)
+      .sort();
+    if (activeHolders.length > 0) {
+      const holders = activeHolders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
+      if (attestation === undefined) {
+        throw new ExecutionError(
+          "execution.adoption-refused",
+          `workflow ${input.workflowId} holds ACTIVE coordinator session(s) ${holders} at epoch ${tx.epoch}; terminal adoption ` +
+            `settles them only against the operator's stop attestation, because it would otherwise revoke a holder nobody has ` +
+            `attested stopped. Supply --attestation <absolute-json> with the full ActivationAttestation whose stoppedSessions ` +
+            `name ${holders} as stopped/reloaded, then retry.`,
+          {
+            workflow_id: input.workflowId,
+            epoch: tx.epoch,
+            active_holder_sessions: activeHolders,
+            adoption_refusal: "active-session-proof-required",
+          },
+        );
+      }
+      const attested = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
+      const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
+      if (unattested.length > 0) {
+        throw new ExecutionError(
+          "execution.adoption-refused",
+          `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} \u2014 the ACTIVE ` +
+            `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} \u2014 as stopped/reloaded, so the settlement ` +
+            `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` +
+            `process itself. Add each listed session to the attestation's stoppedSessions and retry.`,
+          {
+            workflow_id: input.workflowId,
+            epoch: tx.epoch,
+            active_holder_sessions: activeHolders,
+            unattested_sessions: unattested,
+            adoption_refusal: "active-session-proof-incomplete",
+          },
+        );
+      }
+      for (const sessionId of activeHolders) {
+        revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
+      }
     }
     const now = new Date().toISOString();
     const nextState = {
@@ -1955,18 +2061,47 @@ export async function adoptTerminalWorkflow(
       adoption_actor_session_id: caller.sessionId,
       adoption_operation_id: input.operationId,
     };
+    const expectedRevision = input.expectedRevision ?? revision;
     tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?")
-      .run(JSON.stringify(nextState), now, input.workflowId, input.expectedRevision);
+      .run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
     tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
     tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    // Safe provenance on the committed receipt: which addressed rows were
+    // settled, under whose attestation. Only declared attestation fields
+    // travel (the validator refuses anything else), so no credential value is
+    // ever recorded beside the settlement.
+    const settlement: RecoveryDetails | undefined = attestation === undefined ? undefined : {
+      outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
+      target: { workflowId: input.workflowId },
+      applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
+      unresolved: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: attestation.attestedAt },
+      ],
+      warnings: activeHolders.length === 0
+        ? [{
+            code: "execution.adoption.nothing-to-settle",
+            message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`,
+          }]
+        : [],
+      commitState: "committed",
+    };
     const receipt: ExecutionRead<ExecutionState> = {
       data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, readExecutionMetaRow(tx.db)),
       token: executionRootTokenOf(tx),
       storeId: tx.storeId,
       epoch: tx.epoch,
+      ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
-    return { ...receipt, operationId: input.operationId, replayed: false };
+    const { operationRecovery, ...publicReceipt } = receipt;
+    return {
+      ...publicReceipt,
+      operationId: input.operationId,
+      replayed: false,
+      ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }),
+    };
   });
 }
 
@@ -2083,12 +2218,44 @@ function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBi
   return { role: "coordinator", workflowId, sessionId: caller.sessionId, operationId };
 }
 
-function bindSessionRequestHash(caller: ExecutionCaller, bind: ResolvedBind, expected: ExecutionToken): string {
+/**
+ * §3.1 the OMITTED-freshness intent of a session bind.
+ *
+ * A symbol cannot carry this intent: the canonical value form
+ * (`serializeExecutionValue`) accepts plain JSON only, so a symbol in the hashed
+ * intent refuses `execution.canonical-value`. The intent is therefore a
+ * DISCRIMINATED ENVELOPE whose two branches have disjoint shapes — an omitted
+ * freshness is `{freshness: "omitted"}` and a supplied one is
+ * `{freshness: "supplied", token: <the token string>}`. A caller's value is
+ * only ever placed in the `token` slot of the supplied branch, so no value a
+ * caller can write — not the ordinary string `"current"`, and not an untyped
+ * object shaped like the marker — can reproduce the omitted branch. That is
+ * what the previous sentinel lacked: it was the ordinary string `"current"`,
+ * which an explicit `expected: "current"` reproduced exactly, letting a changed
+ * request be served as a replay instead of refusing `execution.operation-conflict`.
+ */
+function bindFreshnessIntent(expected: ExecutionToken | undefined): unknown {
+  return expected === undefined ? { freshness: "omitted" } : { freshness: "supplied", token: expected };
+}
+
+/**
+ * §3.1 the request fingerprint of one session bind: the operation kind, the
+ * addressed workflow, the bind itself and the trusted caller — never the
+ * freshness the caller happened to present. An OMITTED `expected` carries the
+ * omitted marker and is resolved by the verb from the workflow's own header
+ * inside its write transaction, so a retry that omits it carries the SAME
+ * fingerprint as the commit and is served as the recorded replay instead of a
+ * conflict against a token the first bind itself advanced. A SUPPLIED token is
+ * hashed as the token string itself and stays a strict CAS, so a retry
+ * presenting a different explicit value is an operation conflict and is never
+ * silently converted into a replay.
+ */
+function bindSessionRequestHash(caller: ExecutionCaller, bind: ResolvedBind, expected: ExecutionToken | undefined): string {
   return createHash("sha256").update(serializeExecutionValue({
     operation: BIND_SESSION_OPERATION,
     workflow_id: bind.workflowId,
     role: bind.role,
-    expected,
+    expected: bindFreshnessIntent(expected),
     caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId },
   }), "utf8").digest("hex");
 }
@@ -2813,10 +2980,22 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
  * holder and its stop/reload attestation; first-bind adoption is unavailable
  * once any coordinator record exists. Every refusal names the recorded facts and
  * the supported route, so the caller can act instead of guessing.
+ *
+ * `expected` is OPTIONAL: the same freshness-omitted rule the other domain verbs
+ * take. When it is omitted the verb resolves the workflow's CURRENT token from
+ * its own header inside this write transaction — never from a caller value and
+ * never from a pre-transaction read — so the ordinary `{workflowId,
+ * operationId}` call needs no discover/read/copy ladder and still CASes against
+ * what the store holds. The committed receipt is consulted FIRST, before that
+ * resolution, so an identical retry under the same operation id is the recorded
+ * replay rather than a conflict against the revision the first bind advanced. A
+ * SUPPLIED token keeps its strict-CAS semantics: a stale value refuses
+ * `execution.stale-token`, and the same operation id with a different supplied
+ * token stays `execution.operation-conflict`.
  */
 export async function bindExecutionSession(
   context: ExecutionContext,
-  input: { workflowId: string; expected: ExecutionToken; operationId: string },
+  input: { workflowId: string; expected?: ExecutionToken; operationId: string },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const bind = resolveBindRequest(context.caller, input);
   const requestHash = bindSessionRequestHash(context.caller, bind, input.expected);
@@ -2847,7 +3026,11 @@ export async function bindExecutionSession(
       return { ...receipt, operationId: bind.operationId, replayed: true };
     }
     const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
-    assertExecutionToken(input.expected, {
+    // The freshness is resolved INSIDE this transaction from the workflow's own
+    // header: an omitted `expected` is the current token, a supplied one is the
+    // strict CAS it always was.
+    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [bind.workflowId], header.revision);
+    assertExecutionToken(expected, {
       kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [bind.workflowId], revision: header.revision,
     });
     const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);

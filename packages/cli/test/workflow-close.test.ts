@@ -28,6 +28,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -677,12 +678,15 @@ describe("mstar workflow evidence", () => {
       expect(refused.exitCode).toBe(1);
       expect(message(refused)).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
 
-      // An incoherent declaration is refused by the shared per-kind rule.
+      // The declaration is incomplete without both delivery anchors; the
+      // command reports the missing target before attempting any write.
+      const beforeIncoherentSnapshot = readFileSync(snapshot, "utf8");
       const incoherent = runCli([
         "workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "development", "--branch-source", "feature/a", "--harness", harness,
       ]);
-      expect(incoherent.exitCode).toBe(1);
-      expect(message(incoherent)).toContain("delivery source and target branches");
+      expect(incoherent.exitCode).toBe(2);
+      expectUsageDiagnostic(incoherent, "branchTarget");
+      expect(readFileSync(snapshot, "utf8")).toBe(beforeIncoherentSnapshot);
 
       const declared = runCli([
         "workflow", "evidence", "--workflow", WORKFLOW_ID,

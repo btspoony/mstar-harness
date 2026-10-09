@@ -16,7 +16,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine";
 import { runCli, withTempDir } from "./harness";
-import { cliEnvelope } from "./support/cli-assertions";
+import { cliEnvelope, expectUsageDiagnostic } from "./support/cli-assertions";
 
 // ---------------------------------------------------------------------------
 // mstar audit scaffold
@@ -752,7 +752,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
     expect(noDir.exitCode).toBe(2);
-    expect(cliEnvelope(noDir, "usage", "command.invalid-input").message).toContain("audit-dir");
+    expectUsageDiagnostic(noDir, "path");
 
     withTempDir("mstar-slice4-cli-", (dir) => {
       const { outDir } = scaffoldFixture(dir);
@@ -768,7 +768,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
       expect(noPlans.exitCode).toBe(2);
-      expect(cliEnvelope(noPlans, "usage", "command.invalid-input").message).toContain("plans");
+      expectUsageDiagnostic(noPlans, "--plans");
     });
   });
 

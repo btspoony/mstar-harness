@@ -1,7 +1,7 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
 import { describe, expect, test } from "bun:test";
 import { runCli } from "./harness";
-import { cliEnvelope } from "./support/cli-assertions";
+import { cliEnvelope, expectUsageDiagnostic } from "./support/cli-assertions";
 
 // ---------------------------------------------------------------------------
 // mstar host detect
@@ -40,7 +40,7 @@ describe("mstar host detect — tool-shape host matrix", () => {
   test("missing --signals → usage, exit 2", () => {
     const result = runCli(["host", "detect"]);
     expect(result.exitCode).toBe(2);
-    expect(cliEnvelope(result).message).toBe("error: required option '--signals <list>' not specified");
+    expectUsageDiagnostic(result, "signals");
   });
 });
 

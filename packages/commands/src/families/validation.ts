@@ -358,7 +358,20 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       }
       case "worktree.qc-alignment": {
         const files = input.files ?? [];
-        if (!files.length) throw new SddScriptError("usage: worktree qc-alignment <assignment-file>...", 2);
+        if (!files.length) {
+          return refusalEnvelope({
+            command: id,
+            status: "usage",
+            code: "command.invalid-input",
+            exitCode: 2,
+            message: "Invalid input.",
+            diagnostics: [{
+              path: "files",
+              code: "required",
+              message: "at least one assignment file is required",
+            }],
+          });
+        }
         const assignments: QcAlignmentAssignment[] = files.map((file) => {
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
           const text = readFileSync(file, "utf8");
@@ -487,6 +500,26 @@ function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unkn
   const payloads: Record<string, PayloadDescriptor> | undefined = verb === "worktree.check"
     ? { tracks: { schema: tracksSchema, help: "JSON array of {worktreePath, workingBranch}; the CLI passes the JSON string, MCP passes the object array" } }
     : undefined;
-  return { id, cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) }, input: schemas[verb], output: commandEnvelopeSchema, effects: item.effects, description: item.description, ...(payloads === undefined ? {} : { payloads }), execute: (input, context) => execute(id, input, context) };
+  const assignmentHeaderRequirement = {
+    name: "assignmentFile",
+    ownership: "caller" as const,
+    constraint: "the file must use a `## Assignment` header; assignment metadata is read only before the next `##` section, thematic `---`, or top-level `#` heading, so put Execute as, Delegation, and other assignment fields in that header",
+  };
+  return {
+    id,
+    cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) },
+    input: schemas[verb],
+    output: commandEnvelopeSchema,
+    effects: item.effects,
+    description: item.description,
+    ...(verb === "dispatch.validate" ? {
+      requirements: [
+        { ...assignmentHeaderRequirement, route: "cli" as const },
+        { ...assignmentHeaderRequirement, route: "mcp" as const },
+      ],
+    } : {}),
+    ...(payloads === undefined ? {} : { payloads }),
+    execute: (input, context) => execute(id, input, context),
+  };
 }
 export function getValidationCommandDefinitions(): readonly CommandDefinition[] { return verbs.map(definition); }

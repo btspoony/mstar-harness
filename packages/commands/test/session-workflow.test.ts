@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
+import { consultDeliveryEvidence, encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore, readWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
+import { executeCommand } from "../src/definitions.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -47,45 +48,193 @@ describe("session and workflow command families", () => {
     expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
   });
-  test("pathname fields carry no payload descriptor, so a file path is never parsed as JSON", () => {
-    // `--file` is an absolute pathname on every workflow verb. A descriptor
-    // bound to it would make the shared CLI decoder `JSON.parse` the path and
-    // reject ordinary paths as invalid JSON, so the field must not appear —
-    // while the genuine document-valued fields keep theirs.
-    for (const id of ["workflow.evidence", "workflow.execution-policy"]) {
-      const command = definition(id);
-      expect(command.payloads).toBeDefined();
-      expect(command.payloads).not.toHaveProperty("file");
-      expect(command.cli.options.some((option) => option.key === "file")).toBe(true);
-    }
-  });
 
-  test("evidence before Done is accepted through the workflow command", async () => {
+  test("public workflow FILE routes redact malformed source bytes", async () => {
+    const context = testContext({ sessionId: "caller-session" });
+    const harness = path.join(context.cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const secret = "sk-live-9f2c4ab1-secret";
+    const malformedFile = path.join(context.cwd, "malformed.json");
+    writeFileSync(malformedFile, `{"value":${secret}}`);
+
+    const evidence = await executeCommand("workflow.evidence", {
+      workflow: "wf-malformed", file: malformedFile, harness,
+    }, context);
+    expect(evidence).toMatchObject({ status: "refused", code: "workflow.evidence.file-malformed", details: { recovery: expect.stringContaining("mstar workflow evidence") } });
+    expect(JSON.stringify(evidence)).not.toContain(secret);
+    expect(JSON.stringify(evidence)).not.toContain("workflow adopt-terminal --attestation");
+
+    const policy = await executeCommand("workflow.execution-policy", {
+      workflow: "wf-malformed", file: malformedFile, harness,
+    }, context);
+    expect(policy).toMatchObject({ status: "refused", code: "workflow.execution-policy.file-malformed", details: { recovery: expect.stringContaining("mstar workflow execution-policy") } });
+    expect(JSON.stringify(policy)).not.toContain(secret);
+    expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
+
+    const attestation = path.join(context.cwd, "malformed-attestation.json");
+    writeFileSync(attestation, `{"operator":${secret}}`);
+    const recovery = await executeCommand("workflow.recover-coordinator", {
+      session: path.join(context.cwd, "unused-session.json"),
+      operationId: "recover-malformed",
+      reason: "malformed proof",
+      authorizationRef: "fixture-authorization",
+      stopped: ["prior-session"],
+      attestation,
+    }, context);
+    expect(recovery).toMatchObject({ status: "refused", code: "workflow.recover-coordinator.attestation-malformed" });
+    expect(JSON.stringify(recovery)).not.toContain(secret);
+  });
+  test("unreadable non-adoption workflow files recover through their own --file route", async () => {
+    const context = testContext({ sessionId: "caller-session" });
+    const harness = path.join(context.cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const file = path.join(context.cwd, "missing.json");
+    const evidence = await executeCommand("workflow.evidence", {
+      workflow: "wf-missing-file", file, harness,
+    }, context);
+    expect(evidence).toMatchObject({
+      status: "refused", code: "ENOENT",
+      details: { recovery: expect.stringContaining("mstar workflow evidence --workflow <id> --file <absolute-json>") },
+    });
+    expect(JSON.stringify(evidence)).not.toContain("workflow adopt-terminal --attestation");
+
+    const policy = await executeCommand("workflow.execution-policy", {
+      workflow: "wf-missing-file", file, harness,
+    }, context);
+    expect(policy).toMatchObject({
+      status: "refused", code: "ENOENT",
+      details: { recovery: expect.stringContaining("mstar workflow execution-policy --workflow <id> --file <absolute-json>") },
+    });
+    expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
+  });
+  test("workflow.evidence FILE consumers preserve revision paths, member boundaries, and completion freeze rules", async () => {
     const context = testContext();
     const harnessDir = path.join(context.cwd, ".mstar");
     mkdirSync(harnessDir, { recursive: true });
     mkdirSync(path.join(harnessDir, "plans"), { recursive: true });
-    writeFileSync(path.join(harnessDir, "plans", "plan-evidence-order.md"), "**plan_id:** plan-evidence-order\n");
+    for (const planId of ["plan-evidence-order", "plan-report-only", "plan-historical-done", "plan-frozen-done"]) {
+      writeFileSync(path.join(harnessDir, "plans", `${planId}.md`), `**plan_id:** ${planId}\n`);
+    }
     const store = await initializeStore({ harnessDir });
     store.close();
-    const registered = await definition("workflow.register").execute({
+    const evidenceCommand = definition("workflow.evidence");
+    const evidenceFile = path.join(context.cwd, "delivery.json");
+    const snapshotDir = (id: string) => path.join(harnessDir, "workflows", id);
+    const readSnapshot = (id: string) => readWorkflowSnapshot(snapshotDir(id)).snapshot;
+    const record = async (workflow: string, delivery: unknown) => {
+      writeFileSync(evidenceFile, JSON.stringify(delivery));
+      return evidenceCommand.execute({ workflow, file: evidenceFile, harness: harnessDir }, context);
+    };
+    const close = (workflow: string) => definition("status.workflow-close").execute({
+      workflow, harness: harnessDir, endedAt: "2026-10-08T00:00:00.000Z",
+    }, context);
+    // The FILE route's plan status is moved only by the coordinator's authorized
+    // lifecycle operations; this fixture instead plants the initial condition
+    // directly on disk, exactly as the sibling close/process fixtures do, so the
+    // evidence consumer is exercised against a row already at Done.
+    const markDone = (workflow: string) => {
+      const dir = snapshotDir(workflow);
+      const snapshot = readWorkflowSnapshot(dir).snapshot;
+      writeFileSync(path.join(dir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+        ...snapshot,
+        plans: snapshot.plans.map((row) => ({ ...row, status: "Done" })),
+      }));
+    };
+
+    const development = await definition("workflow.register").execute({
       workflow: "wf-evidence-order", planId: "plan-evidence-order", planTitle: "Evidence order",
       planFile: "plans/plan-evidence-order.md", deliveryKind: "development", branchSource: "feature/evidence-order",
       branchTarget: "main", harness: harnessDir,
     }, context);
-    expect(registered).toMatchObject({ status: "ok" });
+    expect(development.status).toBe("ok");
+    expect((await record("wf-evidence-order", { compound: { outcome: "created" } })).status).toBe("ok");
+    const beforeInvalid = readSnapshot("wf-evidence-order").delivery;
+    for (const invalid of [
+      { compound: { outcome: "skipped" } },
+      { compound: { outcome: "skipped", reason: "   " } },
+      { compound: { outcome: "created", unrecognized: "must not be dropped" } },
+      { pr: { repo: "owner/repo", head: "feature/evidence-order" } },
+      { completion: { policy: "wrong-kind", evidence: "must not attach" } },
+    ]) {
+      expect((await record("wf-evidence-order", invalid)).status).toBe("refused");
+      expect(readSnapshot("wf-evidence-order").delivery).toEqual(beforeInvalid);
+    }
+    expect((await record("wf-evidence-order", {
+      compound: { outcome: "skipped", reason: "not applicable to this delivery" },
+    })).status).toBe("ok");
+    expect((await record("wf-evidence-order", {
+      pr: { repo: "owner/repo", head: "feature/evidence-order", target: "main" },
+    })).status).toBe("ok");
+    const beforeChangedPr = readSnapshot("wf-evidence-order").delivery;
+    const changedIdentity = await record("wf-evidence-order", {
+      pr: { repo: "different/repo", head: "feature/evidence-order", target: "main" },
+    });
+    expect(changedIdentity).toMatchObject({ status: "refused", code: "coordination.invalid-transition" });
+    expect(readSnapshot("wf-evidence-order").delivery).toEqual(beforeChangedPr);
+    expect((await record("wf-evidence-order", { merge: { provider: "github", evidence: "confirmed merge receipt" } })).status).toBe("ok");
+    await markDone("wf-evidence-order");
+    expect((await record("wf-evidence-order", { compound: { outcome: "updated" } })).status).toBe("ok");
+    expect((await record("wf-evidence-order", { merge: { provider: "github", evidence: "updated checked receipt" } })).status).toBe("ok");
+    const developmentSnapshot = readSnapshot("wf-evidence-order");
+    expect(developmentSnapshot.plans[0]?.status).toBe("Done");
+    expect(developmentSnapshot.delivery).toEqual({
+      compound: { outcome: "updated" },
+      pr: { repo: "owner/repo", head: "feature/evidence-order", target: "main" },
+      merge: { provider: "github", evidence: "updated checked receipt" },
+    });
 
-    const evidenceFile = path.join(context.cwd, "delivery.json");
-    writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "created" } }));
-    const recorded = await definition("workflow.evidence").execute({
-      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    const reportOnly = await definition("workflow.register").execute({
+      workflow: "wf-report-only", planId: "plan-report-only", planTitle: "Report only",
+      planFile: "plans/plan-report-only.md", deliveryKind: "verification/report-only",
+      completionPolicy: "approval-v1", harness: harnessDir,
     }, context);
-    expect(recorded.status).toBe("ok");
-    const snapshot = JSON.parse(readFileSync(path.join(harnessDir, "workflows", "wf-evidence-order", "snapshot.json"), "utf8"));
-    expect(snapshot.delivery).toEqual({ compound: { outcome: "created" } });
-    expect(snapshot.plans[0].status).not.toBe("Done");
-  });
+    expect(reportOnly.status).toBe("ok");
+    expect((await record("wf-report-only", {
+      completion: { policy: "approval-v0", evidence: "acceptance/report.md" },
+    })).status).toBe("ok");
+    await markDone("wf-report-only");
+    const mismatchClose = await close("wf-report-only");
+    expect(mismatchClose).toMatchObject({ status: "refused", code: "coordination.invalid-transition" });
+    expect(readSnapshot("wf-report-only").status).toBe("running");
+    expect((await record("wf-report-only", {
+      completion: { policy: "approval-v1", evidence: "acceptance/report.md" },
+    })).status).toBe("ok");
+    expect(consultDeliveryEvidence(readSnapshot("wf-report-only"))).toEqual([]);
+    expect((await close("wf-report-only")).status).toBe("ok");
+    expect(readSnapshot("wf-report-only").status).toBe("completed");
 
+    const frozen = await definition("workflow.register").execute({
+      workflow: "wf-frozen-done", planId: "plan-frozen-done", planTitle: "Frozen completion",
+      planFile: "plans/plan-frozen-done.md", deliveryKind: "verification/report-only",
+      completionPolicy: "approval-v1", harness: harnessDir,
+    }, context);
+    expect(frozen.status).toBe("ok");
+    expect((await record("wf-frozen-done", {
+      completion: { policy: "approval-v1", evidence: "acceptance/frozen-report.md" },
+    })).status).toBe("ok");
+    await markDone("wf-frozen-done");
+    const acceptedSnapshot = readSnapshot("wf-frozen-done");
+    expect(await record("wf-frozen-done", {
+      completion: { policy: "approval-v1", evidence: "acceptance/replacement-report.md" },
+    })).toMatchObject({ status: "refused", code: "coordination.completion-frozen" });
+    expect(readSnapshot("wf-frozen-done")).toEqual(acceptedSnapshot);
+
+    const historical = await definition("workflow.register").execute({
+      workflow: "wf-historical-done", planId: "plan-historical-done", planTitle: "Historical completion",
+      planFile: "plans/plan-historical-done.md", deliveryKind: "verification/report-only",
+      completionPolicy: "approval-v2", harness: harnessDir,
+    }, context);
+    expect(historical.status).toBe("ok");
+    await markDone("wf-historical-done");
+    expect((await record("wf-historical-done", {
+      completion: { policy: "approval-v2", evidence: "acceptance/historical-report.md" },
+    })).status).toBe("ok");
+    expect(consultDeliveryEvidence(readSnapshot("wf-historical-done"))).toEqual([]);
+    expect((await close("wf-historical-done")).status).toBe("ok");
+
+
+
+  });
 
   test("session.run launches argv without a shell and preserves child output and exit status", async () => {
     const context = testContext();
@@ -105,10 +254,13 @@ describe("session and workflow command families", () => {
     expect(result.status).toBe("usage");
   });
 
-  test("session.recover requires the runtime main-conversation identity", async () => {
+  test("session.recover refuses request-supplied identity when runtime identity is absent", async () => {
     const context = testContext();
     const result = await definition("session.recover").execute({ workflow: "wf-recovery", sessionId: "child-agent-session", priorSession: "stopped", reason: "reload", attestation: "/tmp/wf-recovery-attestation.json", expect: "stale-token", operation: "recover-1" }, context);
-    expect(result).toMatchObject({ status: "usage", message: "active recovery requires the main conversation session identity" });
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(result.details?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "sessionId", code: "required" }),
+    ]));
   });
   test("workflow recovery requires the runtime main-session identity, not a request-supplied session", async () => {
     const recovery = definition("workflow.recover-coordinator");

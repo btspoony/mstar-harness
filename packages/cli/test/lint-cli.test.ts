@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
-import { cliEnvelope, lintResults, lintViolationCodes } from "./support/cli-assertions";
+import { cliEnvelope, expectUsageDiagnostic, lintResults, lintViolationCodes } from "./support/cli-assertions";
 
 // ---------------------------------------------------------------------------
 // mstar lint
@@ -196,7 +196,7 @@ Check result: exit 0; changed scope line found.
   test("missing <target> arg → usage, exit 2", () => {
     const result = runCli(["lint"]);
     expect(result.exitCode).toBe(2);
-    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'target'");
+    expectUsageDiagnostic(result, "target");
   });
 
   test("existing unclassifiable file → usage, exit 2", () => {
@@ -306,6 +306,6 @@ describe("mstar lint --type provenance", () => {
   test("--type provenance without a target → usage, exit 2", () => {
     const result = runCli(["lint", "--type", "provenance"]);
     expect(result.exitCode).toBe(2);
-    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'target'");
+    expectUsageDiagnostic(result, "target");
   });
 });

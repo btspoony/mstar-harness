@@ -17,6 +17,7 @@
  */
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -78,14 +79,22 @@ export type StoreErrorCode =
   | "execution.consumer-not-ready"
   | "execution.workflow-identity-mismatch";
 
-/** Typed refusal with an actionable, stable code. */
+/** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
   readonly code: StoreErrorCode;
+  /**
+   * Structured facts for the caller when a prose message cannot carry them
+   * losslessly — e.g. the three distinct version facts of a schema refusal. It
+   * is optional so the ~50 existing two-argument constructions keep their exact
+   * shape; a caller that supplies none gets no `details` key at all.
+   */
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: StoreErrorCode, message: string) {
+  constructor(code: StoreErrorCode, message: string, details?: Record<string, unknown>) {
     super(`[${code}] ${message}`);
     this.name = "StoreError";
     this.code = code;
+    if (details !== undefined) this.details = details;
   }
 }
 
@@ -449,6 +458,7 @@ function openConnection(
     if (mode === "read") ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath);
   }
   const fail = (message: string): never => {
@@ -480,6 +490,7 @@ function openConnection(
     } catch {
       // already closed by fail()
     }
+    if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath);
   }
   return busyAware(db, dbPath);
@@ -1461,10 +1472,23 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
     const row = applied[i];
     const compiled = MIGRATIONS.find((m) => m.version === row.version);
     if (!compiled) {
+      // The three facts are distinct and all belong in the refusal. The row's
+      // own version is the FIRST the build cannot interpret; the store's schema
+      // version is the highest row actually applied (a build that supports 1..7
+      // reading a store at 9 meets version 8 first, so calling 8 "the store
+      // version" understates the store by a whole generation); the build's
+      // supported maximum is the highest COMPILED version, not the migration
+      // count, which only coincides while the versions stay contiguous from 1.
+      let highestApplied = 0;
+      for (const candidate of applied) if (candidate.version > highestApplied) highestApplied = candidate.version;
+      let supportedMax = 0;
+      for (const migration of MIGRATIONS) if (migration.version > supportedMax) supportedMax = migration.version;
       throw new StoreError(
         "store.schema-unsupported",
-        `The store was written by schema version ${row.version}, which this build does not know. ` +
-          `Known versions: 1..${MIGRATIONS.length}. Upgrade the harness to read this store; nothing was modified.`,
+        `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, ` +
+          `and the first unsupported migration is ${row.version}. ` +
+          `Upgrade the harness to read this store; nothing was modified.`,
+        { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version },
       );
     }
     if (row.version !== i + 1) {
@@ -1716,6 +1740,49 @@ function isOpenLevelFailure(error: unknown): boolean {
   if (err?.errcode === 14 || err?.errcode === 10) return true;
   return /unable to open database file|disk I\/O error/i.test(String(err?.message ?? ""));
 }
+
+/**
+ * Is this a failure the SAME-PROCESS writer-close window produces, rather than
+ * a real store verdict? Bun 1.4.0's `node:sqlite` completes a closed handle's
+ * cleanup — checkpoint, then removal of the now-empty `-wal`/`-shm` — when the
+ * handle is COLLECTED, so a read-only open (or a read through it) can have its
+ * sidecars deleted underneath it and report SQLITE_CANTOPEN for a store that is
+ * entirely intact. The window is transient: once the deferred cleanup settles,
+ * the same open converges.
+ *
+ * The discrimination reads the DRIVER's own structured fact on the raw error —
+ * the numeric SQLITE error code (`errcode` 14 = SQLITE_CANTOPEN) — and never
+ * the mapped refusal shape or the database path: a harness path that merely
+ * contains the word "open" must not turn an ordinary content failure into a
+ * retry, and a `store.corrupt` `StoreError` is never transient.
+ *
+ * Only that shape is transient, and only while the database FILE itself still
+ * exists: a missing file is the caller's own `store.not-initialized` decision
+ * (taken before this open) and a persistent CANTOPEN — a shape that never
+ * becomes readable — keeps its existing refusal once the budget is spent. Every
+ * non-CANTOPEN failure (BUSY, an I/O error, a content verdict) is never
+ * retried, so no genuine refusal is deferred or weakened.
+ */
+function isRawCantOpen(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
+}
+
+function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
+  if (error instanceof StoreError) return false;
+  if (!isRawCantOpen(error)) return false;
+  return existsSync(dbPath);
+}
+
+/** Bounded retry budget for a read open that meets a same-process writer's
+ * deferred cleanup. Only reached after a transient CANTOPEN, so a healthy
+ * store pays nothing for it. This is a deliberate bounded workaround for the
+ * Bun 1.4.0 `node:sqlite` collection-timed cleanup defect: it removes once the
+ * runtime quiesces a closed handle's sidecars at close. */
+const READ_OPEN_ATTEMPTS = 5;
+/** Delay before the next read-open attempt. The observed window closes on the
+ * runtime's next collection, which the retry's own allocation and this yield
+ * reach; the whole budget stays in the low tens of milliseconds. */
+const READ_OPEN_BACKOFF_MS = 5;
 
 /** The probe's reused read-only connection: the store file it belongs to. */
 type ProbeConnection = { dbPath: string; dev: number; ino: number; db: StoreDb };
@@ -1974,6 +2041,14 @@ export type StoreHandle = {
  * (`ensureJournalForRead`), because a read-only connection cannot create the
  * journal it needs to read a WAL database. The schema and store identity are
  * verified on every request; drift/newer/corrupt refuses before mutation.
+ *
+ * A READ open is retried on a bounded budget when the store file itself still
+ * exists and the raw driver error carries SQLITE_CANTOPEN (`errcode` 14), the
+ * transient shape a same-process writer-close window produces
+ * (`isTransientReadOpenFailure`). Each attempt re-runs the existing journal
+ * preparation and the whole content verification, so a settled store converges
+ * and nothing else changes: a persistent failure still refuses with the same
+ * code and message the single-shot open produced.
  */
 export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
@@ -1992,10 +2067,30 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
         `when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`,
     );
   }
+  const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await openStoreOnce(dbPath, mode);
+    } catch (error) {
+      if (attempt >= attempts || !isTransientReadOpenFailure(error, dbPath)) {
+        refuseOpenFailure(error, dbPath);
+      }
+      await sleep(READ_OPEN_BACKOFF_MS);
+    }
+  }
+}
+
+/** One open attempt: connect, then verify the schema and store identity on the
+ * same connection. `openConnection` preserves eligible raw read CANTOPEN errors
+ * from setup so the caller can retry them; the CONTENT stage rethrows the
+ * driver's own error so a read-open CANTOPEN remains distinguishable from a
+ * real content verdict. This caller owns retrying the former and mapping either. */
+async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<StoreHandle> {
   let db: StoreDb;
   try {
     db = await connect(dbPath, mode);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath);
   }
   try {
@@ -2013,7 +2108,7 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
     };
   } catch (error) {
     db.close();
-    refuseOpenFailure(error, dbPath);
+    throw error;
   }
 }
 

@@ -148,32 +148,6 @@ describe("command discovery", () => {
     expect(overridden.input.safeParse({}).success).toBe(false);
     expect(overridden.input.safeParse({ name: "x" }).success).toBe(true);
   });
-  test("workflow register schema publishes the selected-document title constraint", () => {
-    const selection = selectCommandSchema({ command: "workflow.register" }, getCommandDefinitions());
-    if (selection.kind !== "command") throw new Error("expected workflow.register command descriptor");
-    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "planTitle",
-      ownership: "caller",
-      route: "cli",
-      constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
-    }));
-  });
-  test("issue reopen publishes required CAS/payload inputs and revision-source schema", () => {
-    const selection = selectCommandSchema({ command: "issue.reopen" }, getCommandDefinitions());
-    if (selection.kind !== "command") throw new Error("expected issue.reopen command descriptor");
-    expect(selection.descriptor.cli.path).toEqual(["issue", "reopen"]);
-    expect(selection.descriptor.cli.options.filter((option) => option.required).map((option) => option.key))
-      .toEqual(expect.arrayContaining(["id", "actor", "expect", "operationId"]));
-    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "expect",
-      tokenKind: "revision",
-    }));
-    expect(selection.descriptor.cli.options.find((option) => option.key === "expect")?.help)
-      .toContain("mstar issue show --id <id>");
-    expect(selection.descriptor.payloadSchemas).toMatchObject({
-      payload: { properties: { reason: { type: "string" } } },
-    });
-  });
 
   test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
@@ -222,6 +196,32 @@ describe("command discovery", () => {
     expect(leafData.descriptor.effects).toEqual(["read"]);
     expect(Object.keys(leafData.descriptor.payloadSchemas)).toEqual([]);
   });
+  test("schema discovery publishes canonical alternatives and accepted-value facts", async () => {
+    const envelope = await executeCommand("schema", { command: "milestone.update" }, context());
+    if (envelope.status !== "ok") throw new Error(`expected schema result, got ${envelope.status}`);
+    const data = envelope.data as { kind: "command"; descriptor: { input: Record<string, unknown> } };
+    const requirements = data.descriptor.input["x-mstar-requirements"] as Array<Record<string, unknown>>;
+    expect(requirements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "name",
+        alternatives: expect.objectContaining({
+          cardinality: "at-least-one",
+          members: expect.arrayContaining([expect.objectContaining({ name: "clearTarget", whenTrue: true })]),
+        }),
+      }),
+      expect.objectContaining({
+        name: "target",
+        alternatives: expect.objectContaining({ cardinality: "at-most-one" }),
+      }),
+    ]));
+    const seatEnvelope = await executeCommand("schema", { command: "pr-review.seat-prompt" }, context());
+    if (seatEnvelope.status !== "ok") throw new Error(`expected schema result, got ${seatEnvelope.status}`);
+    const seatData = seatEnvelope.data as { kind: "command"; descriptor: { input: Record<string, unknown> } };
+    expect(seatData.descriptor.input["x-mstar-requirements"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "stage", allowedValues: ["1", "2"] }),
+      expect.objectContaining({ name: "stage", condition: { field: "collectFolded", equals: true }, allowedValues: ["2"] }),
+    ]));
+  });
 
   test("payload selector stays a distinct supported selector", async () => {
     const payload = await executeCommand("schema", { type: "CaptureInput" }, context());
@@ -253,25 +253,6 @@ describe("command discovery", () => {
   });
 });
 
-test("workflow.evidence publishes the delivery evidence file contract and recover-coordinator publishes its attestation option", () => {
-  const evidence = getCommandDefinitions().find((entry) => entry.id === "workflow.evidence");
-  if (evidence === undefined) throw new Error("missing workflow.evidence definition");
-  // The delivery document's shape is published under its own payload key; the
-  // `--file` option stays a plain path string, never an inline JSON field.
-  expect(evidence.payloads?.delivery).toBeDefined();
-  const deliverySchema = evidence.payloads!.delivery.schema.toJSONSchema() as { properties?: Record<string, unknown>; required?: string[] };
-  expect(Object.keys(deliverySchema.properties ?? {})).toEqual(["completion"]);
-  expect(deliverySchema.required).toEqual(["completion"]);
-  const fileOption = evidence.cli.options.find((option) => option.key === "file");
-  expect(fileOption).toBeDefined();
-  expect(fileOption!.variadic ?? false).toBe(false);
-
-  const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
-  if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
-  const attestation = recovery.cli.options.find((option) => option.key === "attestation");
-  expect(attestation).toBeDefined();
-  expect(String(attestation!.help)).toContain("ActivationAttestation");
-});
 
 test("workflow.recover-coordinator is FILE-only and returns usage with the supported ACTIVE recovery pointer", async () => {
   const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");

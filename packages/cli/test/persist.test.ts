@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { synthesizeReview } from "@mstar-harness/engine";
+import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -835,7 +836,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
     withTempDir((dir) => {
       const del = runCli(["persist", "delete", "snapshot"], { env: harnessEnv(dir) });
       expect(del.exitCode).toBe(2);
-      expect(message(del)).toContain("required option '--key <key>' not specified");
+      expectUsageDiagnostic(del, "key");
     });
   });
 

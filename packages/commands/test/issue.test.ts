@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStore } from "@mstar-harness/engine";
-import { getCommandDefinitions } from "../src/index.js";
+import { initializeStore, openStore } from "@mstar-harness/engine";
+import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -36,6 +36,32 @@ function definition(id: string) {
   return found;
 }
 
+async function issueState(context: InvocationContext) {
+  const harnessDir = context.controlRoot;
+  if (harnessDir === null) throw new Error("test context must provide an isolated harness");
+  const store = await openStore({ harnessDir }, "read");
+  try {
+    const tables = new Set((store.db.prepare("select name from sqlite_master where type='table'").all() as { name: string }[]).map(({ name }) => name));
+    const count = (table: string) => tables.has(table)
+      ? (store.db.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n
+      : null;
+    const meta = tables.has("store_meta")
+      ? store.db.prepare("select revision from store_meta where id = 1").get() as { revision: number } | null
+      : null;
+    const issueCounter = tables.has("issue_counter") ? store.db.prepare("select * from issue_counter").all() : null;
+    return {
+      issues: count("issues"),
+      issueTransitions: count("issue_transitions"),
+      storeOperations: count("store_operations"),
+      executionOperations: count("execution_operations"),
+      storeMetaRevision: meta?.revision ?? null,
+      issueCounter,
+    };
+  } finally {
+    store.close();
+  }
+}
+
 function capture(overrides: Record<string, unknown> = {}) {
   return {
     projectId: "proj-a", title: "Finding", kind: "bug", severity: "high", impact: "impact", acceptance: "acceptance",
@@ -46,6 +72,113 @@ function capture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issue command family", () => {
+
+  test("public admission and execution preserve numeric CAS and structured issue refusals", async () => {
+    const context = await testContext();
+    const seed = await executeCommand("issue.add", {
+      payload: capture(), actor: "project-manager",
+    }, context);
+    expect(seed.status).toBe("ok");
+    if (seed.status !== "ok") return;
+    const seedReceipt = seed.data as { issueId: string; operationId: string };
+    expect(seedReceipt.operationId).toMatch(/^[0-9a-f-]{36}$/);
+    const shown = await executeCommand("issue.show", { id: seedReceipt.issueId }, context);
+    expect(shown.status).toBe("ok");
+    if (shown.status !== "ok") return;
+    const shownIssue = shown.data as { id: string; revision: number };
+    expect(typeof shownIssue.revision).toBe("number");
+
+    const triageDefinition = definition("issue.triage");
+    const triageContract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.triage");
+    if (triageContract === undefined) throw new Error("missing canonical issue.triage command contract");
+    const triageInput = {
+      id: shownIssue.id,
+      actor: "project-manager",
+      payload: { reason: "publicly admitted numeric revision" },
+    };
+    const numericAdmission = admitCommandInput(triageDefinition, { ...triageInput, expect: shownIssue.revision }, triageContract);
+    expect(numericAdmission.success).toBe(true);
+    const missingAdmission = admitCommandInput(triageDefinition, triageInput, triageContract);
+    expect(missingAdmission).toMatchObject({
+      success: false,
+      envelope: { status: "usage", code: "command.invalid-input" },
+    });
+    const stringAdmission = admitCommandInput(triageDefinition, { ...triageInput, expect: "not-a-revision" }, triageContract);
+    expect(stringAdmission).toMatchObject({
+      success: false,
+      envelope: { status: "usage", code: "command.invalid-input" },
+    });
+    const beforeInvalidCas = await issueState(context);
+    const missingCas = await executeCommand("issue.triage", triageInput, context);
+    expect(missingCas).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    const stringCas = await executeCommand("issue.triage", { ...triageInput, expect: "not-a-revision" }, context);
+    expect(stringCas).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(await issueState(context)).toEqual(beforeInvalidCas);
+
+    const numericTriage = await executeCommand("issue.triage", {
+      ...triageInput, expect: shownIssue.revision, operationId: "public-numeric-triage",
+    }, context);
+    expect(numericTriage).toMatchObject({
+      status: "ok",
+      data: { issueId: shownIssue.id, revision: shownIssue.revision + 1, operationId: "public-numeric-triage" },
+    });
+    const beforeStale = await issueState(context);
+    const stale = await executeCommand("issue.triage", {
+      ...triageInput, expect: shownIssue.revision, operationId: "public-stale-triage",
+    }, context);
+    expect(stale).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
+    expect(await issueState(context)).toEqual(beforeStale);
+
+    const beforeBlank = await issueState(context);
+    const blank = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/blank", rootCauseKey: "blank-root", acceptanceKey: "blank-accept", occurrenceKey: "blank-occ" }),
+      operationId: "", actor: "project-manager",
+    }, context);
+    expect(blank).toMatchObject({
+      status: "refused", code: "issue.invalid-payload", details: { paths: ["operationId"] },
+    });
+    expect(await issueState(context)).toEqual(beforeBlank);
+
+    const beforeMalformed = await issueState(context);
+    const malformed = await executeCommand("issue.add", { payload: {}, actor: "project-manager" }, context);
+    // The nested payload shape is part of the admitted input contract on both
+    // transports, so the public entry refuses it at admission with the grouped
+    // per-field diagnostics rather than reaching the family's own mapper.
+    expect(malformed).toMatchObject({
+      status: "usage", code: "command.invalid-input",
+      details: { diagnostics: expect.arrayContaining([
+        expect.objectContaining({ path: "payload.rootCauseKey", code: "invalid_type", expected: "string", received: "undefined" }),
+      ]) },
+    });
+    expect(await issueState(context)).toEqual(beforeMalformed);
+    const nextGenerated = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/next", rootCauseKey: "next-root", acceptanceKey: "next-accept", occurrenceKey: "next-occ" }),
+      actor: "project-manager",
+    }, context);
+    expect(nextGenerated).toMatchObject({ status: "ok", data: { issueId: "I-000002" } });
+    if (nextGenerated.status === "ok") expect((nextGenerated.data as { operationId: string }).operationId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const replayInput = capture({
+      sourceIdentity: "review/replay", rootCauseKey: "replay-root", acceptanceKey: "replay-accept", occurrenceKey: "replay-occ",
+    });
+    const replayFirst = await executeCommand("issue.add", {
+      payload: replayInput, operationId: "public-replay", actor: "project-manager",
+    }, context);
+    expect(replayFirst).toMatchObject({ status: "ok", data: { operationId: "public-replay" } });
+    if (replayFirst.status !== "ok") return;
+    const beforeReplay = await issueState(context);
+    const replay = await executeCommand("issue.add", {
+      payload: replayInput, operationId: "public-replay", actor: "project-manager",
+    }, context);
+    expect(replay).toEqual(replayFirst);
+    expect(await issueState(context)).toEqual(beforeReplay);
+    const conflict = await executeCommand("issue.add", {
+      payload: { ...replayInput, title: "Conflicting request" },
+      operationId: "public-replay", actor: "project-manager",
+    }, context);
+    expect(conflict).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    expect(await issueState(context)).toEqual(beforeReplay);
+  });
 
   test("malformed capture is rejected without creating an issue", async () => {
     const context = await testContext();
@@ -122,7 +255,7 @@ describe("issue command family", () => {
       id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
       operationId: "stale-triage", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
-    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.`);
+    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`);
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
@@ -138,7 +271,7 @@ describe("issue command family", () => {
       operationId: "stale-close", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
     expect(closed.status === "refused" ? closed.details?.recovery : undefined).toBe(
-      `Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.`,
+      `Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`,
     );
   });
 
@@ -186,11 +319,50 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, context);
     expect(invalid.status).toBe("refused");
-    if (invalid.status === "refused") expect(invalid.details?.paths).toContain("payload.title");
+    if (invalid.status === "refused") {
+      expect(invalid.details?.paths).toContain("payload.title");
+      // The nested failure is projected through the shared input-aware decoder:
+      // a per-field code/expected/received fact, not a prose name list.
+      expect(invalid.details?.diagnostics).toContainEqual(expect.objectContaining({
+        path: "payload.title", code: "invalid_type", expected: "string", received: "42",
+      }));
+    }
 
     const missingMutation = await command.execute({ payload: capture() }, context);
     expect(missingMutation.status).toBe("refused");
-    if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["operationId", "actor"]);
+    if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["actor"]);
+  });
+
+  test("a nested payload enum violation carries its per-field facts", async () => {
+    const context = await testContext();
+    const invalid = await definition("issue.add").execute({
+      payload: { ...capture(), kind: "not-a-kind" },
+      operationId: "invalid-enum",
+      actor: "project-manager",
+    }, context);
+    expect(invalid.status).toBe("refused");
+    if (invalid.status !== "refused") return;
+    expect(invalid.details?.diagnostics).toContainEqual(expect.objectContaining({
+      path: "payload.kind",
+      code: "invalid_value",
+      expected: "bug | risk | improvement | request | decision | review-obligation",
+      received: "not-a-kind",
+    }));
+  });
+
+  test("an aggregated capture failure keeps its typed engine causes alongside the family paths", async () => {
+    const context = await testContext();
+    const ambiguous = capture({ sourceIdentity: "unknown", rootCauseKey: "unknown", acceptanceKey: "?" });
+    const refused = await definition("issue.add").execute({ payload: ambiguous, operationId: "ambiguous", actor: "project-manager" }, context);
+    expect(refused.status).toBe("refused");
+    if (refused.status !== "refused") return;
+    expect(refused.code).toBe("issue.ambiguous-identity");
+    // The engine's structured causes survive the family mapper instead of
+    // being dropped when the family has its own paths to report.
+    const causes = refused.details?.causes as Array<{ code: string; causes?: Array<{ code: string }> }> | undefined;
+    expect(causes?.length).toBeGreaterThanOrEqual(1);
+    expect(causes?.every((cause) => cause.code === "issue.ambiguous-identity")).toBe(true);
+    expect(causes?.[0]?.causes?.length).toBeGreaterThanOrEqual(2);
   });
 
   test("a declared string-or-null payload field keeps its type instead of accepting any JSON", async () => {
@@ -215,6 +387,101 @@ describe("issue command family", () => {
     expect(typed.status).toBe("ok");
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     if (shown.status === "ok") expect(shown.data).toMatchObject({ owner: "reviewer" });
+  });
+  test("omitted replay ids are fresh per mutation while explicit blank remains invalid without a write", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const first = await command.execute({
+      payload: capture({ sourceIdentity: "review/auto-1", rootCauseKey: "auto-root-1", occurrenceKey: "auto-occ-1" }),
+      actor: "project-manager",
+    }, context);
+    const second = await command.execute({
+      payload: capture({ sourceIdentity: "review/auto-2", rootCauseKey: "auto-root-2", occurrenceKey: "auto-occ-2" }),
+      actor: "project-manager",
+    }, context);
+    expect(first.status).toBe("ok");
+    expect(second.status).toBe("ok");
+    if (first.status !== "ok" || second.status !== "ok") return;
+    const firstReceipt = first.data as { issueId: string; revision: number; operationId: string };
+    const secondReceipt = second.data as { issueId: string; revision: number; operationId: string };
+    expect(firstReceipt.operationId).not.toBe(secondReceipt.operationId);
+    expect(firstReceipt.operationId).toMatch(/^[0-9a-f-]{36}$/);
+    const blank = await command.execute({
+      payload: capture({ sourceIdentity: "review/blank", rootCauseKey: "blank-root", occurrenceKey: "blank-occ" }),
+      operationId: "",
+      actor: "project-manager",
+    }, context);
+    expect(blank).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["operationId"] } });
+    const afterBlank = await definition("issue.list").execute({}, context);
+    expect(afterBlank.status).toBe("ok");
+    if (afterBlank.status === "ok") expect((afterBlank.data as { items: unknown[] }).items).toHaveLength(2);
+    const next = await command.execute({
+      payload: capture({ sourceIdentity: "review/auto-3", rootCauseKey: "auto-root-3", occurrenceKey: "auto-occ-3" }),
+      actor: "project-manager",
+    }, context);
+    expect(next.status).toBe("ok");
+    if (next.status === "ok") expect((next.data as { issueId: string }).issueId).toBe("I-000003");
+
+    const shown = await definition("issue.show").execute({ id: firstReceipt.issueId }, context);
+    expect(shown.status).toBe("ok");
+    if (shown.status !== "ok") return;
+    const current = shown.data as { id: string; revision: number };
+    const triaged = await definition("issue.triage").execute({
+      id: current.id, payload: { reason: "reclassify", severity: "low" },
+      operationId: "triage-from-show", actor: "project-manager", expect: current.revision,
+    }, context);
+    expect(triaged).toMatchObject({ status: "ok", data: { operationId: "triage-from-show", issueId: current.id } });
+    const final = await definition("issue.show").execute({ id: current.id }, context);
+    expect(final).toMatchObject({ status: "ok", data: { id: current.id, revision: current.revision + 1, severity: "low" } });
+  });
+
+  test("explicit replay ids replay once and reject conflicting reuse without mutation", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const input = capture();
+    const first = await command.execute({ payload: input, operationId: "capture-replay", actor: "project-manager" }, context);
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok") return;
+    const replay = await command.execute({ payload: input, operationId: "capture-replay", actor: "project-manager" }, context);
+    expect(replay).toEqual(first);
+    expect(replay).toMatchObject({ data: { operationId: "capture-replay" } });
+    const conflict = await command.execute({
+      payload: capture({ title: "Different issue", occurrenceKey: "different-occurrence" }),
+      operationId: "capture-replay", actor: "project-manager",
+    }, context);
+    expect(conflict).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    const page = await definition("issue.list").execute({}, context);
+    expect(page.status).toBe("ok");
+    if (page.status === "ok") expect((page.data as { items: unknown[] }).items).toHaveLength(1);
+  });
+
+  test("addressed issue mutations publish issue id and revision CAS minima", () => {
+    const addressed = ["occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link"];
+    for (const verb of addressed) {
+      const command = definition(`issue.${verb}`);
+      for (const route of ["cli", "mcp"] as const) {
+        expect(command.requirements).toContainEqual(expect.objectContaining({ name: "id", route, required: true }));
+      }
+      expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: true }));
+      const missingId = command.input.safeParse({ actor: "project-manager" });
+      expect(missingId.success).toBe(false);
+      if (!missingId.success) expect(missingId.error.issues.some((issue) => issue.path.includes("id"))).toBe(true);
+    }
+    for (const verb of ["add", "export"]) {
+      const command = definition(`issue.${verb}`);
+      expect(command.requirements).not.toContainEqual(expect.objectContaining({ name: "id", required: true }));
+      expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: false }));
+    }
+    for (const verb of ["triage", "close", "reopen", "waive", "duplicate", "supersede", "link"]) {
+      expect(definition(`issue.${verb}`).requirements).toContainEqual(
+        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show") }),
+      );
+      const missingCas = definition(`issue.${verb}`).input.safeParse({
+        id: "I-000001", actor: "project-manager", payload: {},
+      });
+      expect(missingCas.success).toBe(false);
+      if (!missingCas.success) expect(missingCas.error.issues.some((issue) => issue.path.includes("expect"))).toBe(true);
+    }
   });
 });
 

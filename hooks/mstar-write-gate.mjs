@@ -24,9 +24,9 @@ import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { basename as basename4, isAbsolute as isAbsolute5, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname6, isAbsolute as isAbsolute6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
-import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { basename as basename5, dirname as dirname7, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync5, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { basename as basename6, dirname as dirname7, isAbsolute as isAbsolute7, join as join14, relative as relative3, resolve as resolve9 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync5 } from "node:fs";
 import { createHash as createHash6 } from "node:crypto";
@@ -57,6 +57,7 @@ import {
 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute10, join as join19, relative as relative5, resolve as resolve14, sep as sep10 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
+import { setTimeout as sleep2 } from "node:timers/promises";
 import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync6 } from "node:fs";
 import { dirname as dirname10, join as join20, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
@@ -11687,441 +11688,6 @@ var init_roadmap_content = __esm(() => {
   ROADMAP_STATUSES = ["active", "paused", "completed"];
   DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
 });
-function assertIssueProvenanceSchema(db) {
-  const schema = db.prepare("select max(version) as version from schema_version").get();
-  if ((schema?.version ?? 0) < MIGRATIONS.length) {
-    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
-  }
-}
-var ISSUE_PAYLOAD_SCHEMAS;
-var IssueError;
-var KINDS;
-var SEVERITIES;
-var DISPOSITIONS;
-var RELATIONS2;
-var PROVENANCE_KINDS;
-var TERMINAL;
-var ENVELOPE_SEATS;
-var init_issue = __esm(() => {
-  init_coordination();
-  init_path();
-  init_store_db();
-  init_workflow();
-  ISSUE_PAYLOAD_SCHEMAS = {
-    CaptureInput: {
-      projectId: { required: true, type: "string", description: "Project identifier" },
-      title: { required: true, type: "string", description: "Finding title" },
-      kind: { required: true, type: "string", description: "Issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-      severity: { required: true, type: "string", description: "Severity", values: ["critical", "high", "medium", "low", "info"] },
-      impact: { required: true, type: "string", description: "User or system impact" },
-      acceptance: { required: true, type: "string", description: "Acceptance condition" },
-      owner: { required: false, type: "string", description: "Optional owner" },
-      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-      sourceKind: { required: true, type: "string", description: "Source category" },
-      location: { required: true, type: "string", description: "Source location" },
-      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-      evidence: { required: true, type: "string[]", description: "Evidence strings" },
-      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-    },
-    OccurrenceInput: {
-      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-      sourceKind: { required: true, type: "string", description: "Source category" },
-      location: { required: true, type: "string", description: "Source location" },
-      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-      evidence: { required: true, type: "string[]", description: "Evidence strings" },
-      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-    },
-    IssueTriage: {
-      reason: { required: true, type: "string", description: "Reason for triage change" },
-      kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-      severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
-      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
-      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
-      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
-    },
-    ClosureEvidence: {
-      reason: { required: true, type: "string", description: "Reason for closure" },
-      references: {
-        required: false,
-        requiredWhen: ["close"],
-        type: "string[]",
-        description: "Acceptance evidence references; required for resolved closure",
-        minItems: 1
-      },
-      scope: { required: false, requiredWhen: ["waive"], type: "string", description: "Named closure scope; required for waived closure" },
-      canonicalIssueId: {
-        required: false,
-        requiredWhen: ["duplicate", "supersede"],
-        type: "string",
-        description: "Canonical issue for duplicate/superseded; required for those dispositions"
-      },
-      alignmentRef: {
-        required: false,
-        requiredWhen: ["close", "waive"],
-        type: "string",
-        description: "Authority alignment reference; required for resolved/waived closure"
-      }
-    },
-    IssueReopen: {
-      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
-    },
-    IssueLink: {
-      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
-      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
-      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
-      target: { required: false, type: "string", description: "Provenance target; required with kind" }
-    },
-    PlanProgress: {
-      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
-      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
-      evidence_paths: {
-        required: true,
-        type: "string[]",
-        description: "Canonical absolute artifact paths for this plan",
-        itemsNonblank: true
-      },
-      track_branches: {
-        required: false,
-        type: "string[]",
-        description: "Reported L2 track branches",
-        itemsNonblank: true
-      }
-    }
-  };
-  IssueError = class IssueError2 extends Error {
-    code;
-    constructor(code2, message) {
-      super(`[${code2}] ${message}`);
-      this.name = "IssueError";
-      this.code = code2;
-    }
-  };
-  KINDS = {
-    bug: true,
-    risk: true,
-    improvement: true,
-    request: true,
-    decision: true,
-    "review-obligation": true
-  };
-  SEVERITIES = {
-    critical: true,
-    high: true,
-    medium: true,
-    low: true,
-    info: true
-  };
-  DISPOSITIONS = {
-    open: true,
-    resolved: true,
-    waived: true,
-    duplicate: true,
-    superseded: true
-  };
-  RELATIONS2 = {
-    related: true,
-    blocks: true,
-    "duplicate-of": true,
-    "superseded-by": true
-  };
-  PROVENANCE_KINDS = {
-    plan: true,
-    iteration: true,
-    pr: true,
-    report: true
-  };
-  TERMINAL = {
-    resolved: true,
-    waived: true,
-    duplicate: true,
-    superseded: true
-  };
-  ENVELOPE_SEATS = {
-    coordinator: "project-manager"
-  };
-});
-function violation7(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function validateNonEmptyString5(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function validateProjectRegister(doc) {
-  const violations = [];
-  if (!isPlainObject(doc)) {
-    return {
-      ok: false,
-      violations: [violation7("high", "project.register.invalid", "project register must be an object")]
-    };
-  }
-  if (doc.entries === undefined) {
-    violations.push(violation7("high", "project.register.missing-entries", "missing required field: entries"));
-  } else if (!isPlainObject(doc.entries)) {
-    violations.push(violation7("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
-  } else {
-    for (const [key, entries] of Object.entries(doc.entries)) {
-      if (key.trim() === "") {
-        violations.push(violation7("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
-      }
-      if (!Array.isArray(entries)) {
-        violations.push(violation7("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
-        continue;
-      }
-      for (const entry of entries) {
-        violations.push(...validateResidual(entry).violations);
-        if (!isPlainObject(entry))
-          continue;
-        validateNonEmptyString5(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
-        if (entry.registered_at === undefined) {
-          violations.push(violation7("high", "project.register.missing-registered-at", "missing required field: registered_at"));
-        } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
-          violations.push(violation7("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
-        }
-        if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
-          violations.push(violation7("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
-        }
-        if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
-          violations.push(violation7("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
-        }
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-var DATE_RE4;
-var init_project = __esm(() => {
-  init_roadmap_content();
-  init_coordination_write();
-  init_store_db();
-  init_issue();
-  init_status();
-  DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
-});
-function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve8(startDir);
-  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
-  if (explicit)
-    return resolve8(start, explicit);
-  const boundary = resolve8(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
-  const rc = loadMstarc(start, boundary);
-  if (rc !== null && rc.config.harnessDir)
-    return resolve8(rc.dir, rc.config.harnessDir);
-  let dir = start;
-  for (;; ) {
-    if (!isAtOrBelow2(dir, boundary))
-      return null;
-    for (const candidate of [join13(dir, ".mstar"), join13(dir, ".agents"), join13(dir, ".plans"), join13(dir, "plans")]) {
-      if (isDirectory(candidate))
-        return candidate;
-    }
-    if (dir === boundary)
-      return null;
-    const parent = dirname7(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
-  }
-}
-function defaultWorkspaceRoot(startDir) {
-  try {
-    const cdup = execFileSync("git", ["rev-parse", "--show-cdup"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-    if (!cdup)
-      return startDir;
-    let boundary = startDir;
-    for (const segment of cdup.split(/[\\/]/)) {
-      if (segment && segment !== ".")
-        boundary = dirname7(boundary);
-    }
-    return resolve8(boundary);
-  } catch {}
-  return startDir;
-}
-function isAtOrBelow2(dir, root) {
-  const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
-}
-function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname7(dir));
-  const declared = rc?.config[key];
-  return declared ? resolve8(rc.dir, declared) : null;
-}
-function resolveSpecsDir(harnessDir, opts = {}) {
-  const declared = mstarcDirOverride(harnessDir, "specsDir");
-  if (declared !== null) {
-    if (opts.create !== false)
-      mkdirSync4(declared, { recursive: true });
-    return declared;
-  }
-  const harness = resolve8(harnessDir);
-  const repoRoot = dirname7(harness);
-  const candidates = [
-    join13(harness, "specs"),
-    join13(repoRoot, "docs", "specs"),
-    join13(repoRoot, "specs"),
-    join13(harness, "designs"),
-    join13(repoRoot, "designs")
-  ];
-  for (const candidate of candidates) {
-    if (isDirectory(candidate) && hasFiles(candidate))
-      return candidate;
-  }
-  const fallback = join13(harness, "specs");
-  if (opts.create !== false)
-    mkdirSync4(fallback, { recursive: true });
-  return fallback;
-}
-function resolvePlanDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "planDir");
-  if (declared !== null)
-    return declared;
-  const dir = resolve8(harnessDir);
-  const name = basename5(dir);
-  if (name === ".plans" || name === "plans")
-    return dir;
-  return join13(dir, "plans");
-}
-function resolveIterationDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "iterationDir");
-  if (declared !== null)
-    return declared;
-  return join13(resolve8(harnessDir), "iterations");
-}
-function resolveKnowledgeDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
-  if (declared !== null)
-    return declared;
-  return join13(resolve8(harnessDir), "knowledge");
-}
-function resolveHarnessSubdir(startDir, opts, key, fallback) {
-  const harness = resolveHarnessDir(startDir, opts);
-  if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
-  }
-  const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join13(resolve8(harness), fallback);
-}
-function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
-  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
-}
-function resolveProjectDir(startDir = process.cwd(), opts = {}) {
-  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
-}
-function isDirectory(dir) {
-  try {
-    return statSync4(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function hasFiles(dir) {
-  try {
-    for (const entry of readdirSync6(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (hasFiles(join13(dir, entry.name)))
-          return true;
-      } else if (entry.isFile()) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-var EMPTY_STATUS_TEMPLATE;
-var SCAFFOLD_DIRS;
-var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
-`;
-var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-`;
-var GITIGNORE_PROCESS_ENTRIES;
-var GITIGNORE_PROCESS_ENTRIES_AGENTS;
-var HARNESS_ROOT_DECLARATION;
-var init_path = __esm(() => {
-  init_catalog();
-  init_mstarc();
-  init_project();
-  init_status();
-  init_lease();
-  init_store();
-  init_store_db();
-  init_coordination_write();
-  EMPTY_STATUS_TEMPLATE = {
-    version: 2,
-    updated_at: "1970-01-01",
-    workflows: []
-  };
-  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"];
-  GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
-`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
-  GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
-`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
-  HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
-});
-var init_session_identity = __esm(() => {
-  init_coordination_write();
-  init_path();
-});
-function storedCoordinationViolations(block, input) {
-  return validateRowCoordination({ ...block, revision: input.revision }, input.what, input.route);
-}
-var IMPLEMENTED_OPERATIONS;
-var OPERATION_NAMES;
-var NON_COMPLETION_OPERATIONS;
-var PROGRESS_TRANSITIONS;
-var init_coordination_transitions = __esm(() => {
-  init_coordination_write();
-  init_workflow();
-  init_project();
-  init_path();
-  IMPLEMENTED_OPERATIONS = {
-    prepare: true,
-    progress: true,
-    "residual-add": true,
-    "residual-close": true,
-    complete: true
-  };
-  OPERATION_NAMES = Object.keys(IMPLEMENTED_OPERATIONS);
-  NON_COMPLETION_OPERATIONS = OPERATION_NAMES.filter((operation) => operation !== "complete");
-  PROGRESS_TRANSITIONS = {
-    Todo: ["InProgress", "Blocked"],
-    InProgress: ["InProgress", "Blocked", "InReview"],
-    Blocked: ["Blocked", "InProgress"],
-    InReview: ["InReview", "InProgress", "Blocked"]
-  };
-});
 var AUDIT_PRIORITIES;
 var AUDIT_EFFORTS;
 var AUDIT_RISKS;
@@ -12232,6 +11798,447 @@ var init_audit = __esm(() => {
   AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
   DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
   LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+});
+function assertIssueProvenanceSchema(db) {
+  const schema = db.prepare("select max(version) as version from schema_version").get();
+  if ((schema?.version ?? 0) < MIGRATIONS.length) {
+    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
+  }
+}
+var KINDS;
+var SEVERITIES;
+var ISSUE_KIND_VALUES;
+var SEVERITY_VALUES;
+var ISSUE_PAYLOAD_SCHEMAS;
+var IssueError;
+var DISPOSITIONS;
+var RELATIONS2;
+var PROVENANCE_KINDS;
+var TERMINAL;
+var ENVELOPE_SEATS;
+var init_issue = __esm(() => {
+  init_audit();
+  init_coordination();
+  init_path();
+  init_store_db();
+  init_workflow();
+  KINDS = {
+    bug: true,
+    risk: true,
+    improvement: true,
+    request: true,
+    decision: true,
+    "review-obligation": true
+  };
+  SEVERITIES = {
+    critical: true,
+    high: true,
+    medium: true,
+    low: true,
+    info: true
+  };
+  ISSUE_KIND_VALUES = Object.keys(KINDS);
+  SEVERITY_VALUES = Object.keys(SEVERITIES);
+  ISSUE_PAYLOAD_SCHEMAS = {
+    CaptureInput: {
+      projectId: { required: true, type: "string", description: "Project identifier" },
+      title: { required: true, type: "string", description: "Finding title" },
+      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
+      severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
+      impact: { required: true, type: "string", description: "User or system impact" },
+      acceptance: { required: true, type: "string", description: "Acceptance condition" },
+      owner: { required: false, type: "string", description: "Optional owner" },
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    OccurrenceInput: {
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    IssueTriage: {
+      reason: { required: true, type: "string", description: "Reason for triage change" },
+      kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
+      severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
+      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
+      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
+      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
+    },
+    ClosureEvidence: {
+      reason: { required: true, type: "string", description: "Reason for closure" },
+      references: {
+        required: false,
+        requiredWhen: ["close"],
+        type: "string[]",
+        description: "Acceptance evidence references; required for resolved closure",
+        minItems: 1
+      },
+      scope: { required: false, requiredWhen: ["waive"], type: "string", description: "Named closure scope; required for waived closure" },
+      canonicalIssueId: {
+        required: false,
+        requiredWhen: ["duplicate", "supersede"],
+        type: "string",
+        description: "Canonical issue for duplicate/superseded; required for those dispositions"
+      },
+      alignmentRef: {
+        required: false,
+        requiredWhen: ["close", "waive"],
+        type: "string",
+        description: "Authority alignment reference; required for resolved/waived closure"
+      }
+    },
+    IssueReopen: {
+      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
+    },
+    IssueLink: {
+      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
+      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
+      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
+      target: { required: false, type: "string", description: "Provenance target; required with kind" }
+    },
+    PlanProgress: {
+      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
+      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
+      evidence_paths: {
+        required: true,
+        type: "string[]",
+        description: "Canonical absolute artifact paths for this plan",
+        itemsNonblank: true
+      },
+      track_branches: {
+        required: false,
+        type: "string[]",
+        description: "Reported L2 track branches",
+        itemsNonblank: true
+      }
+    }
+  };
+  IssueError = class IssueError2 extends Error {
+    code;
+    details = {};
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "IssueError";
+      this.code = code2;
+    }
+  };
+  DISPOSITIONS = {
+    open: true,
+    resolved: true,
+    waived: true,
+    duplicate: true,
+    superseded: true
+  };
+  RELATIONS2 = {
+    related: true,
+    blocks: true,
+    "duplicate-of": true,
+    "superseded-by": true
+  };
+  PROVENANCE_KINDS = {
+    plan: true,
+    iteration: true,
+    pr: true,
+    report: true
+  };
+  TERMINAL = {
+    resolved: true,
+    waived: true,
+    duplicate: true,
+    superseded: true
+  };
+  ENVELOPE_SEATS = {
+    coordinator: "project-manager"
+  };
+});
+function violation8(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString5(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation8("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation8("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validateProjectRegister(doc) {
+  const violations = [];
+  if (!isPlainObject(doc)) {
+    return {
+      ok: false,
+      violations: [violation8("high", "project.register.invalid", "project register must be an object")]
+    };
+  }
+  if (doc.entries === undefined) {
+    violations.push(violation8("high", "project.register.missing-entries", "missing required field: entries"));
+  } else if (!isPlainObject(doc.entries)) {
+    violations.push(violation8("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
+  } else {
+    for (const [key, entries] of Object.entries(doc.entries)) {
+      if (key.trim() === "") {
+        violations.push(violation8("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
+      }
+      if (!Array.isArray(entries)) {
+        violations.push(violation8("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
+        continue;
+      }
+      for (const entry of entries) {
+        violations.push(...validateResidual(entry).violations);
+        if (!isPlainObject(entry))
+          continue;
+        validateNonEmptyString5(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
+        if (entry.registered_at === undefined) {
+          violations.push(violation8("high", "project.register.missing-registered-at", "missing required field: registered_at"));
+        } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
+          violations.push(violation8("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
+        }
+        if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
+          violations.push(violation8("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
+        }
+        if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
+          violations.push(violation8("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
+        }
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+var DATE_RE4;
+var init_project = __esm(() => {
+  init_roadmap_content();
+  init_coordination_write();
+  init_store_db();
+  init_issue();
+  init_status();
+  DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+});
+function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
+  const start = resolve9(startDir);
+  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
+  if (explicit)
+    return resolve9(start, explicit);
+  const boundary = resolve9(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+  const rc = loadMstarc(start, boundary);
+  if (rc !== null && rc.config.harnessDir)
+    return resolve9(rc.dir, rc.config.harnessDir);
+  let dir = start;
+  for (;; ) {
+    if (!isAtOrBelow2(dir, boundary))
+      return null;
+    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
+      if (isDirectory(candidate))
+        return candidate;
+    }
+    if (dir === boundary)
+      return null;
+    const parent = dirname7(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function defaultWorkspaceRoot(startDir) {
+  try {
+    const cdup = execFileSync2("git", ["rev-parse", "--show-cdup"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (!cdup)
+      return startDir;
+    let boundary = startDir;
+    for (const segment of cdup.split(/[\\/]/)) {
+      if (segment && segment !== ".")
+        boundary = dirname7(boundary);
+    }
+    return resolve9(boundary);
+  } catch {}
+  return startDir;
+}
+function isAtOrBelow2(dir, root) {
+  const rel = relative3(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
+}
+function mstarcDirOverride(harnessDir, key) {
+  const dir = resolve9(harnessDir);
+  const rc = loadMstarc(dir, dirname7(dir));
+  const declared = rc?.config[key];
+  return declared ? resolve9(rc.dir, declared) : null;
+}
+function resolveSpecsDir(harnessDir, opts = {}) {
+  const declared = mstarcDirOverride(harnessDir, "specsDir");
+  if (declared !== null) {
+    if (opts.create !== false)
+      mkdirSync5(declared, { recursive: true });
+    return declared;
+  }
+  const harness = resolve9(harnessDir);
+  const repoRoot = dirname7(harness);
+  const candidates = [
+    join14(harness, "specs"),
+    join14(repoRoot, "docs", "specs"),
+    join14(repoRoot, "specs"),
+    join14(harness, "designs"),
+    join14(repoRoot, "designs")
+  ];
+  for (const candidate of candidates) {
+    if (isDirectory(candidate) && hasFiles(candidate))
+      return candidate;
+  }
+  const fallback = join14(harness, "specs");
+  if (opts.create !== false)
+    mkdirSync5(fallback, { recursive: true });
+  return fallback;
+}
+function resolvePlanDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "planDir");
+  if (declared !== null)
+    return declared;
+  const dir = resolve9(harnessDir);
+  const name = basename6(dir);
+  if (name === ".plans" || name === "plans")
+    return dir;
+  return join14(dir, "plans");
+}
+function resolveIterationDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "iterationDir");
+  if (declared !== null)
+    return declared;
+  return join14(resolve9(harnessDir), "iterations");
+}
+function resolveKnowledgeDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
+  if (declared !== null)
+    return declared;
+  return join14(resolve9(harnessDir), "knowledge");
+}
+function resolveHarnessSubdir(startDir, opts, key, fallback) {
+  const harness = resolveHarnessDir(startDir, opts);
+  if (harness === null) {
+    throw new Error(`harness dir not found from ${resolve9(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+  }
+  const declared = mstarcDirOverride(harness, key);
+  return declared !== null ? declared : join14(resolve9(harness), fallback);
+}
+function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
+  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
+}
+function resolveProjectDir(startDir = process.cwd(), opts = {}) {
+  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
+}
+function isDirectory(dir) {
+  try {
+    return statSync4(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function hasFiles(dir) {
+  try {
+    for (const entry of readdirSync7(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (hasFiles(join14(dir, entry.name)))
+          return true;
+      } else if (entry.isFile()) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+var EMPTY_STATUS_TEMPLATE;
+var SCAFFOLD_DIRS;
+var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
+# Principle: process stays local; results are shared with the team.
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
+`;
+var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
+`;
+var GITIGNORE_PROCESS_ENTRIES;
+var GITIGNORE_PROCESS_ENTRIES_AGENTS;
+var HARNESS_ROOT_DECLARATION;
+var init_path = __esm(() => {
+  init_catalog();
+  init_mstarc();
+  init_project();
+  init_status();
+  init_lease();
+  init_store();
+  init_store_db();
+  init_coordination_write();
+  EMPTY_STATUS_TEMPLATE = {
+    version: 2,
+    updated_at: "1970-01-01",
+    workflows: []
+  };
+  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"];
+  GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
+`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
+  GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
+`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
+  HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+});
+var init_session_identity = __esm(() => {
+  init_coordination_write();
+  init_path();
+});
+function storedCoordinationViolations(block, input) {
+  return validateRowCoordination({ ...block, revision: input.revision }, input.what, input.route);
+}
+var IMPLEMENTED_OPERATIONS;
+var OPERATION_NAMES;
+var NON_COMPLETION_OPERATIONS;
+var PROGRESS_TRANSITIONS;
+var init_coordination_transitions = __esm(() => {
+  init_coordination_write();
+  init_workflow();
+  init_project();
+  init_path();
+  IMPLEMENTED_OPERATIONS = {
+    prepare: true,
+    progress: true,
+    "residual-add": true,
+    "residual-close": true,
+    complete: true
+  };
+  OPERATION_NAMES = Object.keys(IMPLEMENTED_OPERATIONS);
+  NON_COMPLETION_OPERATIONS = OPERATION_NAMES.filter((operation) => operation !== "complete");
+  PROGRESS_TRANSITIONS = {
+    Todo: ["InProgress", "Blocked"],
+    InProgress: ["InProgress", "Blocked", "InReview"],
+    Blocked: ["Blocked", "InProgress"],
+    InReview: ["InReview", "InProgress", "Blocked"]
+  };
 });
 var CatalogRegistrationError;
 var ENTITY_KINDS2;
@@ -12512,7 +12519,10 @@ __export(exports_store_activation, {
   ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
   AGENT_FLOW_COMPACTION_JOURNAL: () => AGENT_FLOW_COMPACTION_JOURNAL,
   BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
+  CONSUMER_KINDS: () => CONSUMER_KINDS,
+  DISPOSITIONS: () => DISPOSITIONS2,
   RETAINED_BODY_PROTOCOL_VERSION: () => RETAINED_BODY_PROTOCOL_VERSION,
+  SESSION_STATES: () => SESSION_STATES,
   StoreActivationError: () => StoreActivationError,
   activateStore: () => activateStore,
   activationReceiptFor: () => activationReceiptFor,
@@ -14143,6 +14153,8 @@ function openConnection(dbPath, mode, DatabaseSync) {
       ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error))
+      throw error;
     refuseOpenFailure(error, dbPath);
   }
   const fail = (message) => {
@@ -14173,6 +14185,8 @@ function openConnection(dbPath, mode, DatabaseSync) {
     try {
       db.close();
     } catch {}
+    if (mode === "read" && isRawCantOpen(error))
+      throw error;
     refuseOpenFailure(error, dbPath);
   }
   return busyAware(db, dbPath);
@@ -14379,7 +14393,15 @@ function validateAppliedMigrations(applied) {
     const row = applied[i];
     const compiled = MIGRATIONS.find((m) => m.version === row.version);
     if (!compiled) {
-      throw new StoreError("store.schema-unsupported", `The store was written by schema version ${row.version}, which this build does not know. Known versions: 1..${MIGRATIONS.length}. Upgrade the harness to read this store; nothing was modified.`);
+      let highestApplied = 0;
+      for (const candidate of applied)
+        if (candidate.version > highestApplied)
+          highestApplied = candidate.version;
+      let supportedMax = 0;
+      for (const migration of MIGRATIONS)
+        if (migration.version > supportedMax)
+          supportedMax = migration.version;
+      throw new StoreError("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
     }
     if (row.version !== i + 1) {
       throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
@@ -14428,6 +14450,16 @@ function readExecutionMeta(db, schemaVersion) {
     activatedAt: row.activated_at ?? null
   };
 }
+function isRawCantOpen(error) {
+  return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
+}
+function isTransientReadOpenFailure(error, dbPath) {
+  if (error instanceof StoreError)
+    return false;
+  if (!isRawCantOpen(error))
+    return false;
+  return existsSync15(dbPath);
+}
 async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
@@ -14435,10 +14467,25 @@ async function openStore(context, mode) {
   if (!existsSync15(dbPath)) {
     throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. For a genuinely empty workspace, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to create and activate the selected store (or "mstar store init" with the same --harness when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`);
   }
+  const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
+  for (let attempt = 1;; attempt++) {
+    try {
+      return await openStoreOnce(dbPath, mode);
+    } catch (error) {
+      if (attempt >= attempts || !isTransientReadOpenFailure(error, dbPath)) {
+        refuseOpenFailure(error, dbPath);
+      }
+      await sleep2(READ_OPEN_BACKOFF_MS);
+    }
+  }
+}
+async function openStoreOnce(dbPath, mode) {
   let db;
   try {
     db = await connect(dbPath, mode);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error))
+      throw error;
     refuseOpenFailure(error, dbPath);
   }
   try {
@@ -14456,7 +14503,7 @@ async function openStore(context, mode) {
     };
   } catch (error) {
     db.close();
-    refuseOpenFailure(error, dbPath);
+    throw error;
   }
 }
 var MIN_BUN_VERSION = "1.4.0";
@@ -14925,14 +14972,19 @@ drop table execution_leases;
 var MIGRATIONS;
 var EXECUTION_TABLE_NAMES;
 var EXECUTION_MIGRATION;
+var READ_OPEN_ATTEMPTS = 5;
+var READ_OPEN_BACKOFF_MS = 5;
 var init_store_db = __esm(() => {
   init_coordination();
   StoreError = class StoreError2 extends Error {
     code;
-    constructor(code2, message) {
+    details;
+    constructor(code2, message, details) {
       super(`[${code2}] ${message}`);
       this.name = "StoreError";
       this.code = code2;
+      if (details !== undefined)
+        this.details = details;
     }
   };
   requireDriver = createRequire22(import.meta.url);
@@ -15264,6 +15316,7 @@ init_lease();
 init_path();
 init_recovery_intent();
 init_status();
+init_store_activation();
 init_store_db();
 init_workflow();
 

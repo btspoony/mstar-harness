@@ -65,17 +65,18 @@ describe("mstar judgment review-advice", () => {
     });
     expect(existsSync(join(cwd, ".jev-mailbox"))).toBe(false);
   });
-  test("invalid runtime configuration emits one JSON envelope and exits 2", () => {
+  test("runtime configuration refusal preserves its engine code and message in one envelope", () => {
     const cwd = workspace();
     writeFileSync(join(cwd, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=assist\n");
     const result = run(["--file", "pack.json", "--pilot", "pilot.json", "--json"], cwd);
-    expect(result.status).toBe(2);
+    expect(result.status).toBe(1);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       version: 1,
-      status: "usage",
-      code: "command.invalid-input",
-      exitCode: 2,
+      status: "error",
+      code: "jev.assist-not-qualified",
+      exitCode: 1,
+      message: "Judgment provider rejected the request",
     });
   });
 

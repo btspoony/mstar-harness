@@ -1,13 +1,18 @@
 export * from "./types.js";
 export { refusalEnvelope } from "./envelope.js";
 export type { RefusalDiagnostic, RefusalInput } from "./envelope.js";
+export { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
 export {
   CommandDefinitionError,
   commandEnvelopeSchema,
   getCommandDefinitions,
   executeCommand,
+  admitCommandInput,
+  isPayloadPlaceholder,
+  payloadComposedSchema,
   validateCommandDefinitions,
 } from "./definitions.js";
+export type { AdmittedCommand, CommandAdmission } from "./definitions.js";
 export { getPlanCommandDefinitions, PLAN_COMPLETION_EVIDENCE_SCHEMA } from "./families/plan.js";
 export { getSessionCommandDefinitions } from "./families/session.js";
 export { getWorkflowCommandDefinitions } from "./families/workflow.js";
@@ -24,6 +29,7 @@ export { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 export { getJudgmentCommandDefinitions } from "./families/judgment.js";
 export type { JudgmentProvider } from "./families/judgment.js";
 export { getDashboardCommandDefinitions } from "./families/dashboard.js";
+export { getExecutionLedgerCommandDefinitions } from "./families/execution-ledgers.js";
 export { DASHBOARD_CSP, startDashboard } from "./dashboard/index.js";
 export type { RunningDashboard, StartDashboardOptions } from "./dashboard/index.js";
 export { getProcessCommandDefinitions } from "./families/process.js";

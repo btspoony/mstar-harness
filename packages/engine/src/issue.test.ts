@@ -14,6 +14,7 @@ import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
   IssueError,
+  ISSUE_PAYLOAD_SCHEMAS,
   assertCaptureRequest,
   appendOccurrence,
   captureIssue,
@@ -144,6 +145,18 @@ describe("capture identity", () => {
     expect(detail.disposition).toBe("open");
   });
 
+  test("blank operation ids are rejected before issue capture writes", async () => {
+    const context = ctx("capture-blank-operation-");
+    await initializeStore(context).then((handle) => handle.close());
+    await expect(captureIssue(context, baseInput(), mut(""))).rejects.toMatchObject({
+      name: "IssueError",
+      code: "issue.invalid-operation-id",
+    });
+    expect((await listIssues(context, {})).total).toBe(0);
+    const next = await captureIssue(context, baseInput(), mut("capture-after-blank"));
+    expect(next.issueId).toBe("I-000001");
+  });
+
   test("two concurrent processes capturing the same identity create exactly one issue", async () => {
     const context = ctx("capture-concurrent-");
     await initializeStore(context).then((h) => h.close());
@@ -269,6 +282,70 @@ process.stdout.write(JSON.stringify(receipt));
       "occurrenceKey", "sourceKind", "location", "observedBehavior", "discoveredAt",
     ]) {
       expect(message).toContain(field);
+    }
+  });
+  test("capture enum refusals identify the invalid field and derive their correction values from the schema vocabulary", () => {
+    let failure: unknown;
+    try {
+      assertCaptureRequest(baseInput({ kind: "tech-debt" as IssueKind }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "issue.scope-refused",
+      details: {
+        causes: [{
+          field: "kind",
+          expected: ISSUE_PAYLOAD_SCHEMAS.CaptureInput.kind.values,
+          received: "tech-debt",
+        }],
+      },
+    });
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain('kind received "tech-debt"');
+    expect(message).toContain("bug, risk, improvement, request, decision, review-obligation");
+    expect(message).not.toContain("severity");
+    expect(message).toContain("mstar schema CaptureInput");
+    expect(message).toContain("mstar plan issue-add --help");
+  });
+  test("capture severity refusal names severity alone and its supported values", () => {
+    let failure: unknown;
+    try {
+      assertCaptureRequest(baseInput({ severity: "urgent" as Severity }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "issue.scope-refused",
+      details: { causes: [{ field: "severity", received: "urgent" }] },
+    });
+    expect((failure as Error).message).toContain("critical, high, medium, low, info");
+    expect((failure as Error).message).not.toContain("kind");
+  });
+  test("capture enum refusals redact credential-like scalar input and reduce object input to type facts", () => {
+    const secret = `sk_live_${"a".repeat(24)}`;
+    for (const [field, value] of [
+      ["kind", secret],
+      ["severity", secret],
+      ["kind", { token: secret }],
+      ["severity", { token: secret }],
+    ] as const) {
+      let failure: IssueError | undefined;
+      try {
+        assertCaptureRequest(baseInput({ [field]: value } as Partial<CaptureInput>));
+      } catch (error) {
+        if (error instanceof IssueError) failure = error;
+      }
+      const serialized = JSON.stringify({ message: failure?.message, details: failure?.details });
+      expect(serialized).not.toContain(secret);
+      expect(failure).toMatchObject({
+        code: "issue.scope-refused",
+        details: { causes: [{ field, received: typeof value === "string" ? expect.any(String) : "object" }] },
+      });
+      expect(failure?.message).toContain(field);
+      expect(failure?.message).toContain("mstar schema CaptureInput");
+      expect(failure?.message).toContain("mstar plan issue-add --help");
     }
   });
 

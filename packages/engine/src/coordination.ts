@@ -2661,10 +2661,10 @@ async function mutateResidualClose(
   sessionPath: string,
   request: ResidualCloseCoordinationRequest,
 ): Promise<CoordinationResult> {
-  if (!isNonEmptyString(request.issueId)) throw invalidInput("issueId is required. Read the current issue revision with mstar issue show, then retry with the observed revision.");
+  if (!isNonEmptyString(request.issueId)) throw invalidInput("issueId is required. Read `mstar issue show --id <id>` for the current issue revision, then retry with the observed revision.");
   if (!Number.isInteger(request.expectedIssueRevision) || request.expectedIssueRevision < 0) {
     throw invalidInput(
-      "expectedIssueRevision must be a nonnegative integer; the issue revision guards the DB mutation. Read the current issue revision with mstar issue show, then retry with the observed revision.",
+      "expectedIssueRevision must be a nonnegative integer; this issue revision guards the DB mutation. Read `mstar issue show --id issue-id`, then retry with the observed revision.",
       { issue_id: request.issueId },
     );
   }

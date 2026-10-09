@@ -7,6 +7,7 @@
  * `issue.ambiguous-identity` instead of guessing a merge.
  */
 import { createHash } from "node:crypto";
+import { redactSecrets } from "./audit.js";
 import { join } from "node:path";
 import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
@@ -22,6 +23,24 @@ export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type TerminalDisposition = "resolved" | "waived" | "duplicate" | "superseded";
 export type Disposition = "open" | TerminalDisposition;
+
+const KINDS: Record<IssueKind, true> = {
+  bug: true,
+  risk: true,
+  improvement: true,
+  request: true,
+  decision: true,
+  "review-obligation": true,
+};
+const SEVERITIES: Record<Severity, true> = {
+  critical: true,
+  high: true,
+  medium: true,
+  low: true,
+  info: true,
+};
+const ISSUE_KIND_VALUES = Object.keys(KINDS);
+const SEVERITY_VALUES = Object.keys(SEVERITIES);
 
 export type MutationContext = {
   operationId: string;
@@ -79,8 +98,8 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   CaptureInput: {
     projectId: { required: true, type: "string", description: "Project identifier" },
     title: { required: true, type: "string", description: "Finding title" },
-    kind: { required: true, type: "string", description: "Issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-    severity: { required: true, type: "string", description: "Severity", values: ["critical", "high", "medium", "low", "info"] },
+    kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
+    severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
     impact: { required: true, type: "string", description: "User or system impact" },
     acceptance: { required: true, type: "string", description: "Acceptance condition" },
     owner: { required: false, type: "string", description: "Optional owner" },
@@ -314,6 +333,7 @@ export type IssueErrorCode =
   | "issue.scope-refused"
   | "issue.revision-conflict"
   | "issue.invalid-disposition"
+  | "issue.invalid-operation-id"
   | "milestone.schema-outdated"
   | "issue.schema-outdated"
   | "milestone.project-mismatch"
@@ -326,6 +346,7 @@ export type IssueErrorCode =
 
 export class IssueError extends Error {
   readonly code: IssueErrorCode;
+  details: Record<string, unknown> = {};
 
   constructor(code: IssueErrorCode, message: string) {
     super(`[${code}] ${message}`);
@@ -358,21 +379,6 @@ export function assertIssueLinkVocabulary(link: IssueLink): void {
 
 
 
-const KINDS: Record<IssueKind, true> = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true,
-};
-const SEVERITIES: Record<Severity, true> = {
-  critical: true,
-  high: true,
-  medium: true,
-  low: true,
-  info: true,
-};
 const DISPOSITIONS: Record<Disposition, true> = {
   open: true,
   resolved: true,
@@ -424,7 +430,18 @@ function collectIssueRules(rules: readonly (() => void)[]): void {
     const code = failures.some((error) => error.code === "issue.ambiguous-identity")
       ? "issue.ambiguous-identity"
       : "issue.scope-refused";
-    throw new IssueError(code, failures.map((error) => error.message.replace(/^\[[^\]]+\]\s*/, "")).join("; "));
+    throw Object.assign(
+      new IssueError(code, failures.map((error) => error.message.replace(/^\[[^\]]+\]\s*/, "")).join("; ")),
+      {
+        details: {
+          causes: failures.map((error) => ({
+            code: error.code,
+            message: error.message.replace(/^\[[^\]]+\]\s*/, ""),
+            ...error.details,
+          })),
+        },
+      },
+    );
   }
 }
 
@@ -528,6 +545,9 @@ function receiptStoreRevision(db: StoreDb, composed?: ComposedTransactionRevisio
 }
 
 function lookupOperation(db: StoreDb, operationId: string): { request_hash: string; result_json: string } | undefined {
+  if (typeof operationId !== "string" || operationId.trim() === "") {
+    throw new IssueError("issue.invalid-operation-id", "operationId must be a non-empty string");
+  }
   return db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as
     | { request_hash: string; result_json: string }
     | undefined;
@@ -738,6 +758,23 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
   }
 }
 
+function issueVocabularyError(field: "kind" | "severity", value: unknown): IssueError {
+  const supported = field === "kind" ? ISSUE_KIND_VALUES : SEVERITY_VALUES;
+  const received =
+    typeof value === "string"
+      ? redactSecrets(value).text
+      : value === null
+        ? "null"
+        : typeof value;
+  const error = new IssueError(
+    "issue.scope-refused",
+    `${field} received ${JSON.stringify(received)}; supported values are ${supported.join(", ")}. ` +
+      `Use \`mstar schema CaptureInput\` or \`mstar plan issue-add --help\` to correct the request.`,
+  );
+  error.details = { field, expected: supported, received };
+  return error;
+}
+
 /**
  * §2 the request half of one capture, validated WITHOUT a store: the contract
  * vocabulary, the four nonblank fields and the occurrence identity columns.
@@ -751,14 +788,10 @@ export function assertCaptureRequest(input: CaptureInput): void {
     () => requireNonblank("acceptance", input.acceptance),
     () => requireNonblank("projectId", input.projectId),
     () => {
-      if (!Object.hasOwn(KINDS, input.kind)) {
-        throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
-      }
+      if (typeof input.kind !== "string" || !Object.hasOwn(KINDS, input.kind)) throw issueVocabularyError("kind", input.kind);
     },
     () => {
-      if (!Object.hasOwn(SEVERITIES, input.severity)) {
-        throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
-      }
+      if (typeof input.severity !== "string" || !Object.hasOwn(SEVERITIES, input.severity)) throw issueVocabularyError("severity", input.severity);
     },
     () => occurrenceColumns(input),
   ];

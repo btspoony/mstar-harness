@@ -18,9 +18,10 @@
  * checkout's `store.db`.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   assertIssueStoreActive,
   captureIssue,
@@ -36,6 +37,17 @@ import {
   type ClosureEvidence,
   type IssueError,
 } from "./issue.js";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  readExecutionPlan,
+  type ExecutionCaller,
+  type ExecutionSessionRef,
+} from "./execution-store.js";
+import { mutateExecutionPlan } from "./execution-coordination.js";
+import type { WorkflowSnapshot } from "./workflow.js";
+import type { WorkflowEntry } from "./status.js";
 import { deriveResidualEntries } from "./execution-coordination.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
@@ -52,6 +64,75 @@ async function activeStore(name: string): Promise<StoreContext> {
   const handle = await initializeStore(context);
   handle.close();
   return context;
+}
+
+async function executionPlanFixture(name: string): Promise<{
+  context: StoreContext;
+  workflowId: string;
+  planId: string;
+  caller: ExecutionCaller;
+  session: ExecutionSessionRef;
+}> {
+  const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${name}-`)));
+  const git = (args: string[]) => execFileSync("git", args, { cwd: repoRoot, stdio: "ignore" });
+  git(["init", "-q", "-b", "main"]);
+  git(["-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-q", "--allow-empty", "-m", "fixture"]);
+  const harnessDir = join(repoRoot, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  (await initializeStore(context)).close();
+  const initialized = await initializeExecutionAuthority(context);
+  const workflowId = "wf-issue-batch";
+  const planId = "plan-issue-batch";
+  const iterationId = "iter-issue-batch";
+  const compassRef = `iterations/${iterationId}/delivery-compass.md`;
+  const compassPath = join(harnessDir, compassRef);
+  mkdirSync(dirname(compassPath), { recursive: true });
+  writeFileSync(compassPath, [
+    "---",
+    `iteration_id: ${iterationId}`,
+    "start_date: 2026-10-08",
+    "status: active",
+    "iteration_base_branch: main",
+    "target_branch: main",
+    `plans: [${planId}]`,
+    "---",
+    "",
+    `# ${iterationId}`,
+    "",
+  ].join("\n"));
+  const integrationPath = join(repoRoot, "integration");
+  git(["worktree", "add", "-q", "-b", "integration/issue-batch", integrationPath]);
+  const caller: ExecutionCaller = { sessionId: "coordinator-issue-batch", role: "coordinator", workflowId };
+  const created = await createExecutionWorkflow({ harnessDir, caller }, {
+    entry: { id: workflowId, type: "plan", started_at: "2026-10-08T00:00:00.000Z", dir: `workflows/${workflowId}` } as WorkflowEntry,
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-10-08T00:00:00.000Z",
+      phase: "phase-1-prepare",
+      project: "harness",
+      compass_ref: compassRef,
+      updated_at: "2026-10-08T00:00:00.000Z",
+      delivery_kind: "development",
+      branch: { base: "main", source: "feature/issue-batch", target: "main", integration: "integration/issue-batch" },
+      integration_worktree_path: integrationPath,
+      execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+      plans: [{ id: planId, title: "Issue batch", file: `plans/${planId}.md`, status: "Todo", metadata: { working_branch: "feature/issue-batch" } }],
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `create-${name}`,
+  });
+  const workflow = created.data.workflows[0];
+  if (workflow === undefined) throw new Error("fixture: execution workflow registration returned no workflow");
+  const session = await bindExecutionSession({ harnessDir, caller }, {
+    workflowId,
+    expected: workflow.workflowToken,
+    operationId: `bind-${name}`,
+  });
+  return { context, workflowId, planId, caller, session: session.data };
 }
 
 function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
@@ -171,23 +252,72 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     expect(next.issueId).toBe("I-000001");
     expect(next.created).toBe(true);
   });
-  test("indexed validation reports every invalid issue entry before capture", () => {
+  test("indexed validation retains field causes, accepted values, safe facts, and refuses before store mutation", async () => {
+    const context = await activeStore("invalid-residual-facts");
     const derived = deriveResidualEntries([baseInput({ projectId: "caller-project", occurrenceKey: "event-17" })], "plan-project");
     expect(derived[0]).toMatchObject({ projectId: "plan-project", occurrenceKey: "event-17" });
-
+    const before = await issueFacts(context);
+    const secret = `sk_live_${"b".repeat(24)}`;
     let failure: unknown;
     try {
       deriveResidualEntries(
-        [{ title: "first", occurrenceKey: "event-18" }, { title: "second", occurrenceKey: "event-19" }],
-        "plan-project",
+        [
+          baseInput({ occurrenceKey: "event-bad-kind", kind: "tech-debt" as never }),
+          baseInput({ occurrenceKey: "event-bad-both", kind: secret as never, severity: { token: secret } as never }),
+          baseInput({ occurrenceKey: "event-mixed-cause", title: "", kind: secret as never }),
+        ],
+        "_default",
       );
     } catch (error) {
       failure = error;
     }
     expect(failure).toMatchObject({
       code: "coordination.invalid-input",
-      details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
+      details: {
+        problems: [
+          {
+            path: "entries[0]",
+            causes: [{
+              path: "entries[0].kind",
+              field: "kind",
+              received: "tech-debt",
+              expected: ["bug", "risk", "improvement", "request", "decision", "review-obligation"],
+            }],
+          },
+          {
+            path: "entries[1]",
+            causes: [
+              { path: "entries[1].kind", field: "kind" },
+              { path: "entries[1].severity", field: "severity", received: "object" },
+            ],
+          },
+          {
+            path: "entries[2]",
+            causes: [
+              { code: "issue.scope-refused" },
+              { path: "entries[2].kind", field: "kind" },
+            ],
+          },
+        ],
+      },
     });
+    const message = (failure as Error).message;
+    expect(JSON.stringify({ message, details: (failure as { details: unknown }).details })).not.toContain(secret);
+    expect(message).toContain("Invalid residual-add entries; correct each reported problem, then retry through mstar plan issue-add.");
+    expect(await issueFacts(context)).toEqual(before);
+
+    const corrected = deriveResidualEntries(
+      [
+        baseInput({ occurrenceKey: "event-corrected-kind", kind: "improvement" }),
+        baseInput({ occurrenceKey: "event-corrected-both", kind: "request", severity: "low" }),
+      ],
+      "_default",
+    );
+    expect(corrected.map(({ kind, severity }) => [kind, severity])).toEqual([
+      ["improvement", "high"],
+      ["request", "low"],
+    ]);
+    expect(await issueFacts(context)).toEqual(before);
   });
   test("indexed residual validation rejects sparse holes", () => {
     let mixedFailure: unknown;
@@ -245,6 +375,75 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     expect(replay.issueId).toBe(first.issueId);
     expect(await issueFacts(context)).toEqual(beforeReplay);
     expect((await getIssue(context, first.issueId)).occurrences.map(({ occurrenceKey }) => occurrenceKey)).toEqual(["event-17"]);
+  });
+
+  test("residual-add child occurrence conflicts identify the entry and correction while rolling back the full batch", async () => {
+    const fixture = await executionPlanFixture("residual-child-conflict");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const beforeIssues = await issueFacts(fixture.context);
+    const initialPlan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const operationCount = async () => {
+      const handle = await openStore(fixture.context, "read");
+      try {
+        return (handle.db.prepare("select count(*) as count from execution_operations").get() as { count: number }).count;
+      } finally {
+        handle.close();
+      }
+    };
+    const beforeOperations = await operationCount();
+    const conflictingEntries = [
+      baseInput({ occurrenceKey: "batch-shared-event" }),
+      baseInput({ occurrenceKey: "batch-shared-event", observedBehavior: "different observation reuses the same event key" }),
+    ];
+    const callBatch = (operationId: string, entries: CaptureInput[]) => mutateExecutionPlan(context, {
+      operationId,
+      session: fixture.session,
+      expected: initialPlan.token,
+      planId: fixture.planId,
+      operation: { kind: "residual-add", entries },
+    });
+    const firstRefusal = await refusalOf(() => callBatch("outer-batch-first", conflictingEntries));
+    expect(firstRefusal).toMatchObject({
+      code: "store.operation-conflict",
+      details: {
+        entryIndex: 1,
+        entryPath: "entries[1].occurrenceKey",
+        childOperation: "capture",
+        childOperationIdOrigin: "session + plan + entry occurrenceKey",
+        causeCode: "store.operation-conflict",
+      },
+    });
+    const secondRefusal = await refusalOf(() => callBatch("outer-batch-new-id", conflictingEntries));
+    expect(secondRefusal).toMatchObject({
+      code: "store.operation-conflict",
+      details: {
+        entryIndex: 1,
+        entryPath: "entries[1].occurrenceKey",
+        childOperation: "capture",
+        childOperationIdOrigin: "session + plan + entry occurrenceKey",
+        causeCode: "store.operation-conflict",
+      },
+    });
+    expect(await issueFacts(fixture.context)).toEqual(beforeIssues);
+    expect((await readExecutionPlan(context, fixture.session, fixture.planId)).token).toEqual(initialPlan.token);
+    expect(await operationCount()).toBe(beforeOperations);
+
+    const corrected = await callBatch("outer-batch-corrected", [
+      baseInput({ occurrenceKey: "batch-event-1" }),
+      baseInput({ occurrenceKey: "batch-event-2", observedBehavior: "a distinct observation with its own event key" }),
+    ]);
+    expect(corrected.replayed).toBe(false);
+    expect(await operationCount()).toBe(beforeOperations + 1);
+    const issues = await listIssues(fixture.context, {});
+    expect(issues.total).toBe(1);
+    expect((await getIssue(fixture.context, issues.items[0]!.id)).occurrences.map(({ occurrenceKey }) => occurrenceKey)).toEqual([
+      "batch-event-1", "batch-event-2",
+    ]);
+    expect(await issueFacts(fixture.context)).toMatchObject({
+      issues: 1,
+      occurrences: 2,
+      operations: beforeIssues.operations + 4,
+    });
   });
 
 

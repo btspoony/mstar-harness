@@ -943,6 +943,9 @@ export type {
   StoreAuthorityHandle,
 } from "./store-activation.js";
 export {
+  CONSUMER_KINDS,
+  DISPOSITIONS,
+  SESSION_STATES,
   ACTIVATION_PROTOCOL_VERSION,
   activateStore,
   activationReceiptFor,
