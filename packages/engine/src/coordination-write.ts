@@ -1,8 +1,8 @@
 /**
  * Package-private coordination write layer — NOT a second public API and
- * deliberately NOT re-exported from `index.ts`. It holds the things
- * `coordination.ts` and the routed writers must share without an import
- * cycle (`coordination.ts` → `store.ts`/`workflow.ts` → here):
+ * deliberately NOT re-exported from `index.ts`. It holds the protected-file
+ * authorization and shared snapshot validators used by legacy workflow
+ * handling and the migration importer without an import cycle:
  *
  * 1. `CoordinationError` + the stable refusal codes (the consumer contract;
  *    wording is not).
@@ -14,19 +14,12 @@
  *    target and the operation, never a caller-supplied boolean.
  *    `FsStore.put/delete` reject everything else with
  *    `coordination.direct-write-refused`.
- *    The ONE writer of a coordinated snapshot is the snapshot CAS writer
- *    (`workflow.ts#writeWorkflowSnapshot`): its field-scoped deltas
- *    (`mergePhaseProjection` — `phase` + `updated_at` only) and its
- *    lease-removal terminal close (`settleStoppedFileClaims`) both land the
- *    whole payload against the stored byte version, so the field-scoped guard
- *    is a property of that writer rather than a rule a second writer can skip.
+ *    `writeWorkflowSnapshot` is migration-only; runtime file-route
+ *    replacement is no longer a public coordination operation.
  * 3. The stored coordination shapes and their strict validators, shared by
- *    `workflow.ts` (which refuses to persist a malformed coordination
- *    block) and `coordination.ts` (which builds them). `workflow.ts` cannot
- *    import `coordination.ts` — that would close an ESM cycle back through
- *    `store.ts` — so the shapes live here, next to the raw-byte artifact
- *    version (`sha256:<64 hex>`, missing = `absent`) used by the CAS
- *    writers.
+ *    `workflow.ts` (which refuses to persist malformed coordination blocks)
+ *    and the migration importer. The byte version (`sha256:<64 hex>`, missing
+ *    = `absent`) records exact source bytes for safe legacy import and parsing.
  *
  * Import discipline: this module imports only `node:*` and `./core.js`
  * (a leaf, type-only here) so it can be imported from `store.ts` without
