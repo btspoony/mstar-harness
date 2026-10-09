@@ -25,11 +25,14 @@ import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import {
   captureIssue,
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
-import type { CaptureInput } from '@mstar-harness/engine'
+import type { CaptureInput, ExecutionRead, ExecutionState } from '@mstar-harness/engine'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
@@ -853,21 +856,6 @@ export function v2RootWithWorkflow(workflowId = 'wf-1'): string {
   return v2Root([v2WorkflowEntry(workflowId)])
 }
 
-/**
- * Seed legacy file-route documents directly for migration and consumer tests.
- * This fixture does not exercise the retired register/snapshot writer APIs.
- */
-export async function seedFileWorkflow(
-  harnessDir: string,
-  workflowId: string,
-  plans: Record<string, unknown>[] = [],
-  overrides: Record<string, unknown> = {},
-): Promise<void> {
-  const workflowDir = join(harnessDir, 'workflows', workflowId)
-  await mkdir(workflowDir, { recursive: true })
-  await writeFile(join(workflowDir, 'snapshot.json'), v2SnapshotWithPlans(workflowId, plans, overrides), 'utf8')
-  await writeFile(join(harnessDir, 'status.json'), v2RootWithWorkflow(workflowId), 'utf8')
-}
 
 /** A minimal project register doc (`projects/<id>/residuals.json` — entries keyed by plan id). */
 export function v2Register(entries: Record<string, unknown[]>): string {
@@ -893,20 +881,64 @@ export function v2ResidualEntry(id: string, overrides: Record<string, unknown> =
 }
 
 /**
- * Seed a minimal v2 tree under the harness dir: a v2 root status.json with
- * ONE active workflow entry + that workflow's snapshot. The agent-flow
- * writer / ledger resolve the ACTIVE workflow from this tree and append to
- * `workflows/<id>/` — the v3 write-path precondition.
+ * Create the ACTIVE execution-store fixture used by host adapters and gates.
+ * It writes no status.json or workflow snapshot; plan metadata enters through
+ * catalog registration and the workflow is created by the engine producer.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param workflowId - the active workflow id (default `wf-1`).
- * @param plans - snapshot `plans[]` rows (default [] — the snapshot-read
- * fixture shape).
+ * @param plans - optional plan rows in the workflow's ACTIVE projection.
  */
-export async function seedV2Tree(harnessDir: string, workflowId = 'wf-1', plans: unknown[] = []): Promise<void> {
-  await seedHarness(harnessDir, {
-    'status.json': v2Root([v2WorkflowEntry(workflowId)]),
-    [`workflows/${workflowId}/snapshot.json`]: v2SnapshotWithPlans(workflowId, plans),
-  })
+export async function seedActiveWorkflow(
+  harnessDir: string,
+  workflowId = 'wf-1',
+  plans: unknown[] = [],
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
+  await mkdir(harnessDir, { recursive: true })
+  const store = await initializeStore({ harnessDir })
+  store.close()
+  let state: ExecutionRead<ExecutionState>
+  try {
+    state = await readExecutionState({ harnessDir })
+  } catch {
+    await initializeExecutionAuthority({ harnessDir })
+    state = await readExecutionState({ harnessDir })
+  }
+  if (state.data.workflows.some((workflow) => workflow.state.id === workflowId)) {
+    throw new Error(`ACTIVE fixture workflow already exists: ${workflowId}`)
+  }
+  const planRows = plans.filter(
+    (value): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value),
+  )
+  for (const row of planRows) {
+    if (typeof row.id !== 'string') continue
+    await registerCatalogEntity(
+      { harnessDir },
+      {
+        kind: 'plan',
+        id: row.id,
+        title: typeof row.title === 'string' ? row.title : row.id,
+        rootKind: 'plans',
+        relativePath: typeof row.file === 'string' ? row.file : `plans/${row.id}.md`,
+      },
+      { operationId: `seed-${workflowId}-${row.id}`, actor: 'project-manager' },
+    )
+  }
+  const snapshot = JSON.parse(v2SnapshotWithPlans(workflowId, planRows, overrides)) as Record<string, unknown>
+  const workflowType = snapshot.type === 'iteration' ? 'iteration' : 'plan'
+  await createExecutionWorkflow(
+    {
+      harnessDir,
+      caller: { sessionId: `seed-${workflowId}`, role: 'coordinator', workflowId },
+    },
+    {
+      entry: v2WorkflowEntry(workflowId, workflowType) as never,
+      snapshot: snapshot as never,
+      expected: state.token,
+      operationId: `seed-${workflowId}`,
+    },
+  )
+  await mkdir(join(harnessDir, 'workflows', workflowId), { recursive: true })
 }
 
 /** Well-formed JSON that fails the status schema (plans must be an array). */
@@ -1033,11 +1065,9 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   // receives the session workspace). Same idiom as the engine's own fixtures
   // (`packages/engine/src/gates.test.ts`: `[config]\nharness_dir=…`).
   await writeFile(join(root, '.mstarc'), '[config]\nharness_dir=harness\n')
-  // v3 write-path precondition:
-  // the agent-flow writer / workflow-ledger consumer append only to an
-  // ACTIVE workflow — tests that exercise the ledger opt in to the seeded
-  // v2 tree (root status.json + one active workflow snapshot).
-  if (options.seedV2 === true) await seedV2Tree(harnessDir)
+  // Active workflow state is created through the engine store fixture; the
+  // helper creates no legacy status.json or workflow snapshot documents.
+  if (options.seedV2 === true) await seedActiveWorkflow(harnessDir)
   // The REAL subagents row needs the agents service (the runtime's
   // constructor injects `agents` for its continuation manager) — fail the
   // boot fast instead of hanging the row fiber.
