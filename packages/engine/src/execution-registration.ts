@@ -346,6 +346,12 @@ function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCa
  * Register a shipped workflow on the ACTIVE store. Expectations are read from
  * one transaction so the root token and catalog revision describe one snapshot;
  * commitExecutionRegistration rechecks both under its own atomic write.
+ *
+ * §4.1 the recorded receipt is resolved BEFORE the optional supplied
+ * expectations are enforced: an identical retry after a lost response
+ * re-presents the tokens its own first attempt already advanced, so it must
+ * replay rather than be judged stale. A supplied expectation is a constraint on
+ * a NEW registration attempt, never a veto over an already-recorded operation.
  */
 export async function registerShippedCatalogExecution(
   context: ExecutionContext,
@@ -375,29 +381,53 @@ export async function registerShippedCatalogExecution(
     operationId,
     expectedCatalogRevision: 0,
   };
-  const read = await withExecutionTransaction(context, (tx) => {
-    const versions = readCatalogStoreVersionsOn(tx.db);
+  const resolved = await withExecutionTransaction<
+    { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
+  >(context, (tx) => {
     const expected = executionRootTokenOf(tx);
+    // §4.1 resolve the recorded receipt FIRST: a retry that re-presents the
+    // constraints its own first attempt advanced must replay through
+    // `readOperationReplay` (the one idempotency rule) instead of being judged
+    // stale before the lookup. Only a genuinely new attempt is constrained.
+    const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+      operationId,
+      requestHash: registrationRequestHash(context.caller, canonical),
+      workflowId: canonical.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+    if (replayed !== null) return { replayed: replayed.data };
+    const versions = readCatalogStoreVersionsOn(tx.db);
     if (input.expected !== undefined) {
+      // The ADDRESS half keeps its own precise refusal; the REVISION half is
+      // compared below so this seam can name the recovery for a stale root
+      // expectation instead of the bare shared message.
       assertExecutionToken(input.expected, {
         kind: "root",
         storeId: tx.storeId,
         epoch: tx.epoch,
         key: [],
-        revision: tx.execution.revision,
       });
       if (input.expected !== expected) {
-        throw new ExecutionError("execution.stale-token", "the supplied root expectation is not the current execution token");
+        throw new ExecutionError(
+          "execution.stale-token",
+          "the supplied root expectation is not this store's current execution token. Re-read the current root token " +
+            "with `mstar status validate` (output field data.token) and retry with it; an operation id already committed " +
+            "for this intent replays instead of being refused.",
+        );
       }
     }
     if (input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== versions.catalogRevision) {
       throw new CatalogError(
         "catalog.revision-conflict",
-        `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the store is at ${versions.catalogRevision}`,
+        `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the store is at ` +
+          `${versions.catalogRevision}. Read the current store and catalog revisions (the ACTIVE catalog-revisions read), ` +
+          "or omit the catalog expectation on the shipped registration so it derives the current revision, then retry.",
       );
     }
     return { expected, catalogRevision: versions.catalogRevision };
   });
-  request.expectedCatalogRevision = read.catalogRevision;
-  return commitExecutionRegistration(context, { ...request, expected: read.expected });
+  if ("replayed" in resolved) return resolved.replayed;
+  request.expectedCatalogRevision = resolved.catalogRevision;
+  return commitExecutionRegistration(context, { ...request, expected: resolved.expected });
 }

@@ -1112,5 +1112,49 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     });
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
+
+  test("shipped registration replays an identical retry that re-presents its ORIGINAL constraints", async () => {
+    const fixture = await activeFixture("shipped-registration-replay");
+    const reviewed = planRequest({ context: fixture.context, operationId: "unused-shipped-replay" });
+    const context: ExecutionContext = { ...fixture.context, caller: fixture.caller };
+    // The reviewed constraints the caller held before the lost response: the
+    // registration advances both, so a retry carrying them is exactly the case
+    // that must replay through the recorded receipt, not be judged stale.
+    const constraints = { actor: "project-manager", workflow: reviewed.workflow, expected: fixture.rootToken, expectedCatalogRevision: 0 };
+    const accepted = await registerShippedCatalogExecution(context, constraints);
+    const registered = await footprint(fixture.context);
+    expect(registered).toMatchObject({ root_revision: 2, catalog_revision: 1, operations: 1 });
+
+    // Same operation id (derived), same original constraints: replayed.
+    expect(await registerShippedCatalogExecution(context, constraints)).toEqual(accepted);
+    expect(await footprint(fixture.context)).toEqual(registered);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
+  test("shipped registration refuses a stale constraint on a genuinely new operation and names the recovery", async () => {
+    const fixture = await activeFixture("shipped-registration-stale");
+    const first = planRequest({ context: fixture.context, operationId: "op-shipped-first" });
+    const context: ExecutionContext = { ...fixture.context, caller: fixture.caller };
+    await registerShippedCatalogExecution(context, { actor: "project-manager", workflow: first.workflow });
+
+    const second = planRequest({ context: fixture.context, operationId: "op-shipped-second", workflowId: WORKFLOW_ID_ALT });
+    const staleRoot = await refusalOf(() =>
+      registerShippedCatalogExecution(context, { actor: "project-manager", workflow: second.workflow, expected: fixture.rootToken }),
+    );
+    expect(staleRoot.code).toBe("execution.stale-token");
+    expect(staleRoot.message).toContain("mstar status validate");
+
+    const current = await readExecutionState(fixture.context);
+    const staleCatalog = await refusalOf(() =>
+      registerShippedCatalogExecution(context, {
+        actor: "project-manager",
+        workflow: second.workflow,
+        expected: current.token,
+        expectedCatalogRevision: 0,
+      }),
+    );
+    expect(staleCatalog.code).toBe("catalog.revision-conflict");
+    expect(staleCatalog.message).toContain("omit the catalog expectation");
+  });
 });
 
