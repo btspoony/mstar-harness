@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Command, CommanderError } from "commander";
-import { refusalEnvelope, safeReceivedValue, admitCommandInput } from "@mstar-harness/commands";
+import { refusalEnvelope, safeReceivedValue, admitCommandInput, type RefusalDiagnostic } from "@mstar-harness/commands";
 import {
   executeCommand,
   getCommandDefinitions,
@@ -808,7 +808,7 @@ export function registerCliCommands(
           );
           const admissionDiagnostics = admission.success
             ? []
-            : (admission.envelope.details?.diagnostics as Array<Record<string, unknown>> | undefined ?? [])
+            : (admission.envelope.details?.diagnostics as RefusalDiagnostic[] | undefined ?? [])
               .filter((diagnostic) => typeof diagnostic.path !== "string" || !Object.keys(definition.payloads ?? {}).some(
                 (field) => diagnostic.path === field || diagnostic.path?.startsWith(`${field}.`),
               ));
