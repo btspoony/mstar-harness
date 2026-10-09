@@ -30,8 +30,8 @@ English / [中文](README_CN.md)
 - **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
 - **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Pluggable JSON persistence (pre-activation fallback)** — coordination docs (`status.json`, workflow snapshots, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
-- **Store authority vs JSON transport** — after activation, `{HARNESS_DIR}/store.db` (SQLite) is the issue, catalog, roadmap, and workflow/plan execution authority; `ArtifactStore` retains pre-activation execution JSON (`status.json`, snapshots) and review JSON. The retired project registers are migration history with no write path; open items are issues in the store. They are not the same store.
+- **Pluggable JSON persistence (review documents)** — review envelopes and unrelated generic JSON persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`. Execution state is never stored this way
+- **Store authority** — `{HARNESS_DIR}/store.db` (SQLite) is the issue, catalog, roadmap, and workflow/plan execution authority once created (`mstar store init`, or `mstar store upgrade` for historical file state); `status.json` and workflow snapshots are migration staging written only by that migration tooling, the retired project registers are migration history with no write path, and open items are issues in the store. A workspace without a store has no execution authority — track the work in conversation (no-plan mode)
 - **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **What ships**
