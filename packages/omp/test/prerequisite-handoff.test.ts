@@ -12,7 +12,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 afterEach(() => afterEachCleanup());
 
-async function activeFixture() {
+async function activeFixture(type: "plan" | "iteration" = "plan") {
   const fixture = makeFixture();
   rmSync(fixture.harness, { recursive: true, force: true });
   mkdirSync(join(fixture.harness, "workflows"), { recursive: true });
@@ -22,8 +22,8 @@ async function activeFixture() {
   await registerCatalogEntity(store, { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` }, { operationId: "register-prerequisite-plan", actor: "prerequisite-handoff.test" });
   const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId: WORKFLOW_ID };
   const domain: ExecutionContext = { harnessDir: fixture.harness, caller };
-  const snapshot: WorkflowSnapshot = { schema_version: 1, id: WORKFLOW_ID, type: "plan", status: "running", started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z", plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }] };
-  const created = await createExecutionWorkflow(domain, { entry: { id: WORKFLOW_ID, type: "plan", started_at: snapshot.started_at, dir: `workflows/${WORKFLOW_ID}` }, snapshot, expected: (await readExecutionState(store)).token, operationId: "create-prerequisite-workflow" });
+  const snapshot: WorkflowSnapshot = { schema_version: 1, id: WORKFLOW_ID, type, status: "running", started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z", plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }] };
+  const created = await createExecutionWorkflow(domain, { entry: { id: WORKFLOW_ID, type, started_at: snapshot.started_at, dir: `workflows/${WORKFLOW_ID}` }, snapshot, expected: (await readExecutionState(store)).token, operationId: "create-prerequisite-workflow" });
   const bound = await bindExecutionSession(domain, { workflowId: WORKFLOW_ID, expected: created.data.workflows[0]!.workflowToken, operationId: "bind-prerequisite-coordinator" });
   writeFileSync(join(fixture.harness, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-01-01", workflows: [] }));
   mkdirSync(join(fixture.harness, "workflows", WORKFLOW_ID), { recursive: true });
@@ -44,6 +44,21 @@ describe("ACTIVE prerequisite handoff and write gates", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("invalid-root");
   });
+  test("a bound ACTIVE iteration adopts its DB coordinator binding", async () => {
+    const { fixture, session, executionBinding } = await activeFixture("iteration");
+    const result = await reserveHandoffBinding(handoffInput, {
+      sessionId: "active-coordinator",
+      cwd: fixture.root,
+      taskSession: false,
+      executionBinding,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.binding.executionBinding.session).toEqual(session);
+      expect(result.binding.workflowId).toBe(WORKFLOW_ID);
+    }
+  });
+
 
   test("an ACTIVE graph refuses file-binding reservation without an adopted DB binding", async () => {
     const { fixture } = await activeFixture();
