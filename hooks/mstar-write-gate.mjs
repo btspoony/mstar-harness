@@ -11881,21 +11881,21 @@ var init_issue = __esm(() => {
       reason: { required: true, type: "string", description: "Reason for closure" },
       references: {
         required: false,
-        requiredWhen: ["close"],
+        requiredWhen: ["resolved"],
         type: "string[]",
         description: "Acceptance evidence references; required for resolved closure",
         minItems: 1
       },
-      scope: { required: false, requiredWhen: ["waive"], type: "string", description: "Named closure scope; required for waived closure" },
+      scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
       canonicalIssueId: {
         required: false,
-        requiredWhen: ["duplicate", "supersede"],
+        requiredWhen: ["duplicate", "superseded"],
         type: "string",
         description: "Canonical issue for duplicate/superseded; required for those dispositions"
       },
       alignmentRef: {
         required: false,
-        requiredWhen: ["close", "waive"],
+        requiredWhen: ["resolved", "waived"],
         type: "string",
         description: "Authority alignment reference; required for resolved/waived closure"
       }
