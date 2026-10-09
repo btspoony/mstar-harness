@@ -33,7 +33,9 @@ export function failure(code: string, error: unknown): CommandEnvelope<never> {
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
     details: { operation: id },
-   recovery: "Correct the reported harness-root or dashboard-startup condition before retrying the dashboard command."});
+   recovery: code === "dashboard.harness-unavailable"
+        ? "Resolve the control harness root for the current dashboard invocation, then retry dashboard startup."
+        : "Resolve the dashboard startup cause in the diagnostic, including the configured port or listener failure, then retry startup."});
 }
 
 function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { slot: DashboardSlot; reused: boolean } {

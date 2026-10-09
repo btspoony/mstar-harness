@@ -14,7 +14,24 @@ class UsageError extends Error {}
 function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
 function context(input: Input, invocation: InvocationContext): StoreContext { const root = resolveProcessHarnessDir(invocation.cwd, input.harness); return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd }; }
 function envelope(id: string, data: unknown): CommandEnvelope { return { version:1, command:id, status:"ok", code:`${id}.ok`, exitCode:0, data }; }
-export function failure(id: string, error: unknown): CommandEnvelope<never> { const message=error instanceof Error?error.message:String(error); if(error instanceof UsageError) return refusalEnvelope({command:id,status:"usage",code:"usage",exitCode:2,message,details:{operation:id}}); const code=error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`; return refusalEnvelope({command:id,status:"refused",code,exitCode:1,message,details:{operation:id}, recovery: "Correct the reported milestone input, project state, or revision conflict before retrying the milestone operation."}); }
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof UsageError) {
+    return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id } });
+  }
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : `${id}.internal-error`;
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id }, recovery: id === "milestone.add"
+      ? "Supply a unique milestone name, project ordinal, and the current store revision before retrying the add."
+      : id === "milestone.update"
+        ? "Read the current milestone and store revision, then resubmit only the intended patch."
+        : id === "milestone.assign"
+          ? "Verify the issue and milestone ids and use the current issue and store revisions before retrying assignment."
+          : id === "milestone.list"
+            ? "Select an existing project and correct the reported store-read cause before listing milestones again."
+            : "Select an existing milestone in the project and correct the reported store-read cause before checking its status again." });
+}
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {
   const verb = id.slice("milestone.".length) as typeof verbs[number]; const projectId = requireValue(input.project,"--project"); const store = context(input,invocation);

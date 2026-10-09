@@ -104,7 +104,19 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
-   recovery: "Correct the reported plan input, revision, or workflow-state condition before retrying the plan operation."});
+   recovery: id === "plan.bind"
+        ? "Use the registered workflow and its current coordinator identity; resume only the recorded session when the binding already exists."
+        : id === "plan.show"
+          ? "Select a registered workflow and plan id from the execution authority before retrying the read."
+          : id === "plan.prepare"
+            ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values before retrying."
+            : id === "plan.progress"
+              ? "Correct the progress payload and use the current plan revision before retrying the update."
+              : id === "plan.issue-add"
+                ? "Provide valid issue entries for the addressed plan and retry with its current plan revision."
+                : id === "plan.issue-close"
+                  ? "Use the current issue revision and a supported disposition for the addressed plan issue."
+                  : "Supply the required delivery-route evidence and QC/QA proof for this plan before recording completion."});
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;

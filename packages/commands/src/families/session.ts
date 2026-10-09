@@ -29,7 +29,9 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.refused`;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) , recovery: "Inspect the workflow and session details, restore the recorded coordinator prerequisites, then retry the session operation."});
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) , recovery: id === "session.run"
+        ? "Verify the executable and runtime named in the diagnostic, check the child working directory and environment, then retry the launch."
+        : "Verify the workflow and prior-session identity, provide valid stopped-session attestation, and retry recovery with a fresh operation id."});
 }
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {

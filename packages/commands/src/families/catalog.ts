@@ -92,7 +92,25 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: "Correct the reported catalog input, path, relation, or revision condition before retrying the catalog operation."});
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: id === "catalog.discover"
+        ? "Provide readable repository roots and correct any paths that cannot be inspected, then retry discovery."
+        : id === "catalog.import"
+          ? "Correct the reviewed catalog plan and source identities before retrying the import."
+          : id === "catalog.register"
+            ? "Use a canonical harness-relative location and valid registration metadata, then retry registration."
+            : id === "catalog.update"
+              ? "Read the current catalog row revision and resubmit the intended metadata update against that revision."
+              : id === "catalog.link"
+                ? "Select two registered catalog rows with a supported relation, then retry linking them."
+                : id === "catalog.list"
+                  ? "Select a registered catalog scope and correct the reported store-read problem before listing again."
+                  : id === "catalog.show"
+                    ? "Use the exact registered catalog identity and correct the reported store-read problem before showing it again."
+                    : id === "catalog.export"
+                      ? "Choose a writable export destination and retry the catalog export."
+                      : id === "catalog.reconcile"
+                        ? "Inspect the pending registration execution and correct the recorded source state before reconciling it again."
+                        : "Verify the registration snapshot identity and its canonical location before purging it."});
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
