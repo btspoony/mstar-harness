@@ -206,6 +206,14 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, duplicateContract, composedSchema);
     expect(resolvedAdmission.success).toBe(true);
+    const waivedAdmission = admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "waived",
+      payload: { reason: "outside accepted scope", scope: "legacy behavior", alignmentRef: "user approval" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema);
+    expect(waivedAdmission.success).toBe(true);
 
 
     const duplicateSource = await executeCommand("issue.add", {
