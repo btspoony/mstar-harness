@@ -2,10 +2,10 @@
  * coordination.ts — the shared ACTIVE-route plan-operation surface.
  *
  * Pieces the ACTIVE execution authority (store.db) and the migration tooling
- * share without an ESM cycle: the closed plan-operation union, the Git proof
- * machinery, the execution-catalog pin family, the evidence-area/path helpers
- * and the coordinated-artifact replacement writer its own consumers still use.
- *
+ * share without an ESM cycle: the closed plan-operation union, Git proof
+ * machinery, execution-catalog pin family and evidence-area/path helpers.
+ * The coordinated-artifact replacement surface is retired; file `status` and
+ * `snapshot` kinds remain only for migration staging.
  * The FILE execution route is retired: the coordinator session envelope, the
  * file-route scope/read/mutate machinery and the Prepare show/amend/recover
  * verbs were deleted. Their byte-witness envelope reader lives in

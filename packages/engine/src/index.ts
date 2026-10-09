@@ -474,6 +474,7 @@ export type { QcVerdict } from "./qcreview.js";
 export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
 
+/** `status` and `snapshot` are migration-internal engine kinds, not persist CLI kinds. */
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordination.js";
 

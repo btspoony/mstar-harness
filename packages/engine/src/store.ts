@@ -25,10 +25,10 @@ import {
   assertExecutionFileWriteAllowed,
 } from "./store-db.js";
 
-/** JSON coordination-doc kinds the store persists. The former `residuals`
- * kind is retired (issue-governance cutover G2a): the issue store (`store.db`)
- * is the only findings authority, and a project `residuals.json` is migration
- * history that must never be (re)created through the runtime store. */
+/** Store artifact kinds. `status` and `snapshot` exist only for internal
+ * migration staging; runtime persistence is `review` / `json`. The former
+ * `residuals` kind is retired: `store.db` is the findings authority, and
+ * `residuals.json` is migration history that must never be recreated. */
 export type ArtifactKind = "status" | "snapshot" | "review" | "json";
 
 /** Stable key inside the kind. Workflow id, project id, or review id;

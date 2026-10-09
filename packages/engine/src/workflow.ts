@@ -826,7 +826,7 @@ export type WriteWorkflowSnapshotOptions = {
  * whose target root differs from the active store's root MUST
  * `setArtifactStore(createFsStore(root))` first.
  */
-// Migration importer remains a permanent caller; coordination.ts replacement is the T17-only caller.
+// Migration importer only: status/snapshot are not runtime persistence routes.
 export async function writeWorkflowSnapshot(
   snapshot: WorkflowSnapshot,
   dir: string,
