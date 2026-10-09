@@ -12,7 +12,7 @@ English / [中文](README_CN.md)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/btspoony/mstar-harness/ci.yml?branch=main&style=flat-square&label=CI&labelColor=black)](https://github.com/btspoony/mstar-harness/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-white?labelColor=black&style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases)
+[![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases) [![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-c4f042?style=flat-square&labelColor=black)](INSTALL.md#prerequisites)
 [![Last commit](https://img.shields.io/github/last-commit/btspoony/mstar-harness?color=c4f042&labelColor=black&style=flat-square)](https://github.com/btspoony/mstar-harness/commits/main)
 [![dshfind](https://dshfind.com/api/badge/btspoony/mstar-harness?lang=en)](https://dshfind.com/zh/plugins/btspoony/mstar-harness?ref=badge)
 [![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
@@ -34,8 +34,6 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 - **Boundaries are explicit** — the workflow opens pull requests and stops at merge-ready; merging stays your call. Audits read and report, and anything that touches a real environment needs your explicit authorization.
 
 ## Install
-
-Prerequisites: the CLI launches through **Bun >=1.4.0** — `npx` / `bunx` fetch the package but still need Bun on `PATH`; on a Node-only machine, install the package and run it with **Node >=24.18.0** (`node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`).
 
 | Host | Install |
 |------|---------|
@@ -134,7 +132,7 @@ Details: [`docs/runtime-reference.md`](docs/runtime-reference.md#cli-contract).
 
 From a coding tool that supports MCP, look up issues, the roadmap, and workflows, and run the matching CLI operations and checks, without writing a shell command. `mstar-harness mcp` is the stdio server in this package. It follows the same rules as the CLI — not a new permission — and there is no separate MCP package.
 
-After install, a host usually already has its launch configuration; see [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools). Static JSON configs use the shape below (`npx` needs Bun on `PATH`, as in [Install](#install)). Do not paste it over a file the host already wrote. OpenCode does not read a static file — its plugin injects the server from the `config` hook. dsh is the exception: the shipped row stays inert until the profile includes `@deepseek-ai/dsh-mcp-client` (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`).
+After install, a host usually already has its launch configuration; see [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools). Static JSON configs use the shape below (`npx` needs Bun on `PATH`, as in [Prerequisites](INSTALL.md#prerequisites)). Do not paste it over a file the host already wrote. OpenCode does not read a static file — its plugin injects the server from the `config` hook. dsh is the exception: the shipped row stays inert until the profile includes `@deepseek-ai/dsh-mcp-client` (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`).
 
 ```json
 {
