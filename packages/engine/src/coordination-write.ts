@@ -202,7 +202,7 @@ export function canonicalTarget(target: string): string {
 }
 
 /** Protected document class, decided by the caller's resolved path table. */
-export type ProtectedWriteKind = "root" | "snapshot" | "register";
+export type ProtectedWriteKind = "root" | "snapshot";
 
 /** One live authorization: the canonical target it covers and the operation it permits. */
 type WriteAuthorization = { target: string; operation: "put" | "delete" };

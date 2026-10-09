@@ -495,20 +495,16 @@ export {
   EXECUTION_PIN_CONFLICT_CODE,
   ExecutionPinConflictError,
   executionInputHash,
-  readCoordinatedArtifact,
   readExecutionCatalogPin,
-  replaceCoordinatedArtifact,
   resolveProcessHarnessDir,
 } from "./coordination.js";
 export type {
   CatalogExecutionPin,
   CatalogPinAbsence,
   CoordinationRole,
-  CoordinatedReplacement,
   ExecutionCatalogPinState,
   PlanCoordinationOperation,
   ResidualInput,
-  VersionedArtifact,
 } from "./coordination.js";
 // The retired FILE route's envelope bytes: the migration importer and the
 // not-yet-cut issue-domain authorization read them as import sources, never as

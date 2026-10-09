@@ -14,32 +14,20 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { readJson, type GateResult } from "./core.js";
+import { readJson } from "./core.js";
 import {
   COORDINATION_ERROR_CODES,
   CoordinationError,
-  assertExactKeys,
   canonicalTarget,
   isNonEmptyString,
   isPlainObject,
-  readArtifactBytes,
   evidenceRefOf,
   sha256Bytes,
   validatePlanProgress,
   validateRowCoordination,
-  withProtectedWrite,
   type CoordinationErrorCode,
   type PlanProgress,
   type PreparedCoordination,
@@ -51,7 +39,7 @@ import {
   type CoordinationIdentityRecovery,
   type CompletionRecord,
 } from "./coordination-write.js";
-import { readSessionEnvelope } from "./coordination-envelope.js";
+
 import {
   selectSemanticFields,
   unresolvedRecovery,
@@ -107,12 +95,9 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { findRegisteredWorkflow, rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
-import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
+import { findRegisteredWorkflow, rowPlanIds, validatePlanRow, type PlanRow } from "./status.js";
 import {
   StoreError,
-  assertExecutionFileReadAllowed,
-  assertExecutionFileWriteAllowed,
   openStore,
   type StoreContext,
   type StoreDb,
@@ -141,10 +126,8 @@ import {
   consultDeliveryEvidence,
   readWorkflowSnapshot,
   stableJson,
-  validateWorkflowSnapshot,
   PREPARE_PHASE,
   WORKFLOW_TERMINAL_STATUSES,
-  writeWorkflowSnapshot,
   type WorkflowBranchAnchors,
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
@@ -188,8 +171,6 @@ export { CoordinationError };
 
 /** The sole plan coordinator identity. */
 export type { CoordinationRole };
-/** One artifact read: payload plus the byte version it was read at. */
-export type VersionedArtifact = { payload: unknown; version: string };
 
 export type ResidualInput = Omit<CaptureInput, "projectId">;
 export type PlanCoordinationOperation =
@@ -199,14 +180,6 @@ export type PlanCoordinationOperation =
   | { kind: "residual-close"; issueId: string; disposition: TerminalDisposition; evidence: ClosureEvidence; expectedIssueRevision: number }
   | { kind: "complete"; evidence: CompletionEvidence; integration?: IntegrationResultInput };
 
-/** Coordinator replacement of a coordinated artifact (spec §B). */
-export type CoordinatedReplacement = {
-  harnessRoot: string;
-  ref: ArtifactRef;
-  payload: unknown;
-  /** Required for snapshot replacement (the coordinator session envelope). */
-  sessionPath?: string;
-};
 
 const SNAPSHOT_FILE = "snapshot.json";
 function errorMessage(error: unknown): string {
@@ -247,39 +220,6 @@ function snapshotPathOf(harnessRoot: string, workflowId: string): string {
  * FsStore path table, so a non-local store is refused rather than silently
  * writing somewhere else.
  */
-function localStore(harnessRoot: string): ArtifactStore & { root: string } {
-  let store: ArtifactStore;
-  try {
-    store = getArtifactStore();
-  } catch (error) {
-    throw new CoordinationError(
-      "coordination.local-store-required",
-      "No artifact store is resolvable from the current working directory. Run mstar status validate. Then inspect the control harness root.",
-      { harness_root: harnessRoot, cwd: resolve(process.cwd()), cause: errorMessage(error) },
-    );
-  }
-  const root = "root" in store ? store.root : undefined;
-  if (typeof root !== "string") {
-    throw new CoordinationError(
-      "coordination.local-store-required",
-      "The active ArtifactStore has no local root; this operation requires the canonical FsStore. Run mstar status validate. Then inspect the control harness root.",
-      { harness_root: harnessRoot },
-    );
-  }
-  const actual = canonicalTarget(root);
-  const expected = canonicalTarget(harnessRoot);
-  if (actual !== expected) {
-    throw new CoordinationError(
-      "coordination.path-mismatch",
-      "The active ArtifactStore root does not match the resolved control harness root. Run mstar status validate. Then inspect the resolved control harness root.",
-      { expected, actual },
-    );
-  }
-  // Narrowed by the `root` presence + string check above: this is the FsStore
-  // contract (`createFsStore` is the only local-root implementation).
-  const local = store as ArtifactStore & { root: string };
-  return local;
-}
 
 /* ------------------------------------------------------------------------ *
  * § Process root
@@ -649,70 +589,6 @@ function readSnapshotWithPhase(dir: string): { snapshot: WorkflowSnapshot; phase
   }
 }
 
-/** Assert the resolved snapshot path is the store's own path for this ref. */
-function assertSnapshotPath(harnessRoot: string, workflowId: string, snapshotPath: string): string {
-  const fromTable = resolveArtifactPath(harnessRoot, { kind: "snapshot", key: workflowId });
-  if (canonicalizeNearestExisting(fromTable) !== canonicalizeNearestExisting(snapshotPath)) {
-    throw new CoordinationError(
-      "coordination.path-mismatch",
-      "Resolved snapshot path does not match the store path. Run mstar status validate to inspect the expected and resolved paths.",
-      { expected: fromTable, actual: snapshotPath },
-    );
-  }
-  return snapshotPath;
-}
-
-/**
- * Read one coordinated artifact plus its byte version, from a **single** byte
- * read. `payload` is `undefined` and `version` is `"absent"` when the document
- * does not exist. Snapshot payloads are validated before they are handed out.
- *
- * Read veto at the entry boundary (spec §4.3/§5): `harnessRoot` is this entry's
- * own anchor, so the verdict precedes the `ref` shape check and the byte read —
- * a direct consumer of this authoritative surface cannot observe retired
- * root/snapshot bytes while the execution authority is ACTIVE, and an
- * unreadable store refuses here instead of serving them.
- */
-export async function readCoordinatedArtifact(
-  harnessRoot: string,
-  ref: ArtifactRef,
-): Promise<VersionedArtifact> {
-  if (typeof harnessRoot === "string" && isAbsolute(harnessRoot)) {
-    assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
-  }
-  if (!isPlainObject(ref) || !isNonEmptyString(ref.kind) || !isNonEmptyString(ref.key)) {
-    throw invalidInput("ref must be an ArtifactRef with kind and key. Inspect the harness with mstar status validate.");
-  }
-  const root = canonicalizeNearestExisting(harnessRoot);
-  localStore(root);
-  const path = resolveArtifactPath(root, ref);
-  const bytes = readArtifactBytes(path);
-  if (bytes === undefined) return { payload: undefined, version: "absent" };
-  if (bytes.payload !== undefined) assertStoredArtifact(ref.kind, bytes.payload, path, root);
-  return { payload: bytes.payload, version: bytes.version };
-}
-
-/**
- * Validate a stored artifact against its kind's owner validator. The read
- * surface fails loud on invalid content instead of handing out a document the
- * scoped writers would refuse to write back.
- */
-function assertStoredArtifact(kind: string, payload: unknown, path: string, harnessRoot: string): void {
-  let gate: GateResult | undefined;
-  if (kind === "snapshot") gate = validateWorkflowSnapshot(payload);
-  else if (kind === "status") gate = validateStatusV2(payload as StatusV2Doc, { harnessDir: harnessRoot });
-  if (gate === undefined || gate.ok) return;
-  throw new CoordinationError(
-    "coordination.store",
-    "Stored artifact fails validation. Inspect the harness authority with mstar status validate.",
-    { path, kind, violations: gate.violations.map((entry) => entry.code) },
-  );
-}
-
-
-/** Stable refusal code for malformed, foreign or missing catalog selections. */
-export const EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
-
 /**
  * `catalog_pin` — the frozen identity of the catalog input a prepared
  * execution selected (state-projection contract §1). It is written on a newly
@@ -725,6 +601,9 @@ export const EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
  * side. Progress/status/lease changes are execution authority and cannot
  * invalidate the pin.
  */
+/** Stable refusal code for malformed, foreign or missing catalog selections. */
+export const EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
+
 export type CatalogExecutionPin = {
   /** The store that owns the selection (`store_meta.store_id`). */
   store_id: string;
@@ -1465,272 +1344,6 @@ export function integrationProof(path: string, head: string, baseSha: string, so
     };
   }
   return { kind: "proven", resultSha: candidates[0] };
-}
-
-/**
- * Replace a coordinated artifact. Snapshot replacement goes through the
- * canonical snapshot writer (coordinator session and phase-only delta); root
- * status is validated and written under root → snapshot → destination locks.
- * `review`/`json` are not coordinated artifacts, so they refuse explicitly
- * instead of silently no-opping.
- *
- * Canonical authority discrimination is the entry boundary: the harness root
- * veto precedes request-shape and ownership checks and any lock.
- */
-export async function replaceCoordinatedArtifact(input: CoordinatedReplacement): Promise<VersionedArtifact> {
-  if (typeof input?.harnessRoot === "string" && isAbsolute(input.harnessRoot)) {
-    assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
-  }
-  assertExactKeys(
-    input,
-    ["harnessRoot", "ref", "payload", "sessionPath"],
-    "replacement",
-  );
-  if (!isNonEmptyString(input.harnessRoot) || !isAbsolute(input.harnessRoot)) {
-    throw invalidInput("harnessRoot must be an absolute path. Inspect the harness with mstar status validate.");
-  }
-  if (!isPlainObject(input.ref) || !isNonEmptyString(input.ref.kind) || !isNonEmptyString(input.ref.key)) {
-    throw invalidInput("ref must be an ArtifactRef with kind and key. Inspect the harness with mstar status validate.");
-  }
-  const kind = input.ref.kind;
-  if (kind === "status") {
-    const root = canonicalizeNearestExisting(input.harnessRoot);
-    await replaceRootStatus(input, root);
-    return readCoordinatedArtifact(root, input.ref);
-  }
-  if ((kind as string) === "residuals") {
-    throw new CoordinationError(
-      "coordination.store",
-      "project register replacement is retired \u2014 a residuals.json is migration history and the issue store (store.db) is the only findings authority. Inspect the harness with mstar status validate.",
-      { kind: "residuals" },
-    );
-  }
-  if (kind !== "snapshot") {
-    throw new CoordinationError(
-      "coordination.scoped-writer-required",
-      "This artifact kind has no coordinated writer; snapshot and status use scoped replacements, while this kind keeps its own writer. Inspect the harness with mstar status validate.",
-      { kind },
-    );
-  }
-  const harnessRoot = canonicalizeNearestExisting(input.harnessRoot);
-  localStore(harnessRoot);
-  if (!isNonEmptyString(input.sessionPath) || !isAbsolute(input.sessionPath)) {
-    throw new CoordinationError(
-      "coordination.session-role",
-      "a coordinated snapshot replacement requires the absolute coordinator session envelope. Inspect the harness with mstar status validate.",
-      { kind: input.ref.kind },
-    );
-  }
-  const session = readSessionEnvelope(input.sessionPath);
-  if (session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file after checking the recorded workflow.", {
-      role: session.role,
-    });
-  }
-  if (session.workflow_id !== input.ref.key) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.",
-      { expected: session.workflow_id, actual: input.ref.key },
-    );
-  }
-  const snapshotPath = resolveArtifactPath(harnessRoot, input.ref);
-  assertSnapshotPath(harnessRoot, input.ref.key, snapshotPath);
-  if (!existsSync(snapshotPath)) {
-    throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect the workflow with mstar status validate; bind its coordinator with mstar plan bind before coordinated snapshot replacement.", {
-      path: snapshotPath,
-    });
-  }
-  const current = readSnapshot(dirname(snapshotPath));
-  if (current.coordination === undefined) {
-    throw new CoordinationError(
-      "coordination.identity-missing",
-      "Workflow has no coordinator binding. Inspect with mstar status validate, then bind its coordinator with mstar plan bind before coordinated snapshot replacement.",
-      { workflow_id: current.id },
-    );
-  }
-  if (!isPlainObject(input.payload)) {
-    throw invalidInput("a snapshot payload must be an object. Correct the supplied snapshot payload before retrying; inspect current workflow with mstar status validate.");
-  }
-  if (input.payload.id !== input.ref.key) {
-    throw invalidInput(
-      "Snapshot payload id does not match the reference key. Correct the supplied payload before retrying; inspect the current workflow with mstar status validate.",
-      { actual: input.payload.id, expected: input.ref.key },
-    );
-  }
-  const gate = validateWorkflowSnapshot(input.payload);
-  if (!gate.ok) {
-    throw invalidInput("Snapshot payload fails validation. Correct it before retrying; inspect the current workflow with mstar status validate.", {
-      violations: gate.violations.map((entry) => entry.code),
-    });
-  }
-  // Boundary cast: the payload passed the snapshot gate immediately above and
-  // `writeWorkflowSnapshot` re-validates the merged document before writing.
-  // This writer is the phase projection only: `plans` may not differ from disk
-  // (`coordination.direct-write-refused`), so it can never move a frozen
-  // execution input — and therefore never touches a `catalog_pin` either.
-  const payload = input.payload as WorkflowSnapshot;
-  await writeWorkflowSnapshot(payload, dirname(snapshotPath), {
-    sessionPath: canonicalTarget(input.sessionPath),
-  });
-  return readCoordinatedArtifact(harnessRoot, input.ref);
-}
-
-
-function scopedWriterRequired(message: string, details: Record<string, unknown>): CoordinationError {
-  return new CoordinationError("coordination.scoped-writer-required", message, details);
-}
-
-/** One workflow a root status doc registers, with its resolved snapshot path. */
-type WorkflowEntryRef = { id: string; dir: string; snapshotPath: string };
-
-/** Coordination ownership discovered from validated workflow snapshots. */
-type CoordinatedOwnership = { workflows: string[]; plans: Set<string> };
-
-/**
- * The workflow entries one root status doc registers (spec §C "protection
- * discovery"). Entries are engine-written and harness-relative; a malformed
- * one refuses the replacement rather than silently dropping a protected
- * workflow from the discovered set.
- */
-function registeredWorkflowEntries(harnessRoot: string, doc: unknown, statusPath: string): WorkflowEntryRef[] {
-  const workflows = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
-  const entries: WorkflowEntryRef[] = [];
-  for (const entry of workflows) {
-    if (!isPlainObject(entry) || !isNonEmptyString(entry.id) || !isNonEmptyString(entry.dir)) {
-      throw new CoordinationError(
-        "coordination.store",
-        "Root status contains a malformed workflow entry; correct its id and harness-relative dir, then inspect registrations with mstar status validate.",
-        { path: statusPath },
-      );
-    }
-    if (isAbsolute(entry.dir) || entry.dir.split(/[\\/]+/).includes("..")) {
-      throw new CoordinationError(
-        "coordination.store",
-        "Root status contains a workflow entry whose dir is not harness-relative. Correct its id and dir, then inspect registrations with mstar status validate.",
-        { path: statusPath, dir: entry.dir },
-      );
-    }
-    entries.push({ id: entry.id, dir: entry.dir, snapshotPath: join(harnessRoot, entry.dir, "snapshot.json") });
-  }
-  entries.sort((left, right) =>
-    canonicalizeNearestExisting(left.snapshotPath).localeCompare(canonicalizeNearestExisting(right.snapshotPath)),
-  );
-  return entries;
-}
-
-/**
- * Hold every entry's snapshot lock, in canonical path order, across `run`
- * (spec §C lock order: root → snapshots → destination). Holding them through
- * the destination write is what keeps the discovered protected set stable.
- */
-async function withSnapshotLocks<T>(entries: readonly WorkflowEntryRef[], run: () => Promise<T>): Promise<T> {
-  const next = entries[0];
-  if (next === undefined) return run();
-  return withStatusWriteLock(next.snapshotPath, () => withSnapshotLocks(entries.slice(1), run));
-}
-
-/**
- * Ownership of the entries whose snapshot locks are held. Reading a snapshot
- * outside that set would be the unlocked scan spec §C forbids, so it refuses.
- */
-function coordinatedOwnershipOf(
-  locked: readonly WorkflowEntryRef[],
-  subset: readonly WorkflowEntryRef[],
-): CoordinatedOwnership {
-  const workflows: string[] = [];
-  const plans = new Set<string>();
-  // Membership is decided by canonical snapshot path, never by object
-  // identity: a replacement that retains an existing workflow passes its own
-  // entry object for the very file the lock was taken on (spec §C4 — the
-  // guard judges the document set, not the caller's instances).
-  const lockedPaths = new Set(locked.map((entry) => canonicalizeNearestExisting(entry.snapshotPath)));
-  for (const entry of subset) {
-    const snapshotPath = canonicalizeNearestExisting(entry.snapshotPath);
-    if (!lockedPaths.has(snapshotPath)) {
-      throw new CoordinationError(
-        "coordination.store",
-        "Snapshot was not locked before protection discovery. Run mstar status validate to inspect registered workflows; this is an internal lock invariant failure, not a missing operator action.",
-        { path: snapshotPath },
-      );
-    }
-    const snapshot = readSnapshot(dirname(entry.snapshotPath));
-    if (snapshot.coordination === undefined) continue;
-    workflows.push(entry.id);
-    for (const row of snapshot.plans ?? []) {
-      if (!isPlainObject(row)) continue;
-      const coordination = row.coordination;
-      // Every address the row answers to (`id` and/or legacy `plan_id`): a
-      // prepared row reachable under either key makes that key protected.
-      if (isPlainObject(coordination) && coordination.prepared !== undefined) {
-        for (const planId of rowPlanIds(row)) plans.add(planId);
-      }
-    }
-  }
-  return { workflows, plans };
-}
-
-/** The workflow entries both documents name, deduplicated by canonical snapshot path. */
-function lockableEntries(...groups: readonly WorkflowEntryRef[][]): WorkflowEntryRef[] {
-  const byPath = new Map<string, WorkflowEntryRef>();
-  for (const entry of groups.flat()) {
-    const key = canonicalizeNearestExisting(entry.snapshotPath);
-    if (!byPath.has(key)) byPath.set(key, entry);
-  }
-  return [...byPath.entries()]
-    .sort((left, right) => left[0].localeCompare(right[0]))
-    .map(([, entry]) => entry);
-}
-
-/**
- * Replace the root status.json under its own lock (spec §C2 line 156). The
- * whole-writer cutover refuses any root that registers a coordinated workflow
- * — current or proposed — because those rows belong to the scoped writers.
- */
-async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: string): Promise<void> {
-  const store = localStore(harnessRoot);
-  const statusPath = resolveArtifactPath(harnessRoot, input.ref);
-  const fromTable = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
-  if (canonicalizeNearestExisting(fromTable) !== canonicalizeNearestExisting(statusPath)) {
-    throw new CoordinationError(
-      "coordination.path-mismatch",
-      "Resolved status path does not match the store path. Inspect current registrations with mstar status validate.",
-      { expected: fromTable, actual: statusPath },
-    );
-  }
-  if (!isPlainObject(input.payload)) throw invalidInput("a status payload must be an object. Inspect current registrations with mstar status validate.");
-  // The store's status slot is typed; `validateStatusV2` below is what proves
-  // the payload actually carries that shape before anything is written.
-  const statusDoc = input.payload as StatusV2Doc;
-  const gate = validateStatusV2(statusDoc, { harnessDir: harnessRoot });
-  if (!gate.ok) {
-    throw invalidInput("Status payload fails validation. Inspect current registrations with mstar status validate.", {
-      violations: gate.violations.map((entry) => entry.code),
-    });
-  }
-  await withStatusWriteLock(statusPath, async () => {
-    const current = readArtifactBytes(statusPath);
-    const currentEntries = registeredWorkflowEntries(harnessRoot, current?.payload, statusPath);
-    const proposedEntries = registeredWorkflowEntries(harnessRoot, input.payload, statusPath);
-    const lockedEntries = lockableEntries(currentEntries, proposedEntries);
-    await withSnapshotLocks(lockedEntries, async () => {
-      const currentOwnership = coordinatedOwnershipOf(lockedEntries, currentEntries);
-      if (currentOwnership.workflows.length > 0) {
-        throw scopedWriterRequired(
-          "Root replacement refused because it registers coordinated workflows owned by scoped writers. Use the scoped workflow/plan commands for these rows; inspect them with mstar status validate.",
-          { path: statusPath, workflows: currentOwnership.workflows, side: "current" },
-        );
-      }
-      const proposedOwnership = coordinatedOwnershipOf(lockedEntries, proposedEntries);
-      if (proposedOwnership.workflows.length > 0) {
-        throw scopedWriterRequired(
-          "Root replacement would register coordinated workflows owned by scoped writers. Use the scoped workflow/plan commands for these rows; inspect them with mstar status validate.",
-          { path: statusPath, workflows: proposedOwnership.workflows, side: "proposed" },
-        );
-      }
-      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: statusDoc }));
-    });
-  });
 }
 
 /* ------------------------------------------------------------------------ *
