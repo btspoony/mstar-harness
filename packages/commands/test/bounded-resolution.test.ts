@@ -606,71 +606,8 @@ describe("status family witness", () => {
   });
 });
 
-describe("lease witness", () => {
-  test("an unclaimed integration lane stops the interaction; a claimed lane is surfaced and an absent workflow refuses truthfully", async () => {
-    const { harness, context } = leaseContext();
-    const workflowId = "bounded-lease-workflow";
-    const interaction: Interaction = { label: "integration claim verification", context: "warm", extraDependency: "", calls: [] };
-
-    // No integration merge claim: the honest interaction stops with the
-    // unclaimed fact instead of proceeding toward a serialized merge.
-    writeLeaseSnapshot(harness, workflowId, [
-      { id: "plan-a", plan_id: "plan-a", title: "Integration fixture", file: "plan.md", status: "InProgress" },
-    ]);
-    const snapshotPath = join(harness, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
-    const unclaimedBytes = readFileSync(snapshotPath);
-    const unclaimed = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
-    expect(unclaimed).toMatchObject({ status: "ok", data: { claimed: false } });
-    expect(readFileSync(snapshotPath)).toEqual(unclaimedBytes);
-
-    // A claimed lane is surfaced verbatim; the honest interaction stops —
-    // the write is withheld pending explicit user authorization.
-    const claim: IntegrationMergeLease = {
-      holder: "session-foreign-fixture",
-      plan_id: "plan-a",
-      claimed_at: "2026-09-30T00:00:00Z",
-      source_branch: "feature/foreign-fixture",
-      target_branch: "main",
-    };
-    writeWorkflowSnapshotWithLease(harness, workflowId, claim);
-    const claimedBytes = readFileSync(snapshotPath);
-    const verified = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
-    expect(verified).toMatchObject({ status: "ok", data: { claimed: true, lease: claim } });
-    expect(readFileSync(snapshotPath)).toEqual(claimedBytes);
-
-    // A missing snapshot refuses with the exact target named.
-    const absent = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: "bounded-absent-workflow" }, context);
-    expect(absent).toMatchObject({ status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1 });
-    if (absent.status === "refused") expect(absent.message).toContain("bounded-absent-workflow");
-
-    // The write was withheld: no route toward the claimed integration lane was executed.
-    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 3 });
-  });
-
-  test("a malformed integration merge lease refuses: a null tombstone and a missing holder are invalid, never unclaimed", async () => {
-    const { harness, context } = leaseContext();
-    const workflowId = "bounded-merge-lease-workflow";
-    const interaction: Interaction = { label: "integration lease shape", context: "warm", extraDependency: "", calls: [] };
-
-    // A `null` top-level record is a tombstone, not "no claim": it fails closed.
-    writeWorkflowSnapshotWithLease(harness, workflowId, null);
-    const tombstone = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
-    expect(tombstone).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.invalid" });
-
-    // A claimed lane missing its holder names the missing field.
-    writeWorkflowSnapshotWithLease(harness, workflowId, {
-      plan_id: "plan-a",
-      claimed_at: "2026-09-30T00:00:00Z",
-      source_branch: "feature/f",
-      target_branch: "main",
-    });
-    const missingHolder = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
-    expect(missingHolder).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.missing-holder" });
-
-    // The interaction stopped on the malformed record; nothing was repaired.
-    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 2 });
-  });
-});
+// Retired `lease.verify-integration` setup-verb cases were removed; T13 covers
+// surviving L1 lease facts through `worktree check`.
 
 
 // ---------------------------------------------------------------------------

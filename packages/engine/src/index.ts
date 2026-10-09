@@ -484,6 +484,7 @@ export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordinati
 export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 
 export { activeLifecyclePlanId, collectActiveLifecycleBranches } from "./lifecycle-branches.js";
+export type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 
 export { WorkflowSnapshotValidationError } from "./workflow.js";
 

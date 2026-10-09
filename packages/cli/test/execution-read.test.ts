@@ -336,11 +336,8 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     // A snapshot claiming a held lease for the plan and a held merge lease.
     plantLeftoverSnapshot(fixture);
 
-    // The workflow-wide merge lease is unclaimed in the DB although the file
-    // claims one.
-    const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
-    expect(merge.exitCode).toBe(0);
-    expect(jsonOf(merge)).toMatchObject({ status: "ok", data: { claimed: false } });
+    // Retired `lease.verify-integration` setup-verb assertions were removed;
+    // T13 covers surviving lease facts through `worktree check`.
 
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6"], fixture);
     expect(gate.exitCode).toBe(1);
@@ -427,9 +424,6 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(show.exitCode).toBe(1);
     expect(jsonOf(show).code).toBe("store.corrupt");
 
-    const lease = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], corrupt);
-    expect(lease.exitCode).toBe(1);
-    expect(jsonOf(lease)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
 
     const status = runCli(["status", "validate"], corrupt);
     expect(status.exitCode).toBe(1);
@@ -512,9 +506,6 @@ describe("execution-cross-domain", () => {
     const status = runCli(["status", "validate"], fixture);
     expect(status.exitCode).toBe(1);
     expect(jsonOf(status).code).toBe("store.corrupt");
-    const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
-    expect(merge.exitCode).toBe(1);
-    expect(jsonOf(merge)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(fixture)], fixture);
     expect(gate.exitCode).toBe(1);
     expect(jsonOf(gate)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
