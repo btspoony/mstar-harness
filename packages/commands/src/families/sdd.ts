@@ -70,7 +70,7 @@ async function readContext(value: string | undefined): Promise<SddExecutionConte
   if (!path.isAbsolute(value)) throw new SddScriptError("--context must be an absolute path", 2);
   const doc: unknown = JSON.parse(readFileSync(value, "utf8"));
   if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new SddScriptError("context file must contain a JSON object", 2);
-  return resolveSddExecutionContext(doc as SddExecutionContext);
+  return await resolveSddExecutionContext(doc as SddExecutionContext);
 }
 async function execute(id: string, input: SddInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   try {

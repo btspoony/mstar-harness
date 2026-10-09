@@ -28,7 +28,8 @@ import { collectActiveLifecycleBranches } from "./lifecycle-branches.js";
  * gate their artifact writes before mkdir/write. The resolver is ASYNC: its
  * workflow facts (the governing plan row, branch/worktree scope, and the
  * lifecycle-owned branch set) are read from the ACTIVE execution authority
- * through `readExecutionState` — one transactional read, never a file probe
+ * through `readExecutionPlanAdmission` — the graph AND the registration
+ * verdict projected inside one engine read transaction, never a file probe
  * and never ambient environment state — and the pre-activation
  * status.json/snapshot file route is retired. S1/S2 admission maps to the
  * store's own refusals: no store → `store.not-initialized` (bootstrap
@@ -56,8 +57,7 @@ import {
 import { findMstarc, parseMstarc } from "./mstarc.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
-import { rowPlanIds } from "./status.js";
-import { readExecutionState, type ExecutionState } from "./execution-store.js";
+import { readExecutionPlanAdmission, type ExecutionState } from "./execution-store.js";
 import { assertBranchAlignment, gitProbeTimeoutMs, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
 import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
 
@@ -734,40 +734,6 @@ function recordedMainWorktreeBranch(planFile: string): string {
 }
 
 /**
- * One governing plan-row match in the ACTIVE execution graph: the workflow
- * that owns the row, the plan row itself, and the owning workflow's snapshot
- * state (its integration topology feeds L1).
- */
-type ExecutionPlanRowMatch = {
-  workflowId: string;
-  row: Record<string, unknown>;
-  state: ExecutionState["workflows"][number]["state"];
-};
-
-/**
- * The GOVERNING plan row for `planId` across the ACTIVE execution graph
- * (issue #428): the graph's `workflows[]` IS the register — every entry is a
- * registered ACTIVE lifecycle, and a terminal lifecycle leaves registry
- * membership, so a retained terminal row is structurally outside this lookup
- * and never registration evidence (contract §4b/§6 S2). Rows are addressed by
- * `id` (or the legacy `plan_id`) through the shared accessor; a plan claimed
- * by more than one ACTIVE workflow yields several matches and the caller
- * fails closed. Read-only.
- */
-function matchExecutionPlanRows(graph: ExecutionState, planId: string): ExecutionPlanRowMatch[] {
-  const matches: ExecutionPlanRowMatch[] = [];
-  for (const workflow of graph.workflows) {
-    for (const view of workflow.plans) {
-      if (rowPlanIds(view.plan).includes(planId)) {
-        matches.push({ workflowId: workflow.state.id, row: view.plan as Record<string, unknown>, state: workflow.state });
-        break; // one row per workflow is enough
-      }
-    }
-  }
-  return matches;
-}
-
-/**
  * The L1 lifecycle-branch ownership set read from the ACTIVE graph: ALL
  * registered ACTIVE lifecycles (never only the governing one), projected into
  * the same snapshot shape the pure collector consumes.
@@ -809,8 +775,11 @@ function activeGraphLifecycleDocs(graph: ExecutionState): Record<string, unknown
  * (`featureCwd` inside the control checkout, or the control harness
  * inside the feature checkout, are both refused — L1 hard rules);
  * - branch/scope: workflow facts come from the ACTIVE execution graph —
- * `readExecutionState` is the one transactional read (the pre-activation
- * `status.json`/snapshot file probe is retired, issue #428). The graph's
+ * `readExecutionPlanAdmission` is the one transactional read: the graph AND
+ * the registration verdict (governing row, absence, ambiguity) are projected
+ * INSIDE the engine's read transaction, so the fail-closed judgment runs on
+ * engine-owned transactional state (the pre-activation `status.json`/
+ * snapshot file probe is retired, issue #428). The graph's
  * `workflows[]` IS the register, so a retained terminal row is structurally
  * outside the lookup. A plan row from a REGISTERED ACTIVE workflow that
  * signals ownership (`status: "InProgress"` or recorded
@@ -993,29 +962,29 @@ export async function resolveSddExecutionContext(input: SddExecutionContext): Pr
 // root, so no separate escape check.)
 
 // Workflow facts come from the ACTIVE execution authority (issue #428): ONE
-// transactional read serves the register, the governing plan row and the
-// lifecycle-owned branch set. A store that is ABSENT refuses
-// `store.not-initialized` (bootstrap recovery), a store that exists but is
-// not ACTIVE refuses `execution.not-active` (naming `mstar store upgrade`),
-// and a damaged store refuses out of the same read — admission never
-// downgrades to branch-alignment-only when the authority cannot be
-// established (contract §6 S2, fail-closed like the S1 register and
-// PHASE6_INVALID_ROOT refusals).
-  const graph = (await readExecutionState({ harnessDir: canonicalControlHarnessRoot })).data;
-
-  // Row metadata supplies feature ownership; Git topology is still verified
-  // against the governing workflow state.
-  const matches = matchExecutionPlanRows(graph, planId);
-  if (matches.length > 1) {
+// transactional read serves the register, the governing plan row AND the
+// admission verdict — row selection and its absence/ambiguity classification
+// are projected INSIDE the engine's read transaction
+// (`readExecutionPlanAdmission`), so the fail-closed judgment runs on
+// engine-owned transactional state, never on a graph a concurrent commit
+// already superseded. A store that is ABSENT refuses `store.not-initialized`
+// (bootstrap recovery), a store that exists but is not ACTIVE refuses
+// `execution.not-active`, and a damaged store refuses out of the same
+// transaction — admission never downgrades to branch-alignment-only when the
+// authority cannot be established (contract §6 S2, fail-closed like the S1
+// register and PHASE6_INVALID_ROOT refusals).
+  const admission = await readExecutionPlanAdmission({ harnessDir: canonicalControlHarnessRoot }, planId);
+  const graph = admission.graph;
+  if (admission.kind === "ambiguous") {
     throwGateFail([
       contextViolation(
         "high",
         "sdd.context.workflow-plan-ambiguous",
-        `plan "${planId}" appears in multiple registered active workflows (${matches.map((entry) => entry.workflowId).join(", ")}) \u2014 resolve the duplicate registration before dispatch`,
+        `plan "${planId}" appears in multiple registered active workflows (${admission.workflowIds.join(", ")}) \u2014 resolve the duplicate registration before dispatch`,
       ),
     ]);
   }
-  const match = matches[0];
+  const match = admission.kind === "row" ? admission : undefined;
   const rowMetadata = match !== undefined && isPlainObject(match.row.metadata) ? match.row.metadata : {};
   const rowWorktreePath = typeof rowMetadata.worktree_path === "string" ? rowMetadata.worktree_path : "";
   const rowWorkingBranch = typeof rowMetadata.working_branch === "string" ? rowMetadata.working_branch : "";
