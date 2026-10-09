@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -135,6 +135,33 @@ test("a store engine refusal keeps its code, exit 1 and message through the fact
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const legacySurface of ["status.json", "workflows/workflow-only/snapshot.json"] as const) {
+  test(`store.init refuses legacy ${legacySurface} without creating a store`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-store-init-legacy-"));
+    const harness = join(root, ".mstar");
+    const historicalPath = join(harness, ...legacySurface.split("/"));
+    const historicalBytes = Buffer.from('{"historical":"preserve exactly"}\n');
+    try {
+      mkdirSync(join(historicalPath, ".."), { recursive: true });
+      writeFileSync(historicalPath, historicalBytes);
+      const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.init");
+      if (definition === undefined) throw new Error("missing store.init definition");
+      const result = await definition.execute(definition.input.parse({ harness }), invocation(root));
+
+      expect(result).toMatchObject({ status: "refused", code: "store.already-exists", exitCode: 1 });
+      if (result.status === "ok" || result.status === "usage") throw new Error(`expected a refusal, got ${result.status}`);
+      expect(result.message).toContain(historicalPath);
+      expect(result.message).toContain("mstar harness scaffold");
+      expect(result.message).toContain("mstar store init");
+      expect(result.message).toContain("mstar store upgrade");
+      expect(existsSync(join(harness, "store.db"))).toBe(false);
+      expect(readFileSync(historicalPath)).toEqual(historicalBytes);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("default registration removes only staged protocol faces and keeps independent restore/export", () => {
   const definitions = getCommandDefinitions();
