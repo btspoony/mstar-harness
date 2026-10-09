@@ -141,7 +141,15 @@ describe("issue command family", () => {
 
     const beforeMalformed = await issueState(context);
     const malformed = await executeCommand("issue.add", { payload: {}, actor: "project-manager" }, context);
-    expect(malformed).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    // The nested payload shape is part of the admitted input contract on both
+    // transports, so the public entry refuses it at admission with the grouped
+    // per-field diagnostics rather than reaching the family's own mapper.
+    expect(malformed).toMatchObject({
+      status: "usage", code: "command.invalid-input",
+      details: { diagnostics: expect.arrayContaining([
+        expect.objectContaining({ path: "payload.rootCauseKey", code: "invalid_type", expected: "string", received: "undefined" }),
+      ]) },
+    });
     expect(await issueState(context)).toEqual(beforeMalformed);
     const nextGenerated = await executeCommand("issue.add", {
       payload: capture({ sourceIdentity: "review/next", rootCauseKey: "next-root", acceptanceKey: "next-accept", occurrenceKey: "next-occ" }),
@@ -311,11 +319,50 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, context);
     expect(invalid.status).toBe("refused");
-    if (invalid.status === "refused") expect(invalid.details?.paths).toContain("payload.title");
+    if (invalid.status === "refused") {
+      expect(invalid.details?.paths).toContain("payload.title");
+      // The nested failure is projected through the shared input-aware decoder:
+      // a per-field code/expected/received fact, not a prose name list.
+      expect(invalid.details?.diagnostics).toContainEqual(expect.objectContaining({
+        path: "payload.title", code: "invalid_type", expected: "string", received: "42",
+      }));
+    }
 
     const missingMutation = await command.execute({ payload: capture() }, context);
     expect(missingMutation.status).toBe("refused");
     if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["actor"]);
+  });
+
+  test("a nested payload enum violation carries its per-field facts", async () => {
+    const context = await testContext();
+    const invalid = await definition("issue.add").execute({
+      payload: { ...capture(), kind: "not-a-kind" },
+      operationId: "invalid-enum",
+      actor: "project-manager",
+    }, context);
+    expect(invalid.status).toBe("refused");
+    if (invalid.status !== "refused") return;
+    expect(invalid.details?.diagnostics).toContainEqual(expect.objectContaining({
+      path: "payload.kind",
+      code: "invalid_value",
+      expected: "bug | risk | improvement | request | decision | review-obligation",
+      received: "not-a-kind",
+    }));
+  });
+
+  test("an aggregated capture failure keeps its typed engine causes alongside the family paths", async () => {
+    const context = await testContext();
+    const ambiguous = capture({ sourceIdentity: "unknown", rootCauseKey: "unknown", acceptanceKey: "?" });
+    const refused = await definition("issue.add").execute({ payload: ambiguous, operationId: "ambiguous", actor: "project-manager" }, context);
+    expect(refused.status).toBe("refused");
+    if (refused.status !== "refused") return;
+    expect(refused.code).toBe("issue.ambiguous-identity");
+    // The engine's structured causes survive the family mapper instead of
+    // being dropped when the family has its own paths to report.
+    const causes = refused.details?.causes as Array<{ code: string; causes?: Array<{ code: string }> }> | undefined;
+    expect(causes?.length).toBeGreaterThanOrEqual(1);
+    expect(causes?.every((cause) => cause.code === "issue.ambiguous-identity")).toBe(true);
+    expect(causes?.[0]?.causes?.length).toBeGreaterThanOrEqual(2);
   });
 
   test("a declared string-or-null payload field keeps its type instead of accepting any JSON", async () => {

@@ -1,5 +1,5 @@
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
-import { admitCommandInput, getCommandSchemas } from "@mstar-harness/commands";
+import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandAdmission, CommandDefinition, CommandSchemaDescriptor, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
@@ -49,10 +49,7 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
   const properties = { ...jsonSchema.properties as Record<string, Record<string, unknown>> };
   const composed: Record<string, z.core.$ZodType> = {};
   for (const [field, payload] of Object.entries(definition.payloads ?? {})) {
-    const declared = input.shape[field];
-    const placeholder = declared instanceof z.ZodUnknown
-      || (declared instanceof z.ZodOptional && declared.unwrap() instanceof z.ZodUnknown);
-    if (!placeholder) continue;
+    if (!isPayloadPlaceholder(input.shape[field])) continue;
     composed[field] = payload.schema.optional();
     properties[field] = descriptor.payloadSchemas[field] as Record<string, unknown>;
   }

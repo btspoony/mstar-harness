@@ -32,6 +32,20 @@ function context(): InvocationContext {
   };
 }
 
+/**
+ * One isolated issue harness with an initialized store whose writer is sealed
+ * (the sibling fixture pattern): the registered CLI opens the store read-only,
+ * and a just-closed writer's deferred cleanup can otherwise race that open.
+ */
+async function cliHarness(): Promise<{ root: string; harness: string; invocation: InvocationContext }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "cli-adapter-issue-"));
+  const harness = path.join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
+  (await openStore({ harnessDir: harness }, "read")).close();
+  return { root, harness, invocation: { ...context(), cwd: root, controlRoot: harness } };
+}
+
 async function run(
   args: string[],
   definitions: readonly CommandDefinition[] = getCommandDefinitions(),
@@ -149,16 +163,42 @@ describe("generated CLI adapter", () => {
   });
 
 
-  test("issue show positional parse errors retain their diagnostic shape", () => {
+  test("issue show positional parse errors retain their structured attribution", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
     const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
     const details = envelope?.details;
+    // The offending positional is attributed by argv position and token — the
+    // facts a three-call recovery needs — alongside the command's own usage.
     expect(details).toMatchObject({
-      diagnostics: [{ code: "commander.excessArguments", message: error.message, helpRoute: "mstar issue show --help" }],
+      diagnostics: [{
+        path: "argv[4]",
+        argvIndex: 4,
+        token: "BADPOS",
+        code: "commander.excessArguments",
+        message: error.message,
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --payload <json>",
+        helpRoute: "mstar issue show --help",
+      }],
     });
-    if (details !== undefined && "diagnostics" in details && Array.isArray(details.diagnostics)) {
-      expect(details.diagnostics[0]).not.toHaveProperty("path");
-    }
+  });
+
+  test("excess-argument attribution skips consumed option values and declared positionals", () => {
+    const usageError = (args: string[]) => {
+      const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+      return mapParserError(error, ["node", "mstar", ...args])?.details?.diagnostics;
+    };
+    // A consumed option value is not the excess token; the trailing unknown one is.
+    expect(usageError(["issue", "show", "--id", "I-1", "BADPOS"])).toMatchObject([
+      { path: "argv[6]", argvIndex: 6, token: "BADPOS" },
+    ]);
+    // A declared positional is explained by the syntax; only the extra one is.
+    expect(usageError(["schema", "family", "extra"])).toMatchObject([
+      { path: "argv[4]", argvIndex: 4, token: "extra" },
+    ]);
+    // Two declared positionals are consumed before the excess is attributed.
+    expect(usageError(["sdd", "workspace", "plan-a", "/root", "extra"])).toMatchObject([
+      { path: "argv[6]", argvIndex: 6, token: "extra" },
+    ]);
   });
 
 
@@ -177,6 +217,87 @@ describe("generated CLI adapter", () => {
     const paths = (body.details?.diagnostics ?? []).map((entry) => entry.path);
     expect(paths.length).toBeGreaterThan(0);
     expect(paths.every((entry) => entry.startsWith("payload."))).toBe(true);
+  });
+
+  test("a CLI payload failure and an independent missing requirement are reported together", async () => {
+    // The same request over MCP already groups these; the public CLI must not
+    // suppress the independently missing `actor`, and nested payload errors
+    // must carry expected/received facts — not just a field list.
+    const { root, harness, invocation } = await cliHarness();
+    try {
+      const result = await run(["issue", "add", "--payload", "{}", "--harness", harness], undefined, false, invocation);
+      expect(result.status).toBe(2);
+      const body = JSON.parse(result.stdout) as {
+        status?: string;
+        details?: { diagnostics?: Array<{ path: string; code: string; expected?: string; received?: string }> };
+      };
+      expect(body.status).toBe("usage");
+      const diagnostics = body.details?.diagnostics ?? [];
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        path: "actor", code: "required", expected: "present", received: "undefined",
+      }));
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        path: "payload.kind",
+        code: "invalid_value",
+        expected: "bug | risk | improvement | request | decision | review-obligation",
+        received: "undefined",
+      }));
+      expect(diagnostics.some((entry) => entry.path?.startsWith("payload."))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a nested issue payload enum violation carries per-field code/expected/received", async () => {
+    const { root, harness, invocation } = await cliHarness();
+    try {
+      const payload = {
+        projectId: "p", title: "t", kind: "not-a-kind", severity: "high", impact: "i", acceptance: "a",
+        sourceIdentity: "s", rootCauseKey: "r", acceptanceKey: "a", occurrenceKey: "o", sourceKind: "qc",
+        location: "l", observedBehavior: "o", evidence: ["e"], discoveredAt: "2026-09-26T10:00:00Z",
+      };
+      const result = await run(["issue", "add", "--payload", JSON.stringify(payload), "--actor", "project-manager", "--harness", harness], undefined, false, invocation);
+      expect(result.status).toBe(2);
+      const body = JSON.parse(result.stdout) as {
+        details?: { diagnostics?: Array<{ path: string; code: string; expected?: string; received?: string }> };
+      };
+      expect(body.details?.diagnostics).toContainEqual(expect.objectContaining({
+        path: "payload.kind",
+        code: "invalid_value",
+        expected: "bug | risk | improvement | request | decision | review-obligation",
+        received: "not-a-kind",
+      }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a semantic capture failure keeps its typed engine causes on the CLI response", async () => {
+    const { root, harness, invocation } = await cliHarness();
+    try {
+      const payload = {
+        projectId: "p", title: "t", kind: "bug", severity: "high", impact: "i", acceptance: "a",
+        sourceIdentity: "unknown", rootCauseKey: "unknown", acceptanceKey: "?", occurrenceKey: "o", sourceKind: "qc",
+        location: "l", observedBehavior: "o", evidence: ["e"], discoveredAt: "2026-09-26T10:00:00Z",
+      };
+      const result = await run(["issue", "add", "--payload", JSON.stringify(payload), "--actor", "project-manager", "--harness", harness], undefined, false, invocation);
+      expect(result.status).toBe(1);
+      const body = JSON.parse(result.stdout) as {
+        code?: string;
+        details?: { causes?: Array<{ code: string; message: string }> };
+      };
+      expect(body.code).toBe("issue.ambiguous-identity");
+      // The aggregated rejection is not collapsed to joined prose: the
+      // structured cause (and its per-key sub-causes) survives the CLI mapping
+      // instead of being replaced by a diagnostic-paths table.
+      const causes = body.details?.causes ?? [];
+      expect(causes.length).toBeGreaterThanOrEqual(1);
+      expect(causes.every((cause) => cause.code === "issue.ambiguous-identity")).toBe(true);
+      const nested = (causes[0] as { causes?: Array<{ code: string }> } | undefined)?.causes ?? [];
+      expect(nested.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("report accepts empty input and invokes the bounded canonical handler", async () => {
@@ -495,8 +616,11 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
-    expect(diagnostics[0]?.path).toBe("worktree[0]");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string; received?: string }>;
+    // The payload's own member failure is reported with the missing workflow
+    // requirement; the object value is the rejected received fact.
+    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "worktree[0]", received: "object" }));
+    expect(diagnostics.some((entry) => entry.path === "workflow")).toBe(true);
   });
 
   test("worktree cleanup refuses a malformed JSON-looking --worktree occurrence", async () => {
@@ -504,8 +628,12 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
-    expect(diagnostics[0]?.path).toBe("worktree[0]");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string; code: string; index?: number }>;
+    // The malformed entry stays one literal occurrence the declared schema
+    // rejects as a typed element; the missing workflow requirement groups
+    // alongside it rather than being suppressed.
+    expect(diagnostics).toContainEqual(expect.objectContaining({ path: "worktree[0]", code: "invalid_type", index: 0 }));
+    expect(diagnostics.some((entry) => entry.path === "workflow")).toBe(true);
   });
 });
 
