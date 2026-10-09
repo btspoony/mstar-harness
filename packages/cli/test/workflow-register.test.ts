@@ -119,6 +119,18 @@ async function readWorkflows(harnessDir: string) {
   return authority.data.workflows;
 }
 
+async function expectDevelopmentRegistration(harnessDir: string): Promise<void> {
+  const workflows = await readWorkflows(harnessDir);
+  expect(workflows).toHaveLength(1);
+  const workflow = workflows[0]!;
+  expect(workflow.plans.map((view) => view.plan.id)).toEqual(["20260916-plan-cli-example"]);
+  expect(workflow.state).toMatchObject({
+    delivery_kind: "development",
+    project: "engine",
+    branch: { source: "feature/20260916-plan-cli-example", target: "main" },
+  });
+}
+
 describe("mstar workflow register", () => {
   test("registers a standalone development plan through the ACTIVE shipped route without explicit CAS inputs", async () => {
     await setupHarness(async (harness, { root, snapshot }) => {
@@ -133,9 +145,7 @@ describe("mstar workflow register", () => {
       expect(existsSync(root)).toBe(false);
       expect(existsSync(snapshot)).toBe(false);
 
-      const workflows = await readWorkflows(harness);
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0]?.plans.map((view) => view.plan.id)).toEqual(["20260916-plan-cli-example"]);
+      await expectDevelopmentRegistration(harness);
     });
   });
 
@@ -145,7 +155,24 @@ describe("mstar workflow register", () => {
       const retry = runCli(registerArgs(harness));
       expect(retry.exitCode).toBe(0);
       expect(commandOutput(retry)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
-      expect(await readWorkflows(harness)).toHaveLength(1);
+      await expectDevelopmentRegistration(harness);
+    });
+  });
+
+  test("a distinct operation refuses an already-registered workflow without changing ACTIVE state", async () => {
+    await setupHarness(async (harness) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const before = await readExecutionAuthority({ harnessDir: harness });
+
+      const conflict = runCli(registerArgs(harness, [
+        "--expect", before.token,
+        "--operation", "cli-conflicting-registration",
+      ]));
+      expect(conflict.exitCode).toBe(1);
+      expect(commandOutput(conflict).status).toBe("refused");
+
+      const after = await readExecutionAuthority({ harnessDir: harness });
+      expect(after).toEqual(before);
     });
   });
 
@@ -156,8 +183,7 @@ describe("mstar workflow register", () => {
       const result = runCli(registerArgs(harness, ["--expect", rootToken, "--operation", "cli-explicit-registration"]));
       expect(result.exitCode).toBe(0);
       expect(commandOutput(result)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
-      expect((await readWorkflows(harness))[0]?.plans.map((view) => view.plan.id))
-        .toEqual(["20260916-plan-cli-example"]);
+      await expectDevelopmentRegistration(harness);
     });
   });
 
@@ -232,13 +258,19 @@ describe("mstar workflow register", () => {
       const result = runCli([
         "workflow", "register", "--workflow", WORKFLOW_ID, "--plan-id", "20260916-plan-verify",
         "--plan-title", "Verification plan", "--plan-file", "plans/20260916-plan-verify.md",
-        "--delivery-kind", "verification/report-only", "--completion-policy",
+        "--delivery-kind", "verification/report-only", "--project", "engine", "--completion-policy",
         "acceptance report at plans/20260916-plan-verify/report.md", "--harness", harness,
       ]);
       expect(result.exitCode).toBe(0);
       expect(commandOutput(result)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
-      expect((await readWorkflows(harness))[0]?.plans.map((view) => view.plan.id))
-        .toEqual(["20260916-plan-verify"]);
+      const workflow = (await readWorkflows(harness))[0]!;
+      expect(workflow.plans.map((view) => view.plan.id)).toEqual(["20260916-plan-verify"]);
+      expect(workflow.state).toMatchObject({
+        delivery_kind: "verification/report-only",
+        project: "engine",
+        completion_policy: "acceptance report at plans/20260916-plan-verify/report.md",
+      });
+      expect(workflow.state.branch).toBeUndefined();
     });
   });
 
