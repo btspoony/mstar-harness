@@ -520,40 +520,27 @@ export {
   CoordinationError,
   EXECUTION_PIN_CONFLICT_CODE,
   ExecutionPinConflictError,
-  bindPlanSession,
-  amendPrepareWorkflow,
   executionInputHash,
-  mutatePlanCoordination,
   readCoordinatedArtifact,
   readExecutionCatalogPin,
-  readPlanCoordination,
-  recoverPrepareCoordinator,
   replaceCoordinatedArtifact,
-  readSessionEnvelope,
-  resolvePlanScope,
   resolveProcessHarnessDir,
-  showPrepareCoordinatorRecovery,
-  showPrepareWorkflow,
 } from "./coordination.js";
 export type {
-  BindPlanSessionInput,
   CatalogExecutionPin,
   CatalogPinAbsence,
-  CoordinationRequest,
-  CoordinationResult,
   CoordinationRole,
-  CoordinationSession,
   CoordinatedReplacement,
   ExecutionCatalogPinState,
   PlanCoordinationOperation,
-  PlanCoordinationView,
-  PlanScopeInput,
-  PrepareCoordinatorRecoveryView,
-  RecoverPrepareCoordinatorResult,
   ResidualInput,
-  ResolvedPlanScope,
   VersionedArtifact,
 } from "./coordination.js";
+// The retired FILE route's envelope bytes: the migration importer and the
+// not-yet-cut issue-domain authorization read them as import sources, never as
+// authority. The shape + one byte-witness reader live in `coordination-envelope`.
+export { readSessionEnvelope } from "./coordination-envelope.js";
+export type { CoordinationSession } from "./coordination-envelope.js";
 export type {
   CompletionEvidence,
   CompletionRecord,
@@ -565,16 +552,8 @@ export type {
   QaGate,
   FindingsCleanupMode,
 } from "./coordination-write.js";
-// Recovery-first resolution and the file-route close: the ONE resolution path a
-// sparse caller enters (trusted root → associated target, S2/E02), the durable
-// authority verdict a DB-route caller re-asserts before it commits, and the file
-// authority's ONE close verb (S3/E11) — fulfilment, row completion, terminal
-// membership removal and the unregister composed on the route's own journals.
-// ADDITIVE export: the transports (T02/T03) call the engine's own resolution and
-// close instead of re-deriving either; the strict module-local frames, the
-// resolution builder and the crash-gap test hook stay module-scoped.
-export type { FileWorkflowCloseInput, FileWorkflowCloseResult, RootAssociation } from "./coordination.js";
-export { closeFileWorkflow, resolveIntentRoot, resolveIntentTarget } from "./coordination.js";
+export type { RootAssociation } from "./coordination.js";
+export { resolveIntentRoot, resolveIntentTarget } from "./coordination.js";
 export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
 // Issue-store boundary: lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.

@@ -1,22 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
   bindExecutionSession,
-  bindPlanSession,
   createFsStore,
   decodeExecutionSessionRef,
   executionContextFor,
   mutateExecutionPlan,
-  mutatePlanCoordination,
   readExecutionPlan,
-  readPlanCoordination,
   readExecutionAuthority,
-  resolveExecutionReadRoute,
   resolveProcessHarnessDir,
-  readSessionEnvelope,
   resumeExecutionSession,
   setArtifactStore,
-  StoreError,
-  type BindPlanSessionInput,
   type ExecutionIdentity,
   type ExecutionToken,
   type PlanCoordinationOperation,
@@ -56,10 +49,8 @@ const completionEvidenceSchema = z.object({
   }),
 });
 const inputSchema = z.object({
-  session: z.string().min(1).optional(),
   sessionRef: z.string().min(1).optional(),
   resumeRef: z.string().min(1).optional(),
-  resume: z.string().min(1).optional(),
   coordinator: z.boolean().optional(),
   execution: z.boolean().optional(),
   workflow: z.string().min(1).optional(),
@@ -105,7 +96,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
    recovery: id === "plan.bind"
-        ? "The registered workflow and current coordinator identity must match; an existing binding uses its recorded session. Run mstar plan bind --workflow <workflow-id> --session <current-session>."
+        ? "The registered workflow and current coordinator identity must match; an existing binding is resumed through its active session reference. Run mstar plan bind --workflow <workflow-id> --coordinator, or mstar plan bind --resume-ref <session-ref>."
         : id === "plan.show"
           ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
           : id === "plan.prepare"
@@ -124,11 +115,6 @@ function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I
 function absolutePath(value: string | undefined, key: string): string {
   if (value === undefined || !path.isAbsolute(value)) throw new PlanInputError(`${key} must be an absolute path`);
   return value;
-}
-function expectedRevision(value: PlanInput["expect"]): number {
-  const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new PlanInputError("expect must be a nonnegative integer revision");
-  return parsed;
 }
 function jsonObject(value: unknown, field: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new PlanInputError(`${field} must be an object`);
@@ -200,15 +186,8 @@ function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation 
       throw new PlanInputError(`unsupported plan operation ${id}`);
   }
 }
-function pinSessionStore(sessionPath: string): void {
-  setArtifactStore(createFsStore(readSessionEnvelope(sessionPath).harness_root));
-}
-
 async function execute(id: string, input: PlanInput, context: InvocationContext): Promise<CommandEnvelope<unknown>> {
   try {
-    if (input.session !== undefined && input.sessionRef !== undefined) {
-      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "pre-activation and active transports are disjoint" });
-    }
     if (id === "plan.bind") {
       if (input.plan !== undefined) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
@@ -263,44 +242,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         });
         return ok(id, receipt);
       }
-      let bindInput: BindPlanSessionInput;
-      if (input.resume !== undefined) {
-        if ((context.sessionId !== undefined && context.sessionIdSource !== "env") || input.harness !== undefined) {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--resume accepts no --session-id or --harness" });
-        }
-        const resumePath = absolutePath(input.resume, "resume");
-        pinSessionStore(resumePath);
-        bindInput = { resumePath, cwd };
-      } else if (input.coordinator === true) {
-        if (context.sessionId === undefined || context.sessionId.trim() === "" || context.sessionIdSource === "env") {
-          const message = context.sessionIdSource === "env"
-            ? "legacy pre-activation coordinator bootstrap does not accept env-provided identity; pass --session-id explicitly"
-            : `coordinator bind requires runtime session identity (${IDENTITY_SUPPLIES}).`;
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: message });
-        }
-        if (input.workflow === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind requires workflow" });
-        const root = resolveProcessHarnessDir(cwd, input.harness);
-        if (root !== null) setArtifactStore(createFsStore(root));
-        bindInput = {
-          coordinator: true,
-          workflowId: input.workflow,
-          cwd,
-          sessionId: context.sessionId,
-          ...(input.harness !== undefined ? { harnessDir: absolutePath(input.harness, "harness") } : {}),
-        };
-      } else {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind requires a resume path or the coordinator workflow" });
-      }
-      const legacyWorkflowBind = "coordinator" in bindInput && bindInput.coordinator === true && "workflowId" in bindInput;
-      const root = resolveProcessHarnessDir(cwd, input.harness);
-      if (legacyWorkflowBind && root !== null && await resolveExecutionReadRoute({ harnessDir: root }) === "execution") {
-        throw new StoreError(
-          "execution.consumer-not-ready",
-          "This workflow is registered in the active DB execution authority; the legacy snapshot-file bind route is unavailable. " +
-            "Re-run with `--execution` (`mstar plan bind --execution --workflow <id> --coordinator`) and the runtime session identity.",
-        );
-      }
-      return ok(id, await bindPlanSession(bindInput));
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind requires --execution or a --resume-ref of an active session" });
     }
     if (id === "plan.show") {
       // The coordinator reads any row of its own workflow: the addressed plan is
@@ -309,11 +251,6 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       // when no session reference is supplied.
       if (input.plan === undefined) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan show requires --plan; the coordinator states which row it reads" });
-      }
-      if (input.session !== undefined) {
-        const sessionPath = absolutePath(input.session, "session");
-        pinSessionStore(sessionPath);
-        return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd, input.harness));
       }
       if (context.sessionId === undefined) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active plan show requires runtime session identity (${IDENTITY_SUPPLIES}).` });
@@ -348,61 +285,48 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
     // coordinator is the only remaining seat.
     const activeRoute = input.sessionRef !== undefined ||
       context.executionIdentity !== undefined ||
-      (input.session === undefined && input.workflow !== undefined);
-    if (activeRoute) {
-      if (context.sessionId === undefined) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).` });
-      }
-      if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active operation requires a full execution token" });
-      if (input.plan === undefined) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active plan operation requires --plan; the coordinator states which row it addresses` });
-      }
-      // A numeric revision is the file route's CAS transport; the active route
-      // takes only a full execution token, so the transports never mix.
-      const operation = fileOperation(id, input);
-      const operationId = input.operation ?? randomUUID();
-      const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
-      const root = resolveProcessHarnessDir(context.cwd, input.harness);
-      if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-      setArtifactStore(createFsStore(root));
-      const acquired = context.executionIdentity;
-      const workflowId = ref?.workflowId ?? acquired?.workflowId ?? input.workflow;
-      if (workflowId === undefined) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active plan operation needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
-      }
-      if (input.workflow !== undefined && input.workflow !== workflowId) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the caller's workflow" });
-      }
-      if (acquired !== undefined && (workflowId !== acquired.workflowId || acquired.role !== "coordinator")) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "selected workflow does not match the acquired coordinator identity" });
-      }
-      const identity: ExecutionIdentity = {
-        source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
-        sessionId: context.sessionId,
-        workflowId,
-        role: "coordinator",
-      };
-      const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
-        operationId,
-        ...(ref === undefined ? {} : { session: ref }),
-        ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
-        planId: input.plan,
-        operation: operation as never,
-      });
-      return ok(id, receipt);
+      input.workflow !== undefined;
+    if (!activeRoute) {
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+    }
+    if (context.sessionId === undefined) {
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).` });
+    }
+    if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active operation requires a full execution token" });
+    if (input.plan === undefined) {
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active plan operation requires --plan; the coordinator states which row it addresses` });
     }
     const operation = fileOperation(id, input);
-    if (input.session === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires session or active sessionRef" });
-    if (input.plan === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires --plan; every plan operation addresses its row explicitly" });
-    const sessionPath = absolutePath(input.session, "session");
-    pinSessionStore(sessionPath);
-    const result = await mutatePlanCoordination({
-      sessionPath,
+    const operationId = input.operation ?? randomUUID();
+    const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+    const root = resolveProcessHarnessDir(context.cwd, input.harness);
+    if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
+    setArtifactStore(createFsStore(root));
+    const acquired = context.executionIdentity;
+    const workflowId = ref?.workflowId ?? acquired?.workflowId ?? input.workflow;
+    if (workflowId === undefined) {
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active plan operation needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+    }
+    if (input.workflow !== undefined && input.workflow !== workflowId) {
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the caller's workflow" });
+    }
+    if (acquired !== undefined && (workflowId !== acquired.workflowId || acquired.role !== "coordinator")) {
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "selected workflow does not match the acquired coordinator identity" });
+    }
+    const identity: ExecutionIdentity = {
+      source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
+      sessionId: context.sessionId,
+      workflowId,
+      role: "coordinator",
+    };
+    const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
+      operationId,
+      ...(ref === undefined ? {} : { session: ref }),
+      ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
       planId: input.plan,
-      expectedRevision: expectedRevision(input.expect),
-      operation,
+      operation: operation as never,
     });
-    return ok(id, result);
+    return ok(id, receipt);
   } catch (error) {
     return failure(id, error);
   }
