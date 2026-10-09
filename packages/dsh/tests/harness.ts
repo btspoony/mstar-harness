@@ -25,17 +25,19 @@ import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import {
   captureIssue,
+  bindExecutionSession,
   createExecutionWorkflow,
   initializeStore,
   openStore,
   readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
-import type { CaptureInput } from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext, CaptureInput } from '@mstar-harness/engine'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
 import type { SubagentsServiceView, ContinuableStartSpecView } from '../src/gates/role-persona.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -894,6 +896,9 @@ export async function seedActiveWorkflow(
   workflowId = 'wf-1',
   plans: unknown[] = [],
   overrides: Record<string, unknown> = {},
+  sessionId = `seed-${workflowId}`,
+  cwd = dirname(harnessDir),
+  selectedWorkflowId: string | null = workflowId,
 ): Promise<void> {
   await mkdir(harnessDir, { recursive: true })
   let expected = activeExecutionTokens.get(harnessDir)
@@ -905,9 +910,15 @@ export async function seedActiveWorkflow(
   if (activeExecutionTokens.has(`${harnessDir}:${workflowId}`)) {
     throw new Error(`ACTIVE fixture workflow already exists: ${workflowId}`)
   }
-  const planRows = plans.filter(
-    (value): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value),
-  )
+  const sourcePlans = plans.length > 0 ? plans : Array.isArray(overrides.plans) ? overrides.plans : []
+  const planRows = sourcePlans
+    .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value))
+    .map((row) => ({
+      ...row,
+      title: typeof row.title === 'string' ? row.title : String(row.id ?? 'plan'),
+      file: typeof row.file === 'string' ? row.file : `plans/${String(row.id ?? 'plan')}.md`,
+      status: typeof row.status === 'string' ? row.status : 'Todo',
+    }))
   for (const row of planRows) {
     if (typeof row.id !== 'string') continue
     await registerCatalogEntity(
@@ -915,30 +926,53 @@ export async function seedActiveWorkflow(
       {
         kind: 'plan',
         id: row.id,
-        title: typeof row.title === 'string' ? row.title : row.id,
+        title: row.title as string,
         rootKind: 'plans',
-        relativePath: typeof row.file === 'string' ? row.file : `plans/${row.id}.md`,
+        relativePath: row.file as string,
       },
       { operationId: `seed-${workflowId}-${row.id}`, actor: 'project-manager' },
     )
   }
-  const snapshot = JSON.parse(v2SnapshotWithPlans(workflowId, planRows, overrides)) as Record<string, unknown>
+  const snapshotOverrides = { ...overrides }
+  delete snapshotOverrides.plans
+  const snapshot = JSON.parse(v2SnapshotWithPlans(workflowId, planRows, snapshotOverrides)) as Record<string, unknown>
   const workflowType = snapshot.type === 'iteration' ? 'iteration' : 'plan'
+  const caller = { sessionId, role: 'coordinator', workflowId } satisfies ExecutionCaller
+  const context = { harnessDir, caller } satisfies ExecutionContext
   const receipt = await createExecutionWorkflow(
-    {
-      harnessDir,
-      caller: { sessionId: `seed-${workflowId}`, role: 'coordinator', workflowId },
-    },
+    context,
     {
       entry: v2WorkflowEntry(workflowId, workflowType) as never,
       snapshot: snapshot as never,
       expected,
       operationId: `seed-${workflowId}`,
     },
-  )
+  ).catch((error: unknown) => {
+    if (typeof error === 'object' && error !== null && 'details' in error) {
+      throw new Error(JSON.stringify(error.details))
+    }
+    throw error
+  })
   activeExecutionTokens.set(harnessDir, receipt.token)
   activeExecutionTokens.set(`${harnessDir}:${workflowId}`, receipt.token)
   await mkdir(join(harnessDir, 'workflows', workflowId), { recursive: true })
+  const workflow = receipt.data.workflows.find((candidate) => candidate.state.id === workflowId)
+  if (workflow === undefined) throw new Error(`ACTIVE fixture workflow was not registered: ${workflowId}`)
+  const binding = await bindExecutionSession(context, {
+    workflowId,
+    expected: workflow.workflowToken,
+    operationId: `bind-${workflowId}-${sessionId}`,
+  })
+  await writeFile(join(cwd, '.mstarc'), `[config]\nharness_dir=${harnessDir}\n`)
+  updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
+    ...(selectedWorkflowId === null ? {} : { selectedWorkflowId }),
+    executionBinding: {
+      version: 1,
+      harnessRoot: harnessDir,
+      session: binding.data,
+    },
+    excludedBeforeSeq: 0,
+  })
 }
 
 /** Well-formed JSON that fails the status schema (plans must be an array). */
