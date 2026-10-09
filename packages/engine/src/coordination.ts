@@ -107,7 +107,6 @@ import type { ActivationAttestation } from "./store-activation.js";
 import {
   IssueError,
   assertIssueProvenanceSchema,
-  assertPlanIssueSession,
   captureIssue,
   closeIssue,
   linkIssueScoped,
