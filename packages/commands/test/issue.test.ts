@@ -5,6 +5,7 @@ import path from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
+import { z } from "zod";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -190,6 +191,22 @@ describe("issue command family", () => {
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
     const target = added.data as { issueId: string };
+    const duplicateDefinition = definition("issue.duplicate");
+    const duplicateContract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.duplicate");
+    const duplicatePayload = duplicateDefinition.payloads?.payload;
+    if (!(duplicateDefinition.input instanceof z.ZodObject) || duplicateContract === undefined || duplicatePayload === undefined) {
+      throw new Error("missing issue.duplicate composed payload contract");
+    }
+    const composedSchema = duplicateDefinition.input.safeExtend({ payload: duplicatePayload.schema.optional() });
+    const resolvedAdmission = admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "resolved",
+      payload: { reason: "acceptance verified", references: ["qa/evidence.md"], alignmentRef: "QA gate" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema);
+    expect(resolvedAdmission.success).toBe(true);
+
 
     const duplicateSource = await executeCommand("issue.add", {
       payload: capture({ sourceIdentity: "review/closure-duplicate", rootCauseKey: "closure-duplicate", acceptanceKey: "closure-duplicate", occurrenceKey: "closure-duplicate" }),
@@ -225,6 +242,15 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, context);
     expect(missingReferences).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    const invalidOpen = await executeCommand("issue.duplicate", {
+      id: unresolved.issueId,
+      expect: unresolved.revision,
+      disposition: "open",
+      payload: { reason: "not terminal" },
+      operationId: "closure-open",
+      actor: "project-manager",
+    }, context);
+    expect(invalidOpen).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
   });
 
   test("malformed capture is rejected without creating an issue", async () => {

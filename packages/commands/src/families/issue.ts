@@ -238,7 +238,7 @@ const expectedRevisionVerbs: Record<string, true> = {
   supersede: true,
   link: true,
 };
-function fieldSchema(field: PayloadFieldSchema, condition: string): z.ZodType {
+function fieldSchema(field: PayloadFieldSchema, condition?: string): z.ZodType {
   let schema: z.ZodType;
   if (field.type === "object") {
     schema = z.object(Object.fromEntries(Object.entries(field.properties ?? {}).map(([name, child]) => [name, fieldSchema(child, condition)])));
@@ -268,10 +268,10 @@ function fieldSchema(field: PayloadFieldSchema, condition: string): z.ZodType {
     schema = z.unknown();
   }
   if (field.nullable) schema = schema.nullable();
-  return field.required || field.requiredWhen?.includes(condition) ? schema : schema.optional();
+  return field.required || (condition !== undefined && field.requiredWhen?.includes(condition) === true) ? schema : schema.optional();
 }
 
-function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition: string): z.ZodType {
+function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition?: string): z.ZodType {
   const fields = ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>;
   return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, condition)])));
 }
@@ -363,7 +363,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     ...(payloadType[verb] !== undefined
-      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], verb), registryName: payloadType[verb], help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb]), registryName: payloadType[verb], help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };
