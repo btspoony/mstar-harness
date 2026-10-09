@@ -69,6 +69,39 @@ if (expectedDigest !== observedDigest) throw new Error("mismatch");`,
   test("keeps unmarked gates as violations", () => {
     expect(scanSource("packages/engine/src/hash.ts", gate()).map(({ classification }) => classification)).toEqual(["hash-gate"]);
   });
+
+  test("one marker authorizes one adjacent gate only, never both", () => {
+    // RED-first: a trailing marker on gate A's line also matched gate B on the
+    // next line (the previous marker line === pos.line coincidence), so a
+    // single comment suppressed two findings. Site identity, not the line, is
+    // the binding key now.
+    const sources = [
+      `${gate()} // hash-gate: authorized — preserve identity\nif (expectedDigest !== observedDigest) throw new Error("mismatch");`,
+      `${gate("// hash-gate: authorized — preserve identity")}\nif (expectedDigest !== observedDigest) throw new Error("mismatch");`,
+    ];
+    for (const source of sources) {
+      const classifications = scanSource("packages/engine/src/hash.ts", source).map(({ classification }) => classification);
+      expect(classifications.filter((value) => value === "authorized-gate")).toHaveLength(1);
+      expect(classifications.filter((value) => value === "hash-gate")).toHaveLength(1);
+    }
+  });
+
+  test("two gates on one line are distinct sites; one marker authorizes one of them", () => {
+    const source = `if (expectedDigest !== observedDigest) throw new Error("a"); if (otherDigest !== observedDigest) throw new Error("b"); // hash-gate: authorized — preserve identity`;
+    const classifications = scanSource("packages/engine/src/hash.ts", source).map(({ classification }) => classification);
+    expect(classifications.filter((value) => value === "authorized-gate")).toHaveLength(1);
+    expect(classifications.filter((value) => value === "hash-gate")).toHaveLength(1);
+  });
+
+  test("an over-authorized sibling exits 1", async () => {
+    const overAuthorized = await runLint({
+      "over.ts": `${gate()} // hash-gate: authorized — preserve identity\nif (expectedDigest !== observedDigest) throw new Error("mismatch");`,
+    });
+    expect(overAuthorized.exitCode).toBe(1);
+    expect(overAuthorized.output).toContain("1 violation(s)");
+    expect(overAuthorized.output).toContain("authorized gates — 1");
+  });
+
   test("authorized-only reports exit 0 and exposes authorizedGates in text and JSON", async () => {
     const files = { "authorized.ts": gate("// hash-gate: authorized — preserve identity") };
     const text = await runLint(files);

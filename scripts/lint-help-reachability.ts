@@ -361,7 +361,6 @@ export function run(argv: string[] = process.argv.slice(2), options: { root?: st
     else {
       for (const row of violations) console.log(`${row.file}:${row.line}:${row.column} ${row.classification} ${row.reason}\n  ${row.snippet}`);
       for (const row of manualRecoveries) console.log(`manual recovery (authorized): ${row.file}:${row.line} — ${row.reason}`);
-      if (manualRecoveries.length) console.log(`Manual recoveries (${manualRecoveries.length}):\n${JSON.stringify(manualRecoveries, null, 2)}`);
       if (applied.used.length) console.log(`Allowlist (${applied.used.length}):\n${JSON.stringify(applied.used, null, 2)}`);
       if (applied.stale.length) console.error(`Stale allowlist entries: ${applied.stale.join(", ")}`);
       console.log(`Help-reachability: ${countViolations(violations)} violations; ${manualRecoveries.length} manual recoveries; ${applied.used.length} allowlisted`);
