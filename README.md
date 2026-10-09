@@ -4,7 +4,7 @@
 
 # [Morning Star](https://github.com/btspoony/mstar-harness)
 
-Harness Workflow Engine · Agent Plugin
+Plan, implement, review, verify, merge — a delivery process for agent coding hosts.
 
 English / [中文](README_CN.md)
 
@@ -13,280 +13,117 @@ English / [中文](README_CN.md)
 [![CI](https://img.shields.io/github/actions/workflow/status/btspoony/mstar-harness/ci.yml?branch=main&style=flat-square&label=CI&labelColor=black)](https://github.com/btspoony/mstar-harness/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-white?labelColor=black&style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases)
-[![Last commit](https://img.shields.io/github/last-commit/btspoony/mstar-harness?color=c4f042&labelColor=black&style=flat-square)](https://github.com/btspoony/mstar-harness/commits/main)
-[![dshfind](https://dshfind.com/api/badge/btspoony/mstar-harness?lang=en)](https://dshfind.com/zh/plugins/btspoony/mstar-harness?ref=badge)
-[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
 
-
-[![npm: cli](https://img.shields.io/npm/dt/@mstar-harness/cli?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20cli)](https://www.npmjs.com/package/@mstar-harness/cli)
-[![npm: dsh](https://img.shields.io/npm/dt/@mstar-harness/dsh?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20dsh)](https://www.npmjs.com/package/@mstar-harness/dsh)
-[![npm: omp](https://img.shields.io/npm/dt/@mstar-harness/omp?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20omp)](https://www.npmjs.com/package/@mstar-harness/omp)
-[![npm: opencode](https://img.shields.io/npm/dt/@mstar-harness/opencode?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20opencode)](https://www.npmjs.com/package/@mstar-harness/opencode)
 </div>
 
-**Morning Star / 晨星** is an Agent Plugin for harness engineering workflows: a TypeScript **Harness Workflow Engine** (`@mstar-harness/engine`) enforces deterministic workflow gates, while `mstar-*` judgment skills drive multi-agent code delivery.
+Morning Star is a plugin for agent coding hosts: dsh, omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex. It turns a request into a delivery process instead of a chat — a `project-manager` agent clarifies the work and keeps a plan, specialist agents implement it, and independent review and acceptance passes run before anything is called done. The mechanically checkable parts of that process (workflow state, branches, gates) are implemented by the shipped TypeScript engine; judgment (direction, role choice, review verdicts) stays with the `mstar-*` skills — plain Markdown you can read and change.
 
-- **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
-- **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
-- **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
-- **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Pluggable JSON persistence (pre-activation fallback)** — coordination docs (`status.json`, workflow snapshots, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
-- **Store authority vs JSON transport** — after activation, `{HARNESS_DIR}/store.db` (SQLite) is the issue, catalog, roadmap, and workflow/plan execution authority; `ArtifactStore` retains pre-activation execution JSON (`status.json`, snapshots) and review JSON. The retired project registers are migration history with no write path; open items are issues in the store. They are not the same store.
-- **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
+**Why use it**
 
-**What ships**
-
-| Component | What it is |
-|-----------|------------|
-| Harness Workflow Engine | `@mstar-harness/engine` — TS enforcement of deterministic workflow gates |
-| mstar CLI | `@mstar-harness/cli` — installer bootstrap + `mstar` workflow verbs |
-| `mstar-*` skills | Role, gate, and workflow judgment (single source of truth) |
-| Host adapters | dsh, omp, OpenCode, Cursor, Kimi Code, ZCode, Codex |
-
-Release notes: [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.md](CHANGELOG_CN.md).
+- **The same loop for every request** — plan, implement, review, verify: a small fix and a multi-plan iteration go through the same stages, and work can be paused and resumed without losing its trail.
+- **Specialists instead of one long prompt** — a PM orchestrates; separate roles own requirements, architecture, implementation, QC, acceptance, audits, and ops, each with a narrow brief.
+- **A trail you can audit** — plans, findings, review reports, and decisions are recorded under the harness directory in your repo, not just in the chat.
+- **Boundaries are explicit** — the workflow opens pull requests and stops at merge-ready; merging stays your call. Audits read and report, and anything that touches a real environment needs your explicit authorization.
 
 ## Install
 
-| Host | Command |
+Prerequisites: the CLI launches through **Bun >=1.4.0** — `npx` / `bunx` fetch the package but still need Bun on `PATH`; on a Node-only machine, install the package and run it with **Node >=24.18.0** (`node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`).
+
+| Host | Install |
 |------|---------|
-| dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh`<br>(one CLI command that runs two **independent** `dsh plugin --profile web add` installs:<br>`@mstar-harness/dsh` + `dsh-llm-fallbacks`; `--no-fallbacks` skips the latter)<br>or `dsh plugin --profile web add @mstar-harness/dsh`<br>+ `dsh plugin --profile web add dsh-llm-fallbacks` |
-| omp | `npx @mstar-harness/cli init --target omp`<br>(links `~/.mstar/harness/packages/omp`)<br>or `omp plugin install @mstar-harness/omp` |
+| dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh` — needs the `dsh` CLI on `PATH`; installs the plugin plus LLM fallbacks (`--no-fallbacks` skips the second) |
+| omp | `npx @mstar-harness/cli init --target omp` — uses the `omp` CLI when present, otherwise falls back to `omp plugin install @mstar-harness/omp` |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
-| Cursor | `npx @mstar-harness/cli init --target cursor` |
-| Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`<br>→ `/plugins reload` |
-| ZCode | `npx @mstar-harness/cli init --target zcode`<br>then install **morning-star-harness** in ZCode → Settings → Plugin Management |
-| Codex | `npx @mstar-harness/cli init --target codex`<br>then `codex plugin add morning-star-harness@mstar-repo` (repo-bundled marketplace) |
-| Generic (Agent Plugins v1) | point any Agent Plugins v1.0.0 conformant client at this repo root<br>(`plugin.json` + `skills/` are the portable package) |
+| Cursor | `npx @mstar-harness/cli init --target cursor` — creates a real plugin checkout, so `git` is required |
+| Kimi Code | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload` |
+| ZCode | `npx @mstar-harness/cli init --target zcode`, then install **morning-star-harness** from Settings → Plugin Management |
+| Codex | `npx @mstar-harness/cli init --target codex` — needs the `codex` CLI; registers the repo marketplace and adds `morning-star-harness@mstar-repo` |
+| Any Agent Plugins v1.0.0 client | point it at this repo root — `plugin.json` plus `skills/` is the portable package |
 
-> CLI commands in this section run the published bin through its Bun shebang: `npx` / `bunx` / `npm i -g` all need **Bun >=1.4.0** on PATH. Node-only machine: `npm install @mstar-harness/cli`, then `node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>` (see **Runtime floors**).
+`init` writes project-scoped config by default (`--scope global` installs host-wide; Codex's global scope skips the seven slash-command skills), and after a successful run it installs the matching `@mstar-harness/cli` version globally — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
 
-### Engine gate checks (Recommended)
-
-```bash
-npm i -g @mstar-harness/cli
-```
-
-Puts the `mstar-harness` binary (short alias `mstar`) on PATH, so the engine-check commands the skills cite (`mstar status validate`, `mstar dispatch validate`, `mstar iteration gate`, …) actually run.
-
-`init` now auto-installs the matching-version CLI globally after a successful run — pass `--no-global-cli` to opt out.
-
-Without a global install the harness still works and those checks stay advisory. Set `enforcement: hard` in an iteration compass to make dispatch preflights fail-fast.
-
-> **Caution**: `mstar` is a short alias and a **shared bin namespace** — an unrelated third-party npm package named `mstar` claims the same command name. The alias exists only where `@mstar-harness/cli` is installed: bare `npx mstar …` without the package resolves via the registry to that other tool, and globally co-installing both packages silently overwrites the `mstar` shim (last install wins). The canonical invocation name stays `mstar-harness` — use the long name on any conflict.
-
-### Verify
-
-`npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` checks the selected target; Codex also accepts `--scope <global|project>`. MCP package health is reported as aligned, mismatch, or unavailable. Doctor reads package metadata/executable and checks runtime floor; it does not open the issue store. See [MCP host install paths](#mcp-host-install-paths).
-
-Codex agent-link repair and named-role verification: [Codex installation](INSTALL.md#codex).
-
-The repo ships a portable **Agent Plugins v1.0.0** manifest (`plugin.json`) at its root; `skills/` is the Agent Skills component — verify it with `npx @mstar-harness/cli plugin validate`.
-
-Manual install / path layout: [`INSTALL.md`](INSTALL.md). CLI flags: the **`mstar-use-cli`** skill.
-
-### Runtime floors (entrypoint, not “install both”)
-
-The published CLI keeps a Bun shebang (`#!/usr/bin/env bun`). Normal launch of `mstar-harness` / the dist file uses **Bun >=1.4.0**. An explicit `node <CLI bundle>` uses **Node >=24.18.0**. `npx` / `bunx` fetch the package but still execute that same Bun-shebang bin, so they need **Bun >=1.4.0** on PATH as well — a package runner is not a runtime; on a Node-only machine install the package and run the bundle under Node (`node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>`). Bun-hosted plugins need Bun; native Node entries need Node. Do not treat those floors as a demand to install both runtimes on every machine. This README does not prove packaged compatibility or store activation.
+The published binary is `mstar-harness`. The short alias `mstar` exists only where this package is installed, and an unrelated npm package claims the same name — use the long form when in doubt. Manual installs, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
 
 ## Use
 
-Three entry shapes: **without iteration** (single plan / hotfix), **with iteration** (multi-plan Phase 1–5), or **audit, review & verification** (discover work, assess changes, or run requested E2E checks).
-
-Full command reference: [`docs/commands.md`](docs/commands.md).
-
-### General (without iteration)
-
-Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate → Done`.
+Enter the PM once per session, then describe the work in your own words; the PM runs the process in that session.
 
 | Host | Enter PM |
 |------|----------|
-| dsh (DeepSeek Harness) | `pm` skill (via the mstar skill provider; no auto-load) |
-| omp | `/skill:pm` each session (no auto-load) |
-| OpenCode | `agent.project-manager` (OpenCode-only shell, `packages/opencode/agents/project-manager.md`) |
+| dsh | `pm` skill |
+| omp | `/skill:pm` |
+| OpenCode | `Project Manager` agent, or `/pm` |
 | Cursor | `/pm` |
-| Kimi | session auto-loads `pm`; or `/skill:pm` |
-| ZCode | `/morning-star-harness:pm` each session (no auto-load) |
+| Kimi | auto-loads in a session, or `/skill:pm` |
+| ZCode | `/morning-star-harness:pm` |
 | Codex | `/pm` |
+
+### Single task (no iteration)
+
+Give the PM a concrete request — for example, *"Add rate limiting to the public API and cover it with tests."* The PM clarifies the gaps, writes a plan, runs the work on a feature branch, and drives it through implement → independent QC review → acceptance → done. Confirmed problems that are not fixed in this round are captured as issues instead of being dropped. You review the result and merge.
 
 ### Iteration
 
-| Command | When |
-|---------|------|
-| `/iteration-start [direction] [pause]` | Start a new iteration: Phase 1 (interactive grill-me), then auto-continue Phase 2→6.<br>`direction` — optional hint (still interactive).<br>`pause` — stop after Phase 1; resume with `/iteration-drive`. |
-| `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration (no arguments). |
-| `/iteration-loop [direction] [scale]` | Full Phase 1→6 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
+| Command | What it does |
+|---------|--------------|
+| `/iteration-start [direction] [pause]` | Phase 1: an interactive direction lock (grill-me) that produces the iteration's compass and plans, then continues automatically through execution, close, pull request, and merge-ready. `pause` stops after Phase 1; continue with `/iteration-drive`. |
+| `/iteration-drive` | Resume or advance an already locked iteration. Takes no arguments. |
+| `/iteration-loop [direction] [scale]` | The same lifecycle end to end without the interactive phase. `scale` (`S` / `M` / `L` / `XL`) caps how many plans the iteration takes on. |
+
+An iteration ends only after its post-merge close: a closed phase, an open pull request, or a merged pull request is not completion by itself. Command spelling differs per host — some hosts require a plugin prefix, and Codex installs the command skills at project scope only; argument forms and per-host details are in [`docs/commands.md`](docs/commands.md).
 
 ### Audit, review & verification
 
-The audit and review commands are read-only and advisory; findings can become plans for Prepare → Execute. SSOT → `mstar-audit` (variants: `codebase-audit`, `tests`, `pr`).
+| Command | What it does |
+|---------|--------------|
+| `/codebase-audit [keywords]` | Read-only survey that produces prioritized, ready-to-execute improvement plans; narrow it with a category focus (`bug`, `security`, `perf`, `tech-debt`, …). |
+| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | Pre-merge review of a PR or branch at three strengths, ending in one verdict — `ship it`, `needs fixes`, or `blocked`. |
+| `/amazing-test-audit [scope] [quick\|deep] [campaign]` | Read-only audit of the test surface → plans to delete, repair, consolidate, or relocate tests. |
+| `/amazing-e2e-check [environment] [scenarios]` | Runs browser, device, or installed-deployment scenarios you explicitly asked for, in a separate workflow. |
 
-| Command | When |
-|---------|------|
-| `/codebase-audit [keywords]` | Read-only survey of what's worth doing — prioritized, ready-to-execute plans; narrow it with category focus (`bug`, `security`, `perf`, `tech-debt`, …) when you want a targeted pass. |
-| `/amazing-pr-review [pr\|branch\|scope] [quick\|default\|deep]` | Deep pre-merge review of a PR / branch / diff at three strengths — `quick` (single-pass, 1 seat) / `default` (no-flag landing tier, reduced seats) / `deep` (full three-stage pipeline) — one verdict (`ship it` / `needs fixes` / `blocked`) and every finding, posted to GitHub by the command's main agent at Stage 3 synthesis when a PR number is given. `deep` runs the full three-stage pipeline (collect → domain review → main-agent synthesis; one verdict / one GitHub Review); `default` / `quick` are lighter single/dual-seat passes. Multi-PR input → first PR only; remaining PRs queued as audit todos (next session); suggest one session per PR. |
-| `/amazing-test-audit [scope\|subsystem] [quick\|deep] [campaign]` | Read-only audit of the existing test surface — junk-pattern sweep, value/retention grading, and prioritized plans to delete, repair, consolidate or relocate tests; `campaign` marks every declaration of one subsystem in an R/F/C/D ledger first. |
-| `/amazing-e2e-check [environment/device] [scenarios]` | Execute explicitly requested browser/device/installed-deployment scenarios through `mstar-e2e` in a separate workflow; never a routine iteration QA gate. |
+The audit commands read and report; they do not edit your code. Two boundaries to know: `/amazing-pr-review` posts its findings to GitHub as a comment review when you give it a pull-request number — it never approves, requests changes, or merges — and `/amazing-e2e-check` runs only when you ask for it, with steps that touch a real environment requiring explicit authorization.
 
-### Local dashboard
+## Workflow
 
-`mstar dashboard` serves a **read-only** web UI of the issue store and the execution/roadmap projections on `127.0.0.1` — loopback only, with no bind-address option. It covers the issue list and detail with recorded history, the workflow / iteration / roadmap views, and one cumulative captured-vs-retired issue-flow chart. The dashboard never mutates anything; make changes with the CLI (`mstar issue …`, `mstar catalog …`) and stop the server with Ctrl-C.
+1. **Clarify and plan.** The PM turns the request into a written plan — scope, tasks, acceptance — and, for an iteration, locks the direction with you first.
+2. **Implement on a branch.** Work happens on feature branches, and each task goes to the role that fits it.
+3. **Review and verify independently.** Per-task review, then a plan-level QC review, then acceptance by QA or the PM: separate passes with their own evidence, not a re-read of the implementer's summary.
+4. **Close out with evidence.** Confirmed findings become tracked issues or fixes; a plan is completed only with its verification evidence, and the workflow's pull request reaches merge-ready.
+5. **Merge.** Merging is a separate authorization — request it explicitly, or merge yourself. After the merge, the workflow verifies the result and closes.
 
-```
-mstar dashboard            # prints the resolved URL after the server is listening
-mstar dashboard --help     # --port / --open / --project
-```
-
-### Command contract
-
-Non-installer commands are generated from one canonical definition in `@mstar-harness/commands`. `mstar init` remains the installer and is not a generated command. Success, refusal, and usage each print a version-1 JSON envelope; ordinary exits are 0, 1, and 2. A missing SDD task still exits 3, and child processes still propagate 124, 127, and 128+n. Examples below are synthetic. This README does not claim an installed-host, browser, or live-service run.
-
-```text
-mstar schema CaptureInput
-mstar host detect --signals question
-```
-
-### Offline report draft
-
-`mstar report` creates an offline draft for the GitHub issue form; it does not read credentials or files, submit the issue, or make a network request. Supply only the report fields you choose: `title`, `command`, `arguments`, `expected`, `actual`, `reproduction`, `stableCode`, `exitStatus`, `host`, `platform`, and `versionOverrides`. Narrative fields you omit are marked `absent`; unavailable observed versions are `unknown`. Version overrides remain labeled caller-supplied. Each text field is limited to 8192 UTF-8 bytes and all supplied text together to 32768 bytes; `arguments` accepts at most 128 items.
-
-The report reuses a finite redaction set: private-key blocks, AWS access keys, GitHub tokens and PATs, live Stripe keys, Slack tokens, JWTs, `sk-` API keys, credential-like key/value assignments (`password`, `passwd`, `api-key`, `access-token`, `auth-token`, `secret`, or `token`), and four CI/IaC shapes (plaintext GitHub Actions secret environment values, echoed Actions secrets, credential-named Docker `ENV`/`ARG`, and hardcoded Terraform passwords). Redaction counts are distinct matched line/type findings per field, not every occurrence. This finite set cannot guarantee every secret is removed; inspect the draft yourself.
-
-```bash
-mstar report --title "Synthetic example" --command "mstar status" \
-  --expected "workflow is listed" --actual "workflow is missing" \
-  --stable-code "workflow.not-found" --exit-status 1
-```
-
-The generated prompt asks you to review it before submission. For CLI and MCP details, see [report command usage](INSTALL.md#report-command).
-
-### MCP runtime
-
-`mstar mcp` runs the stdio MCP server from the same `@mstar-harness/cli` package as the command-line interface. It registers the canonical non-installer commands as MCP tools (names use the `mstar_` prefix and replace command dots and hyphens with underscores). There is no standalone `@mstar-harness/mcp` package, per-host bundle, or native bridge.
-
-Six host configurations launch the CLI with `npx @mstar-harness/cli mcp`; DSH’s Cordis YAML launch row remains follow-up work. This requires a published CLI version that contains the `mcp` command; until that release is published, `npx` may resolve an older CLI that does not recognize it. Node.js >=24.18.0 is required by the CLI and engine.
-
-```json
-{
-  "mcpServers": {
-    "morning-star": {
-      "command": "npx",
-      "args": ["@mstar-harness/cli", "mcp"]
-    }
-  }
-}
-```
-
-`sessionId` selects the main conversation session, not a spawned child-agent session. An optional `host` selects a supported host context; it is not a role or authority grant. Existing shared-handler workflow ownership, path, state-transition, and CAS checks still decide whether a request is allowed. A refusal keeps its stable command envelope and code (and is returned as an MCP tool error); callers should explain or resolve that refusal, not retry through a different identity or path. This documents the package contract, not an installed-host run.
-
-Examples are synthetic; this README does not claim an installed-host, browser, or live-service run.
-MCP-captured SDD evidence records are `stable:false`; collector parity with the CLI remains a documented cross-plan residual.
-
-### MCP host install paths
-
-The six JSON-backed host configs and OpenCode's plugin `config` hook launch the CLI with `npx @mstar-harness/cli mcp`; DSH's Cordis YAML launch row is a follow-up. `npx` may download the CLI package at launch, so the CLI version containing `mcp` must be published first:
-
-| Host | MCP config | Runtime |
-|------|------------|---------|
-| omp | Plugin `mcp.json` | Node.js >=24.18.0 |
-| OpenCode | `packages/opencode/mcp.json` template; the plugin injects `mcp` into OpenCode config at load | Node.js >=24.18.0 |
-| dsh | Cordis profile YAML MCP launch row — follow-up (no JSON config in this package) | Not configured |
-| Cursor | `.cursor-plugin/mcp.json` | Node.js >=24.18.0 |
-| Codex | `.codex-plugin/mcp.json` | Node.js >=24.18.0 |
-| Kimi | `.kimi-plugin/mcp.json` | Node.js >=24.18.0 |
-| ZCode | `.zcode-plugin/mcp.json` | Node.js >=24.18.0 |
-
-For exact install commands and configuration details, see [INSTALL.md](INSTALL.md#installing-the-mcp-tools). The target-specific artifacts are also described in [`mstar-host` references](skills/mstar-host/SKILL.md).
-
-`doctor --target <host>` reports MCP config status as **aligned**, **mismatch**, or **unavailable**; an aligned config is not an installed-host success claim. Doctor checks the configured CLI launch and Node.js floor; it does **not** start the server or open the issue store. MCP context keeps the shared contract: optional `host` selects validated host context, `sessionId` is the main conversation session, and child-agent attribution is neither required nor performed. Development unit/component/integration evidence is distinct from installed-host/live verification, which requires a separately authorized activity and is not claimed here.
-OpenCode's plugin adds the MCP server through its dynamic config hook; its packaged `mcp.json` is a reference template, not a static user `opencode.json` requirement. DSH uses a Cordis YAML plugin row; its npx launch row is a separately tracked host-wiring follow-up and `doctor --target dsh` currently reports unavailable.
-
-## Harness Workflow
-
-```mermaid
-flowchart TD
-    A["PM: entry and intent clarification"] --> B{"PM: spec and context ready"}
-    B -->|No| C["PM: clarify and refine requirements"]
-    C --> B
-    B -->|Yes| D["PM: initialize/load HARNESS_DIR and PLAN_DIR"]
-    D --> E{"Iteration scope needed"}
-    E -->|Deep / first iteration| F["iteration-start: grill-me → compass → review → lock"]
-    E -->|Fast autonomous loop| F2["iteration-loop: Phase 1→5 continuous"]
-    F --> G["PM: lock compass and create integration branch"]
-    F2 --> G
-    G --> H["Phase 2→5: execute → close → PR → merge-ready"]
-    E -->|No| I["PM: select active plan from ACTIVE store.db execution authority"]
-    H --> I
-    I --> J{"Any plan not Done"}
-    J -->|Yes| K["PM: dispatch one plan on a feature branch"]
-    K --> L["Dev roles: implement and report"]
-    L --> M["PM: update plan document and execution state through ACTIVE store.db authority"]
-    M --> N["QC trio: review gate"]
-    N --> O{"QC decision"}
-    O -->|Request Changes| K
-    O -->|Approve| P{"QA gate"}
-    P -->|mandatory| P1["qa-engineer: acceptance verification"]
-    P -->|pm-acceptance| P2["PM: acceptance checklist"]
-    P1 --> Q{"Residual findings remain"}
-    P2 --> Q
-    Q -->|Yes| R["PM: capture confirmed findings as issues in {HARNESS_DIR}/store.db"]
-    R --> S["PM: mark plan Done and merge to integration branch"]
-    Q -->|No| S
-    S --> T["PM: sync compass plan status"]
-    T --> J
-    J -->|No| U["iteration-close: close entry checklist"]
-    U --> V["PM: compound round and knowledge index"]
-    V --> W["PM: update roadmap and compass completed frontmatter"]
-    W --> X["PM: close exit checklist and commit"]
-    X --> Y["Phase 4: create PR"]
-    Y --> Z["Phase 5: merge-ready loop until CI green and reviews resolved"]
-```
-
-Without iteration: same per-plan gates, no `iteration-start` / `iteration-close` wrapper.
+The engine checks the mechanically checkable parts of this process — workflow state transitions, branch and worktree alignment, dispatch preconditions, plan and issue bookkeeping. These checks are advisory by default: they report problems, and a project or iteration can opt into blocking enforcement with `enforcement: hard`; whether a violation can actually block depends on the host. Process state (plans, workflow records, findings, review reports) lives in the harness directory, `.mstar/` by default, which is gitignored.
 
 ## Roles and skills
 
-| Agent ID | Responsibility |
-|----------|----------------|
-| `project-manager` | Routing, assignment, phase progression |
-| `product-manager` | Requirements, product planning, research |
-| `architect` | Architecture and technical contracts |
-| `fullstack-dev` / `fullstack-dev-2` | Backend-led implement / second parallel track |
-| `frontend-dev` | UI, interaction, frontend performance |
-| `qa-engineer` | Acceptance when `QA gate: mandatory` |
-| `code-reviewer` | SDD per-task review; codebase audit (`audit` category) |
-| `qc-specialist` / `-2` / `-3` | QC trio |
-| `ops-engineer` | Deploy, monitoring, infrastructure |
-| `writing-specialist` | Docs, fiction, copy, scripts |
-| `prompt-engineer` | Prompt / skill / rule work |
+A **project-manager** runs your session and dispatches the specialists: requirements and architecture, backend and frontend implementation, QC review, acceptance, codebase and PR audits, operations, and writing. Their instructions are the `mstar-*` skills — readable Markdown that is also the single source of truth for the process — and `@mstar-harness/engine` implements the checkable half of what they declare. Nothing needs to be loaded or read by hand to use the harness: enter the PM and describe the task.
 
-Load **`mstar-harness-core` first**, then topic skills on demand (`mstar-roles`).
+## Command line
 
-| Skill | Purpose |
-|-------|---------|
-| `mstar-harness-core` | Entry, state machine, Task category, skill index |
-| `mstar-phase-gates` | Prepare/Execute, clarify, hotfix |
-| `mstar-iteration` | Phase 1–5 iteration lifecycle |
-| `mstar-dispatch-gates` | Dispatch, Delegation, anti-recursion |
-| `mstar-sdd` | Subagent-driven development |
-| `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout |
-| `mstar-conventions` | `{HARNESS_DIR}` discovery / init |
-| `mstar-artifacts` | Plans, `status.json`, issue capture pointers, Findings cleanup |
-| `mstar-project-governance` | Roadmap authoring + issue capture contract, register migration history, `_default` fallback |
-| `mstar-design-md` | DESIGN.md gate for UI plans |
-| `mstar-review-qc` | PM QC tri orchestration |
-| `mstar-coding-behavior` | RCA, test-first, review feedback, evidence |
-| `mstar-compound` / `mstar-compound-refresh` | Knowledge crystallize / maintain |
-| `mstar-strategy` | `STRATEGY.md` alignment |
-| `mstar-skill-authoring` | General skill authoring (SkillsBench gate) |
-| `mstar-audit` | Read-only codebase audit → prioritized improvement plans |
-| `mstar-e2e` | Explicit standalone E2E, browser, device, and installed-deployment verification |
-| `mstar-roles` | Role prompts + load lists |
-| `mstar-host` | Host adapters (dsh / omp / OpenCode / Cursor / Kimi / ZCode / Codex) |
-| `pm` | `/pm` / `/skill:pm` / host PM entry |
+The `mstar-harness` CLI covers what you do outside a session: issues, roadmap, workflow state, checks, the dashboard, and MCP.
 
-Consumer plans default to **`.mstar/`**. Process artifacts (`plans/`, `iterations/`, `status.json`, `workflows/`, `projects/`, `sdd/`, …) are gitignored; tracked results: `{HARNESS_DIR}/AGENTS.md`, `knowledge/`, `specs/`. Specs resolve `.mstar/specs/` → `docs/specs/` → repo-root `specs/`. Repos with a non-default layout can declare every harness directory symbol in a gitignored **`.mstarc`** (`[config]` keys `harness_dir` / `plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir` — honored above probing). Details → `mstar-conventions`.
+- **Ask the command itself.** `--help` shows the input a command expects; for issue write verbs it lists each payload field with its type and whether it is required or only required for a particular disposition. A usage refusal tells you what it found wrong, the help route to read, and how to recover.
+- **Output is JSON**, so scripts and agents can parse it; exit codes are `0` success, `1` refused, `2` usage, and `3` for a missing SDD task.
 
-Maintainers: [`AGENTS.md`](AGENTS.md).
+```text
+mstar-harness --help                        # command families
+mstar-harness issue close --help            # options and payload fields for one verb
+mstar-harness schema --command issue.close  # the same contract as machine-readable JSON
+```
+
+- `mstar-harness dashboard` serves a read-only web view of issues and workflow state on `127.0.0.1` (Ctrl-C to stop).
+- `mstar-harness report` drafts an offline, redacted GitHub issue report for you to review before posting.
+- `mstar-harness mcp` serves the same command set over stdio MCP from the same package; every host ships a launch configuration (dsh's needs the `@deepseek-ai/dsh-mcp-client` bridge plugin in its profile).
+
+Host wiring, the issue and roadmap command families, and the details behind these surfaces are in [`docs/runtime-reference.md`](docs/runtime-reference.md).
+
+## Documentation
+
+- [`docs/runtime-reference.md`](docs/runtime-reference.md) — components, storage layout, roles and skills, CLI and MCP reference.
+- [`INSTALL.md`](INSTALL.md) — install and verification per host, plus the `report` command in detail.
+- [`docs/commands.md`](docs/commands.md) — the seven slash commands: arguments, when to use, owning skill.
+- [`CONCEPTS.md`](CONCEPTS.md) — the vocabulary the harness uses across skills and docs.
+- Release notes: [`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md). CLI flags: the **`mstar-use-cli`** skill.
+- Maintainers: [`AGENTS.md`](AGENTS.md).
 
 ## License
 
