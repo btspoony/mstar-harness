@@ -105,9 +105,15 @@ function parserDiagnostic(error: CommanderError, argv: readonly string[]): Recor
   const missingValue = error.code === "commander.optionMissingArgument" || error.code === "commander.missingMandatoryOptionValue";
   const quoted = /'([^']+)'/.exec(error.message)?.[1];
   const unknown = error.code === "commander.unknownOption";
-  const rejectedIndex = (!unknown && !missingValue) || definition === undefined || quoted === undefined ? undefined
-    : rejectedOptionIndex(argv, definition, quoted, missingValue ? option : undefined);
-  const path = field;
+  const excess = error.code === "commander.excessArguments";
+  const rejectedIndex = definition === undefined
+    ? undefined
+    : excess
+      ? excessArgumentIndex(argv, definition)
+      : (!unknown && !missingValue) || quoted === undefined
+        ? undefined
+        : rejectedOptionIndex(argv, definition, quoted, missingValue ? option : undefined);
+  const path = field ?? (excess && rejectedIndex !== undefined ? `argv[${rejectedIndex}]` : undefined);
   return {
     ...(path === undefined ? {} : { path }),
     ...(unknown ? { expected: "recognized option", received: quoted ?? "unknown option" } : {}),
@@ -137,6 +143,14 @@ function parserField(
   return undefined;
 }
 
+/**
+ * The argv position a parser failure is attributed to, resolved against the
+ * command's own syntax. A known option consumes the value that follows it
+ * (including a token that looks like a flag), so a rejected token is one the
+ * syntax does not account for: an unfilled mandatory option when its value is
+ * missing, else the unconsumed token itself. Positions the syntax fully
+ * explains — a consumed value, a declared positional — are never reported.
+ */
 function rejectedOptionIndex(
   argv: readonly string[],
   definition: CommandDefinition,
@@ -166,6 +180,41 @@ function rejectedOptionIndex(
     if (missingOption === undefined && token === quoted) return index;
   }
   return undefined;
+}
+
+/**
+ * The argv position of the first token beyond the command's declared
+ * positionals — commander reports `excessArguments` by count, never by token,
+ * so the position is recovered from the same argv the syntax was matched
+ * against: skip the command path, consume every known option (and the value it
+ * takes), then count the remaining tokens as the positionals commander counted.
+ */
+function excessArgumentIndex(argv: readonly string[], definition: CommandDefinition): number | undefined {
+  const options = definition.cli.options.map((option) => ({
+    flags: cliOptionFlags(definition, option),
+    names: option.flags.split(/[ ,|]+/).filter((flag) => flag.startsWith("-")),
+  }));
+  const positionals: number[] = [];
+  let terminated = false;
+  for (let index = 2 + definition.cli.path.length; index < argv.length; index++) {
+    const token = argv[index]!;
+    if (!terminated && token === "--") {
+      terminated = true;
+      continue;
+    }
+    if (!terminated) {
+      const name = token.split("=")[0]!;
+      const known = options.find((entry) => entry.names.includes(name));
+      if (known !== undefined) {
+        if (token.includes("=")) continue;
+        if (known.flags.includes("<")) index++;
+        else if (known.flags.includes("[") && argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) index++;
+        continue;
+      }
+    }
+    positionals.push(index);
+  }
+  return positionals[definition.cli.arguments.length];
 }
 
 function renderCliUsage(definition: CommandDefinition): string {

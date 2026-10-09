@@ -163,16 +163,42 @@ describe("generated CLI adapter", () => {
   });
 
 
-  test("issue show positional parse errors retain their diagnostic shape", () => {
+  test("issue show positional parse errors retain their structured attribution", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
     const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
     const details = envelope?.details;
+    // The offending positional is attributed by argv position and token — the
+    // facts a three-call recovery needs — alongside the command's own usage.
     expect(details).toMatchObject({
-      diagnostics: [{ code: "commander.excessArguments", message: error.message, helpRoute: "mstar issue show --help" }],
+      diagnostics: [{
+        path: "argv[4]",
+        argvIndex: 4,
+        token: "BADPOS",
+        code: "commander.excessArguments",
+        message: error.message,
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --payload <json>",
+        helpRoute: "mstar issue show --help",
+      }],
     });
-    if (details !== undefined && "diagnostics" in details && Array.isArray(details.diagnostics)) {
-      expect(details.diagnostics[0]).not.toHaveProperty("path");
-    }
+  });
+
+  test("excess-argument attribution skips consumed option values and declared positionals", () => {
+    const usageError = (args: string[]) => {
+      const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+      return mapParserError(error, ["node", "mstar", ...args])?.details?.diagnostics;
+    };
+    // A consumed option value is not the excess token; the trailing unknown one is.
+    expect(usageError(["issue", "show", "--id", "I-1", "BADPOS"])).toMatchObject([
+      { path: "argv[6]", argvIndex: 6, token: "BADPOS" },
+    ]);
+    // A declared positional is explained by the syntax; only the extra one is.
+    expect(usageError(["schema", "family", "extra"])).toMatchObject([
+      { path: "argv[4]", argvIndex: 4, token: "extra" },
+    ]);
+    // Two declared positionals are consumed before the excess is attributed.
+    expect(usageError(["sdd", "workspace", "plan-a", "/root", "extra"])).toMatchObject([
+      { path: "argv[6]", argvIndex: 6, token: "extra" },
+    ]);
   });
 
 
