@@ -375,7 +375,7 @@ function workflowOperationRequestHash(
  * §4.1 the sidecar of one workflow-frame result: what this call did with the
  * intent, the workflow it addressed, the facts it reconciled and the commit
  * boundary the caller can rely on. It is the same object shape a refusal carries
- * under `error.details.recovery`, so one contract covers both paths.
+ * under `error.details.recoveryFacts`, so one contract covers both paths.
  */
 function workflowRecovery(input: {
   workflowId: string;
@@ -707,7 +707,7 @@ function refusalCodeOf(error: unknown): string | undefined {
 function declaredRecoveryOf(error: unknown): RecoveryDetails | undefined {
   if (!(error instanceof Error) || !("details" in error)) return undefined;
   const details: unknown = error.details;
-  const recovery = isPlainObject(details) ? details.recovery : undefined;
+  const recovery = isPlainObject(details) ? details.recoveryFacts : undefined;
   if (!isPlainObject(recovery)) return undefined;
   // Boundary cast: the sidecar is written by this engine's own recovery helpers
   // (`unresolvedRecovery` / `withRecoveryDetails`), and the guard above proves it
@@ -789,7 +789,7 @@ function prerequisiteCause(
     needed: problem.needed,
     available_work: problem.availableWork,
     commit_state: "none",
-    recovery: unresolvedRecovery({
+    recoveryFacts: unresolvedRecovery({
       target: { workflowId: input.workflowId },
       unresolved: [problem],
     }),
@@ -841,7 +841,7 @@ function workflowConflictCause(
     current_facts: problem.currentFacts,
     needed: problem.needed,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({
+    recoveryFacts: unresolvedRecovery({
       target: { workflowId: input.workflowId },
       unresolved: [problem],
     }),
@@ -913,7 +913,7 @@ function unresolvedWorkflowAddress(caller: ExecutionCaller): CoordinationError {
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
+    recoveryFacts: unresolvedRecovery({ target: {}, unresolved: [problem] }),
   });
 }
 

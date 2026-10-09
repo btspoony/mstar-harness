@@ -266,7 +266,7 @@ export type CoordinationResult = {
    * §4.1 the recovery sidecar of this call: what it did with the intent, the
    * row it addressed, the facts it reconciled and the commit boundary the
    * caller can rely on. The same object shape a refusal carries under
-   * `error.details.recovery`, so one contract covers both paths.
+   * `error.details.recoveryFacts`, so one contract covers both paths.
    */
   recovery?: RecoveryDetails;
   /**
@@ -772,7 +772,7 @@ export function resolveIntentTarget(input: {
  * The refusal of an unresolved resolution, in the frozen coordination
  * vocabulary: the problem's `needed` is the actionable message, the problem
  * itself is the caller's question, and the contract's sidecar travels under
- * `details.recovery` so the refusal prose is never the whole report.
+ * `details.recoveryFacts` so the refusal prose is never the whole report.
  */
 function refuseResolution(problem: RecoveryProblem, resolvedFrom: readonly ResolutionSource[]): never {
   const code = (COORDINATION_ERROR_CODES as readonly string[]).includes(problem.code)
@@ -786,7 +786,7 @@ function refuseResolution(problem: RecoveryProblem, resolvedFrom: readonly Resol
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({ target: {}, unresolved: [problem], resolvedFrom }),
+    recoveryFacts: unresolvedRecovery({ target: {}, unresolved: [problem], resolvedFrom }),
   });
 }
 
@@ -1144,7 +1144,7 @@ type RowFrameResult = {
 /**
  * §4.1/§4.2 the sidecar of one file-route row mutation: what this call did with
  * the intent, the row it addressed and the commit boundary the caller can rely
- * on. The same object shape a refusal carries under `error.details.recovery`,
+ * on. The same object shape a refusal carries under `error.details.recoveryFacts`,
  * mirroring the DB frames' `planRecovery`.
  *
  * `commitState` is `committed` only when THIS call landed the effect (its own
@@ -1252,8 +1252,8 @@ function rowFrameRefusal(
   // generic problem. Both routes then report the SAME object for the same
   // state; every other refusal keeps the generic report below.
   const declaredReport =
-    isPlainObject(declared) && isPlainObject((declared as Record<string, unknown>).recovery)
-      ? ((declared as Record<string, unknown>).recovery as RecoveryDetails)
+    isPlainObject(declared) && isPlainObject((declared as Record<string, unknown>).recoveryFacts)
+      ? ((declared as Record<string, unknown>).recoveryFacts as RecoveryDetails)
       : undefined;
   const prerequisite = isPrerequisiteRefusal(refusalCode);
   const message = errorMessage(error);
@@ -1310,7 +1310,7 @@ function rowFrameRefusal(
     workflow_id: input.scope.workflowId,
     plan_id: input.scope.planId,
     current_revision: input.context.revision,
-    recovery: partlyAppliedRecovery(
+    recoveryFacts: partlyAppliedRecovery(
       declaredReport === undefined
         ? unresolvedRecovery({
             target: { workflowId: input.scope.workflowId, planId: input.scope.planId },
@@ -5288,7 +5288,7 @@ function refuseAmendment(
     workflow_id: input.workflowId,
     withheld_components: problems.map((entry) => entry.component),
     components: [...input.components],
-    recovery: input.recovery,
+    recoveryFacts: input.recovery,
   });
 }
 
@@ -6119,7 +6119,7 @@ export async function amendPrepareWorkflow(
     // recognized as already current, the components it withheld with their own
     // typed problem, the declarations it resolved from and the commit boundary a
     // caller can rely on. The same object shape travels on the refusal below
-    // under `error.details.recovery`, so one contract covers both paths.
+    // under `error.details.recoveryFacts`, so one contract covers both paths.
     const recovery: RecoveryDetails = {
       outcome: plan.unresolved.length > 0 ? (plan.applied.length > 0 ? "partial" : "unresolved") : writing ? "applied" : "already-satisfied",
       target: { workflowId: scope.workflowId },

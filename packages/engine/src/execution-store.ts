@@ -221,7 +221,7 @@ export type ExecutionReceipt<T> = ExecutionRead<T> & {
    * §4.1 the sidecar of this call's outcome: what was applied, what was
    * already satisfied, the provenance it was resolved from, scoped warnings and
    * the known commit boundary (`RecoveryDetails`). Present on every frame
-   * result; a refusal carries the same object under `error.details.recovery`.
+   * result; a refusal carries the same object under `error.details.recoveryFacts`.
    */
   recovery?: ExecutionReceiptRecovery;
 };
@@ -579,7 +579,7 @@ function authorityEpochRefusal(input: {
     current_facts: problem.currentFacts,
     needed: problem.needed,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({
+    recoveryFacts: unresolvedRecovery({
       target: input.target ?? {},
       unresolved: [problem],
       resolvedFrom: [{ path: "epoch", source: input.source }],
@@ -690,7 +690,7 @@ export function semanticRequestHash(input: {
  * §4.1 the typed cause of one refusal a frame produced: the SAME error — code,
  * class and message unchanged — with the contract's `recovery` sidecar (and the
  * field facts beside it) merged into whatever details it already carried, so
- * `error.details.recovery` is the report and the prose is never the whole of
+ * `error.details.recoveryFacts` is the report and the prose is never the whole of
  * it. A value that is not an `Error` is returned untouched: no sidecar is ever
  * fabricated for a foreign value.
  */
@@ -2156,7 +2156,7 @@ function sessionRefusalDetails(input: {
     sources_tried: input.problem.sourcesTried,
     current_facts: input.problem.currentFacts,
     available_work: input.problem.availableWork,
-    recovery: unresolvedRecovery({ target: input.target ?? {}, unresolved: [input.problem] }),
+    recoveryFacts: unresolvedRecovery({ target: input.target ?? {}, unresolved: [input.problem] }),
   };
 }
 
@@ -2710,7 +2710,7 @@ export function readOperationReplay<T>(
         sources_tried: problem.sourcesTried,
         current_facts: problem.currentFacts,
         available_work: problem.availableWork,
-        recovery: unresolvedRecovery({
+        recoveryFacts: unresolvedRecovery({
           target: { workflowId: input.workflowId, ...(input.planId === null ? {} : { planId: input.planId }) },
           unresolved: [problem],
         }),
@@ -3010,7 +3010,7 @@ function sessionBindRefusal(input: {
     current_facts: problem.currentFacts,
     needed: problem.needed,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] }),
+    recoveryFacts: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] }),
   });
 }
 
@@ -3329,7 +3329,7 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({
+    recoveryFacts: unresolvedRecovery({
       target: { workflowId: address.workflowId },
       unresolved: [problem],
       resolvedFrom: [

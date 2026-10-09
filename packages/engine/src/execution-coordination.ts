@@ -402,7 +402,7 @@ function planOperationRequestHash(
 /**
  * §4.1 the sidecar of one plan-frame result: what this call did with the intent,
  * the record it addressed and the commit boundary the caller can rely on — the
- * same object shape a refusal carries under `error.details.recovery`, so a
+ * same object shape a refusal carries under `error.details.recoveryFacts`, so a
  * consumer reads one contract on both paths.
  */
 function planRecovery(input: {
@@ -476,7 +476,7 @@ function stalePlanRowRefusal(
       sources_tried: problem.sourcesTried,
       current_facts: problem.currentFacts,
       available_work: problem.availableWork,
-      recovery: unresolvedRecovery({
+      recoveryFacts: unresolvedRecovery({
         target: { workflowId: witness.workflowId, planId: witness.planId },
         unresolved: [problem],
         resolvedFrom: [{ path: "planId", source: "intent.explicit" }],

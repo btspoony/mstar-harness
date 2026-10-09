@@ -761,7 +761,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       workflowMutation(fixture, "op-close-notdone", { kind: "lifecycle", status: "completed", reason: "done" }),
     );
     expect(notDone.code).toBe("coordination.invalid-transition");
-    expect(notDone.details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(notDone.details.recoveryFacts).toMatchObject({ outcome: "unresolved", commitState: "none" });
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
     setRowStatus(fixture.context, PLAN_ID, "Done");
@@ -1220,7 +1220,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
 
 /** The typed cause one refusal carries, as the consumer contract exposes it. */
 function recoveryOf(details: Record<string, unknown>): Record<string, unknown> {
-  const recovery = details.recovery;
+  const recovery = details.recoveryFacts;
   if (typeof recovery !== "object" || recovery === null || Array.isArray(recovery)) {
     throw new Error(`the refusal carries no recovery sidecar: ${JSON.stringify(details)}`);
   }

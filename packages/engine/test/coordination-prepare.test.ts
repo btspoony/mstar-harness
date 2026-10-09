@@ -1811,7 +1811,7 @@ describe("Prepare workflow amendment", () => {
     );
     expect(duplicateRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
     expect(duplicateRefusal.details.plan_id).toBe(PREPARE_ROW);
-    const duplicateRecovery = duplicateRefusal.details.recovery as RecoveryDetails;
+    const duplicateRecovery = duplicateRefusal.details.recoveryFacts as RecoveryDetails;
     expect(duplicateRecovery.outcome).toBe("unresolved");
     expect(duplicateRecovery.applied).toEqual([]);
     expect(duplicateRecovery.unresolved.map((entry) => entry.path)).toEqual(["correctPlanFiles[0]", "correctPlanFiles[1]"]);
@@ -2230,7 +2230,7 @@ describe("Prepare workflow amendment", () => {
     expect(refusal.details.undeclared).toEqual([PREPARE_UNREVIEWED]);
     expect(refusal.details.withheld_components).toEqual([`append plan ${PREPARE_UNREVIEWED}`]);
     expect(refusal.details.components).toEqual([`append plan ${PREPARE_UNREVIEWED}`, `correct-plan-file ${PREPARE_ROW}`]);
-    const recovery = refusal.details.recovery as RecoveryDetails;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails;
     expect(recovery.outcome).toBe("partial");
     expect(recovery.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
     expect(recovery.unresolved).toHaveLength(1);
@@ -2251,7 +2251,7 @@ describe("Prepare workflow amendment", () => {
     // no new bytes.
     const settled = protectedBytes(fixture);
     const retry = await prepareRefusalOf(() => amendPrepare(fixture, patch));
-    const retryRecovery = retry.details.recovery as RecoveryDetails;
+    const retryRecovery = retry.details.recoveryFacts as RecoveryDetails;
     expect(retry.code).toBe("coordination.prepare-amendment.compass-mismatch");
     expect(retryRecovery.outcome).toBe("unresolved");
     // The already-recorded component is NOT reported as applied a second time:
@@ -2302,7 +2302,7 @@ describe("Prepare workflow amendment", () => {
       `integration-worktree ${fixture.integrationPath}`,
       "execution-policy parallel",
     ]);
-    const recovery = refusal.details.recovery as RecoveryDetails;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails;
     expect(recovery.outcome).toBe("partial");
     expect(recovery.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
     // BOTH members carry the same problem: the pair is withheld as one unit, so
@@ -2391,7 +2391,7 @@ describe("Prepare workflow amendment", () => {
       `append plan ${PREPARE_UNREVIEWED}`,
       `correct-plan-file ${PREPARE_ROW}`,
     ]);
-    const recovery = refusal.details.recovery as RecoveryDetails;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails;
     expect(recovery.outcome).toBe("unresolved");
     expect(recovery.applied).toEqual([]);
     expect(recovery.commitState).toBe("none");
@@ -2428,7 +2428,7 @@ describe("Prepare workflow amendment", () => {
     );
 
     expect(shapeRefusal.code).toBe("coordination.prepare-amendment.invalid-patch");
-    const shapeRecovery = shapeRefusal.details.recovery as RecoveryDetails;
+    const shapeRecovery = shapeRefusal.details.recoveryFacts as RecoveryDetails;
     expect(shapeRecovery.outcome).toBe("unresolved");
     expect(shapeRecovery.applied).toEqual([]);
     expect(shapeRecovery.unresolved.map((entry) => entry.path)).toEqual(["patch", "correctPlanFiles", "planParallelism"]);
@@ -2466,7 +2466,7 @@ describe("Prepare workflow amendment", () => {
       `integration-worktree ${fixture.integrationPath}`,
       "execution-policy maybe",
     ]);
-    const recovery = refusal.details.recovery as RecoveryDetails;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails;
     expect(recovery.outcome).toBe("partial");
     expect(recovery.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
     expect(recovery.unresolved.map((entry) => entry.component)).toEqual([
@@ -2517,7 +2517,7 @@ describe("Prepare workflow amendment", () => {
       `append plan ${PREPARE_APPEND}`,
       `append plan ${PREPARE_APPEND}`,
     ]);
-    const recovery = refusal.details.recovery as RecoveryDetails;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails;
     expect(recovery.outcome).toBe("partial");
     expect(recovery.applied).toEqual([`correct-plan-file ${PREPARE_ROW}`]);
     expect(recovery.unresolved.map((entry) => entry.path)).toEqual(["appendPlans[0]", "appendPlans[1]"]);

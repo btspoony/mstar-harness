@@ -255,7 +255,7 @@ export function missingDecision(input: {
   return new CoordinationError("coordination.invalid-input", input.message, {
     plan_id: input.planId,
     path: input.field,
-    recovery: {
+    recoveryFacts: {
       outcome: "unresolved",
       target: { planId: input.planId },
       applied: [],

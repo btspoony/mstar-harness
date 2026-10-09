@@ -105,7 +105,7 @@ describe("status command family", () => {
       // the command surface reports that typed cause, not a code and prose.
       expect(result).toMatchObject({ status: "refused", code: "store.stale-epoch", exitCode: 1 });
       const details = result.status === "ok" ? undefined : result.details;
-      expect(details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+      expect(details?.recoveryFacts).toMatchObject({ outcome: "unresolved", commitState: "none" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

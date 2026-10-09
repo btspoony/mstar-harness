@@ -11,7 +11,7 @@
  *
  * What the landed surface still owns is the recovery SIDECAR contract: every
  * coordinator call reports one `RecoveryDetails` object — under
- * `result.recovery` on success, under `error.details.recovery` on refusal — with
+ * `result.recovery` on success, under `error.details.recoveryFacts` on refusal — with
  * the same seven fields (outcome, target, applied, unresolved, resolvedFrom,
  * warnings, commitState). There is no sealed Assignment to go stale: the
  * Assignment file is prose beside the row that no coordinator operation reads,
@@ -108,7 +108,7 @@ test("a live refusal reports the same sidecar as unresolved, and an active row s
   );
   if (!(refusal instanceof CoordinationError)) throw refusal;
   expect(refusal.code).toBe("coordination.progress-transition");
-  expect(refusal.details.recovery).toMatchObject({
+  expect(refusal.details.recoveryFacts).toMatchObject({
     outcome: "unresolved",
     target: { workflowId: WORKFLOW_ID, planId: PLAN_ID },
     applied: [],
@@ -146,7 +146,7 @@ test("the removed seat's recovery vocabulary is gone from the surface, never ali
     expect(failureCode(refusal)).toBe("coordination.unknown-operation");
     expect(refusal.message).toContain("recover-assignment");
     if (!(refusal instanceof CoordinationError)) throw refusal;
-    expect(refusal.details.recovery).toBeUndefined();
+    expect(refusal.details.recoveryFacts).toBeUndefined();
   }
 
   // The landed operation set is exactly the coordinator verbs: no seat recovery,
