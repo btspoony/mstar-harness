@@ -6,7 +6,7 @@ import {
   WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES,
   adoptTerminalWorkflow, createFsStore, decodeExecutionSessionRef,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, registerShippedCatalogExecution,
-  resolveExecutionReadRoute, resolveProcessHarnessDir, setArtifactStore,
+  resolveProcessHarnessDir, setArtifactStore,
   type ActivationAttestation,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence,
   type WorkflowExecutionOperation, type WorkflowExecutionPolicy,
@@ -492,17 +492,6 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             : readAdoptionAttestation(absolute(input.attestation, "attestation"));
           const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-          const active = await resolveExecutionReadRoute({ harnessDir });
-          if (active !== "execution") {
-            return refusalEnvelope({
-              command: id,
-              status: "refused",
-              code: "execution.adoption-refused",
-              exitCode: 1,
-              message: "terminal adoption requires an active execution authority",
-              recovery: "Run mstar status validate to inspect the harness, then mstar store upgrade --operator <name> to import legacy execution state and activate the execution authority before retrying adoption.",
-            });
-          }
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
           return ok(id, await adoptTerminalWorkflow(executionContextFor({ harnessDir }, identity), {
             workflowId,

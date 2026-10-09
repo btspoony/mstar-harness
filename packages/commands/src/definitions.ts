@@ -1,4 +1,4 @@
-import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
+import { commandEnvelopeSchema, refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
 import { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "./types.js";
@@ -26,44 +26,13 @@ import { getLocalCommandDefinitions } from "./families/local.js";
 import { getReportCommandDefinitions } from "./families/report.js";
 import { getCommandSchemas, getSchemaCommandDefinitions, type CommandSchemaDescriptor } from "./families/schema.js";
 
-
-const failureEnvelopeSchema = z.object({
-  version: z.literal(1),
-  command: z.string().min(1),
-  status: z.enum(["refused", "error"]),
-  code: z.string().min(1),
-  exitCode: z.number().int().refine((code) => code !== 0),
-  message: z.string(),
-  details: z.record(z.string(), z.unknown()).optional(),
-}).passthrough();
-
-export function usageEnvelope(id: string, message: string): CommandEnvelope<never> {
-  return refusalEnvelope({
-    command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message,
-    diagnostics: [{ code: "command.invalid-input", message }],
-  });
-}
-
-export const commandEnvelopeSchema = z.discriminatedUnion("status", [
-  z.object({
-    version: z.literal(1),
-    command: z.string().min(1),
-    status: z.literal("ok"),
-    code: z.string().min(1),
-    exitCode: z.literal(0),
-    data: z.unknown(),
-  }).passthrough(),
-  failureEnvelopeSchema,
-  z.object({
-    version: z.literal(1),
-    command: z.string().min(1),
-    status: z.literal("usage"),
-    code: z.string().min(1),
-    exitCode: z.literal(2),
-    message: z.string(),
-    details: z.record(z.string(), z.unknown()).optional(),
-  }).passthrough(),
-]);
+/**
+ * Re-exported from the leaf `envelope.js` so every existing consumer of this
+ * aggregator (`command-discovery.test.ts`, `families/schema.ts`, the CLI) keeps
+ * resolving the SAME schema instance, while a family module can import it from
+ * `envelope.js` without closing an ESM cycle back through this aggregator.
+ */
+export { commandEnvelopeSchema };
 
 export class CommandDefinitionError extends Error {
   constructor(message: string) {
