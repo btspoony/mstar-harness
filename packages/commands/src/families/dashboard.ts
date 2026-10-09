@@ -33,7 +33,9 @@ export function failure(code: string, error: unknown): CommandEnvelope<never> {
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
     details: { operation: id },
-  });
+   recovery: code === "dashboard.harness-unavailable"
+        ? "Resolve the control harness root for this invocation. Run mstar dashboard."
+        : "Clear the reported port or listener conflict. Run mstar dashboard."});
 }
 
 function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { slot: DashboardSlot; reused: boolean } {

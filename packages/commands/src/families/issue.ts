@@ -67,24 +67,30 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  const issueId = input?.id?.trim() || "<id>";
-  const recovery = code === "issue.revision-conflict"
-    ? `Run \`mstar issue show --id ${issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
-    : id !== "issue.reopen"
-      ? undefined
-      : code === "store.operation-conflict"
-        ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
-        : code === "issue.invalid-disposition"
-          ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
-          : code === "issue.scope-refused"
-            ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
-            : code === "issue.invalid-payload"
-              ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
-              : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
+  const reopen = id === "issue.reopen";
+  const payloadOnly = paths.length > 0 && paths.every((value) => value === "payload");
+  let recovery = "Correct the reported condition, then read the command contract with mstar schema --command <id>.";
+  if (code === "issue.revision-conflict") {
+    recovery = "Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.";
+  } else if (code === "store.operation-conflict") {
+    recovery = "Run mstar issue show to inspect the issue, then either replay the original request unchanged or retry with a fresh operation id.";
+  } else if (code === "issue.invalid-disposition" && reopen) {
+    recovery = "Run mstar issue show; only resolved, waived, duplicate or superseded issues can reopen, and open issues stay open.";
+  } else if (code === "issue.scope-refused") {
+    recovery = "As an authorized actor, run mstar schema --command <id> to read this command's contract, then retry this operation.";
+  } else if (code === "issue.invalid-payload" && reopen) {
+    recovery = "Run mstar issue show, then retry this reopen with a non-empty payload.reason.";
+  } else if (code === "issue.invalid-payload" && payloadOnly) {
+    recovery = "Correct the payload so it parses as a JSON object (or supply a readable --file), then rerun this operation.";
+  } else if (code === "issue.invalid-payload") {
+    recovery = "Correct the payload field(s) named in this refusal, then rerun this operation.";
+  } else if (reopen) {
+    recovery = "Run mstar issue show to verify the issue before retrying reopen.";
+  }
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(paths.length > 0 ? { details: { paths } } : {}),
-    ...(recovery === undefined ? {} : { recovery }),
+    recovery,
   });
 }
 function storeContext(input: IssueInput, invocation: InvocationContext): StoreContext {

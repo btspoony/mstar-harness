@@ -92,7 +92,25 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: id === "catalog.discover"
+        ? "Set readable repository roots and resolve any inaccessible paths. Run mstar catalog discover."
+        : id === "catalog.import"
+          ? "Correct the reviewed catalog plan and source identities. Run mstar catalog import --plan <reviewed-plan>."
+          : id === "catalog.register"
+            ? "Set a canonical harness-relative location and valid registration metadata. Run mstar catalog register --kind <kind> --id <id> --title <title> --root-kind <kind> --path <path>."
+            : id === "catalog.update"
+              ? "Read the current catalog row revision and retain the intended metadata update. Run mstar catalog update <kind> <id>."
+              : id === "catalog.link"
+                ? "Select two registered catalog rows and a supported relation. Run mstar catalog link --from-kind <kind> --from-id <id> --relation <relation> --to-kind <kind> --to-id <id>."
+                : id === "catalog.list"
+                  ? "Select a registered catalog scope and resolve the reported store-read problem. Run mstar catalog list."
+                  : id === "catalog.show"
+                    ? "Set the exact registered catalog identity and resolve the reported store-read problem. Run mstar catalog show <kind> <id>."
+                    : id === "catalog.export"
+                      ? "Choose a writable catalog export destination. Run mstar catalog export --out <path>."
+                      : id === "catalog.reconcile"
+                        ? "Inspect the pending registration execution and correct its recorded source state. Run mstar catalog reconcile --list."
+                        : "Verify the registration snapshot identity and canonical location. Run mstar catalog purge-registration --workflow <workflow-id> --operation <operation-id> --expect <revision> --actor <actor>."});
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);

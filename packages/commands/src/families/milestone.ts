@@ -14,7 +14,24 @@ class UsageError extends Error {}
 function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
 function context(input: Input, invocation: InvocationContext): StoreContext { const root = resolveProcessHarnessDir(invocation.cwd, input.harness); return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd }; }
 function envelope(id: string, data: unknown): CommandEnvelope { return { version:1, command:id, status:"ok", code:`${id}.ok`, exitCode:0, data }; }
-export function failure(id: string, error: unknown): CommandEnvelope<never> { const message=error instanceof Error?error.message:String(error); if(error instanceof UsageError) return refusalEnvelope({command:id,status:"usage",code:"usage",exitCode:2,message,details:{operation:id}}); const code=error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`; return refusalEnvelope({command:id,status:"refused",code,exitCode:1,message,details:{operation:id}}); }
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof UsageError) {
+    return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id } });
+  }
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : `${id}.internal-error`;
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id }, recovery: id === "milestone.add"
+      ? "Set a unique milestone name, project ordinal, and current store revision. Run mstar milestone add --project <project> --name <name> --ordinal <ordinal> --expect-store <revision> --operation <operation-id>."
+      : id === "milestone.update"
+        ? "Read the current milestone and store revision and retain only the intended patch. Run mstar milestone update --project <project> --id <id> --expect-store <revision> --operation <operation-id>."
+        : id === "milestone.assign"
+          ? "Verify the issue and milestone ids and current issue and store revisions. Run mstar milestone assign --project <project> --issue <issue-id> --reason <reason> --expect-issue <revision> --expect-store <revision> --operation <operation-id> --session <session-id> --actor <actor>."
+          : id === "milestone.list"
+            ? "Select an existing project and resolve the reported store-read cause. Run mstar milestone list --project <project>."
+            : "Select an existing milestone in the project and resolve the reported store-read cause. Run mstar milestone status --project <project> --id <id>." });
+}
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {
   const verb = id.slice("milestone.".length) as typeof verbs[number]; const projectId = requireValue(input.project,"--project"); const store = context(input,invocation);

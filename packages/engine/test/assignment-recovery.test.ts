@@ -11,7 +11,7 @@
  *
  * What the landed surface still owns is the recovery SIDECAR contract: every
  * coordinator call reports one `RecoveryDetails` object — under
- * `result.recovery` on success, under `error.details.recovery` on refusal — with
+ * `result.recovery` on success, under `error.details.recoveryFacts` on refusal — with
  * the same seven fields (outcome, target, applied, unresolved, resolvedFrom,
  * warnings, commitState). There is no sealed Assignment to go stale: the
  * Assignment file is prose beside the row that no coordinator operation reads,
@@ -108,7 +108,7 @@ test("a live refusal reports the same sidecar as unresolved, and an active row s
   );
   if (!(refusal instanceof CoordinationError)) throw refusal;
   expect(refusal.code).toBe("coordination.progress-transition");
-  expect(refusal.details.recovery).toMatchObject({
+  expect(refusal.details.recoveryFacts).toMatchObject({
     outcome: "unresolved",
     target: { workflowId: WORKFLOW_ID, planId: PLAN_ID },
     applied: [],
@@ -139,14 +139,15 @@ test("the removed seat's recovery vocabulary is gone from the surface, never ali
   await prepareCall(fixture, PLAN_ID, configOf(fixture));
 
   // Both decisions of the deleted `recover-assignment` operation are unknown
-  // operations now: a caller still driving the old flow is told so explicitly,
-  // with the operation named and no recovery sidecar to mistake for applied work.
+  // operations now: a caller still driving the old flow is directed to a
+  // supported operation through its owning plan command, with no recovery
+  // sidecar to mistake for applied work.
   for (const decision of ["re-review", "restore"] as const) {
     const refusal = await failureOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "recover-assignment", decision }));
     expect(failureCode(refusal)).toBe("coordination.unknown-operation");
-    expect(refusal.message).toContain("recover-assignment");
+    expect(refusal.message).toBe("Unknown coordination operation. Use mstar plan show. Pass the plan id registered in the workflow row to inspect the row, then choose a supported operation through its owning plan command.");
     if (!(refusal instanceof CoordinationError)) throw refusal;
-    expect(refusal.details.recovery).toBeUndefined();
+    expect(refusal.details.recoveryFacts).toBeUndefined();
   }
 
   // The landed operation set is exactly the coordinator verbs: no seat recovery,

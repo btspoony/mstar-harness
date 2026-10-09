@@ -108,7 +108,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const file = abs(context.cwd, need(input.reportFile, "report file"));
       if (!existsSync(file)) throw new Error(`report file not found: ${file}`);
       const result = validatePrReviewReport(readFileSync(file, "utf8"));
-      return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: `${id}.invalid`, exitCode: 1, message: "PR-review report validation failed", details: { violations: result.violations } });
+      return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: `${id}.invalid`, exitCode: 1, message: "PR-review report validation failed", details: { violations: result.violations } , recovery: "Correct each listed violation in the saved report. Run mstar pr-review validate-report <report-file>."});
     }
     if (verb === "post") {
       if (!/^\d+$/.test(need(input.pr, "--pr")) || Number(input.pr) < 1) throw new UsageError("--pr requires a positive integer");
@@ -126,11 +126,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid"]);
 
       if (viewResult.exitCode !== 0 || viewResult.signal !== null) {
-        return refusalEnvelope({ command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" });
+        return refusalEnvelope({ command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review-file>."});
       }
       const plan = planReviewPost(JSON.parse(viewResult.stdout), { body, comments });
       if (plan.pr !== Number(input.pr)) {
-        return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` });
+        return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
       }
       const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
       const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, body: commentBody }) => ({ path: filePath, line, side, body: commentBody })) } : {}) });

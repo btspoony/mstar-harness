@@ -200,8 +200,8 @@ type ResolvedWorkflowOperation<Operation extends WorkflowExecutionOperation> = {
 };
 
 /** The caller-input refusal of this module (`coordination.invalid-input`). */
-function invalidWorkflowInput(detail: string): CoordinationError {
-  return new CoordinationError("coordination.invalid-input", detail);
+function invalidWorkflowInput(detail: string, details: Record<string, unknown> = {}): CoordinationError {
+  return new CoordinationError("coordination.invalid-input", detail, details);
 }
 
 /** The one carrier of lifecycle-ordering refusals (`coordination.invalid-transition`). */
@@ -216,13 +216,13 @@ function invalidWorkflowTransition(detail: string, details: Record<string, unkno
  */
 function assertWorkflowOperationShape(operation: unknown): asserts operation is WorkflowExecutionOperation {
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
-    throw invalidWorkflowInput("a workflow operation needs an operation with a kind");
+    throw invalidWorkflowInput("Invalid workflow operation: provide an operation with a kind; inspect the operation contract with mstar schema.");
   }
   const op = operation as unknown as Record<string, unknown>;
   switch (operation.kind) {
     case "phase": {
       assertExactKeys(op, ["kind", "phase", "compassPath"], "a phase operation");
-      if (!isNonEmptyString(op.phase)) throw invalidWorkflowInput("a phase operation needs the non-empty phase it requests");
+      if (!isNonEmptyString(op.phase)) throw invalidWorkflowInput("Invalid phase operation: provide a non-empty phase; retry through mstar workflow phase.");
       if (!isNonEmptyString(op.compassPath) || !isAbsolute(op.compassPath)) {
         throw invalidWorkflowInput(
           "a phase operation needs the absolute compassPath of the lifecycle's registered compass \u2014 the gate is evaluated " +
@@ -234,37 +234,36 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
     case "lifecycle": {
       assertExactKeys(op, ["kind", "status", "reason"], "a lifecycle operation");
       if (typeof op.status !== "string" || !(WORKFLOW_LIFECYCLE_STATUSES as readonly string[]).includes(op.status)) {
-        throw invalidWorkflowInput(
-          `a lifecycle operation needs status one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} \u2014 got ${JSON.stringify(op.status)}`,
-        );
+        throw new CoordinationError("coordination.invalid-input", "Invalid lifecycle status: provide one of the supported statuses; retry through mstar workflow lifecycle.", {
+          status: op.status,
+          allowed_statuses: WORKFLOW_LIFECYCLE_STATUSES,
+        });
       }
-      if (!isNonEmptyString(op.reason)) throw invalidWorkflowInput("a lifecycle operation needs the non-empty reason it is recorded with");
+      if (!isNonEmptyString(op.reason)) throw invalidWorkflowInput("Invalid lifecycle operation: provide a non-empty reason; retry through mstar workflow lifecycle.");
       return;
     }
     case "execution-policy": {
       assertExactKeys(op, ["kind", "policy"], "an execution-policy operation");
-      if (!isPlainObject(op.policy)) throw invalidWorkflowInput("an execution-policy operation needs a policy object");
+      if (!isPlainObject(op.policy)) throw invalidWorkflowInput("Invalid execution-policy operation: provide a policy object; retry through mstar workflow execution-policy.");
       return;
     }
     case "integration-worktree": {
       assertExactKeys(op, ["kind", "path"], "an integration-worktree operation");
       if (!isNonEmptyString(op.path) || !isAbsolute(op.path)) {
-        throw invalidWorkflowInput("an integration-worktree operation needs the absolute path of the integration checkout");
+        throw invalidWorkflowInput("Invalid integration-worktree operation: provide an absolute checkout path; retry through mstar workflow integration-worktree.");
       }
       return;
     }
     case "delivery": {
       assertExactKeys(op, ["kind", "delivery"], "a delivery operation");
-      if (!isPlainObject(op.delivery)) throw invalidWorkflowInput("a delivery operation needs a delivery evidence object");
+      if (!isPlainObject(op.delivery)) throw invalidWorkflowInput("Invalid delivery operation: provide a delivery evidence object; retry through mstar workflow evidence.");
       if (Object.keys(op.delivery).length === 0) {
-        throw invalidWorkflowInput(
-          "a delivery operation needs at least one evidence member (compound | pr | merge | completion) \u2014 an empty patch changes nothing",
-        );
+        throw invalidWorkflowInput("Invalid delivery operation: provide at least one evidence member (compound, pr, merge, or completion); retry through mstar workflow evidence.");
       }
       return;
     }
     default:
-      throw new CoordinationError("coordination.unknown-operation", `${String(op.kind)} is not a workflow operation`, {
+      throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind,
       });
   }
@@ -280,16 +279,16 @@ function resolveWorkflowOperationRequest<Operation extends WorkflowExecutionOper
   caller: ExecutionCaller,
   request: WorkflowOperationRequest<Operation>,
 ): ResolvedWorkflowOperation<Operation> {
-  if (!isPlainObject(request)) throw invalidWorkflowInput("a workflow operation needs a request object");
+  if (!isPlainObject(request)) throw invalidWorkflowInput("Invalid workflow operation: provide a request object; inspect the operation contract with mstar schema.");
   if (!isNonEmptyString(caller?.sessionId)) {
-    throw invalidWorkflowInput("the execution caller needs a non-empty session identity");
+    throw invalidWorkflowInput("Invalid execution caller: provide a non-empty session identity; inspect the workflow with mstar status validate.");
   }
   const operationId = assertOperationId((request as { operationId?: unknown }).operationId);
   const workflowId = (request as { workflowId?: unknown }).workflowId;
   if (!isNonEmptyString(workflowId)) {
-    throw invalidWorkflowInput("a workflow operation needs the non-empty workflow id it addresses");
+    throw invalidWorkflowInput("Invalid workflow operation: provide the non-empty workflow id; inspect registered workflows with mstar status validate.");
   }
-  assertWorkflowOperationShape((request as { operation?: unknown }).operation);
+  assertWorkflowOperationShape(request.operation);
   const read = resolveWorkflowWrite(caller, request.session, workflowId);
   return { call: { ...request, operationId, workflowId }, read };
 }
@@ -376,7 +375,7 @@ function workflowOperationRequestHash(
  * §4.1 the sidecar of one workflow-frame result: what this call did with the
  * intent, the workflow it addressed, the facts it reconciled and the commit
  * boundary the caller can rely on. It is the same object shape a refusal carries
- * under `error.details.recovery`, so one contract covers both paths.
+ * under `error.details.recoveryFacts`, so one contract covers both paths.
  */
 function workflowRecovery(input: {
   workflowId: string;
@@ -455,7 +454,7 @@ async function readWorkflowHeaderBefore(context: ExecutionContext, workflowId: s
   if (workflow === undefined) {
     throw new CoordinationError(
       "coordination.workflow-not-found",
-      `workflow ${workflowId} is not an active lifecycle of this store`,
+      "The requested workflow is not active in this store. Inspect registered workflows with mstar status validate.",
       { workflow_id: workflowId },
     );
   }
@@ -485,9 +484,8 @@ async function readPhaseEvidence(
   const registered = header.compass_ref;
   if (!isNonEmptyString(registered)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} registers no compass_ref \u2014 a phase transition is decided by the iteration compass gate, and a ` +
-        `lifecycle without a registered compass has no gate to evaluate`,
-      { workflow_id: workflowId },
+      "Workflow transition requires a registered compass; inspect workflow state with mstar status validate.",
+      { workflow_id: workflowId, compass_ref: header.compass_ref },
     );
   }
   const harnessRoot = controlHarnessRoot(context);
@@ -496,12 +494,12 @@ async function readPhaseEvidence(
   if (canonical !== expected) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      `the phase transition of workflow ${workflowId} reads the lifecycle's registered compass ${expected}, not ${canonical}`,
+      "Phase transition must use the workflow's registered compass; inspect the workflow with mstar status validate.",
       { workflow_id: workflowId, expected, actual: canonical },
     );
   }
   if (!existsSync(canonical)) {
-    throw invalidWorkflowTransition(`the registered compass ${canonical} of workflow ${workflowId} does not exist`, {
+    throw invalidWorkflowTransition("The registered compass does not exist; repair it, then retry through mstar workflow phase.", {
       workflow_id: workflowId,
       compass_path: canonical,
     });
@@ -510,7 +508,10 @@ async function readPhaseEvidence(
   const doc = parseCompassFrontmatterText(text, canonical);
   const validation = validateCompassFrontmatter(doc);
   if (!validation.ok) {
-    throw invalidWorkflowInput(`the compass ${canonical} does not validate (${summarize(validation.violations)})`);
+    throw invalidWorkflowInput("The registered compass is invalid; correct its validation findings, then retry through mstar workflow phase.", {
+      compass_path: canonical,
+      violations: validation.violations,
+    });
   }
 
   const probes: PhaseGateOptions = {};
@@ -566,12 +567,12 @@ async function readIntegrationWorktreeEvidence(
   const mainRoot = canonicalTarget(main.root);
   if (path === mainRoot || path === canonicalTarget(control)) {
     throw invalidWorkflowTransition(
-      `the integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required`,
+      "The integration checkout is the control checkout; provide a dedicated worktree, then retry through mstar workflow integration-worktree.",
       { workflow_id: workflowId, path, expected: `a checkout distinct from ${mainRoot}` },
     );
   }
   if (!existsSync(path) || !statSync(path).isDirectory()) {
-    throw invalidWorkflowTransition(`the integration checkout ${path} does not exist`, { workflow_id: workflowId, path });
+    throw invalidWorkflowTransition("The integration checkout does not exist; provide an existing checkout path, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path });
   }
   // The repository a checkout belongs to is its MAIN worktree: a linked
   // worktree's own `--show-toplevel` is itself, so the main record is what
@@ -580,7 +581,7 @@ async function readIntegrationWorktreeEvidence(
   if (owner === null) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `the integration checkout ${path} is not a readable Git worktree`,
+      "The integration checkout is not a readable Git worktree; inspect it with mstar worktree check.",
       { workflow_id: workflowId, path },
     );
   }
@@ -595,16 +596,25 @@ async function readIntegrationWorktreeEvidence(
   }
   if (!isDistinctCheckout(mainRoot, path)) {
     throw invalidWorkflowTransition(
-      `the integration checkout ${path} is not a distinct Git checkout (it resolves to the same checkout as ${mainRoot})`,
-      { workflow_id: workflowId, path },
+      "The integration checkout resolves to the control checkout; provide a distinct worktree, then retry through mstar workflow integration-worktree.",
+      {
+        main_root: mainRoot,
+        workflow_id: workflowId,
+        path,
+      },
     );
   }
   const alignment = assertBranchAlignment(path, integrationBranch);
   if (!alignment.ok) {
     throw new CoordinationError(
       "coordination.integration-diverged",
-      `the integration checkout ${path} is not on the registered integration branch (${summarize(alignment.violations)})`,
-      { workflow_id: workflowId, path, expected: integrationBranch },
+      "The integration checkout is not on the registered integration branch; inspect it with mstar worktree check.",
+      {
+        violations: alignment.violations,
+        workflow_id: workflowId,
+        path,
+        expected: integrationBranch,
+      },
     );
   }
   return { worktree: { path, branch: integrationBranch } };
@@ -697,7 +707,7 @@ function refusalCodeOf(error: unknown): string | undefined {
 function declaredRecoveryOf(error: unknown): RecoveryDetails | undefined {
   if (!(error instanceof Error) || !("details" in error)) return undefined;
   const details: unknown = error.details;
-  const recovery = isPlainObject(details) ? details.recovery : undefined;
+  const recovery = isPlainObject(details) ? details.recoveryFacts : undefined;
   if (!isPlainObject(recovery)) return undefined;
   // Boundary cast: the sidecar is written by this engine's own recovery helpers
   // (`unresolvedRecovery` / `withRecoveryDetails`), and the guard above proves it
@@ -779,7 +789,7 @@ function prerequisiteCause(
     needed: problem.needed,
     available_work: problem.availableWork,
     commit_state: "none",
-    recovery: unresolvedRecovery({
+    recoveryFacts: unresolvedRecovery({
       target: { workflowId: input.workflowId },
       unresolved: [problem],
     }),
@@ -831,7 +841,7 @@ function workflowConflictCause(
     current_facts: problem.currentFacts,
     needed: problem.needed,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({
+    recoveryFacts: unresolvedRecovery({
       target: { workflowId: input.workflowId },
       unresolved: [problem],
     }),
@@ -896,13 +906,14 @@ function unresolvedWorkflowAddress(caller: ExecutionCaller): CoordinationError {
       "the addressed workflow transition - no target was guessed, so no workflow row, session or CAS token was read for it",
     availableWork: ["address the workflow explicitly (workflowId)", "coordinate the lifecycle this transition belongs to"],
   };
-  return new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+  return new CoordinationError(code, "This transition addresses no workflow; inspect registered workflows with mstar status validate.", {
+    needed: problem.needed,
     component: problem.component,
     path: problem.path,
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,
-    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
+    recoveryFacts: unresolvedRecovery({ target: {}, unresolved: [problem] }),
   });
 }
 
@@ -1191,14 +1202,14 @@ function applyWorkflowOperation(input: {
 /** The pre-transaction evidence a transition must have read (an internal invariant). */
 function requireCompassEvidence(evidence: WorkflowEvidence): { compass: CompassEvidence; probes: PhaseGateOptions } {
   if (evidence.compass === undefined) {
-    throw invalidWorkflowInput("the phase transition ran without its pinned compass evidence");
+    throw invalidWorkflowInput("The phase transition ran without its pinned compass evidence; retry through mstar workflow phase.");
   }
   return { compass: evidence.compass, probes: evidence.probes ?? {} };
 }
 
 function requireWorktreeEvidence(evidence: WorkflowEvidence): { worktree: { path: string; branch: string } } {
   if (evidence.worktree === undefined) {
-    throw invalidWorkflowInput("the integration-worktree transition ran without its validated checkout");
+    throw invalidWorkflowInput("The integration-worktree transition ran without a validated checkout; retry through mstar workflow integration-worktree.");
   }
   return { worktree: evidence.worktree };
 }
@@ -1208,8 +1219,11 @@ function assertHeaderValid(workflowId: string, header: Record<string, unknown>):
   const gate = validateWorkflowSnapshot({ ...header, plans: [] });
   if (!gate.ok) {
     throw invalidWorkflowTransition(
-      `the workflow ${workflowId} header this transition would store does not validate (${summarize(gate.violations)})`,
-      { workflow_id: workflowId },
+      "The workflow header this transition would store is invalid; inspect the workflow with mstar status validate.",
+      {
+        violations: gate.violations,
+        workflow_id: workflowId,
+      },
     );
   }
 }
@@ -1316,17 +1330,21 @@ function applyLifecycleTransition(input: {
     const notDone = rows.filter((row) => rowStatusOf(row) !== "Done");
     if (notDone.length > 0) {
       throw invalidWorkflowTransition(
-        `workflow ${workflowId} cannot complete: every owned plan row must be Done \u2014 ${notDone
-          .map((row) => `${String(row.id)} (${rowStatusOf(row) || "no status"})`)
-          .join(", ")}`,
-        { workflow_id: workflowId },
+        "The workflow cannot complete while plan rows are not Done; inspect the rows with mstar plan show.",
+        {
+          not_done: notDone.map((row) => `${String(row.id)} (${rowStatusOf(row) || "no status"})`),
+          workflow_id: workflowId,
+        },
       );
     }
     const violations = consultDeliveryEvidence({ ...(header as unknown as WorkflowSnapshot), plans: [...rows] });
     if (violations.length > 0) {
       throw invalidWorkflowTransition(
-        `workflow ${workflowId} cannot complete: ${summarize(violations)}`,
-        { workflow_id: workflowId },
+        "The workflow cannot complete; inspect the workflow with mstar status validate.",
+        {
+          violations: violations.map((entry) => entry.message),
+          workflow_id: workflowId,
+        },
       );
     }
   }
@@ -1448,7 +1466,9 @@ function applyDeliveryEvidence(input: {
   }
   const shape = deliveryEvidenceViolations(delivery, "the delivery patch");
   if (shape.length > 0) {
-    throw invalidWorkflowInput(`the delivery patch does not validate (${summarize(shape)})`);
+    throw invalidWorkflowInput("The delivery patch does not validate; inspect the delivery contract with mstar schema.", {
+      violations: shape.map((entry) => entry.message),
+    });
   }
   const stored = (isPlainObject(header.delivery) ? header.delivery : {}) as Record<string, unknown>;
   const incomingPr = isPlainObject(delivery.pr) ? delivery.pr : undefined;
@@ -1456,8 +1476,12 @@ function applyDeliveryEvidence(input: {
   if (recordedPr !== undefined && incomingPr !== undefined &&
       (recordedPr.repo !== incomingPr.repo || recordedPr.head !== incomingPr.head || recordedPr.target !== incomingPr.target)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} records a different PR identity; use the registered delivery identity or a separate workflow`,
-      { workflow_id: workflowId },
+      "The workflow records a different PR identity; use the registered delivery identity, then inspect the workflow with mstar status validate.",
+      {
+        recorded_pr: recordedPr ?? null,
+        incoming_pr: incomingPr ?? null,
+        workflow_id: workflowId,
+      },
     );
   }
   const branch = isPlainObject(header.branch) ? header.branch : {};
@@ -1496,7 +1520,7 @@ function applyDeliveryEvidence(input: {
     if (changesAccepted) {
       throw new CoordinationError(
         "coordination.completion-frozen",
-        `workflow ${workflowId} is Done against its recorded completion policy/reference; edit the referenced document normally; a different completed intent uses its own workflow`,
+        "The workflow already has accepted completion evidence; its recorded fulfilment cannot be replaced. Inspect the workflow with mstar status validate.",
         { workflow_id: workflowId },
       );
     }
@@ -1590,17 +1614,17 @@ export async function recoverExecutionCoordinator(
   }
   const workflowId = caller.workflowId;
   if (!isNonEmptyString(workflowId) || !isNonEmptyString(caller.sessionId)) {
-    throw invalidWorkflowInput("recovering a coordinator needs a caller with a non-empty session and workflow identity");
+    throw invalidWorkflowInput("Coordinator recovery requires caller session and workflow identities; inspect the workflow with mstar status validate.");
   }
   const operationId = assertOperationId(input?.operationId);
   const reason = input?.reason;
   if (!isNonEmptyString(reason)) {
-    throw invalidWorkflowInput("recovering a coordinator needs the non-empty reason it is recorded with");
+    throw invalidWorkflowInput("Coordinator recovery requires a non-empty reason; the supported coordinator-recovery renewal needs that reason with its attestation, then inspect the workflow with mstar status validate.");
   }
   const priorSessionId = input?.priorSessionId;
   if (priorSessionId !== null && !isNonEmptyString(priorSessionId)) {
     throw invalidWorkflowInput(
-      "recovering a coordinator needs priorSessionId: the session identity it replaces, or null only when the workflow records no coordinator at all",
+      "Coordinator recovery requires the prior session id to name the holder it replaces, or null only when no coordinator is recorded; inspect the workflow with mstar status validate.",
     );
   }
   // The operator's authorization is a DOCUMENT here, exactly as at the
@@ -1681,8 +1705,11 @@ export async function recoverExecutionCoordinator(
       if (prior === undefined) {
         throw new CoordinationError(
           "coordination.session-not-found",
-          `workflow ${workflowId} records no coordinator session ${priorSessionId} to recover from`,
-          { workflow_id: workflowId },
+          "The workflow records no coordinator session to recover from; inspect the workflow with mstar status validate.",
+          {
+            prior_session_id: priorSessionId,
+            workflow_id: workflowId,
+          },
         );
       }
       // A LIVE holder is never replaced by another name: the recovery identity
@@ -1826,13 +1853,7 @@ function recoverableIntegrationClaim(
   if (cause === null) return claim;
   if (!input.required) return null;
   throw invalidWorkflowTransition(
-    `workflow ${workflowId} cannot renew predecessor recovery: ${cause}. The current binding and claim are unchanged. ` +
-      `Read this workflow's actual claim and plan scope. With no claim, resume ordinary plan operations using the current binding; ` +
-      `a current or foreign holder finishes its own attempt through plan complete. Correct this row's source scope through ` +
-      `plan prepare when needed, or retry mstar session recover with a new operation id and full stop evidence whose instant ` +
-      `covers the named predecessor's claim and is not in the future. For an absent claim plan, use the documented store execution ` +
-      `restore-preview --backup <valid-pre-corruption-backup> --out <preview>, then store execution restore --preview <preview> ` +
-      `--operator <name> --authorization <ref>; do not hand-edit state.`,
+    "The workflow cannot renew predecessor recovery; the current binding and claim are unchanged. A renewal requires a fresh operation id and complete stop evidence whose instant covers the named predecessor's claim and is not in the future. Inspect the claim and scope with mstar status validate; for an absent claim plan, inspect the backup with mstar store execution restore-preview before any restore.",
     {
       workflow_id: workflowId, session_id: callerId, prior_session_id: priorSessionId,
       claim: claim ?? null, registered_source: isPlainObject(metadata) ? metadata.working_branch ?? null : null,

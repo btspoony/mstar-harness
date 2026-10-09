@@ -429,7 +429,7 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
 
     const lease = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], corrupt);
     expect(lease.exitCode).toBe(1);
-    expect(jsonOf(lease).code).toBe("store.corrupt");
+    expect(jsonOf(lease)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
 
     const status = runCli(["status", "validate"], corrupt);
     expect(status.exitCode).toBe(1);
@@ -514,10 +514,10 @@ describe("execution-cross-domain", () => {
     expect(jsonOf(status).code).toBe("store.corrupt");
     const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
     expect(merge.exitCode).toBe(1);
-    expect(jsonOf(merge).code).toBe("store.corrupt");
+    expect(jsonOf(merge)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(fixture)], fixture);
     expect(gate.exitCode).toBe(1);
-    expect(jsonOf(gate).code).toBe("store.corrupt");
+    expect(jsonOf(gate)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
 
     // The dashboard's projection boundary is not an authority on an unreadable
     // store either -- for the execution view or any other.

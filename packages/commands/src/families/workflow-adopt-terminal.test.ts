@@ -119,7 +119,7 @@ test("fresh adoption operation against listed adopted revision gets the exact al
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command already has a terminal-adoption record; read status validate and use the recorded result",
-    "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed.",
+    "Read mstar status validate; the existing terminal-adoption record is already the close receipt.",
   );
   const after = await executeCommand("status.validate", {}, invocation(root));
   expect(after.status).toBe("ok");
@@ -137,7 +137,7 @@ test("inactive-authority refusal names the supported status and store-upgrade re
   expectAdoptionRefusal(
     refused,
     "terminal adoption requires an active execution authority",
-    "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
+    "Run mstar status validate to inspect the harness, then mstar store upgrade --operator <name> to import legacy execution state and activate the execution authority before retrying adoption.",
   );
 });
 test("workflow adopt-terminal refusal keeps exact engine message first and names the recovery", async () => {
@@ -148,7 +148,7 @@ test("workflow adopt-terminal refusal keeps exact engine message first and names
   expectAdoptionRefusal(
     refused,
     "[execution.header-revision-conflict] workflow wf-command header revision is 1, not expected revision 2; re-read status validate and retry with its listed revision",
-    "Run `mstar status validate`, then retry `mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>`.",
+    "Run mstar status validate, then retry mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>.",
   );
 });
 test("registered-row refusal advertises the existing close path", async () => {
@@ -172,7 +172,7 @@ test("registered-row refusal advertises the existing close path", async () => {
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command is already registered; finish its lifecycle through mstar status workflow-close",
-    "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding.",
+    "Run mstar status validate, then close the existing registered workflow with mstar status workflow-close.",
   );
   const close = await executeCommand("status.workflow-close", {
     workflow: "wf-command", harness, reason: "restating existing terminal lifecycle", operation: "registered-close",
@@ -193,10 +193,10 @@ test("ACTIVE-session refusal routes the existing holder to its close authority",
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command has an ACTIVE coordinator session at the current epoch; no supported exit exists for a terminal header holding an ACTIVE session at the current epoch",
-    "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    "No supported exit exists for this terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.",
   );
   expectDeadEndMarkers(
-    "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    "No supported exit exists for this terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.",
     true,
   );
 });
@@ -211,10 +211,10 @@ test("nonterminal-header refusal routes through execution bind and normal close"
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command is not terminal; no supported exit exists for a non-terminal header without registry membership",
-    "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    "No supported exit exists for this non-terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.",
   );
   expectDeadEndMarkers(
-    "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    "No supported exit exists for this non-terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.",
     true,
   );
 });
@@ -229,10 +229,10 @@ test("missing terminal-reason refusal states the dead end and issue-capture rout
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason",
-    "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header.",
+    "No supported exit exists for this stopped or failed header; preserve the header and capture the residual with mstar issue add --operation-id <id> --actor project-manager.",
   );
   expectDeadEndMarkers(
-    "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header.",
+    "No supported exit exists for this stopped or failed header; preserve the header and capture the residual with mstar issue add --operation-id <id> --actor project-manager.",
     false,
   );
 });
@@ -246,6 +246,6 @@ test("missing-header refusal directs to new registration, not adoption", async (
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command has no terminal header to adopt; register the workflow through the supported workflow registration route",
-    "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection.",
+    "Create a new workflow through mstar workflow register with a valid catalog selection.",
   );
 });

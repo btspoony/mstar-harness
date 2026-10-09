@@ -56,6 +56,30 @@ describe("issue command family", () => {
     if (page.status === "ok") expect((page.data as { items: unknown[] }).items).toHaveLength(0);
   });
 
+  test("non-reopen refusals carry operation-accurate recovery, never reopen-specific guidance", async () => {
+    const context = await testContext();
+    // A capture whose payload names individual fields: the recovery must point
+    // at those fields, not at a `payload.reason` that add does not accept.
+    const invalid = await definition("issue.add").execute({ payload: { title: "only a title" }, operationId: "bad-capture-fields", actor: "project-manager" }, context);
+    expect(invalid.status).toBe("refused");
+    const invalidRecovery = invalid.status === "refused" ? invalid.details?.recovery : undefined;
+    expect(String(invalidRecovery)).toContain("Correct the payload field(s) named in this refusal");
+    expect(String(invalidRecovery)).not.toContain("payload.reason");
+    // A malformed --payload string (no field paths): guidance is about parsing,
+    // and never directs the caller to show an issue that was never created.
+    const malformed = await definition("issue.add").execute({ payload: "{not json", operationId: "bad-capture-json", actor: "project-manager" }, context);
+    expect(malformed.status).toBe("refused");
+    const malformedRecovery = malformed.status === "refused" ? malformed.details?.recovery : undefined;
+    expect(String(malformedRecovery)).toContain("parses as a JSON object");
+    expect(String(malformedRecovery)).not.toContain("Run mstar issue show");
+    // An unauthorized seat keeps its actor-scoped guidance rather than reopen prose.
+    const scoped = await definition("issue.add").execute({ payload: capture(), operationId: "bad-capture-seat", actor: "qc-specialist" }, context);
+    expect(scoped.status).toBe("refused");
+    const scopedRecovery = scoped.status === "refused" ? scoped.details?.recovery : undefined;
+    expect(String(scopedRecovery)).toContain("As an authorized actor");
+    expect(String(scopedRecovery)).not.toContain("payload.reason");
+  });
+
   test("reads list, show and export data from the same store", async () => {
     const context = await testContext();
     const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-1", actor: "project-manager" }, context);
@@ -98,7 +122,7 @@ describe("issue command family", () => {
       id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
       operationId: "stale-triage", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
-    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`);
+    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.`);
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
@@ -114,7 +138,7 @@ describe("issue command family", () => {
       operationId: "stale-close", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
     expect(closed.status === "refused" ? closed.details?.recovery : undefined).toBe(
-      `Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`,
+      `Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.`,
     );
   });
 

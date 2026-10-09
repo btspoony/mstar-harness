@@ -9,7 +9,7 @@
  *    acquired `ExecutionIdentity` — a role string or session reference is a
  *    selector, never authority. `RecoveryDetails` is a SIDECAR on existing
  *    domain results: a successful engine value exposes `recovery`, a domain
- *    refusal exposes the same object under `error.details.recovery`.
+ *    refusal exposes the same object under `error.details.recoveryFacts`.
  *    `CommandEnvelope` remains the only CLI/MCP transport envelope; nothing
  *    here is a second one (contract § One resolver path, two existing
  *    authorities).
@@ -235,7 +235,7 @@ export type TargetResolution =
 /**
  * The recovery sidecar of a resolution that withheld its effect, in the frozen
  * `RecoveryDetails` shape: a refusal carries this object under
- * `error.details.recovery`, and it names every unresolved component, the facts
+ * `error.details.recoveryFacts`, and it names every unresolved component, the facts
  * that were resolved instead, and that nothing was committed.
  */
 export function unresolvedRecovery(input: {

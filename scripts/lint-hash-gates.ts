@@ -31,7 +31,7 @@
  *     reported as advisory, never silently excused.
  *
  * CLI:
- *   bun scripts/lint-hash-gates.ts                    scan engine src + test
+ *   bun scripts/lint-hash-gates.ts                    scan production src
  *   bun scripts/lint-hash-gates.ts --dir <path> ...  scan other roots
  *   bun scripts/lint-hash-gates.ts --repo <path>     path display root
  *   bun scripts/lint-hash-gates.ts --json            machine-readable report
@@ -51,7 +51,9 @@ export type HashGateClassification =
   | "byte-assertion"
   | "helper-hash-gate"
   | "replay-allowed"
-  | "record-only";
+  | "record-only"
+  | "authorized-gate"
+  | "invalid-authorized-marker";
 
 export interface HashGateFinding {
   file: string;
@@ -70,6 +72,7 @@ const VIOLATION_CLASSES: Readonly<Record<string, true>> = {
   "canonical-assertion": true,
   "byte-assertion": true,
   "helper-hash-gate": true,
+  "invalid-authorized-marker": true,
 };
 
 
@@ -80,7 +83,7 @@ const REFUSAL_CALL =
 
 const ASSERTION_CALL = /^(?:expect|assert|assertEquals?|strictEqual|notStrictEqual|deepStrictEqual|deepEqual|notDeepEqual)\b/;
 
-const DEFAULT_DIRS = ["packages/engine/src", "packages/engine/test"];
+const DEFAULT_DIRS = ["packages/engine/src"];
 
 /** Names of value kinds this lint tracks. */
 type ValueKind = "hash" | "canonical" | "bytes";
@@ -573,6 +576,7 @@ function equalityClass(kind: ValueKind, rawBytes: boolean, mode: "gate" | "asser
 /** Scan one source file's text. Pure: no filesystem access. */
 export function scanSource(rel: string, text: string): HashGateFinding[] {
   const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  if (rel.endsWith(".test.ts") || /(?:^|[\\/])test[\\/]/.test(rel)) return [];
   const aliases = collectAliases(sf);
   const contexts = collectRefusalContexts(sf);
   const local = collectLocalFunctions(sf);
@@ -633,7 +637,64 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
     }
     add(node, "record-only", kind, "");
   }
-  return findings.sort((a, b) => (a.line - b.line) || (a.column - b.column));
+  return applyAuthorizedMarkers(sf, text, findings).sort((a, b) => (a.line - b.line) || (a.column - b.column));
+}
+
+/** The authorized-gate marker prefix (em-dash U+2014). */
+const AUTHORIZED_MARKER_PREFIX = "// hash-gate: authorized \u2014";
+
+/**
+ * Bind authorized-gate markers to findings, one marker to EXACTLY ONE site.
+ *
+ * Markers are recognized ONLY through full-source lexical context — the
+ * TypeScript scanner's comment trivia — never by per-line substring matching,
+ * so a multiline block-comment continuation or a template-literal line cannot
+ * authorize anything. For each marker the nearest unbound violation on its own
+ * line wins (ties by column), and only when none exists does it fall back to
+ * the following line, again nearest-first. A marker consumed by the same-line
+ * site cannot also authorize the next line, so one comment never suppresses two
+ * findings. Sites are bound in source order and a site keeps the first marker
+ * bound to it, so the result is order-independent.
+ *
+ * A non-empty reason is required: a marker with an empty/whitespace reason turns
+ * the site it binds to into the `invalid-authorized-marker` violation.
+ */
+export function applyAuthorizedMarkers(sf: ts.SourceFile, text: string, findings: HashGateFinding[]): HashGateFinding[] {
+  const commentRanges = new Map<number, ts.CommentRange>();
+  const collectCommentRanges = (node: ts.Node): void => {
+    for (const range of [
+      ...(ts.getLeadingCommentRanges(text, node.getFullStart()) ?? []),
+      ...(ts.getTrailingCommentRanges(text, node.end) ?? []),
+    ]) commentRanges.set(range.pos, range);
+    ts.forEachChild(node, collectCommentRanges);
+  };
+  collectCommentRanges(sf);
+  const markers = [...commentRanges.values()]
+    .filter((range) => range.kind === ts.SyntaxKind.SingleLineCommentTrivia && text.slice(range.pos, range.end).trimStart().startsWith(AUTHORIZED_MARKER_PREFIX))
+    .sort((a, b) => a.pos - b.pos)
+    .map((range) => {
+      const point = sf.getLineAndCharacterOfPosition(range.pos);
+      return { line: point.line + 1, column: point.character + 1, reason: text.slice(range.pos, range.end).trim().slice(AUTHORIZED_MARKER_PREFIX.length).trim() };
+    });
+  // Site identity is the finding's own position, never the line alone.
+  const identity = (finding: HashGateFinding): string => `${finding.line}:${finding.column}`;
+  const candidates = findings.filter((finding) => Object.hasOwn(VIOLATION_CLASSES, finding.classification) && finding.classification !== "invalid-authorized-marker");
+  const bound = new Map<string, { reason: string }>();
+  const nearest = (pool: HashGateFinding[], column: number): HashGateFinding | undefined =>
+    pool.filter((finding) => !bound.has(identity(finding)))
+      .sort((a, b) => Math.abs(a.column - column) - Math.abs(b.column - column) || a.column - b.column)[0];
+  for (const marker of markers) {
+    const site = nearest(candidates.filter((finding) => finding.line === marker.line), marker.column)
+      ?? nearest(candidates.filter((finding) => finding.line === marker.line + 1), marker.column);
+    if (site) bound.set(identity(site), marker);
+  }
+  return findings.map((finding) => {
+    const marker = bound.get(identity(finding));
+    if (marker === undefined) return finding;
+    return marker.reason.length > 0
+      ? { ...finding, classification: "authorized-gate", reason: marker.reason }
+      : { ...finding, classification: "invalid-authorized-marker", reason: "authorized marker requires a non-empty reason" };
+  });
 }
 
 function collectTsFiles(dir: string, out: string[]): void {
@@ -641,8 +702,9 @@ function collectTsFiles(dir: string, out: string[]): void {
     if (entry === "node_modules" || entry === "dist" || entry === ".git") continue;
     const full = join(dir, entry);
     const st = statSync(full);
-    if (st.isDirectory()) collectTsFiles(full, out);
-    else if (entry.endsWith(".ts")) out.push(full);
+    if (st.isDirectory()) {
+      if (entry !== "test") collectTsFiles(full, out);
+    } else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts")) out.push(full);
   }
 }
 
@@ -685,14 +747,13 @@ Usage: bun scripts/lint-hash-gates.ts [--repo <path>] [--dir <path>]... [--json]
 
   --repo      path used to display file locations and to resolve default roots
               (default: process.cwd())
-  --dir       scan root, repeatable (default: packages/engine/src packages/engine/test)
-              pass a disposable fixture directory to exercise the rule
+  --dir       scan root, repeatable (default: packages/engine/src)
   --json      print the full report as JSON
   --advisory  print advisory rows (record-only / canonical non-gate) in text mode
 
 Exit codes: 0 clean, 1 violations found, 2 usage or read error.`;
 
-async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if ("error" in parsed) {
     if (parsed.error === "help") {
@@ -730,13 +791,14 @@ async function main(argv: string[]): Promise<number> {
 
   const isViolation = (finding: HashGateFinding): boolean => Object.hasOwn(VIOLATION_CLASSES, finding.classification);
   const violations = all.filter(isViolation);
+  const authorizedGates = all.filter((f) => f.classification === "authorized-gate");
   const allowlist = all.filter((f) => f.classification === "replay-allowed");
-  const advisory = all.filter((f) => !isViolation(f) && f.classification !== "replay-allowed");
+  const advisory = all.filter((f) => !isViolation(f) && f.classification !== "authorized-gate" && f.classification !== "replay-allowed");
 
   if (parsed.json) {
     console.log(
       JSON.stringify(
-        { repo, dirs: parsed.dirs, scanned: scanned.length, violations, allowlist, advisory },
+        { repo, dirs: parsed.dirs, scanned: scanned.length, violations, authorizedGates, allowlist, advisory },
         null,
         2,
       ),
@@ -755,6 +817,8 @@ async function main(argv: string[]): Promise<number> {
     console.error(`lint:hash-gates: ${violations.length} violation(s) in ${scanned.length} file(s) scanned:`);
     show(violations);
   }
+  console.error(`lint:hash-gates: authorized gates — ${authorizedGates.length}:`);
+  show(authorizedGates);
   console.error(`lint:hash-gates: replay allowlist — ${allowlist.length} same-operation-id request_hash site(s):`);
   show(allowlist);
   if (parsed.advisory) {

@@ -1016,7 +1016,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     // The token of the superseded generation is refused with the typed
     // re-resolution report: nothing is written and no receipt is replayed from
     // the old epoch.
-    let stale: { code?: unknown; details?: { recovery?: { unresolved?: Array<{ component?: unknown; path?: unknown; code?: unknown }> } } } = {};
+    let stale: { code?: unknown; details?: { recoveryFacts?: { unresolved?: Array<{ component?: unknown; path?: unknown; code?: unknown }> } } } = {};
     try {
       await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...request, expected: fixture.rootToken });
       throw new Error("expected a refusal");
@@ -1024,7 +1024,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
       stale = error as typeof stale;
     }
     expect(stale.code).toBe("store.stale-epoch");
-    expect(stale.details?.recovery?.unresolved?.[0]).toMatchObject({ component: "authority", path: "epoch", code: "store.stale-epoch" });
+    expect(stale.details?.recoveryFacts?.unresolved?.[0]).toMatchObject({ component: "authority", path: "epoch", code: "store.stale-epoch" });
     expect(await footprint(fixture.context)).toEqual(published);
 
     // Nor is the old-epoch receipt served under the new generation: the same

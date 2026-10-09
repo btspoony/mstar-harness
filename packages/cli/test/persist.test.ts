@@ -783,7 +783,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
 
       const del = runCli(["persist", "delete", "snapshot", "--key", "wf-1"], { env: harnessEnv(dir) });
       expect(del.exitCode).toBe(1);
-      expect(message(del)).toContain("is a protected coordination document (snapshot)");
+      expect(message(del)).toContain("Raw writes are refused for protected coordination documents.");
       expect(message(del)).toContain("refused");
       expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toEqual(SNAPSHOT_PAYLOAD);
     });
@@ -795,7 +795,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
         env: harnessEnv(dir),
       });
       expect(del.exitCode).toBe(1);
-      expect(message(del)).toContain("is a protected coordination document (snapshot)");
+      expect(message(del)).toContain("Raw writes are refused for protected coordination documents.");
     });
   });
 
@@ -804,7 +804,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       writePayload(dir, "status.json", STATUS_PAYLOAD);
       const del = runCli(["persist", "delete", "status", "--key", "root"], { env: harnessEnv(dir) });
       expect(del.exitCode).toBe(1);
-      expect(message(del)).toContain("is a protected coordination document (root)");
+      expect(message(del)).toContain("Raw writes are refused for protected coordination documents.");
       expect(JSON.parse(readFileSync(join(dir, "status.json"), "utf8"))).toEqual(STATUS_PAYLOAD);
     });
   });
@@ -894,7 +894,7 @@ describe("mstar persist coordinated-writer — identity and path boundaries", ()
       const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
       const put = runCli(["persist", "write", "json", "--key", join(dir, "status.json"), "--file", payloadFile], { env: harnessEnv(dir) },);
       expect(put.exitCode).toBe(1);
-      expect(message(put)).toContain("is a protected coordination document (root)");
+      expect(message(put)).toContain("Raw writes are refused for protected coordination documents.");
       expect(existsSync(join(dir, "status.json"))).toBe(false);
     });
   });

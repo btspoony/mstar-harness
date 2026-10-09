@@ -1367,7 +1367,8 @@ describe("migration target existence behavior (archive / notes)", () => {
       const failure = await applyMigratePlan(plan).then(() => null, (error: unknown) => error);
       expect(failure).toBeInstanceOf(CoordinationError);
       expect((failure as CoordinationError).code).toBe("coordination.store");
-      expect((failure as CoordinationError).message).toContain(archivePath);
+      expect((failure as CoordinationError).message).toContain("Cannot write the migration target. Inspect the reported path and filesystem cause, then correct the target filesystem state before retrying.");
+      expect((failure as CoordinationError).details).toMatchObject({ path: archivePath });
 
       // Refuse-before-commit is preserved: the raw error never escaped and
       // the root schema version was not advanced.

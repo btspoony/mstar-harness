@@ -34,8 +34,8 @@ function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "status.ok", exitCode: 0, data };
 }
 
-function refused(command: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+function refused(command: string, code: string, message: string, details?: Record<string, unknown>, recovery?: string): CommandEnvelope<never> {
+  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }), recovery });
 }
 
 function invalid(command: string, error: z.ZodError): CommandEnvelope<never> {
@@ -110,7 +110,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           const legacyUpgradeDetails: { entry: string; limitation?: string } = { entry: legacyUpgradeEntry };
           if (defaultTarget) {
             const harnessDir = executionHarness(context);
-            if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
+            if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold to create the harness directory, then rerun mstar status validate.");
             try {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {
@@ -132,17 +132,17 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
                   ? error.details
                   : {};
-              return refused("status.validate", code, `${cause} Self-check recovery: ${recovery}`, {
+              return refused("status.validate", code || "status.authority-unreadable", `${cause} Self-check recovery: ${recovery}`, {
                 ...originalDetails,
                 state: "unreadable",
                 selfCheck: { couldNotRead: cause, recovery },
-              });
+              }, "Correct the store or runtime problem named in the self-check recovery, then run mstar status validate.");
             }
             target = path.join(harnessDir, "status.json");
           } else {
             target = path.resolve(context.cwd, target!);
             if (path.basename(target) === "status.json" && (await resolveExecutionReadRoute({ harnessDir: path.dirname(target) })) === "execution") {
-              return refused("status.validate", "status.execution-authority-active", "The active execution authority must be validated through its authority reader");
+              return refused("status.validate", "status.execution-authority-active", "The active execution authority must be validated through its authority reader", undefined, "Run mstar status validate to read the active execution authority instead of this status file.");
             }
           }
           if (!existsSync(target)) {
@@ -155,9 +155,9 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                   couldNotRead: "legacy status register is missing",
                   recovery: "Run `mstar store upgrade --operator <name>` to create or upgrade the store, import recognizable workflows, and report skipped items without moving their source files.",
                 },
-              });
+              }, "Run mstar store upgrade --operator <name> to create the store, import recognizable workflows, and report skipped items, then rerun mstar status validate.");
             }
-            return refused("status.validate", "status.file-not-found", `status file not found: ${target}`);
+            return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, undefined, "Restore or create the status file at the reported path, then run mstar status validate.");
           }
           if (path.basename(target) === WORKFLOW_SNAPSHOT_FILE) {
             const read = readWorkflowSnapshot(path.dirname(target));
@@ -169,9 +169,10 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             : { path: target, violations: gate.ok ? [] : gate.violations };
           return gate.ok
             ? ok("status.validate", data)
-            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { ...data });
+            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { ...data }, "Resolve each status validation violation reported in the details, then run mstar status validate.");
         } catch (error) {
-          return refused("status.validate", engineCode(error, "status.validation-failed"), messageOf(error));
+          const code = engineCode(error, "status.validation-failed");
+          return refused("status.validate", code || "status.validation-failed", messageOf(error), undefined, "Correct the reported status validation problem, then run mstar status validate.");
         }
       },
     }),
@@ -217,11 +218,11 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           });
         }
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) {
-          return refused("status.workflow-close", "workflow.invalid-id", `invalid workflow id ${JSON.stringify(workflow)}`);
+          return refused("status.workflow-close", "workflow.invalid-id", `invalid workflow id ${JSON.stringify(workflow)}`, undefined, "Rerun mstar status workflow-close with a valid registered workflow id.");
         }
         try {
           const harnessDir = executionHarness(context, harness);
-          if (harnessDir === null) return refused("status.workflow-close", "status.harness-not-found", "Harness directory not found");
+          if (harnessDir === null) return refused("status.workflow-close", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold to create the harness directory, then rerun the close.");
           const activeFields = [parsed.data.sessionRef, parsed.data.expect, parsed.data.operation];
           const activeRequested = activeFields.some((field) => field !== undefined);
           const active = (await resolveExecutionReadRoute({ harnessDir })) === "execution";
@@ -237,11 +238,13 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 "status.workflow-close",
                 "coordination.identity-missing",
                 "This close needs an acquired coordinator identity: launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`.",
+                undefined,
+                "Acquire a coordinator identity for this workflow, then rerun mstar status workflow-close.",
               );
             }
             const acquired = context.executionIdentity;
             if (acquired !== undefined && (acquired.workflowId !== workflow || acquired.role !== "coordinator")) {
-              return refused("status.workflow-close", "coordination.identity-mismatch", "acquired caller identity does not address this workflow's coordinator seat");
+              return refused("status.workflow-close", "coordination.identity-mismatch", "acquired caller identity does not address this workflow's coordinator seat", undefined, "Rerun mstar status workflow-close after acquiring the coordinator identity that addresses this workflow.");
             }
             const executionContext = executionContextFor(
               { harnessDir },
@@ -249,7 +252,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             );
             const ref = parsed.data.sessionRef === undefined ? undefined : decodeExecutionSessionRef(parsed.data.sessionRef);
             if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator")) {
-              return refused("status.workflow-close", "coordination.identity-mismatch", "sessionRef must address this workflow's coordinator seat");
+              return refused("status.workflow-close", "coordination.identity-mismatch", "sessionRef must address this workflow's coordinator seat", undefined, "Rerun mstar status workflow-close after acquiring the coordinator identity that owns this sessionRef.");
             }
             const receipt = await mutateExecutionWorkflow(executionContext, {
               workflowId: workflow,
@@ -266,12 +269,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           });
           if (!rootResolution.ok) throw Object.assign(new Error(rootResolution.problem.needed), {
             code: rootResolution.problem.code,
-            details: { recovery: { unresolved: [rootResolution.problem] } },
+            details: { recoveryFacts: { unresolved: [rootResolution.problem] } },
           });
           const target = resolveIntentTarget({ root: rootResolution.root, selection: { workflowId: workflow } });
           if (!target.ok) throw Object.assign(new Error(target.problem.needed), {
             code: target.problem.code,
-            details: { recovery: { unresolved: [target.problem] } },
+            details: { recoveryFacts: { unresolved: [target.problem] } },
           });
           setArtifactStore(createFsStore(rootResolution.root));
           const closed = await closeFileWorkflow({
@@ -283,12 +286,21 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           return ok("status.workflow-close", { ...closed, statusFile: path.join(rootResolution.root, "status.json") });
         } catch (error) {
           // A refused close reports the engine's own typed cause: the field
-          // facts and the `recovery` sidecar travel with the code and message.
+          // facts travel with the code and message, and the intent-resolution
+          // problems travel under `details.recoveryFacts` so they never collide
+          // with the envelope's own `recovery` string below.
+          const code = engineCode(error, "workflow.close-refused");
           const details =
             error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
               ? error.details
               : undefined;
-          return refused("status.workflow-close", engineCode(error, "workflow.close-refused"), messageOf(error), details);
+          if (code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable") {
+            return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Select the control root that holds the workflow, then rerun mstar status workflow-close.");
+          }
+          if (code === "coordination.invalid-input" || code === "coordination.workflow-not-found" || code === "coordination.plan-not-found") {
+            return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Select a workflow and plan this control root holds, then rerun mstar status workflow-close.");
+          }
+          return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Correct the reported workflow lifecycle problem, then rerun mstar status workflow-close.");
         }
       },
     }),
@@ -301,6 +313,8 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           "status.archive-residuals",
           "status.verb-retired",
           "status archive-residuals: removed — findings are issues in {HARNESS_DIR}/store.db; close one with `mstar plan issue-close` (plan-scoped) or `mstar issue close|waive|duplicate|supersede` (unscoped) instead",
+          undefined,
+          "Close the finding with mstar plan issue-close, then list what remains with mstar issue list.",
         );
       },
     }),
@@ -319,9 +333,10 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         try {
           const harnessDir = executionHarness(context, parsed.data.harness) ?? parsed.data.harness ?? context.cwd;
           const gate = await findingsCleanupGate({ harnessDir }, parsed.data.planId, parsed.data.mode ? { mode: parsed.data.mode } : undefined);
-          return gate.ok ? ok("status.findings-cleanup", { planId: parsed.data.planId, violations: [] }) : refused("status.findings-cleanup", gate.violations[0]?.code ?? "findings.cleanup-refused", "Findings cleanup gate failed", { violations: gate.violations });
+          return gate.ok ? ok("status.findings-cleanup", { planId: parsed.data.planId, violations: [] }) : refused("status.findings-cleanup", gate.violations[0]?.code ?? "findings.cleanup-refused", "Findings cleanup gate failed", { violations: gate.violations }, "Resolve each reported findings-cleanup violation, then rerun mstar status findings-cleanup <plan-id>.");
         } catch (error) {
-          return refused("status.findings-cleanup", engineCode(error, "findings.cleanup-refused"), messageOf(error));
+          const code = engineCode(error, "findings.cleanup-refused");
+          return refused("status.findings-cleanup", code || "findings.cleanup-refused", messageOf(error), undefined, "Correct the reported findings-cleanup problem, then rerun mstar status findings-cleanup <plan-id>.");
         }
       },
     }),
@@ -348,7 +363,8 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           }
           return ok("status.tech-debt", { total_open: totalOpen, by_severity: bySeverity, by_project: Object.fromEntries(Object.entries(byProject).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
         } catch (error) {
-          return refused("status.tech-debt", engineCode(error, "issue.store-refused"), messageOf(error));
+          const code = engineCode(error, "issue.store-refused");
+          return refused("status.tech-debt", code || "issue.store-refused", messageOf(error), undefined, "Correct the reported issue-store problem, then run mstar status tech-debt.");
         }
       },
     }),
@@ -361,6 +377,8 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           `status.${verb}`,
           "status.verb-retired",
           `status ${verb}: removed — project registers are migration history; findings are issues in {HARNESS_DIR}/store.db (capture/close via \`mstar ${replacement}\`, or the unscoped \`mstar issue add|close\`); this verb writes nothing`,
+          undefined,
+          "Use mstar plan issue-add to capture the finding and mstar plan issue-close to close it.",
         );
       },
     })),

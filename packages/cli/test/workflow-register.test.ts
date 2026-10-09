@@ -141,10 +141,10 @@ describe("mstar workflow register", () => {
       expect(String(envelope.message)).toContain(
         `derivePlanRegistration: plan "20260916-plan-cli-example" was declared with title "Contradictory title", but the selected document ${realpathSync(join(harness, "plans/20260916-plan-cli-example.md"))} states "CLI example plan" - the selected plan document is the registration authority (R1/section 4), so a supplied title is a constraint against it, never an override`,
       );
-      expect(String(envelope.message)).toContain("Use the title in the selected plan document's H1");
+      expect(String(envelope.message)).toContain("Use the document's H1 title exactly as reported in this refusal");
       expect(String(envelope.message)).toContain("Help: mstar workflow register --help");
       expect(String(envelope.message)).toContain(
-        "Recovery: Use the title in the selected plan document's H1, or correct that document before registering.",
+        "Recovery: Use the document's H1 title exactly as reported in this refusal, then rerun mstar workflow register with that title.",
       );
     });
   });

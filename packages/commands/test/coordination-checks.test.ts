@@ -257,7 +257,7 @@ plans:
         { workflow: workflowId, compass, harness } as never,
         context(cwd),
       );
-      expect(result).toMatchObject({ status: "refused", code: "execution.workflow-identity-mismatch" });
+      expect(result).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "execution.workflow-identity-mismatch" } });
     }
   });
 

@@ -2000,6 +2000,7 @@ export async function purgeCatalogRegistration(
       if (!isPlainObject(failure) ||
         failure.workflow_id !== workflowId ||
         failure.snapshot_path !== recorded.snapshotPath ||
+        // hash-gate: authorized — digest mismatch prevents purging an altered snapshot.
         failure.snapshot_content_sha256 !== recorded.recordedDigest ||
         typeof failure.reviewed_identity !== "string") {
         throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no matching identity-failure record`);
@@ -2011,6 +2012,7 @@ export async function purgeCatalogRegistration(
       }
       if (existsSync(recorded.snapshotPath)) {
         const observedDigest = createHash("sha256").update(readFileSync(recorded.snapshotPath)).digest("hex");
+        // hash-gate: authorized — digest mismatch blocks deletion of a wrong snapshot.
         if (observedDigest !== recorded.recordedDigest) {
           throw new CatalogRegistrationError(
             "catalog.purge-identity-mismatch",

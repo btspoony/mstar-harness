@@ -1015,7 +1015,7 @@ export {
 } from "./execution-recovery.js";
 // Recovery-first intent contract (S1): the sparse `IntentContext` a public
 // lifecycle operation accepts, the `RecoveryProblem`/`RecoveryDetails`
-// sidecar it reports (`recovery` on success, `error.details.recovery` on a
+// sidecar it reports (`recovery` on success, `error.details.recoveryFacts` on a
 // refusal) and the shared per-operation semantic selections
 // (`PLAN_OPERATION_SEMANTICS` / `WORKFLOW_OPERATION_SEMANTICS`,
 // `selectSemanticFields`) the freshness/replay frames compare instead of

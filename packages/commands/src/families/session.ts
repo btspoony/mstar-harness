@@ -29,7 +29,9 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.refused`;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) , recovery: id === "session.run"
+        ? "The executable, working directory, and child environment must match the invocation. Inspect harness authority with mstar status validate."
+        : "The workflow, prior-session identity, and stopped-session attestation must match the recorded authority. Inspect harness authority with mstar status validate."});
 }
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
