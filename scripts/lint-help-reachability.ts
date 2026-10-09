@@ -19,14 +19,19 @@ const MANUAL_MARKER_PREFIX = "// reachability: manual \u2014";
 /**
  * Apply manual-recovery markers to a source file's reachability findings.
  *
- * A marker authorizes ONE site. It is recognized ONLY through full-source
- * lexical context — the TypeScript scanner's comment trivia — never by
- * per-line substring matching. A single-line comment trivia whose line is the
- * finding's own line or the immediately preceding line authorizes it; a
- * multiline block-comment continuation or a template-literal line cannot,
- * because neither is SingleLineCommentTrivia at that position (the hash-gates
- * lesson). A non-empty reason is required; an empty/whitespace reason turns the
- * finding into the `invalid-manual-marker` violation.
+ * A marker authorizes EXACTLY ONE site. Markers are recognized ONLY through
+ * full-source lexical context — the TypeScript scanner's comment trivia — never
+ * by per-line substring matching, so a multiline block-comment continuation or
+ * a template-literal line cannot authorize anything (the hash-gates lesson).
+ *
+ * Binding is deterministic and one-to-one: for each marker, the site on its own
+ * line wins; only when no such site exists does it fall back to the site on the
+ * following line. A marker consumed by the same-line site cannot also authorize
+ * the next line, so one comment never suppresses two findings. Sites are
+ * processed in source order; a site keeps the first marker that binds to it.
+ *
+ * A non-empty reason is required: a marker with an empty/whitespace reason turns
+ * the site it binds to into the `invalid-manual-marker` violation.
  */
 export function applyManualMarkers(source: ts.SourceFile, sourceText: string, findings: HelpReachabilityFinding[]): HelpReachabilityFinding[] {
   const commentRanges = new Map<number, ts.CommentRange>();
@@ -38,18 +43,23 @@ export function applyManualMarkers(source: ts.SourceFile, sourceText: string, fi
     ts.forEachChild(node, collectCommentRanges);
   };
   collectCommentRanges(source);
+  const lineOf = (offset: number): number => source.getLineAndCharacterOfPosition(offset).line + 1;
+  const markers = [...commentRanges.values()]
+    .filter((range) => range.kind === ts.SyntaxKind.SingleLineCommentTrivia && sourceText.slice(range.pos, range.end).trimStart().startsWith(MANUAL_MARKER_PREFIX))
+    .sort((a, b) => a.pos - b.pos)
+    .map((range) => ({ line: lineOf(range.pos), reason: sourceText.slice(range.pos, range.end).trim().slice(MANUAL_MARKER_PREFIX.length).trim() }));
+  const bySite = new Map<number, { reason: string }>();
+  for (const marker of markers) {
+    const ownLine = findings.find((finding) => finding.classification === "capability-unreachable" && finding.line === marker.line);
+    const nextLine = ownLine === undefined ? findings.find((finding) => finding.classification === "capability-unreachable" && finding.line === marker.line + 1) : undefined;
+    const site = ownLine ?? nextLine;
+    if (site && !bySite.has(site.line)) bySite.set(site.line, marker);
+  }
   return findings.map((finding) => {
-    if (finding.classification !== "capability-unreachable") return finding;
-    const marker = [...commentRanges.values()].find((range) => {
-      if (range.kind !== ts.SyntaxKind.SingleLineCommentTrivia) return false;
-      const markerLine = source.getLineAndCharacterOfPosition(range.pos).line + 1;
-      return (markerLine === finding.line || markerLine === finding.line - 1) &&
-        sourceText.slice(range.pos, range.end).trimStart().startsWith(MANUAL_MARKER_PREFIX);
-    });
+    const marker = finding.classification === "capability-unreachable" ? bySite.get(finding.line) : undefined;
     if (marker === undefined) return finding;
-    const reason = sourceText.slice(marker.pos, marker.end).trim().slice(MANUAL_MARKER_PREFIX.length).trim();
-    return reason.length > 0
-      ? { ...finding, classification: "manual-recovery", reason }
+    return marker.reason.length > 0
+      ? { ...finding, classification: "manual-recovery", reason: marker.reason }
       : { ...finding, classification: "invalid-manual-marker", reason: "manual marker requires a non-empty reason" };
   });
 }

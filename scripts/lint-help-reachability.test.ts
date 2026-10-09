@@ -276,6 +276,22 @@ describe("manual-recovery marker", () => {
     expect(classifications.filter((value) => value === "capability-unreachable")).toHaveLength(1);
   });
 
+  test("a trailing marker binds to its own line only, never the sibling below", () => {
+    // RED-first: the same-line site wins the marker, so the next-line site stays
+    // a violation — one marker can never suppress two findings.
+    const source = `${site()} // reachability: manual — legacy layout migration has no CLI retry verb\nrefusalEnvelope({ command: "y", status: "refused", code: "NO_STATE", exitCode: 1, message: "Cannot continue", recovery: "Correct the reported file path and retry." });`;
+    const classifications = marked(source).map(({ classification }) => classification);
+    expect(classifications.filter((value) => value === "manual-recovery")).toHaveLength(1);
+    expect(classifications.filter((value) => value === "capability-unreachable")).toHaveLength(1);
+  });
+
+  test("two adjacent markers authorize two sites independently", () => {
+    const source = `${site("// reachability: manual — first site")}\n${site("// reachability: manual — second site")}`;
+    const findings = marked(source);
+    expect(findings.map(({ classification }) => classification)).toEqual(["manual-recovery", "manual-recovery"]);
+    expect(findings.map(({ reason }) => reason)).toEqual(["first site", "second site"]);
+  });
+
   test("reports the manual recoveries separately, exits 0, and keeps them out of findings", async () => {
     const root = mkdtempSync(join(tmpdir(), "help-reachability-"));
     mkdirSync(join(root, "src"));
