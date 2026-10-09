@@ -4,7 +4,7 @@
 
 # [Morning Star](https://github.com/btspoony/mstar-harness)
 
-Plan, implement, review, verify, merge — a delivery process for AI-assisted development.
+Harness Workflow Engine · Agent Plugin
 
 English / [中文](README_CN.md)
 
@@ -13,6 +13,14 @@ English / [中文](README_CN.md)
 [![CI](https://img.shields.io/github/actions/workflow/status/btspoony/mstar-harness/ci.yml?branch=main&style=flat-square&label=CI&labelColor=black)](https://github.com/btspoony/mstar-harness/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-white?labelColor=black&style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases)
+[![Last commit](https://img.shields.io/github/last-commit/btspoony/mstar-harness?color=c4f042&labelColor=black&style=flat-square)](https://github.com/btspoony/mstar-harness/commits/main)
+[![dshfind](https://dshfind.com/api/badge/btspoony/mstar-harness?lang=en)](https://dshfind.com/zh/plugins/btspoony/mstar-harness?ref=badge)
+[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
+
+[![npm: cli](https://img.shields.io/npm/dt/@mstar-harness/cli?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20cli)](https://www.npmjs.com/package/@mstar-harness/cli)
+[![npm: dsh](https://img.shields.io/npm/dt/@mstar-harness/dsh?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20dsh)](https://www.npmjs.com/package/@mstar-harness/dsh)
+[![npm: omp](https://img.shields.io/npm/dt/@mstar-harness/omp?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20omp)](https://www.npmjs.com/package/@mstar-harness/omp)
+[![npm: opencode](https://img.shields.io/npm/dt/@mstar-harness/opencode?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20opencode)](https://www.npmjs.com/package/@mstar-harness/opencode)
 
 </div>
 
@@ -84,13 +92,62 @@ The audit commands read and report; they do not edit your code. Two boundaries t
 
 ## Workflow
 
-1. **Clarify and plan.** The PM turns the request into a written plan — scope, tasks, acceptance — and, for an iteration, locks the direction with you first.
-2. **Implement on a branch.** Work happens on feature branches, and each task goes to the role that fits it.
-3. **Review and verify independently.** Multi-task plans get a per-task review, then a plan-level QC review; a hotfix or a single small task runs a lighter route. Acceptance — by QA or the PM — is a separate pass with its own evidence, not a re-read of the implementer's summary.
-4. **Close out with evidence.** Confirmed findings become tracked issues or fixes; a plan is completed only with its verification evidence, and the workflow's pull request reaches merge-ready.
-5. **Merge.** Merging is a separate authorization — request it explicitly, or merge yourself. After the merge, the workflow verifies the result and closes.
+```mermaid
+flowchart TD
+    A["You describe the work"] --> B["PM clarifies it and writes the plan"]
+    B --> C["Implement on a feature branch"]
+    C --> D["Independent review"]
+    D -->|changes requested| C
+    D --> E["Acceptance by QA or the PM, with its own evidence"]
+    E -->|not accepted| C
+    E --> F{"Iteration with plans still to run?"}
+    F -->|yes: next plan| C
+    F -->|no| G["Wrap up: record results and issues, keep reusable lessons"]
+    G --> H["Open the pull request"]
+    H --> I["CI checks and review feedback"]
+    I --> J{"All green and reviews resolved?"}
+    J -->|no: fix, verify, push| I
+    J -->|yes| K["Merge-ready"]
+    K -->|only after your authorization| L["Merge"]
+    L --> M["Verify the merge, then close the delivery"]
+```
+
+The main path shows a **development** delivery. Every plan gets a plan-level QC review — three independent seats by default — and a multi-task plan adds a per-task review during implementation. A hotfix — or a plan explicitly set to run inline — takes a lighter route with fewer review seats. Acceptance is a separate pass with its own evidence — QA or the PM — not a re-read of the implementer's summary, and confirmed problems that this round does not fix become tracked issues instead of being dropped.
+
+**Scope notes.** An iteration locks its direction with you first, then runs the per-plan cycle for every plan it takes on and closes out once before its pull request; without an iteration, the cycle runs for a single plan. A verification or report-only deliverable — an audit, for example — ends at its agreed completion, with no pull request or merge. On the development path, a plan is complete only with its evidence: plan completion, merge-ready, and merged are three different facts, and only a verified merge, followed by the post-merge close, ends the delivery. Merging is a separate authorization — request it explicitly, or merge yourself — and branch cleanup stays a separate, explicit step.
 
 The engine checks the mechanically checkable parts of this process — workflow state transitions, branch and worktree alignment, dispatch preconditions, plan and issue bookkeeping. These checks are advisory by default: they report problems, and a project or iteration can opt into blocking enforcement with `enforcement: hard`; whether a violation can actually block depends on the host. Process state (plans, workflow records, findings, review reports) lives in the harness directory, `.mstar/` by default, which is gitignored.
+
+## Dashboard
+
+A read-only page on `127.0.0.1`, for this machine only, that brings project progress, open issues, and the roadmap into one view for the repository you start it from. It has Issues, Workflows, Iterations, and Roadmap; on Issues you can search and filter, open an issue's recorded history, and read the issue flow — a cumulative trend of issues captured versus retired. Nothing on the page writes; changes go through the CLI.
+
+```text
+mstar-harness dashboard
+```
+
+The command prints a one-line JSON result. Open `data.url` (`http://127.0.0.1:` plus the port it actually bound) and press Ctrl-C to stop. `--port` and `--project <projectId>` are optional; omit `--port` and the OS chooses. The page does not push live updates.
+
+Details: [`docs/runtime-reference.md`](docs/runtime-reference.md#cli-contract).
+
+## MCP
+
+From a coding tool that supports MCP, look up issues, the roadmap, and workflows, and run the matching CLI operations and checks, without writing a shell command. `mstar-harness mcp` is the stdio server in this package. It follows the same rules as the CLI — not a new permission — and there is no separate MCP package.
+
+After install, a host usually already has its launch configuration; see [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools). Static JSON configs use the shape below (`npx` needs Bun on `PATH`, as in [Install](#install)). Do not paste it over a file the host already wrote. OpenCode does not read a static file — its plugin injects the server from the `config` hook. dsh is the exception: the shipped row stays inert until the profile includes `@deepseek-ai/dsh-mcp-client` (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`).
+
+```json
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
+    }
+  }
+}
+```
+
+Further detail: [`docs/runtime-reference.md`](docs/runtime-reference.md#mcp).
 
 ## Roles and skills
 
@@ -108,9 +165,7 @@ mstar-harness issue close --help            # options and payload fields for one
 mstar-harness schema --command issue.close  # the same contract as machine-readable JSON
 ```
 
-- `mstar-harness dashboard` serves a read-only web view of issues and workflow state on `127.0.0.1` (Ctrl-C to stop).
 - `mstar-harness report` drafts an offline, redacted GitHub issue report for you to review before posting.
-- `mstar-harness mcp` serves the same command set over stdio MCP from the same package; every host ships a launch configuration (dsh's needs the `@deepseek-ai/dsh-mcp-client` bridge plugin in its profile).
 
 Host wiring, the issue and roadmap command families, and the details behind these surfaces are in [`docs/runtime-reference.md`](docs/runtime-reference.md).
 

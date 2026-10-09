@@ -4,7 +4,7 @@
 
 # [Morning Star](https://github.com/btspoony/mstar-harness)
 
-规划、实现、审查、验证、合并 —— 面向 AI 辅助开发的交付流程。
+Harness Workflow Engine · Agent Plugin
 
 [English](README.md) / 中文
 
@@ -13,6 +13,14 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/btspoony/mstar-harness/ci.yml?branch=main&style=flat-square&label=CI&labelColor=black)](https://github.com/btspoony/mstar-harness/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-white?labelColor=black&style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/btspoony/mstar-harness?include_prereleases&sort=semver&label=version&style=flat-square&labelColor=black&color=c4f042)](https://github.com/btspoony/mstar-harness/releases)
+[![Last commit](https://img.shields.io/github/last-commit/btspoony/mstar-harness?color=c4f042&labelColor=black&style=flat-square)](https://github.com/btspoony/mstar-harness/commits/main)
+[![dshfind](https://dshfind.com/api/badge/btspoony/mstar-harness?lang=zh)](https://dshfind.com/zh/plugins/btspoony/mstar-harness?ref=badge)
+[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
+
+[![npm: cli](https://img.shields.io/npm/dt/@mstar-harness/cli?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20cli)](https://www.npmjs.com/package/@mstar-harness/cli)
+[![npm: dsh](https://img.shields.io/npm/dt/@mstar-harness/dsh?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20dsh)](https://www.npmjs.com/package/@mstar-harness/dsh)
+[![npm: omp](https://img.shields.io/npm/dt/@mstar-harness/omp?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20omp)](https://www.npmjs.com/package/@mstar-harness/omp)
+[![npm: opencode](https://img.shields.io/npm/dt/@mstar-harness/opencode?style=flat-square&labelColor=black&color=c4f042&label=npm%3A%20opencode)](https://www.npmjs.com/package/@mstar-harness/opencode)
 
 </div>
 
@@ -85,13 +93,62 @@ CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本
 
 ## 工作流
 
-1. **澄清并规划。** PM 把请求落成书面计划 —— 范围、任务、验收 —— 迭代场景下先与你锁定方向。
-2. **在分支上实现。** 工作发生在功能分支上，每个任务交给合适的角色。
-3. **独立审查与验证。** 多任务 plan 先做 per-task review，再做 plan 级 QC 审查；hotfix 或单个小任务走更轻的通道。随后由 QA 或 PM 验收：这是独立取证的一环，而不是复述实现者的总结。
-4. **带证据收尾。** 已确认的发现转成跟踪中的 issue 或修复；plan 只有在验证证据齐全时才标记完成，workflow 的 PR 推进到 merge-ready。
-5. **合并。** 合并是单独的一次授权 —— 你可以显式授权，也可以自己合并。合并之后，workflow 会验证结果并关闭。
+```mermaid
+flowchart TD
+    A["你描述要做的事"] --> B["PM 澄清请求并写出计划"]
+    B --> C["在功能分支上实现"]
+    C --> D["独立审查"]
+    D -->|要求修改| C
+    D --> E["验收：QA 或 PM，独立取证"]
+    E -->|未通过| C
+    E --> F{"迭代中仍有计划待执行？"}
+    F -->|是：下一个计划| C
+    F -->|否| G["收尾：记录结果与问题、保留可复用经验"]
+    G --> H["开 PR"]
+    H --> I["CI 检查与审查反馈"]
+    I --> J{"全部通过且 review 已解决？"}
+    J -->|否：修正、验证后推送| I
+    J -->|是| K["Merge-ready"]
+    K -->|仅在你授权之后| L["合并"]
+    L --> M["核实合并结果，结束本次交付"]
+```
+
+主路径展示的是一次 **development** 交付。每个 plan 都会做 plan 级 QC 审查 —— 默认由三个独立席位执行 —— 多任务 plan 还会在实现阶段加入 per-task review。hotfix（或显式设为 inline 执行模式的 plan）走更轻的通道，审查席位更少。验收是独立取证的一环 —— 由 QA 或 PM 执行，而不是复述实现者的总结；本轮没有修掉的已确认问题会变成跟踪中的 issue，而不是丢掉。
+
+**范围说明。** 迭代会先与你锁定方向，然后对承接的每个 plan 各跑一遍上述循环，最后统一收尾再开 PR；不跑迭代时，这套循环就只为一个 plan 执行一次。验证或 report-only 的交付物 —— 例如一次审计 —— 在达到约定的完成条件时结束，没有 PR，也没有合并环节。在 development 这条路径上，plan 只有在证据齐全时才算完成：plan 完成、merge-ready 与已合并是三件不同的事，只有核实合并、走完 post-merge 收尾，交付才算结束。是否合并是一次单独的授权 —— 你可以显式授权，也可以自己合并 —— 分支清理则是收尾之后单独的、显式的动作。
 
 引擎负责校验流程中可机械校验的部分 —— 工作流状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。这些校验默认是 advisory：只报告问题；项目或迭代可以用 `enforcement: hard` 升级为阻断，具体能否阻断取决于宿主。过程状态（计划、workflow 记录、发现、审查报告）存放在 harness 目录，默认 `.mstar/`，默认被 gitignore。
+
+## Dashboard：本地看板
+
+只在本机 `127.0.0.1` 上提供的只读页面：在同一个界面里查看项目进展、未解决问题和路线图，对应你启动它时所在的仓库。页面有 Issues、Workflows、Iterations 和 Roadmap；在 Issues 中可以搜索和筛选、打开单条 issue 的已记录历史，并查看 issue 走势 —— 捕获与退役（captured vs retired）的累计趋势。页面本身不写入；修改通过 CLI 完成。
+
+```text
+mstar-harness dashboard
+```
+
+命令打印一行 JSON。打开其中的 `data.url`（`http://127.0.0.1:` 加上它实际绑定的端口），按 Ctrl-C 停止。`--port` 和 `--project <projectId>` 都是可选的；省略 `--port` 时由操作系统选择端口。页面不会推送实时更新。
+
+细节见 [`docs/runtime-reference.md`](docs/runtime-reference.md#cli-contract)。
+
+## MCP
+
+在支持 MCP 的编程工具中，可以查看 issue、roadmap 和 workflow，并调用对应的 CLI 操作与检查，而不必编写 shell 命令。`mstar-harness mcp` 是本包中的 stdio 服务。它遵守与 CLI 相同的规则 —— 不是一项新权限 —— 也没有单独的 MCP 包。
+
+安装之后，宿主通常已经带有启动配置，见 [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools)。带静态 JSON 配置的宿主使用下面这种形式（`npx` 需要 PATH 上有 Bun，见上文「安装」）。不要把它粘贴到宿主已经写好的文件上。OpenCode 不读取静态文件 —— 它的插件通过 `config` hook 注入该服务。dsh 是例外：自带的配置行在 profile 包含 `@deepseek-ai/dsh-mcp-client` 之前不会生效（`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`）。
+
+```json
+{
+  "mcpServers": {
+    "morning-star": {
+      "command": "npx",
+      "args": ["@mstar-harness/cli", "mcp"]
+    }
+  }
+}
+```
+
+命令细节见 [`docs/runtime-reference.md`](docs/runtime-reference.md#mcp)。
 
 ## 角色与技能
 
@@ -109,9 +166,7 @@ mstar-harness issue close --help            # 单个动词的选项与 payload �
 mstar-harness schema --command issue.close  # 同一份契约的机器可读 JSON
 ```
 
-- `mstar-harness dashboard` 在 `127.0.0.1` 提供只读的 issue 与工作流状态网页界面（Ctrl-C 停止）。
 - `mstar-harness report` 生成离线、脱敏的 GitHub issue 报告草稿，供你检查后再提交。
-- `mstar-harness mcp` 用同一个包通过 stdio MCP 暴露同一套命令；七个宿主都带有启动配置（dsh 需要在 profile 中安装 `@deepseek-ai/dsh-mcp-client` 桥接插件）。
 
 宿主接入、issue 与 roadmap 命令族，以及这些界面背后的细节，见 [`docs/runtime-reference.md`](docs/runtime-reference.md)。
 
