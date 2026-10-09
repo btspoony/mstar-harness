@@ -84,6 +84,7 @@ interface CliEnvelope {
   code: string;
   exitCode: number;
   message?: string;
+  details?: Record<string, unknown>;
   data?: Record<string, unknown>;
 }
 
@@ -299,7 +300,9 @@ describe("mstar migrate — exit codes", () => {
     try {
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(1);
-      expect(envelopeOf(r, "refused", "migrate.refused").message).toContain("no v1 status.json");
+      const response = envelopeOf(r, "refused", "coordination.check-refused");
+      expect(response.details).toMatchObject({ underlyingCode: "migrate.refused" });
+      expect(response.message).toContain("no v1 status.json");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -311,7 +314,9 @@ describe("mstar migrate — exit codes", () => {
       writeFileSync(join(root, "status.json"), JSON.stringify({ version: 99 }));
       const r = runCli(["migrate", "--path", root]);
       expect(r.exitCode).toBe(1);
-      expect(envelopeOf(r, "refused", "migrate.refused").message).toContain("unrecognized schema version");
+      const response = envelopeOf(r, "refused", "coordination.check-refused");
+      expect(response.details).toMatchObject({ underlyingCode: "migrate.refused" });
+      expect(response.message).toContain("unrecognized schema version");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -435,7 +440,8 @@ describe("mstar migrate --json — machine-readable output", () => {
     try {
       const r = runCli(["migrate", "--path", root, "--json"]);
       expect(r.exitCode).toBe(1);
-      const response = envelopeOf(r, "refused", "migrate.refused");
+      const response = envelopeOf(r, "refused", "coordination.check-refused");
+      expect(response.details).toMatchObject({ underlyingCode: "migrate.refused" });
       expect(response.exitCode).toBe(1);
       expect(typeof response.message).toBe("string");
     } finally {
@@ -522,7 +528,9 @@ describe("mstar migrate — delivery kind for ACTIVE standalone plan lifts", () 
     try {
       const r = runCli(["migrate", "--path", root, "--delivery-kind", "development", "--branch-source", "feature/a"]);
       expect(r.exitCode).toBe(1);
-      expect(envelopeOf(r, "refused", "migrate.refused").message).toContain("delivery source and target branches");
+      const response = envelopeOf(r, "refused", "coordination.check-refused");
+      expect(response.details).toMatchObject({ underlyingCode: "migrate.refused" });
+      expect(response.message).toContain("delivery source and target branches");
       expect(existsSync(join(root, "workflows"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
