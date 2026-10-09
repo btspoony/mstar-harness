@@ -1028,7 +1028,7 @@ function createSessionEnvelope(session: CoordinationSession): string {
     if (code === "EEXIST") {
       throw new CoordinationError(
         "coordination.identity-mismatch",
-        "Session envelope already exists. The recorded envelope is addressed by mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
+        "Session envelope already exists. Use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.",
         { path },
       );
     }
@@ -1460,14 +1460,14 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
   if (coordinator.session_id !== session.session_id) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "Session does not match the recorded coordinator. Inspect the binding with mstar status validate, then use mstar status validate. Use the recorded session envelope path when resuming an existing binding or recover only a stopped coordinator.",
+      "Session does not match the recorded coordinator. Inspect the binding with mstar status validate, then use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file, or recover only a stopped coordinator.",
       { expected: coordinator.session_id, actual: session.session_id },
     );
   }
   if (canonicalTarget(coordinator.session_file) !== canonicalTarget(sessionPath)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "Session envelope is not the recorded coordinator file. Inspect the binding with mstar status validate, then use mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
+      "Session envelope is not the recorded coordinator file. Inspect the binding with mstar status validate, then use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.",
       { expected: coordinator.session_file, actual: canonicalTarget(sessionPath) },
     );
   }
@@ -1796,7 +1796,7 @@ function requireCwd(cwd: string): void {
 /** Resume is a read-only verification of the workflow coordinator binding. */
 function resumeBoundSession(resumePath: string): CoordinationResult {
   if (!isNonEmptyString(resumePath) || !isAbsolute(resumePath)) {
-    throw invalidInput("resumePath must be an absolute path. For an existing envelope use mstar status validate. Use the absolute path of the recorded session envelope when resuming an existing binding; inspect the target with mstar status validate.");
+    throw invalidInput("resumePath must be an absolute path. Use mstar plan bind --resume=PATH, where PATH is the absolute path to the recorded session envelope file; inspect the target with mstar status validate.");
   }
   const sessionPath = canonicalTarget(resumePath);
   const session = readSessionEnvelope(sessionPath);
@@ -3645,14 +3645,14 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   const session = readSessionEnvelope(input.sessionPath);
   if (session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Existing bindings are resumed with mstar status validate. Use the recorded session envelope path when resuming an existing binding after checking the recorded workflow.", {
+    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file after checking the recorded workflow.", {
       role: session.role,
     });
   }
   if (session.workflow_id !== input.ref.key) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; for an existing binding use mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
+      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.",
       { expected: session.workflow_id, actual: input.ref.key },
     );
   }
@@ -4077,7 +4077,7 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
   if (session.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.session-role",
-      "Workflow Prepare operations require a coordinator session. Inspect authority with mstar status validate; for an existing coordinator envelope use mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
+      "Workflow Prepare operations require a coordinator session. Inspect authority with mstar status validate; use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.",
       { actual: session.role },
     );
   }
@@ -4105,7 +4105,7 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
 function readPrepareSnapshot(snapshotPath: string): { snapshot: WorkflowSnapshot; version: string; phaseDerived: boolean } {
   const bytes = readArtifactBytes(snapshotPath);
   if (bytes === undefined) {
-    throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect authority with mstar status validate; for an existing coordinator envelope use mstar status validate. Use the recorded session envelope path when resuming an existing binding.", {
+    throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect authority with mstar status validate; use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.", {
       path: snapshotPath,
     });
   }
