@@ -10,7 +10,7 @@ import {
   mutateExecutionWorkflow,
   createExecutionWorkflow,
   openStore,
-  initializeExecutionAuthority,
+  readExecutionState,
   initializeStore,
   evaluatePostMergeCloseFromExecutionAuthority,
   registerCatalogEntity,
@@ -51,8 +51,10 @@ async function activeWorkflow(cwd: string, workflowId: string, rowDone = false) 
   mkdirSync(harness, { recursive: true });
   const storeContext = { harnessDir: harness };
   const store = await initializeStore(storeContext);
+  // `initializeStore` activates the execution authority (issue #428); read its
+  // root creation token back instead of re-initializing.
+  const initialized = { token: (await readExecutionState(storeContext)).token };
   store.close();
-  const initialized = await initializeExecutionAuthority(storeContext);
   const planId = `plan-${workflowId}`;
   await registerCatalogEntity(storeContext, {
     kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `${planId}.md`,
@@ -358,12 +360,19 @@ describe("coordination checks command family", () => {
     expect(readdirSync(cwd)).toEqual(before);
   });
 
-  test("phase-six gate reports blocking violations for an invalid workflow snapshot", async () => {
+  test("phase-six gate reports blocking violations for an invalid workflow state", async () => {
     const cwd = tempRoot();
-    const harness = path.join(cwd, ".mstar");
-    const workflowDir = path.join(harness, "workflows", "wf-invalid");
-    mkdirSync(workflowDir, { recursive: true });
-    writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({ type: "iteration", status: "InProgress" }));
+    // The ACTIVE authority is the only source (issue #428): an addressed
+    // workflow whose stored state cannot be verified is `PHASE6_INVALID_SNAPSHOT`
+    // rather than a verdict about a planted snapshot file.
+    const { harness, storeContext } = await activeWorkflow(cwd, "wf-invalid");
+    const store = await openStore(storeContext, "write");
+    try {
+      store.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+        .run(JSON.stringify({ id: "wf-invalid", type: "iteration", status: "InProgress" }), "wf-invalid");
+    } finally {
+      store.close();
+    }
 
     const result = await definition("iteration.gate").execute(
       { workflow: "wf-invalid", phase: "6", harness } as never,
@@ -382,20 +391,28 @@ describe("coordination checks command family", () => {
     expect(result).toMatchObject({ status: "refused", exitCode: 1 });
     if (result.status === "refused") expect(result.details?.violations).toHaveLength(2);
   });
-  test("integration lease verification validates claimed snapshot leases", async () => {
+  test("integration lease verification reads the lease from the addressed authority entry", async () => {
     const cwd = tempRoot();
-    const harness = path.join(cwd, ".mstar");
-    const workflowDir = path.join(harness, "workflows", "wf-integration");
-    mkdirSync(workflowDir, { recursive: true });
-    const file = path.join(workflowDir, "snapshot.json");
+    const { harness, storeContext } = await activeWorkflow(cwd, "wf-integration");
     const validLease = {
       holder: "session-a",
       claimed_at: "2026-09-26T12:00:00Z",
-      plan_id: "plan-a",
+      plan_id: "plan-wf-integration",
       source_branch: "feature/plan-a",
       target_branch: "spec/integration",
     };
-    writeFileSync(file, JSON.stringify({ integration_merge_lease: validLease }));
+    // The lease fact lives on the addressed workflow ENTRY of the served graph
+    // (`ExecutionState.workflows[0].integrationLease`) — never at the DTO root.
+    // Seeding it through the authority's own row is what makes `claimed:true`
+    // observable: a DTO-root read reports `claimed:false` for a held lease.
+    const store = await openStore(storeContext, "write");
+    try {
+      store.db.prepare(
+        "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
+      ).run("wf-integration", JSON.stringify(validLease));
+    } finally {
+      store.close();
+    }
 
     const valid = await definition("lease.verify-integration").execute(
       { workflow: "wf-integration", harness } as never,
@@ -406,15 +423,36 @@ describe("coordination checks command family", () => {
       data: { workflow: "wf-integration", claimed: true, lease: validLease },
     });
 
-    writeFileSync(file, JSON.stringify({ integration_merge_lease: null }));
+    // An INVALID held lease is validated, not silently reported as unclaimed.
+    const broken = await openStore(storeContext, "write");
+    try {
+      broken.db.prepare("update execution_integration_leases set lease_json = ? where workflow_id = ?")
+        .run(JSON.stringify({ holder: "session-a" }), "wf-integration");
+    } finally {
+      broken.close();
+    }
     const invalid = await definition("lease.verify-integration").execute(
       { workflow: "wf-integration", harness } as never,
       context(cwd),
     );
-    expect(invalid).toMatchObject({
-      status: "refused",
-      code: "lease.merge-lease.invalid",
-      exitCode: 1,
-    });
+    // A malformed held lease is refused at the authority read boundary (the
+    // stored row cannot be verified) — never silently reported as unclaimed.
+    expect(invalid).toMatchObject({ status: "refused", exitCode: 1 });
+    if (invalid.status !== "refused") throw new Error("expected a refusal");
+    expect(String(invalid.message)).toContain("lease.merge-lease.missing-claimed-at");
+
+    // A RELEASED lease tombstone is retained history, not a carried claim.
+    const released = await openStore(storeContext, "write");
+    try {
+      released.db.prepare("update execution_integration_leases set lease_json = ? where workflow_id = ?")
+        .run(JSON.stringify({ ...validLease, status: "released" }), "wf-integration");
+    } finally {
+      released.close();
+    }
+    const unclaimed = await definition("lease.verify-integration").execute(
+      { workflow: "wf-integration", harness } as never,
+      context(cwd),
+    );
+    expect(unclaimed).toMatchObject({ status: "ok", data: { workflow: "wf-integration", claimed: false } });
   });
 });

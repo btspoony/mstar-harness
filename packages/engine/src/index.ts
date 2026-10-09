@@ -136,6 +136,7 @@ export {
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
   normalizeIterationCompassRef,
+  WORKFLOW_COMPOUND_OUTCOMES,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
@@ -269,7 +270,6 @@ export type {
 export {
   assertCatalogCompleteness,
   evaluatePhaseGate,
-  evaluatePostMergeClose,
   evaluatePostMergeCloseFromExecutionAuthority,
   readRegisteredWorkflowFromExecutionAuthority,
   parseCompassFrontmatter,
@@ -777,7 +777,6 @@ export type {
 } from "./projection.js";
 export {
   PROJECTION_FORMAT_VERSION,
-  PROJECTION_ROOT_FILE,
   ProjectionError,
   captureProjectionSources,
   publishProjectionCapture,

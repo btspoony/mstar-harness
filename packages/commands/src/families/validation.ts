@@ -9,7 +9,6 @@ import {
   assertTriIdentity,
   classifySkillLint,
   activeLifecyclePlanId,
-  collectActiveLifecycleBranches,
   completenessLevel,
   executionModeToN,
   findEphemeralCitations,
@@ -27,7 +26,6 @@ import {
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   planQualityBar,
-  scanActiveLifecycleBranches,
   scopeGuard,
   SddScriptError,
   stripFrontmatter,
@@ -40,15 +38,13 @@ import {
   type GateResult,
   type ActiveLifecycleBranch,
   type QcAlignmentAssignment,
-  WorkflowSnapshotValidationError,
-  readWorkflowSnapshot,
   resolveProcessHarnessDir,
   type ExecutionState,
 } from "@mstar-harness/engine";
 import { refusalEnvelope } from "../envelope.js";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext, PayloadDescriptor } from "../types.js";
 
 /** One contract for `worktree.check --tracks`: the typed input field drives publication and boundary validation, while the shared schema also serves the CLI's JSON decoding and the discovery descriptor. Error messages carry indexed `tracks[N].<field>` paths (the array index is the last numeric path segment, whether the schema runs wrapped in the input object or bare), so a refused request names the offending member. */
@@ -243,115 +239,42 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
         if (!harness) throw new Error("harness directory not found");
-        const { readExecutionState, resolveExecutionReadRoute } = await import("@mstar-harness/engine");
-        if (await resolveExecutionReadRoute({ harnessDir: harness }) === "execution") {
-          const graph = (await readExecutionState({ harnessDir: harness })).data;
-          const registered = graph.workflows.find(({ state }) => state.id === workflow);
-          if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness }, "Rerun mstar worktree check --workflow <id> --plan <plan-id> with a workflow id registered in the execution authority.");
-          const planView = input.planId === undefined
-            ? registered.plans.length === 1 ? registered.plans[0] : undefined
-            : registered.plans.find((candidate) => candidate.plan.id === plan);
-          if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a plan id that exists in the workflow.");
-          const selectedPlanId = planView.plan.id;
-          if (typeof selectedPlanId !== "string") return refusal(id, "worktree.l1.plan-not-found", `the selected plan row in workflow "${workflow}" has no string id`, { workflowId: workflow, authorityGraph: harness }, "Correct the plan row named in the details, then rerun mstar worktree check --plan <plan-id> --workflow <id>.");
-          const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
-          if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
-          const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-          if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
-          const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
-          if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
-          const branch = registered.state.branch ?? {};
-          const lifecycleBranches = activeGraphLifecycleBranches(graph);
-          const metadata = isPlainRecord(planView.plan.metadata) ? planView.plan.metadata : {};
-          const selectedIntegration = input.integration ?? input.control;
-          const gate = l1PreDispatchCheck({
-            workflowType: registered.state.type,
-            integrationWorktreePath: selectedIntegration !== undefined
-              ? path.resolve(selectedIntegration)
-              : typeof registered.state.integration_worktree_path === "string" ? registered.state.integration_worktree_path : "",
-            integrationBranch: String(branch.integration ?? ""),
-            mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
-            expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),
-            lifecycleBranches,
-            rowWorktreePath: typeof metadata.worktree_path === "string" ? metadata.worktree_path : "",
-            rowWorkingBranch: typeof metadata.working_branch === "string" ? metadata.working_branch : "",
-            planId: selectedPlanId,
-          });
-          const gateResult = gateData(gate);
-          const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
-          return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");
-        }
-        const snapshotPath = path.join(harness, "workflows", workflow, "snapshot.json");
-        if (!existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
-        let snapshot: Record<string, any>;
-        let snapshotDiagnostics: Array<{ ok: boolean; code: string; message: string }> = [];
-        try {
-          const read = readWorkflowSnapshot(path.dirname(snapshotPath));
-          snapshot = read.snapshot as Record<string, any>;
-          snapshotDiagnostics = read.diagnostics;
-        } catch (error) {
-          if (!(error instanceof WorkflowSnapshotValidationError)) throw error;
-          const first = error.violations[0];
-          return refusal(id, first?.code ?? "workflow.snapshot.invalid", first?.message ?? "invalid workflow snapshot", { violations: error.violations }, "Correct each reported workflow snapshot violation, then rerun mstar worktree check --workflow <id> --plan <plan-id>.");
-        }
-        for (const diagnostic of snapshotDiagnostics) {
-          if (!diagnostic.ok) {
-            context.effects.writeStderr?.(`[mstar-harness] ${diagnostic.code}: ${diagnostic.message}`);
-            warnings.push(`${diagnostic.code}: ${diagnostic.message}`);
-          }
-        }
-        const rows = Array.isArray(snapshot.plans) ? snapshot.plans.filter((row: Record<string, unknown>) => row?.id === plan || row?.plan_id === plan) : [];
-        if (!rows.length) return refusal(id, "worktree.l1.plan-not-found", `no plan row with id/plan_id ${plan}`, { snapshotPath, planId: plan }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a plan id present in the snapshot.");
-        if (rows.length > 1) return refusal(id, "worktree.l1.ambiguous", "multiple plan rows match (id and plan_id both present)", { snapshotPath, planId: plan }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a selector that matches exactly one row.");
+        // The pre-activation snapshot arm is retired (issue #428): the ACTIVE
+        // execution authority is the only source, so a control root without one
+        // refuses out of `readExecutionState` instead of reading leftover JSON.
+        const { readExecutionState } = await import("@mstar-harness/engine");
+        const graph = (await readExecutionState({ harnessDir: harness })).data;
+        const registered = graph.workflows.find(({ state }) => state.id === workflow);
+        if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness }, "Rerun mstar worktree check --workflow <id> --plan <plan-id> with a workflow id registered in the execution authority.");
+        const planView = input.planId === undefined
+          ? registered.plans.length === 1 ? registered.plans[0] : undefined
+          : registered.plans.find((candidate) => candidate.plan.id === plan);
+        if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a plan id that exists in the workflow.");
+        const selectedPlanId = planView.plan.id;
+        if (typeof selectedPlanId !== "string") return refusal(id, "worktree.l1.plan-not-found", `the selected plan row in workflow "${workflow}" has no string id`, { workflowId: workflow, authorityGraph: harness }, "Correct the plan row named in the details, then rerun mstar worktree check --plan <plan-id> --workflow <id>.");
         const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
         if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
         const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
         if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
         const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
         if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
-        const observedMainBranch = mainBranch.stdout.trim();
-        const rowMetadata = isPlainRecord(rows[0].metadata) ? rows[0].metadata : {};
-        const lifecycleBranches: ActiveLifecycleBranch[] = [];
-        const siblingScan = scanActiveLifecycleBranches(harness, workflow);
-        if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail, undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after correcting the reported sibling-workflow problem.");
-        lifecycleBranches.push(...siblingScan.branches);
-        // The selected row's source checkout/branch uses the dedicated identity
-        // guard; its retained tracks and other snapshot ownership still block main.
-        const snapshotWithoutSelectedSource = {
-          ...snapshot,
-          plans: snapshot.plans.map((row: Record<string, unknown>) =>
-            row.id === plan || row.plan_id === plan ? { ...row, metadata: { track_branches: rowMetadata.track_branches } } : row,
-          ),
-        };
-        lifecycleBranches.push(...collectActiveLifecycleBranches([snapshotWithoutSelectedSource]));
-        const integrationPath = input.integration ?? input.control ?? snapshot.integration_worktree_path;
-        const integrationBranch = snapshot.branch?.integration;
+        const branch = registered.state.branch ?? {};
+        const lifecycleBranches = activeGraphLifecycleBranches(graph);
+        const metadata = isPlainRecord(planView.plan.metadata) ? planView.plan.metadata : {};
+        const selectedIntegration = input.integration ?? input.control;
         const gate = l1PreDispatchCheck({
-          workflowType: snapshot.type,
-          integrationWorktreePath: integrationPath === undefined ? "" : path.resolve(integrationPath),
-          integrationBranch: typeof integrationBranch === "string" ? integrationBranch : "",
-          mainWorktree: { root: primary, branch: observedMainBranch },
-          expectedMainBranch: input.mainBranch ?? String(snapshot.branch?.base ?? ""),
+          workflowType: registered.state.type,
+          integrationWorktreePath: selectedIntegration !== undefined
+            ? path.resolve(selectedIntegration)
+            : typeof registered.state.integration_worktree_path === "string" ? registered.state.integration_worktree_path : "",
+          integrationBranch: String(branch.integration ?? ""),
+          mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
+          expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),
           lifecycleBranches,
-          rowWorktreePath: String(rowMetadata.worktree_path ?? ""), rowWorkingBranch: String(rowMetadata.working_branch ?? ""), planId: plan,
+          rowWorktreePath: typeof metadata.worktree_path === "string" ? metadata.worktree_path : "",
+          rowWorkingBranch: typeof metadata.working_branch === "string" ? metadata.working_branch : "",
+          planId: selectedPlanId,
         });
-        if (
-          observedMainBranch === (input.mainBranch ?? String(snapshot.branch?.base ?? "")) &&
-          Array.isArray(rowMetadata.track_branches) && rowMetadata.track_branches.includes(observedMainBranch)
-        ) {
-          for (const violation of gate.violations) {
-            if (violation.code !== "worktree.main.residency-switched") continue;
-            const recovery =
-              `workflow "${workflow}" plan "${plan}" in control harness "${harness}" records the main branch "${observedMainBranch}" as a retained track. ` +
-              "Use its workflow coordinator's ordinary mstar plan show --session <coordinator-envelope> --plan <plan-id> --harness <control-root> " +
-              "to read the current revision and progress, then mstar plan progress --session <coordinator-envelope> " +
-              "--plan <plan-id> --harness <control-root> --expect <observed-revision> --progress <JSON> with the current status, summary, " +
-              "evidence_paths and corrected complete track_branches. Keep all live tracks; use [] only when no tracks remain. " +
-              "If the track is live, move it to a distinct feature branch and report that real branch; do not clear live ownership or switch main merely to satisfy this check.";
-            violation.fix = recovery;
-            violation.message += ` Recovery: ${recovery}`;
-          }
-        }
         const gateResult = gateData(gate);
         const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
         return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");

@@ -34,8 +34,10 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
+import { executionInputHash } from "./coordination.js";
 import { refreshProjections } from "./projection.js";
 import { importRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
+import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "./execution-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   queryDashboard,
@@ -59,14 +61,16 @@ afterEach(() => {
 
 type Fixture = { dir: string; harness: string; context: StoreContext };
 
+/** One initialized workspace with the harness artifact store pinned.
+ * `initializeStore` activates the execution authority (issue #428 retired the
+ * pre-activation file route), so every read boundary here serves an ACTIVE
+ * authority. */
 async function workspace(name: string): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
-  // These read-boundary cases exercise pre-activation transport behavior.
-  handle.db.prepare("update execution_meta set authority_state = 'legacy', activated_at = null where id = 1").run();
   handle.close();
   return { dir, harness, context };
 }
@@ -151,52 +155,6 @@ function issueCount(db: StoreDb): number {
 // ---------------------------------------------------------------------------
 // Projection fixture (root status.json + one plan workflow + catalog inputs)
 // ---------------------------------------------------------------------------
-
-function snapshotDoc(id: string, pinRevision: number): string {
-  return JSON.stringify(
-    {
-      schema_version: 1,
-      id,
-      type: "plan",
-      status: "running",
-      started_at: STARTED_AT,
-      updated_at: STARTED_AT,
-      phase: "phase-2-execute",
-      branch: { base: "main", source: `feature/${id}`, target: "main" },
-      plans: [
-        {
-          id: "wf-read",
-          title: "Plan wf-read",
-          file: "/plans/wf-read.md",
-          status: "InProgress",
-          coordination: { revision: 1, progress: { status: "InProgress", summary: "half way", evidence_paths: [] } },
-          metadata: { catalog_pin: { entity_revision: pinRevision }, worktree_path: `/wt/${id}`, working_branch: `feature/${id}` },
-        },
-      ],
-      integration_merge_lease: {
-        holder: "session-2",
-        claimed_at: STARTED_AT,
-        plan_id: "wf-read",
-        source_branch: `feature/${id}`,
-        target_branch: "main",
-      },
-    },
-    null,
-    2,
-  );
-}
-
-function statusDoc(id: string, dir: string): string {
-  return JSON.stringify(
-    {
-      version: 2,
-      updated_at: "2026-09-18",
-      workflows: [{ id, type: "plan", started_at: STARTED_AT, dir }],
-    },
-    null,
-    2,
-  );
-}
 
 const COMPASS_DOC = [
   "---",
@@ -328,8 +286,52 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
   // The frozen pin must be the catalog revision this prepare actually saw:
   // a link also bumps its from-row revision, so it is read back here.
   const plan = await getCatalog(context, { kind: "plan", id: "wf-read" });
-  writeFile(join(fixture.harness, "status.json"), statusDoc("wf-read", "workflows/wf-read"));
-  writeFile(join(fixture.harness, "workflows/wf-read/snapshot.json"), snapshotDoc("wf-read", plan.entity.revision));
+  // The pre-activation file route is retired (issue #428): the projection's
+  // execution-ROW source is the ACTIVE execution graph, built here through the
+  // real producer rather than by writing status.json / snapshot.json.
+  // `initializeStore` already activated the execution authority (issue #428),
+  // so the creation token is read back rather than re-initialized.
+  const initialized = await readExecutionState(context);
+  const caller: ExecutionCaller = { sessionId: "store-read-coordinator", role: "coordinator", workflowId: "wf-read" };
+  await createExecutionWorkflow({ harnessDir: fixture.harness, caller }, {
+    entry: { id: "wf-read", type: "plan", started_at: STARTED_AT, dir: "workflows/wf-read" },
+    snapshot: {
+      schema_version: 1, id: "wf-read", type: "plan", status: "running", started_at: STARTED_AT,
+      updated_at: STARTED_AT, phase: "phase-2-execute",
+      branch: { base: "main", source: "feature/wf-read", target: "main" },
+      plans: [{
+        id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress",
+        metadata: {
+          // The same complete frozen pin the authorized `prepare` records: the
+          // store identity, the catalog entity revision, the document hash of
+          // the row and a relation hash (all four are required — a partial pin
+          // refuses `catalog.execution-pin-conflict`).
+          catalog_pin: {
+            store_id: initialized.storeId,
+            entity_revision: plan.entity.revision,
+            document_hash: executionInputHash({ id: "wf-read", plan_id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress" }, "wf-read"),
+            relation_hash: "0".repeat(64),
+          },
+          worktree_path: "/wt/wf-read", working_branch: "feature/wf-read",
+        },
+      }],
+      delivery_kind: "development",
+    } as never,
+    expected: initialized.token,
+    operationId: "store-read-create",
+  });
+  const executionHandle = await openStore(context, "write");
+  try {
+    executionHandle.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+      .run(JSON.stringify({ progress: { status: "InProgress", summary: "half way", evidence_paths: [] } }), "wf-read", "wf-read");
+    executionHandle.db.prepare(
+      "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
+    ).run("wf-read", JSON.stringify({
+      holder: "session-2", claimed_at: STARTED_AT, plan_id: "wf-read",
+      source_branch: "feature/wf-read", target_branch: "main",
+    }));
+    executionHandle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+  } finally { executionHandle.close(); }
 
   const report = await refreshProjections(context);
   if (report.generation === null) throw new Error(`fixture: projection not published (${report.freshness})`);
@@ -505,19 +507,15 @@ describe("milestone views", () => {
     const standalone = await withStoreRead(context, queryMilestones("proj-a"));
     expect(standalone.storeRevision).toBe(resolved.storeRevision);
     expect(standalone.data).toEqual(resolvedData.milestones);
-    writeFile(join(harness, "status.json"), "{ not json");
-    const afterSourceChange = await withStoreRead(context, queryMilestones("proj-a"));
-    expect(afterSourceChange.projection).toEqual(standalone.projection);
-    expect(afterSourceChange.projection.freshness).toBe("current");
-    expect(afterSourceChange.data).toEqual(standalone.data);
-    // The view that does need projections refreshes and discloses the change;
-    // the milestone grouping is unchanged either way.
+    // A milestone-only read needs no projection refresh, so a later
+    // projection-consuming read republishes a new generation and the milestone
+    // grouping is answered from the committed rows either way (issue #428: the
+    // retired file route's status.json is no longer a projection source).
     const refreshed = await withStoreRead(context, queryDashboard("workflows"));
-    expect(refreshed.projection.freshness).toBe("stale");
-    const stale = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(stale.projection.freshness).toBe("stale");
-    expect(stale.projection.generation).toBe(generation);
-    expect(stale.data?.milestones).toEqual(standalone.data);
+    expect(refreshed.projection.freshness).toBe("current");
+    const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    expect(roadmap.projection.generation).toBeGreaterThanOrEqual(generation);
+    expect(roadmap.data?.milestones).toEqual(standalone.data);
   });
 
   test("a concurrent assignment cannot change the milestone counts or revisions one read reports", async () => {
@@ -1023,8 +1021,49 @@ describe("projection views", () => {
 
   test("a missing catalog link is a badge, not a guessed join", async () => {
     const { context, harness } = await workspace("workflow-unlinked-");
-    writeFile(join(harness, "status.json"), statusDoc("wf-read", "workflows/wf-read"));
-    writeFile(join(harness, "workflows/wf-read/snapshot.json"), snapshotDoc("wf-read", 3));
+    // The workflow is registered through the ACTIVE producer with NO catalog
+    // entity for the plan: the join by id finds nothing and must disclose a
+    // badge instead of guessing.
+    const created = await readExecutionState(context);
+    // Creation BINDS existing catalog identities (it never fabricates one), so
+    // the plan entity is registered while the workflow/plan LINK is absent --
+    // the join by id then finds nothing and must disclose a badge.
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: "wf-read", title: "Plan wf-read", rootKind: "plans", relativePath: "wf-read.md" },
+      op("unlinked-plan"),
+    );
+    const caller: ExecutionCaller = { sessionId: "unlinked-coordinator", role: "coordinator", workflowId: "wf-read" };
+    await createExecutionWorkflow({ harnessDir: harness, caller }, {
+      entry: { id: "wf-read", type: "plan", started_at: STARTED_AT, dir: "workflows/wf-read" },
+      snapshot: {
+        schema_version: 1, id: "wf-read", type: "plan", status: "running", started_at: STARTED_AT,
+        updated_at: STARTED_AT, phase: "phase-2-execute",
+        branch: { base: "main", source: "feature/wf-read", target: "main" },
+        plans: [{
+          id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress",
+          metadata: {
+            catalog_pin: {
+              store_id: created.storeId,
+              entity_revision: 1,
+              document_hash: executionInputHash({ id: "wf-read", plan_id: "wf-read" }, "wf-read"),
+              relation_hash: "0".repeat(64),
+            },
+          },
+        }],
+        delivery_kind: "development",
+      } as never,
+      expected: created.token,
+      operationId: "unlinked-create",
+    });
+    // The catalog row the workflow's plan bound at creation is gone: the join
+    // by id finds nothing and must disclose a badge, never fabricate a row.
+    const cleanup = await openStore(context, "write");
+    try {
+      cleanup.db.prepare("delete from catalog_links where from_id = ? or to_id = ?").run("wf-read", "wf-read");
+      cleanup.db.prepare("delete from catalog_entities where kind = 'plan' and id = ?").run("wf-read");
+      cleanup.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { cleanup.close(); }
     await refreshProjections(context);
 
     const envelope = await withStoreRead(context, queryDashboard("workflows"));
@@ -1033,7 +1072,7 @@ describe("projection views", () => {
     expect(workflow.badges).toEqual(["catalog-missing"]);
     expect(workflow.plans[0]?.catalog).toBeNull();
     // The frozen pin is disclosed even when the catalog row it refers to is gone.
-    expect(workflow.plans[0]?.catalogPinRevision).toBe(3);
+    expect(workflow.plans[0]?.catalogPinRevision).toBe(1);
     expect(workflow.plans[0]?.badges).toEqual(["catalog-missing"]);
   });
 
@@ -1113,75 +1152,61 @@ describe("projection views", () => {
     );
 
     // Same plan id under two different workflows: the plan workflow's own
-    // execution row and the iteration workflow's row for the same plan.
-    writeFile(
-      join(harness, "status.json"),
-      JSON.stringify(
-        {
-          version: 2,
-          updated_at: "2026-09-18",
-          workflows: [
-            { id: "wf-dup", type: "plan", started_at: STARTED_AT, dir: "workflows/wf-dup" },
-            { id: "iter-dup", type: "iteration", started_at: STARTED_AT, dir: "workflows/iter-dup" },
-          ],
-        },
-        null,
-        2,
-      ),
-    );
-    writeFile(
-      join(harness, "workflows/wf-dup/snapshot.json"),
-      JSON.stringify(
-        {
-          schema_version: 1,
-          id: "wf-dup",
-          type: "plan",
-          status: "running",
-          started_at: STARTED_AT,
-          updated_at: STARTED_AT,
-          phase: "phase-2-execute",
+    // execution row and the iteration workflow's row for the same plan. The
+    // pre-activation file route is retired (issue #428), so the graph is built
+    // through the ACTIVE producer.
+    const seeded = await readExecutionState(context);
+    const dupPlan = await getCatalog(context, { kind: "plan", id: "wf-dup" });
+    const pinFor = (revision: number) => ({
+      store_id: seeded.storeId,
+      entity_revision: revision,
+      document_hash: executionInputHash({ id: "wf-dup", plan_id: "wf-dup", title: "Plan wf-dup" }, "wf-dup"),
+      relation_hash: "0".repeat(64),
+    });
+    await createExecutionWorkflow(
+      { harnessDir: harness, caller: { sessionId: "dup-plan-coordinator", role: "coordinator" as const, workflowId: "wf-dup" } },
+      {
+        entry: { id: "wf-dup", type: "plan", started_at: STARTED_AT, dir: "workflows/wf-dup" },
+        snapshot: {
+          schema_version: 1, id: "wf-dup", type: "plan", status: "running", started_at: STARTED_AT,
+          updated_at: STARTED_AT, phase: "phase-2-execute",
           branch: { base: "main", source: "feature/wf-dup", target: "main" },
-          plans: [
-            {
-              id: "wf-dup",
-              title: "Plan wf-dup",
-              file: "/plans/wf-dup.md",
-              status: "InProgress",
-              coordination: { revision: 1, progress: { status: "InProgress", summary: "plan-workflow progress", evidence_paths: [] } },
-              metadata: { catalog_pin: { entity_revision: 7 }, worktree_path: "/wt/wf-dup", working_branch: "feature/wf-dup" },
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+          plans: [{
+            id: "wf-dup", title: "Plan wf-dup", file: "plans/wf-dup.md", status: "InProgress",
+            metadata: { catalog_pin: pinFor(7), worktree_path: "/wt/wf-dup", working_branch: "feature/wf-dup" },
+          }],
+          delivery_kind: "development",
+        } as never,
+        expected: seeded.token,
+        operationId: "dup-plan-create",
+      },
     );
-    writeFile(
-      join(harness, "workflows/iter-dup/snapshot.json"),
-      JSON.stringify(
-        {
-          schema_version: 1,
-          id: "iter-dup",
-          type: "iteration",
-          status: "running",
-          started_at: STARTED_AT,
-          updated_at: STARTED_AT,
-          phase: "phase-3-close",
+    const afterPlan = await readExecutionState(context);
+    await createExecutionWorkflow(
+      { harnessDir: harness, caller: { sessionId: "dup-iter-coordinator", role: "coordinator" as const, workflowId: "iter-dup" } },
+      {
+        entry: { id: "iter-dup", type: "iteration", started_at: STARTED_AT, dir: "workflows/iter-dup" },
+        snapshot: {
+          schema_version: 1, id: "iter-dup", type: "iteration", status: "running", started_at: STARTED_AT,
+          updated_at: STARTED_AT, phase: "phase-3-close",
           branch: { base: "main", source: "feature/wf-dup", integration: "integrate/iter-dup", target: "main" },
-          plans: [
-            {
-              id: "wf-dup",
-              title: "Plan wf-dup",
-              file: "/plans/wf-dup.md",
-              status: "Blocked",
-              metadata: { catalog_pin: { entity_revision: 9 }, worktree_path: "/wt/iter-dup", working_branch: "integrate/iter-dup" },
-            },
-          ],
-        },
-        null,
-        2,
-      ),
+          plans: [{
+            id: "wf-dup", title: "Plan wf-dup", file: "plans/wf-dup.md", status: "Blocked",
+            metadata: { catalog_pin: pinFor(9), worktree_path: "/wt/iter-dup", working_branch: "integrate/iter-dup" },
+          }],
+        } as never,
+        expected: afterPlan.token,
+        operationId: "dup-iter-create",
+      },
     );
+    const dupHandle = await openStore(context, "write");
+    try {
+      dupHandle.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify({ progress: { status: "InProgress", summary: "plan-workflow progress", evidence_paths: [] } }), "wf-dup", "wf-dup");
+      dupHandle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { dupHandle.close(); }
+    const dupPlanCatalog = await getCatalog(context, { kind: "plan", id: "wf-dup" });
+    expect(dupPlan.entity.revision).toBe(dupPlanCatalog.entity.revision);
     await refreshProjections(context);
 
     const envelope = await withStoreRead(context, queryDashboard("workflows"));
@@ -1240,27 +1265,42 @@ describe("projection views", () => {
   });
 
   test("an unavailable projection is disclosed as unavailable, not as zero work", async () => {
-    const { context, harness } = await workspace("unavailable-");
-    writeFile(join(harness, "status.json"), "{ not json");
-    const envelope = await withStoreRead(context, queryDashboard("workflows"));
-    expect(envelope.projection.generation).toBeNull();
-    expect(envelope.projection.freshness).toBe("unavailable");
-    expect(envelope.projection.builtAt).toBeNull();
-    expect(envelope.projection.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("root:harness:status.json");
-    expect(envelope.data).toEqual({ items: [], total: 0 });
+    const { context } = await workspace("unavailable-");
+    // The projection's execution-ROW source is the ACTIVE authority: an
+    // unreadable authority is `unavailable`, never an empty projection.
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "Unexpected token 'not json'";
+    try {
+      const envelope = await withStoreRead(context, queryDashboard("workflows"));
+      expect(envelope.projection.generation).toBeNull();
+      expect(envelope.projection.freshness).toBe("unavailable");
+      expect(envelope.projection.builtAt).toBeNull();
+      expect(envelope.projection.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("root:harness:execution/registry");
+      expect(envelope.data).toEqual({ items: [], total: 0 });
+    } finally {
+      delete process.env.MSTAR_STORE_TEST_RUNNER;
+      delete process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR;
+    }
   });
 
   test("a projection view reads only committed store data, never source JSON", async () => {
-    const { context, harness } = await projectedWorkspace("no-source-io-");
-    // The view layer must not consult the sources: with every source made
-    // unreadable after publication, a published generation still answers --
+    const { context } = await projectedWorkspace("no-source-io-");
+    // The view layer must not consult the sources: with the ACTIVE authority
+    // made unreadable after publication, a published generation still answers --
     // and the refresh that precedes it keeps the last good generation.
-    rmSync(join(harness, "status.json"));
-    const envelope = await withStoreRead(context, queryDashboard("workflows"));
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "authority went away";
+    let envelope;
+    try {
+      envelope = await withStoreRead(context, queryDashboard("workflows"));
+    } finally {
+      delete process.env.MSTAR_STORE_TEST_RUNNER;
+      delete process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR;
+    }
     expect(envelope.projection.freshness).toBe("stale");
     expect(envelope.projection.generation).not.toBeNull();
     expect(envelope.data.items.map((item) => item.id)).toEqual(["wf-read"]);
-    expect(envelope.projection.diagnostics.some((diagnostic) => diagnostic.reason === "missing")).toBe(true);
+    expect(envelope.projection.diagnostics.some((diagnostic) => diagnostic.reason === "invalid")).toBe(true);
     // The view answers from the retained generation, whose bytes on disk are
     // already gone: no source read could have produced this data.
   });

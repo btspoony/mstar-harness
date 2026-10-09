@@ -893,7 +893,14 @@ export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: strin
   refusePendingRegistration(id, pending);
 }
 
-/** Async handle-taking gate retained until coordination.ts drops its legacy route. */
+/**
+ * Async handle-taking gate. Its remaining callers are OUTSIDE this change's
+ * Files list — `coordination.ts:871` (the retained prepare/bind registration
+ * gate) and `packages/dsh/src/gates/workflow-selection.ts:869` — so the wrapper
+ * and those callers are handed to T21 with the terminal veto sweep rather than
+ * cut here (T6 owns only this module's own fixtures).
+ */
+// T21: coordination.ts prepare/bind gate + dsh workflow-selection gate still call this wrapper.
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
   const handle = await openStore(context, "read");
   try {

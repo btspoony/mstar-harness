@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import {
   decodeExecutionSessionRef,
   executionContextFor,
@@ -8,17 +6,12 @@ import {
   listIssues,
   mutateExecutionWorkflow,
   readExecutionAuthority,
-  readWorkflowSnapshot,
-  resolveExecutionReadRoute,
   resolveCurrentAuthority,
   resolveProcessHarnessDir,
-  validateStatusV2,
-  WORKFLOW_SNAPSHOT_FILE,
-  WorkflowSnapshotValidationError,
   type ExecutionToken,
 } from "@mstar-harness/engine";
 import { z } from "zod";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
 import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import { engineErrorFacts } from "./family-refusal.js";
@@ -99,94 +92,61 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
   return [
     command({
       id: "status.validate",
-      cli: { path: ["status", "validate"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
+      cli: { path: ["status", "validate"], aliases: [], arguments: [], options: [
+        { key: "path", flags: "--path <path>", required: false, help: "retired file-route input: naming a status.json/snapshot path is refused; the ACTIVE authority is read with no path" },
+      ] },
       input: z.object({ path: z.string().min(1).optional() }),
       output,
       effects: ["read", "validate"],
-      description: "Validate the v2 status register or a workflow snapshot. Under an ACTIVE execution authority the output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, and each plan's token at data.authority.workflows[].planTokens[<planId>].",
+      description: "Validate the control root's ACTIVE execution authority (the pre-activation status.json / snapshot file route is retired). The output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, and each plan's token at data.authority.workflows[].planTokens[<planId>].",
       async execute(input, context) {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);
+        if (parsed.data.path !== undefined) {
+          return refused(
+            "status.validate",
+            "status.file-route-retired",
+            "status validate reads the ACTIVE execution authority only; the pre-activation status.json / snapshot file route is retired (issue #428). Nothing was read.",
+            { path: parsed.data.path },
+            "Run mstar status validate with no path to read the control root's ACTIVE execution authority; a control root with no ACTIVE store is created with mstar harness scaffold then mstar store init (or mstar store upgrade to import historical file state).",
+          );
+        }
         try {
-          const defaultTarget = parsed.data.path === undefined;
-          let target = parsed.data.path;
-          const legacyUpgradeEntry = "mstar store upgrade --operator <name>";
-          const legacyUpgradeDetails: { entry: string; limitation?: string } = { entry: legacyUpgradeEntry };
-          if (defaultTarget) {
-            const harnessDir = executionHarness(context);
-            if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold to create the harness directory, then rerun mstar status validate.");
-            try {
-              const authority = await resolveCurrentAuthority({ harnessDir });
-              if (authority.route === "execution") {
-                const read = await readExecutionAuthority({ harnessDir });
-                return ok("status.validate", {
-                  authority: read.data,
-                  token: read.token,
-                  workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
-                  terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
-                  terminalAdoptions: "terminalAdoptions" in read.data ? read.data.terminalAdoptions : [],
-                  state: "active",
-                });
-              }
-            } catch (error) {
-              const code = engineCode(error, "status.authority-unreadable");
-              const cause = messageOf(error);
-              const recovery = authorityRecoveryHint(code);
-              const originalDetails =
-                error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
-                  ? error.details
-                  : {};
-              return refused("status.validate", code || "status.authority-unreadable", `${cause} Self-check recovery: ${recovery}`, {
-                ...originalDetails,
-                state: "unreadable",
-                selfCheck: { couldNotRead: cause, recovery },
-              }, "Correct the store or runtime problem named in the self-check recovery, then run mstar status validate.");
-            }
-            target = path.join(harnessDir, "status.json");
-          } else {
-            target = path.resolve(context.cwd, target!);
-            if (path.basename(target) === "status.json" && (await resolveExecutionReadRoute({ harnessDir: path.dirname(target) })) === "execution") {
-              return refused("status.validate", "status.execution-authority-active", "The active execution authority must be validated through its authority reader", undefined, "Run mstar status validate to read the active execution authority instead of this status file.");
-            }
+          const harnessDir = executionHarness(context);
+          if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold then mstar store init to create an ACTIVE control root, then rerun mstar status validate.");
+          try {
+            const authority = await resolveCurrentAuthority({ harnessDir });
+            const read = await readExecutionAuthority({ harnessDir });
+            return ok("status.validate", {
+              authority: read.data,
+              token: read.token,
+              workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
+              terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
+              terminalAdoptions: "terminalAdoptions" in read.data ? read.data.terminalAdoptions : [],
+              state: authority.route,
+            });
+          } catch (error) {
+            const code = engineCode(error, "status.authority-unreadable");
+            const cause = messageOf(error);
+            const recovery = authorityRecoveryHint(code);
+            const originalDetails =
+              error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
+                ? error.details
+                : {};
+            return refused("status.validate", code || "status.authority-unreadable", `${cause} Self-check recovery: ${recovery}`, {
+              ...originalDetails,
+              state: "unreadable",
+              selfCheck: { couldNotRead: cause, recovery },
+            }, "Correct the store or runtime problem named in the self-check recovery, then run mstar status validate.");
           }
-          if (!existsSync(target)) {
-            if (defaultTarget) {
-              return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, {
-                path: target,
-                state: "legacy",
-                upgrade: legacyUpgradeDetails,
-                selfCheck: {
-                  couldNotRead: "legacy status register is missing",
-                  recovery: "Run `mstar store upgrade --operator <name>` to create or upgrade the store, import recognizable workflows, and report skipped items without moving their source files.",
-                },
-              }, "Run mstar store upgrade --operator <name> to create the store, import recognizable workflows, and report skipped items, then rerun mstar status validate.");
-            }
-            return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, undefined, "Restore or create the status file at the reported path, then run mstar status validate.");
-          }
-          if (path.basename(target) === WORKFLOW_SNAPSHOT_FILE) {
-            const read = readWorkflowSnapshot(path.dirname(target));
-            return ok("status.validate", { path: target, diagnostics: read.diagnostics });
-          }
-          const gate = validateStatusV2(target);
-          const data = defaultTarget
-            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: legacyUpgradeDetails }
-            : { path: target, violations: gate.ok ? [] : gate.violations };
-          return gate.ok
-            ? ok("status.validate", data)
-            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { ...data }, "Resolve each status validation violation reported in the details, then run mstar status validate.");
         } catch (error) {
-          // The engine's own refusal facts travel verbatim at this mapper too:
-          // a typed store/authority error keeps its code, its `details` record
-          // (e.g. the distinct schema-unsupported version facts) and any
-          // recovery it authors, instead of collapsing to code plus prose.
           const { code, details, recovery } = engineErrorFacts(error);
-          const snapshotCode = error instanceof WorkflowSnapshotValidationError ? error.violations[0]?.code : undefined;
           const failureMessage = recovery === undefined ? messageOf(error) : `${messageOf(error)}\nRecovery: ${recovery}`;
-          const fallbackRecovery = recovery ?? "Correct the invalid snapshot field, then run mstar status validate again.";
+          const fallbackRecovery = recovery ?? "Correct the reported store or runtime condition, then run mstar status validate again.";
           return refusalEnvelope({
             command: "status.validate",
             status: "refused",
-            code: snapshotCode ?? code ?? "status.validation-failed",
+            code: code ?? "status.validation-failed",
             exitCode: 1,
             message: failureMessage,
             details: details ?? {},
