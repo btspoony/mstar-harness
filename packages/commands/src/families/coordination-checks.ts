@@ -115,7 +115,13 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           // one refuses out of `readExecutionAuthority` instead of reading
           // leftover JSON.
           const read = await readExecutionAuthority({ harnessDir: root }, { workflowId: input.workflow });
-          lease = (read.data as { integrationLease?: unknown }).integrationLease ?? undefined;
+          // The scoped addressed read answers an `ExecutionState` shape whose
+          // lease fact lives on the addressed workflow ENTRY
+          // (`ExecutionState.workflows[0].integrationLease`), never at the DTO
+          // root — reading the root would always answer `claimed:false` and
+          // skip lease validation entirely.
+          const addressed = read.data as { workflows?: Array<{ integrationLease?: unknown }> };
+          lease = addressed.workflows?.[0]?.integrationLease ?? undefined;
           if (lease === undefined) return ok(id, { workflow: input.workflow, claimed: false });
           const result = validateIntegrationMergeLease(lease);
           return result.ok ? ok(id, { workflow: input.workflow, claimed: true, lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.merge-lease.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations }, recovery: "Resolve each reported merge-lease violation, then run mstar lease verify-integration --workflow <workflow-id>." });
