@@ -671,7 +671,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(jsonOf(evidenceMix)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
 
-    // The one-time delivery-kind rewrite has no active operation.
+    // The one-time delivery-kind rewrite needs both delivery anchors. The
+    // CLI returns one aggregated usage envelope and leaves the header intact.
+    const headerBeforeDeclare = await storedHeader(fixture);
     const declare = runCli(
       [
         "workflow",
@@ -686,9 +688,15 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(declare.exitCode).toBe(1);
-    expect(String(jsonOf(declare).code)).toBe("execution.consumer-not-ready");
-    expect((await storedHeader(fixture)).status).toBe("running");
+    expect(declare.exitCode).toBe(2);
+    const declarationEnvelope = jsonOf(declare);
+    expect(declarationEnvelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    const details = declarationEnvelope.details;
+    const diagnostics = details !== null && typeof details === "object" && "diagnostics" in details ? details.diagnostics : undefined;
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "branchSource" }), expect.objectContaining({ path: "branchTarget" })]),
+    );
+    expect(await storedHeader(fixture)).toEqual(headerBeforeDeclare);
   });
 
   test("the retired pre-activation registration path is refused while the authority is active", async () => {

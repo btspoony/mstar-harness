@@ -19,9 +19,18 @@ interface CliEnvelope {
   status: string;
   code: string;
   exitCode: number;
-  message?: string;
+  helpRoute?: string;
+  recovery?: string;
   data?: Record<string, unknown>;
-  details?: { violations?: { code: string }[]; results?: LintResult[]; findings?: Finding[]; unreadableFiles?: number };
+  details?: {
+    helpRoute?: string;
+    recovery?: string;
+    violations?: { code: string }[];
+    diagnostics?: { path?: string; code: string; expected?: string; received?: string }[];
+    results?: LintResult[];
+    findings?: Finding[];
+    unreadableFiles?: number;
+  };
 }
 type Finding = { file?: string; line?: number; type?: string; kind?: string; code?: string };
 
@@ -33,6 +42,17 @@ export function cliEnvelope(result: RunResult, status?: string, code?: string): 
   if (code !== undefined) expect(envelope.code).toBe(code);
   return envelope;
 }
+
+export function expectUsageDiagnostic(result: RunResult, path: string): CliEnvelope {
+  const envelope = cliEnvelope(result, "usage", "command.invalid-input");
+  expect(envelope.details?.helpRoute).toEqual(expect.any(String));
+  expect(envelope.details?.recovery).toEqual(expect.any(String));
+  expect(envelope.details?.diagnostics).toEqual(
+    expect.arrayContaining([expect.objectContaining({ path, code: expect.any(String) })]),
+  );
+  return envelope;
+}
+
 
 export function violationCodes(result: RunResult): string[] {
   const envelope = cliEnvelope(result, result.exitCode === 0 ? "ok" : "refused");

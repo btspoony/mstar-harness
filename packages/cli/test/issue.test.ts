@@ -546,8 +546,17 @@ describe("mstar issue CLI bundle", () => {
     expect(listed.exitCode).toBe(2);
     expect(jsonOf(listed).code).toBe("command.invalid-input");
     const add = runBundle("node", ["issue", "add", "--harness", harness, "--actor", "project-manager", "--operation-id", "x"], root);
-    expect(add.exitCode).toBe(1);
-    expect(jsonOf(add).status).toBe("refused");
+    expect(add.exitCode).toBe(2);
+    expect(jsonOf(add)).toMatchObject({
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      details: {
+        helpRoute: expect.any(String),
+        recovery: expect.any(String),
+        diagnostics: expect.arrayContaining([expect.objectContaining({ path: expect.any(String), code: expect.any(String) })]),
+      },
+    });
   });
 
   test("below-floor Node refuses with actionable upgrade guidance", async () => {

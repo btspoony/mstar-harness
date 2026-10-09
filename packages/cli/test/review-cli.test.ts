@@ -17,6 +17,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -204,7 +205,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
   test("missing <assignment-file> arg → usage, exit 2", () => {
     const result = runCli(["review", "seats"]);
     expect(result.exitCode).toBe(2);
-    expect(String(jsonOf(result).message)).toContain("missing required argument 'assignmentFile'");
+    expectUsageDiagnostic(result, "assignmentFile");
   });
 
   test("nonexistent assignment file → exit 1 with file error", () => {

@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -294,7 +295,7 @@ describe("mstar pr-review seat-prompt", () => {
     });
   });
 
-  test("--collect-folded on stage 1 surfaces the engine contradiction error (exit 1)", () => {
+  test("--collect-folded stage 1 reports the conditional stage input as usage", () => {
     withTempDir(() => {
       const result = runCli([
         "pr-review", "seat-prompt",
@@ -302,10 +303,17 @@ describe("mstar pr-review seat-prompt", () => {
         "--domain", "backend",
         "--seat", "7",
         "--worktree", "/abs/wt",
+        "--diff-file", "/abs/x.diff",
         "--collect-folded",
       ]);
-      expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("collectFolded requires stage 2");
+      expect(result.exitCode).toBe(2);
+      const envelope = expectUsageDiagnostic(result, "stage");
+      expect(envelope.details?.diagnostics?.[0]).toMatchObject({
+        path: "stage",
+        code: "not_allowed",
+        expected: '"2"',
+        received: '"1"',
+      });
     });
   });
 
@@ -330,7 +338,10 @@ describe("mstar pr-review seat-prompt", () => {
   test("bad stage value → usage, exit 2", () => {
     const result = runCli(["pr-review", "seat-prompt", "--stage", "3", "--domain", "d", "--seat", "s", "--worktree", "/w"]);
     expect(result.exitCode).toBe(2);
-    expect(message(result)).toContain("--stage must be 1 or 2");
+    const envelope = expectUsageDiagnostic(result, "stage");
+    expect(envelope.details?.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "stage", expected: '"1" | "2"', received: '"3"' })]),
+    );
   });
 
   test("--tier quick shrinks read-first sections and omits deep-only ingredients", () => {
@@ -1175,7 +1186,7 @@ describe("mstar pr-review post", () => {
       });
       const result: RunResult = { exitCode: noGhProc.exitCode, stdout: noGhProc.stdout.toString(), stderr: noGhProc.stderr.toString() };
       expect(noGhProc.exitCode).toBe(1);
-      expect(envelope(result).status).toBe("error");
+      expect(envelope(result).code).toBe("process.not-found");
       expect(message(result)).toContain("executable not found in $PATH: gh");
     });
   });

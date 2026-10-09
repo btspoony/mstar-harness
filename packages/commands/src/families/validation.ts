@@ -358,7 +358,20 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       }
       case "worktree.qc-alignment": {
         const files = input.files ?? [];
-        if (!files.length) throw new SddScriptError("usage: worktree qc-alignment <assignment-file>...", 2);
+        if (!files.length) {
+          return refusalEnvelope({
+            command: id,
+            status: "usage",
+            code: "command.invalid-input",
+            exitCode: 2,
+            message: "Invalid input.",
+            diagnostics: [{
+              path: "files",
+              code: "required",
+              message: "at least one assignment file is required",
+            }],
+          });
+        }
         const assignments: QcAlignmentAssignment[] = files.map((file) => {
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
           const text = readFileSync(file, "utf8");

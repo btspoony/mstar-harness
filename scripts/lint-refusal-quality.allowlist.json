@@ -498,11 +498,6 @@
   "expectedCount": 1
  },
  {
-  "signature": "missing-recovery:packages/commands/src/families/status.ts:58e7a761dc88",
-  "justification": "same one-level refusal-wrapper cohort as the replaced entry: the wrapper transports engine-authored code/details/recovery verbatim (verified by the F4 fidelity smoke and family L2 reviews); signature refreshed after the engineErrorFacts recovery-transport refactor",
-  "trackingIssue": "#422, refreshed by #426"
- },
- {
   "signature": "missing-cause-code:packages/commands/src/families/milestone.ts:b8ccc9433d16",
   "justification": "same one-level refusal-wrapper cohort as the replaced entry: the wrapper transports engine-authored code/details/recovery verbatim (verified by the F4 fidelity smoke and family L2 reviews); signature refreshed after the engineErrorFacts recovery-transport refactor",
   "trackingIssue": "#422, refreshed by #426"

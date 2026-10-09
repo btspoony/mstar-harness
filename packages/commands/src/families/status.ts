@@ -20,6 +20,7 @@ import {
   setArtifactStore,
   validateStatusV2,
   WORKFLOW_SNAPSHOT_FILE,
+  WorkflowSnapshotValidationError,
   type ExecutionToken,
 } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -177,7 +178,16 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           // (e.g. the distinct schema-unsupported version facts) and any
           // recovery it authors, instead of collapsing to code plus prose.
           const { code, details, recovery } = engineErrorFacts(error);
-          return refused("status.validate", code ?? "status.validation-failed", messageOf(error), details, recovery);
+          const snapshotCode = error instanceof WorkflowSnapshotValidationError ? error.violations[0]?.code : undefined;
+          return refusalEnvelope({
+            command: "status.validate",
+            status: "refused",
+            code: snapshotCode ?? code ?? "status.validation-failed",
+            exitCode: 1,
+            message: recovery === undefined ? messageOf(error) : `${messageOf(error)}\nRecovery: ${recovery}`,
+            details: details ?? {},
+            recovery: "Correct the invalid snapshot field, then run mstar status validate again.",
+          });
         }
       },
     }),

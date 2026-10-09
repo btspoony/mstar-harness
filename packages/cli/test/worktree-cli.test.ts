@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runCli as runOwnerCli, withTempDir } from "./harness";
-import { cliEnvelope, violationCodes } from "./support/cli-assertions";
+import { cliEnvelope, expectUsageDiagnostic, violationCodes } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -926,6 +926,6 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
   test("no assignment files is a usage error (exit 2)", () => {
     const result = runOwnerCli(["worktree", "qc-alignment"]);
     expect(result.exitCode).toBe(2);
-    expect(String(cliEnvelope(result, "usage").message)).toContain("missing required argument 'files'");
+    expectUsageDiagnostic(result, "files");
   });
 });

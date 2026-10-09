@@ -21,6 +21,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -652,15 +653,23 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
       const f = executionFixture(root);
       const noContext = runCli(["sdd", "exec"], { cwd: root });
       expect(noContext.exitCode).toBe(2);
-      expectEnvelopeMessage(noContext, "missing required argument 'argv'");
+      expectUsageDiagnostic(noContext, "argv");
 
       const noArgv = runCli(["sdd", "exec", "--context", f.ctxFile], { cwd: f.control });
       expect(noArgv.exitCode).toBe(2);
-      expectEnvelopeMessage(noArgv, "missing required argument 'argv'");
+      expectUsageDiagnostic(noArgv, "argv");
 
       const relativeCtx = runCli(["sdd", "exec", "--context", "ctx.json", "--", "true"], { cwd: f.control });
       expect(relativeCtx.exitCode).toBe(2);
-      expectEnvelopeMessage(relativeCtx, "usage: sdd exec --context");
+      expect(JSON.parse(relativeCtx.stdout)).toMatchObject({
+        status: "usage",
+        code: "command.invalid-input",
+        exitCode: 2,
+        details: {
+          helpRoute: expect.any(String),
+          recovery: expect.any(String),
+        },
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

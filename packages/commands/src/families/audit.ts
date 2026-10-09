@@ -189,9 +189,33 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const auditDir = resolvePath(context.cwd, required(input.path, "audit-dir"));
       if (!existsSync(auditDir)) throw new Error(`audit dir not found: ${auditDir}`);
       const selected = input.plans === undefined ? listAuditPlanIds(auditDir) : parseCsv(input.plans);
-      if (selected.length === 0) throw new SddScriptError(input.plans === undefined ? `no audit plans found in ${auditDir}` : "--plans must select at least one plan", 2);
+      if (selected.length === 0) {
+        return refusalEnvelope({
+          command: id,
+          status: "usage",
+          code: "command.invalid-input",
+          exitCode: 2,
+          message: "Invalid input.",
+          diagnostics: [{
+            path: "--plans",
+            code: "required",
+            message: input.plans === undefined ? "select an audit plan with --plans" : "--plans must select at least one plan",
+          }],
+        });
+      }
       if (input.plans === undefined && selected.length > 1) {
-        throw new SddScriptError(`--plans is a required decision because ${selected.length} audit plans are available: ${selected.join(", ")}`, 2);
+        return refusalEnvelope({
+          command: id,
+          status: "usage",
+          code: "command.invalid-input",
+          exitCode: 2,
+          message: "Invalid input.",
+          diagnostics: [{
+            path: "--plans",
+            code: "required",
+            message: `--plans is required because ${selected.length} audit plans are available`,
+          }],
+        });
       }
       const deliveryKind = required(input.deliveryKind, "--delivery-kind");
       if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) throw new SddScriptError(`--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`, 2);

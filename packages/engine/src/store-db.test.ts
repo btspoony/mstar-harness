@@ -124,11 +124,16 @@ describe("store-db read-open repair", () => {
     bytes.write("this is not a sqlite database", 0, "latin1");
     // The two bytes the quiesced-WAL shape is recognized by, on a file that is
     // not a SQLite database at all: the repair must not add a journal for it.
+    // SQLite driver wording varies by platform; both messages mean the corrupt
+    // file could not be opened as a database.
     bytes[18] = 2;
     bytes[19] = 2;
     writeFileSync(path, bytes);
 
-    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({
+      code: "store.corrupt",
+      message: expect.stringMatching(/unable to open database file|not a database/i),
+    });
     expect(existsSync(`${path}-wal`)).toBe(false);
   });
 
