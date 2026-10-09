@@ -1,145 +1,26 @@
 /**
- * model-handoff — omp extension: the coordinator-session half of the Morning
- * Star iteration model handoff.
+ * omp coordinator-session half of the Morning Star model handoff.
  *
- * The saved preference lives in native omp plugin settings
- * (`packages/omp/src/model-handoff-settings.ts`, read through the exported
- * `getPluginSettings` helper — never a second settings file or UI). This module
- * owns the *session* half: it arms `@slow` once the direction is locked and
- * before the Phase 1 draft is written — the named workflow is not registered
- * yet, so the arm takes the unregistered reservation path — observes unowned
- * model changes while that arm is pending, guards session navigation around an
- * invoked model action, and recovers a durable attempt as `uncertain`.
+ * Native omp settings own the preference. This extension records one session-
+ * local ledger, arms `@slow` at the direction-lock entry, validates Phase 1
+ * readiness against ACTIVE execution authority facts, then performs at most one
+ * model switch. It never writes workflow lifecycle or engine state.
  *
- * ## Authority is derived from host facts, never claimed by the caller
+ * Authority comes from the host session and canonical control-root facts, not
+ * caller-declared role, identity or paths. The operation observes session
+ * history conservatively: unowned model changes cancel a pending action,
+ * uncertainty is never replayed, and an invoked action is never retried.
  *
- * The `mstar_model_handoff` start input carries **no authority, intent or entry
- * declaration**. The control root this session addresses decides WHICH authority
- * answers (§6), and the caller never selects one:
- *
- * - On an **ACTIVE execution authority** (`resolveExecutionReadRoute` →
- *   `execution`) the start authority is the DB's own workflow/coordinator view:
- *   the named workflow must exist as a running iteration whose coordinator seat
- *   is this session, this session must not already coordinate another
- *   non-terminal workflow, and the adopted `ExecutionBinding` is carried into
- *   the durable handoff record. The retired register, snapshot and coordinator
- *   envelopes are never opened.
- * - On the **pre-activation FILE route** (a harness with no store, or a
- *   non-active one) `deriveStartAuthority` reads host and engine facts only:
- *
- *   - the host session must not be a leaf/subagent session (`session_init` in
- *     its ledger);
- *   - the workflow's own session envelopes
- *     (`{WORKFLOW_DIR}/<id>/sessions/*.json`, read-only through the engine's
- *     `readSessionEnvelope`) must not bind the named workflow to a *different*
- *     coordinator session, and must not bind this session to a different
- *     workflow;
- *   - the root register's other non-terminal workflows must not already name
- *     this session as their coordinator.
- *
- * What that blocks: a task session, a session that is demonstrably not the
- * named workflow's coordinator, and a session already coordinating another
- * running workflow. What it does **not** do: it is not cryptographic proof of
- * caller identity. For a brand-new iteration there is no envelope yet, so a
- * caller inside a genuine coordinator session can still invoke the tool — that is
- * the frozen E1 trusted-assertion boundary (Task 2's trust split), and this
- * module does not claim to strengthen it.
- *
- * ## What this module may claim — and what it must not
- *
- * The host exposes no attributed model-selection event and no cancellation for
- * an already invoked `setModel` (spec §B1), so:
- *
- * - Pending cancellation is a **conservative observation**, not exact user
- *   attribution: a new unowned `model_change` entry, or a live model that
- *   differs from the armed baseline, cancels the not-yet-executed switch.
- *   Another extension or a host-driven change can therefore cancel a pending
- *   handoff too; that safety bias is disclosed rather than hidden.
- * - The durable record is appended **before** the action
- *   (attempt-before-action) and an interrupted attempt recovers as `uncertain`
- *   with no retry. `appendEntry` is not a flush/storage acknowledgement, so this
- *   is at-most-once per *persisted* attempt under normal session persistence —
- *   **not** exactly-once and not power-loss durable. No earlier model is ever
- *   restored "back".
- * - Same-model reselection and transactional withdrawal of an already invoked
- *   action are not requirements; nothing here claims them.
- *
- * ## Lifecycle (durable state is the session ledger, never a second store)
- *
- * `pi.appendEntry("mstar:model-handoff", HandoffRecord)` is the only writer.
- * Every decision replays the full ledger (`getEntries()`) with exact session-ID
- * filtering, so a fork with a new session ID inherits no authority and a
- * terminal binding cannot be resurrected by tree navigation.
- *
- * - **Arm** (`mstar_model_handoff` `{operation:"start"}`): the PM's explicit
- *   call once the direction is locked and before the Phase 1 draft is written.
- *   On the FILE route the workflow is not registered yet at that moment, so the
- *   arm takes the unregistered reservation path — the expected route for a new
- *   iteration, never a reason to skip the call; on the ACTIVE route the named
- *   workflow exists in the DB and its coordinator seat must already be this
- *   session. A false/absent preference returns a neutral successful no-op,
- *   leaving the session model and ledger unchanged. The arm is single-entry
- *   in memory (`armInFlight`) *and*
- *   re-checks the durable state after every `await`, so two concurrent starts
- *   cannot both reserve and arm. The arm attempt is recorded, `@slow` is
- *   selected once through `pi.setModel`, and `pending` is entered only when the
- *   live model agrees **and** every `model_change` entry recorded after the
- *   pre-arm cursor describes `@slow` (an away-and-back inside the arm window is
- *   a conflict). The durable record carries the binding of the route that
- *   answered — the adopted DB session reference on the ACTIVE route, the
- *   envelope-address paths on the FILE route.
- * - **Fire** (`{operation:"phase1-complete"}`): an off preference is a neutral
- *   no-op even without a binding; otherwise it runs the frozen E2 readiness
- *   checkpoint on the route the recorded binding names (the DB views for an
- *   ACTIVE binding, the register/snapshot/envelope for a FILE one), re-reads
- *   the preference after that asynchronous work (honoring settings edits), then
- *   performs — synchronously, with no `await` in between — the final pending
- *   scan, the `pending → attempting` record append, the navigation-guard arm and
- *   the single public `setModel`.
- * - **Observation** (`input`, `before_agent_start`, `tool_result`, `agent_end`,
- *   navigation-before events, reconstruction) only ever *cancels*; it never
- *   switches a model, never re-selects `@slow`, and is skipped while this
- *   instance's own action is in flight.
- * - **Navigation**: while an action is in flight, a navigation-before handler
- *   returns `{ cancel: true }` immediately (no `await` inside the handler — an
- *   extension-handler timeout would otherwise let navigation continue). When
- *   navigation arrives first it advances a generation fence before any
- *   asynchronous callback can start an action; the fence clears only on the
- *   matching post-navigation event plus reconstruction. If no post-event arrives
- *   (e.g. another extension cancelled the navigation) the suspended condition
- *   stays visibly recorded instead of being guessed away.
- *
- * The extension never writes role mappings, thinking level, service tiers, goal
- * state, workflow lifecycle or another session's model, and it never shadows a
- * native command, registers a command/shortcut/flag or intercepts a key.
- *
- * ## Host session identity
- *
- * Every identity comparison on this surface — the `model-handoff-readiness`
- * readiness checkpoint and `deriveStartAuthority` below — compares the *engine*
- * session id with the *host* session id (`ctx.sessionManager.getSessionId()`);
- * they are one identifier only when the engine was told which one to adopt. The
- * module closes that gap from the host side through the host-owned
- * `mstar_coordinator` tool (`../coordinator-identity.ts`): a coordinator `bind`
- * derives the native id and the canonical control root from host facts and calls
- * the engine directly, so the identity is acquired rather than injected. No
- * environment variable authorizes a coordinator bootstrap, and a managed
- * coordinator bind attempted through the shell is refused with a redirect to
- * that tool instead of a silent input revision.
+ * Navigation fencing is in-memory and synchronous at the event boundary;
+ * notices disclose observed state without asserting a guessed status.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
   WORKFLOW_TERMINAL_STATUSES,
   canonicalizeNearestExisting,
   readExecutionAuthority,
   readMainWorktree,
-  readSessionEnvelope,
-  readWorkflowSnapshot,
-  resolveExecutionReadRoute,
   resolveHarnessDir,
-  validateStatusV2,
 } from "@mstar-harness/engine";
 import type { ExecutionPlanView, ExecutionRead, ExecutionSessionRef, ExecutionState } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
@@ -161,7 +42,7 @@ import type {
   Phase1Receipt,
 } from "../model-handoff-readiness";
 import { readHandoffSettings } from "../model-handoff-settings";
-import { HANDOFF_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, neutralNotice, statusNotice } from "../notices";
+import { HANDOFF_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, neutralNotice } from "../notices";
 import type { NoticeTitle } from "../notices";
 
 /** Ledger `customType` of the durable handoff record (the only writer). */
@@ -179,10 +60,6 @@ const TOOL_NAME = "mstar_model_handoff";
 const SLOW_SPEC = "@slow";
 /** Record schema version; bumped only by a deliberate migration. */
 const RECORD_VERSION = 1;
-/** Root register file inside the harness dir (v2 `status.json`). */
-const STATUS_FILE = "status.json";
-/** Session envelopes of one workflow live in `<workflow-dir>/sessions/`. */
-const SESSION_DIR = "sessions";
 /** Host session id passed to plan/assignment binds through the child shell. */
 const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 /** Single-quote a value for a POSIX shell — the one quoting that never expands. */
@@ -386,166 +263,22 @@ function routeOf(text: string): RouteKind | null {
 
 /* --------------------------------------------------- start authority ------ */
 
-type AuthorityRefusalCode =
-  | "task-session"
-  | "coordinator-elsewhere"
-  | "envelope-invalid"
-  | "register-invalid";
+type AuthorityRefusalCode = "task-session" | "coordinator-elsewhere" | "register-invalid";
 
 type AuthorityDecision =
   | Readonly<{ ok: true }>
-  | Readonly<{
-      ok: false;
-      code: AuthorityRefusalCode;
-      message: string;
-      /**
-       * Internal typed discriminator for exactly one decision: the named
-       * workflow's own coordinator envelope names a *different* session. It is
-       * not a refusal code and not exported; only the registered-attach branch
-       * maps it to the observable `already-bound` outcome. No other decision
-       * carries it, and nothing matches error prose to recover it.
-       */
-      reason?: "foreign-coordinator";
-    }>;
+  | Readonly<{ ok: false; code: AuthorityRefusalCode; message: string }>;
 
-/** One engine session envelope, reduced to the fields this adapter derives from. */
-type WorkflowEnvelope = Readonly<{
-  path: string;
-  sessionId: string;
-  workflowId: string;
-  role: "coordinator";
-}>;
-
-/** Read-only engine facts inside one workflow dir: envelope path, session id, workflow id, role. */
-function readWorkflowEnvelopes(workflowDir: string): readonly WorkflowEnvelope[] {
-  const sessionsDir = join(workflowDir, SESSION_DIR);
-  if (!existsSync(sessionsDir)) return [];
-  const envelopes: WorkflowEnvelope[] = [];
-  for (const name of readdirSync(sessionsDir).sort()) {
-    if (!name.endsWith(".json")) continue;
-    const path = join(sessionsDir, name);
-    const envelope = readSessionEnvelope(path); // throws coordination.session-* on malformed input
-    envelopes.push({
-      path,
-      sessionId: envelope.session_id,
-      workflowId: envelope.workflow_id,
-      role: envelope.role,
-    });
-  }
-  return envelopes;
-}
-
-/**
- * Host-derived authority for one explicit new-iteration start. Read-only: engine
- * envelopes, the root register and the workflows it names are read, never
- * written. Any failure refuses the start with a visible code — the caller cannot
- * claim authority, and a caller that supplies none cannot forge any.
- */
-export function deriveStartAuthority(args: {
-  sessionId: string;
-  binding: HandoffBinding;
-  taskSession: boolean;
-  route: RouteObservation | null;
-}): AuthorityDecision {
-  const { sessionId, binding, taskSession, route } = args;
-  if (sessionId === "") {
-    return { ok: false, code: "task-session", message: "the host session has no id" };
-  }
-  if (taskSession) {
-    return {
-      ok: false,
-      code: "task-session",
-      message: "this session is a leaf/subagent (task) session, not the iteration coordinator",
-    };
-  }
-  const workflowDir = dirname(binding.snapshotPath);
-  let envelopes: readonly WorkflowEnvelope[];
-  try {
-    envelopes = readWorkflowEnvelopes(workflowDir);
-  } catch (error) {
-    return {
-      ok: false,
-      code: "envelope-invalid",
-      message: `a session envelope under ${join(workflowDir, SESSION_DIR)} could not be read: ${String(error)}`,
-    };
-  }
-  for (const envelope of envelopes) {
-    if (envelope.sessionId === sessionId) {
-      if (envelope.workflowId !== binding.workflowId) {
-        return {
-          ok: false,
-          code: "coordinator-elsewhere",
-          message: `this session is the coordinator of workflow ${envelope.workflowId}, not of ${binding.workflowId}`,
-        };
-      }
-      continue;
-    }
-    if (envelope.role === "coordinator" && envelope.workflowId === binding.workflowId) {
-      return {
-        ok: false,
-        code: "coordinator-elsewhere",
-        reason: "foreign-coordinator",
-        message: `workflow ${binding.workflowId} is bound to coordinator session ${envelope.sessionId}, not to this session`,
-      };
-    }
-  }
-
-  const register = readRootRegister(binding.harnessRoot);
-  if (register.kind === "absent") return { ok: true };
-  if (register.kind === "invalid") {
-    return { ok: false, code: "register-invalid", message: register.message };
-  }
-  for (const row of register.rows) {
-    if (!isPlainObject(row) || typeof row.id !== "string" || row.id === binding.workflowId) continue;
-    const rowDir =
-      typeof row.dir === "string" && row.dir !== ""
-        ? isAbsolute(row.dir)
-          ? row.dir
-          : join(binding.harnessRoot, row.dir)
-        : join(binding.harnessRoot, "workflows", row.id);
-    let snapshot;
-    try {
-      snapshot = readWorkflowSnapshot(rowDir).snapshot;
-    } catch (error) {
-      return {
-        ok: false,
-        code: "register-invalid",
-        message: `registered workflow ${row.id} at ${rowDir} could not be read: ${String(error)}`,
-      };
-    }
-    const coordinator = snapshot.coordination?.coordinator?.session_id;
-    if (coordinator === sessionId && !(WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status)) {
-      return {
-        ok: false,
-        code: "coordinator-elsewhere",
-        message: `this session is the coordinator of the ${snapshot.status} workflow ${row.id}; one session coordinates one iteration`,
-      };
-    }
-  }
-  return { ok: true };
-}
-
-/**
- * Host-derived authority for one explicit start on the **ACTIVE route** (§6).
- * The same host facts the file arm checks hold here — a leaf/subagent session
- * never arms — but the ownership facts come from the
- * DB's own workflow views instead of the retired register/envelopes: the named
- * workflow must exist as a running iteration, its coordinator seat must be this
- * session, and this session must not already coordinate another non-terminal
- * workflow. Read-only: the authority is read, never written, and no
- * caller-supplied identity participates.
- */
 export function deriveActiveStartAuthority(args: {
   sessionId: string;
   taskSession: boolean;
-  route: RouteObservation | null;
   /** The addressed workflow's DB view, or `null` when the authority holds none. */
   workflow: Readonly<{ id: string; status: string; type: string }> | null;
   coordinator: ExecutionSessionRef | null;
   /** Every workflow the authority holds, for the one-session/one-iteration rule. */
   registry: readonly Readonly<{ id: string; status: string; coordinator: ExecutionSessionRef | null }>[];
 }): AuthorityDecision {
-  const { sessionId, taskSession, route, workflow, coordinator, registry } = args;
+  const { sessionId, taskSession, workflow, coordinator, registry } = args;
   if (sessionId === "") {
     return { ok: false, code: "task-session", message: "the host session has no id" };
   }
@@ -590,85 +323,13 @@ export function deriveActiveStartAuthority(args: {
   return { ok: true };
 }
 
-/**
- * The root register of one canonical harness root, derived once: absent,
- * malformed/unreadable, or its validated rows.
- *
- * Both consumers on the start path — the structural classifier and the
- * authority scan — derive the register through this one function instead of
- * each carrying its own exists/validate/parse/filter chain, so the two can
- * never drift in how they read it. They deliberately keep their own read
- * *timing* and their own refusal policy: the classifier reads before the
- * reservation, `deriveStartAuthority` after it, so a register that changes in
- * between can still refuse rather than being silently adopted. The E1 module's
- * own structural revalidation of the named row and its snapshot is a third,
- * independent check by frozen spec (§3) — adoption authority must never rest on
- * the adapter's classification.
- */
-type RootRegister =
-  | Readonly<{ kind: "absent"; path: string }>
-  | Readonly<{ kind: "invalid"; path: string; message: string }>
-  | Readonly<{ kind: "rows"; path: string; rows: readonly unknown[] }>;
-
-function readRootRegister(harnessRoot: string): RootRegister {
-  const path = join(harnessRoot, STATUS_FILE);
-  if (!existsSync(path)) return { kind: "absent", path };
-  if (!validateStatusV2(path).ok) {
-    return { kind: "invalid", path, message: `the root register ${path} is not a valid v2 coordination document` };
-  }
-  try {
-    const doc: unknown = JSON.parse(readFileSync(path, "utf8"));
-    return { kind: "rows", path, rows: isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [] };
-  } catch (error) {
-    return { kind: "invalid", path, message: `the root register ${path} could not be read: ${String(error)}` };
-  }
-}
-
-/**
- * Structural branch selector, derived by this adapter from the validated root
- * register for the explicitly named workflow id. It is never public tool input
- * and never an authority grant: `reserveHandoffBinding` revalidates the
- * register row and the own snapshot in `attach` mode, and a stale `reserve`
- * selection is still fenced by the register-row refusal there. An absent,
- * unreadable or malformed register classifies as `reserve`, so its own frozen
- * `invalid-root`/`already-bound` refusals apply unchanged.
- *
- * §5 before that register is read: the root register is retired as a route while
- * the control harness's execution authority is ACTIVE, so the route decision
- * precedes the consultation — the classifier never derives a branch from retired
- * bytes, and a route that cannot be read at all leaves the register unread too
- * (`reserve`; E1 re-probes and refuses with the store's own code). E1 refuses an
- * ACTIVE authority before this verdict is ever consumed, so the ordering changes
- * which document is opened, never the answer a caller sees.
- */
-async function bindingModeFor(workflowId: string, cwd: string): Promise<"reserve" | "attach"> {
-  try {
-    const main = readMainWorktree(cwd);
-    if (main === null || !isNonEmpty(main.root)) return "reserve";
-    const resolved = resolveHarnessDir(main.root);
-    if (resolved === null) return "reserve";
-    const harnessRoot = canonicalizeNearestExisting(resolved);
-    if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") return "reserve";
-    const register = readRootRegister(harnessRoot);
-    return register.kind === "rows" && register.rows.some((row) => isPlainObject(row) && row.id === workflowId)
-      ? "attach"
-      : "reserve";
-  } catch {
-    return "reserve";
-  }
-}
-
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
 /**
- * The canonical control-harness root of the host cwd, or `null` when none is
- * resolvable. Derived the same way `bindingModeFor` derives it — the main
- * worktree, then the engine's documented harness precedence — so the identity
- * adapter and the start classifier can never disagree about which control root
- * a coordinator bind addresses. Never cached: a root that moves between calls
- * must refuse rather than bind an identity to a stale path.
+ * Resolve the canonical ACTIVE control-harness root from the host cwd, never
+ * from a caller-supplied path or a cached value.
  */
 function resolveControlRoot(cwd: string): string | null {
   try {
@@ -682,28 +343,6 @@ function resolveControlRoot(cwd: string): string | null {
   }
 }
 
-/**
- * Presentation-only sample of the bound workflow's own snapshot status, for
- * notice titles only. It never gates a model action, never changes authority
- * or readiness facts, and is re-read fresh at notice time (never cached). A
- * missing or unreadable snapshot yields `null` — the notice then falls back
- * and asserts no workflow status instead of guessing one.
- *
- * An ACTIVE binding (one carrying the DB session reference) yields `null` by
- * construction: the snapshot is retired under an active authority, and this
- * hook is presentation-only, so it never opens that document to title a notice.
- * The fallback title asserts no status, and the coordinator reads the DB status
- * through the authority's own read surfaces.
- */
-function observedWorkflowStatus(binding: HandoffBinding): Readonly<{ id: string; status: string }> | null {
-  if (binding.executionBinding != null) return null;
-  try {
-    const snapshot = readWorkflowSnapshot(dirname(binding.snapshotPath)).snapshot;
-    return { id: snapshot.id, status: snapshot.status };
-  } catch {
-    return null;
-  }
-}
 
 /**
  * In-memory operation gate (spec §B1). Never persisted: a refused navigation or
@@ -732,24 +371,11 @@ function newOperationId(action: HandoffAction): string {
 type ToolOutcome = Readonly<{ ok: boolean; isError: boolean; text: string; details: Record<string, unknown> }>;
 
 /**
- * Test seams for this adapter's awaited steps, following this package's own
- * convention (`mstar-gates`' `dispatchGateLoader`). The runtime behavior is
- * always the real one: a probe replaces `inspectReadiness` only to hold that step
- * open and prove that the preference is re-read *after* it, and
- * `bindingModeFor` is exposed because its verdict is the whole observable of the
- * §5 ordering that keeps the retired root register out of the pre-authority
- * path *on the FILE route* (the ACTIVE route never consults it).
- *
- * `decisionPreferenceRead` is the fire path's first (decision) preference read.
- * It is a seam for the same reason `inspectReadiness` is: that read is where the
- * consistency window opens, so a probe holds it open to plant a concurrent
- * ledger transition and prove the window is closed on *both* arms — an unbound
- * snapshot must not answer with a success-shaped no-op for a binding that
- * appeared during the read.
+ * Test seams for awaited readiness/settings steps. These hold reads open to
+ * exercise the observable concurrency boundaries.
  */
 export const handoffSeams = {
   inspectReadiness: inspectPhase1Readiness,
-  bindingModeFor,
   decisionPreferenceRead: readHandoffSettings,
 };
 
@@ -783,7 +409,6 @@ type ToolPlanEvidence = Readonly<{ planId: string; planPath: string; prepareEvid
 type ToolParams = {
   operation: "start" | "phase1-complete";
   workflowId: string;
-  coordinatorSessionPath?: string;
   mainWorktreeBranch?: string;
   reviews?: readonly ToolSpecialistReceipt[];
   plans?: readonly ToolPlanEvidence[];
@@ -803,10 +428,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
   /**
    * Durable coordinator-visible notice; never log-only, never throws into the
-   * host. Every notice uses the shared Morning Star title shape
-   * (`statusNotice`/`fallbackNotice` rendered through `formatNotice`), so a
-   * title either states the observed workflow id and status or asserts no
-   * status at all.
+   * The shared Morning Star title shape is rendered through `formatNotice`;
+   * ACTIVE lifecycle status is read by the coordinator's public read surface.
    */
   const notice = (title: NoticeTitle): void => {
     try {
@@ -860,18 +483,10 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       observedModel,
       reason,
     });
-    // A bound site: sample the workflow's own snapshot for the title. The
-    // binding itself is not status evidence, so a missing/unreadable snapshot
-    // falls back instead of guessing a status.
-    const observed = observedWorkflowStatus(record.binding);
     const detail = appended
       ? `model handoff ${state} for this coordinator session: ${reason}. The session keeps ${observedModel ?? "its actual model"}; the saved preference is unchanged and later iterations still apply it.`
       : `model handoff ${state} for this coordinator session (the session record could not be appended): ${reason}. The session keeps ${observedModel ?? "its actual model"}.`;
-    notice(
-      observed !== null
-        ? statusNotice({ workflowId: observed.id, status: observed.status, detail })
-        : fallbackNotice({ subject: `Model handoff ${state}`, detail }),
-    );
+    notice(fallbackNotice({ subject: `Model handoff ${state}`, detail }));
     return appended;
   };
 
@@ -1003,149 +618,63 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       );
     }
 
-    // Enabling the preference never arms by itself.
-    // E1 resolves the derived paths for the explicitly named workflow. Which
-    // arm answers is decided by the CONTROL ROOT this session addresses (§6),
-    // never by the caller or by the tool input:
-    //
-    // - ACTIVE (`resolveExecutionReadRoute` → `execution`): this session's DB
-    //   binding for the named workflow is adopted. The workflow must exist in
-    //   the authority as a running iteration whose coordinator seat is this
-    //   session; the retired register/snapshot/envelopes are never opened.
-    // - FILE (pre-activation, and only it): the structural branch is derived
-    //   here from the validated root register — unregistered ids reserve,
-    //   registered ids attach to their existing own snapshot. The classifier
-    //   asks the route first, so an ACTIVE authority never reads the register.
-    //
-    // The reservation is session-local and writes nothing; adoption authority is
-    // decided solely after it.
     const taskSession = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
     const bindingInput: HandoffBindingInput = {
       workflowId: params.workflowId,
       entry: lastRoute !== null ? lastRoute.kind : "skill-start",
-      // Supplied by this adapter, never by the caller: they are E1's frozen input
-      // shape for an explicit new-iteration start, and the derivation below is
-      // what has to hold before they are true.
       intent: "new-iteration",
       authority: "coordinator",
     };
     const harnessRoot = resolveControlRoot(ctx.cwd);
-    let executionRoute = false;
-    if (harnessRoot !== null) {
-      try {
-        executionRoute = (await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution";
-      } catch {
-        // A store that exists and cannot be read keeps its own refusal: this
-        // probe answers "not ACTIVE", and E1's own route read below surfaces the
-        // store's code instead of a verdict invented here.
-        executionRoute = false;
-      }
+    if (harnessRoot === null) return refuseStart("register-invalid", "the control harness root cannot be resolved");
+    if (taskSession) return refuseStart("task-session", "this session is a leaf/subagent (task) session, not the iteration coordinator");
+    let addressed: ExecutionRead<ExecutionState | ExecutionPlanView>;
+    try {
+      addressed = await readExecutionAuthority({ harnessDir: harnessRoot }, { workflowId: params.workflowId });
+    } catch (error) {
+      return refuseStart("register-invalid", `the execution authority of ${harnessRoot} cannot serve workflow ${params.workflowId}: ${String(error)}`);
     }
-
-    let binding: HandoffBinding;
-    if (executionRoute && harnessRoot !== null) {
-      // --- ACTIVE route: the DB workflow/coordinator view is the authority ----
-      if (taskSession) {
-        return refuseStart("task-session", "this session is a leaf/subagent (task) session, not the iteration coordinator");
+    const workflow = "workflows" in addressed.data ? addressed.data.workflows[0] : undefined;
+    let registry: readonly Readonly<{ id: string; status: string; coordinator: ExecutionSessionRef | null }>[] = [];
+    try {
+      const all = await readExecutionAuthority({ harnessDir: harnessRoot });
+      if ("workflows" in all.data) {
+        registry = all.data.workflows.map((entry) => ({
+          id: entry.state.id,
+          status: entry.state.status,
+          coordinator: entry.coordinator,
+        }));
       }
-      let addressed: ExecutionRead<ExecutionState | ExecutionPlanView> | null = null;
-      try {
-        addressed = await readExecutionAuthority({ harnessDir: harnessRoot }, { workflowId: params.workflowId });
-      } catch (error) {
-        return refuseStart(
-          "register-invalid",
-          `the execution authority of ${harnessRoot} cannot serve workflow ${params.workflowId}: ${String(error)}`,
-        );
-      }
-      if (addressed === null) {
-        return refuseStart("register-invalid", `the execution authority of ${harnessRoot} returned no read`);
-      }
-      const addressedData = addressed.data;
-      const workflow = "workflows" in addressedData ? addressedData.workflows[0] : undefined;
-      let registry: readonly Readonly<{ id: string; status: string; coordinator: ExecutionSessionRef | null }>[] = [];
-      try {
-        const all = await readExecutionAuthority({ harnessDir: harnessRoot });
-        if ("workflows" in all.data) {
-          registry = all.data.workflows.map((entry) => ({
-            id: entry.state.id,
-            status: entry.state.status,
-            coordinator: entry.coordinator,
-          }));
-        }
-      } catch {
-        // The one-session/one-iteration scan is a refusal input, never an
-        // authorization: an unreadable registry leaves it empty, and the
-        // addressed read above is the authority this arm admits against.
-        registry = [];
-      }
-      const coordinator = workflow?.coordinator ?? null;
-      const authority = deriveActiveStartAuthority({
-        sessionId,
-        taskSession,
-        route: lastRoute,
-        workflow:
-          workflow === undefined
-            ? null
-            : { id: workflow.state.id, status: workflow.state.status, type: workflow.state.type },
-        coordinator,
-        registry,
-      });
-      if (!authority.ok) return refuseStart(authority.code, authority.message);
-      if (workflow === undefined || coordinator === null) {
-        // Unreachable after the decision above; kept so the adopted binding can
-        // never be built from a missing seat.
-        return refuseStart("coordinator-elsewhere", `workflow ${params.workflowId} holds no coordinator seat to adopt`);
-      }
-      const reservation = await reserveHandoffBinding(
-        bindingInput,
-        {
-          sessionId,
-          cwd: ctx.cwd,
-          taskSession,
-          executionBinding: executionBindingOf(harnessRoot, coordinator),
-        },
-        "reserve",
-      );
-      if (!reservation.ok) {
-        return outcome(
-          false,
-          true,
-          `the new-iteration handoff binding was refused (${reservation.code}): ${reservation.message}`,
-          { code: reservation.code },
-        );
-      }
-      binding = reservation.binding;
-    } else {
-      const mode = await handoffSeams.bindingModeFor(params.workflowId, ctx.cwd);
-      const reservation = await reserveHandoffBinding(bindingInput, { sessionId, cwd: ctx.cwd, taskSession }, mode);
-      if (!reservation.ok) {
-        return outcome(
-          false,
-          true,
-          `the new-iteration handoff binding was refused (${reservation.code}): ${reservation.message}`,
-          { code: reservation.code },
-        );
-      }
-
-      // Host-derived authority (no caller-supplied claim anywhere on this path).
-      const authority = deriveStartAuthority({
-        sessionId,
-        binding: reservation.binding,
-        taskSession,
-        route: lastRoute,
-      });
-      if (!authority.ok) {
-        // Attach only: a foreign coordinator of the named registered workflow is
-        // the user-approved observable `already-bound` outcome, with the original
-        // detail preserved. The mapping matches the typed discriminator only —
-        // never error prose — and every other decision keeps its own code.
-        if (mode === "attach" && authority.reason === "foreign-coordinator") {
-          return refuseStart("already-bound", authority.message);
-        }
-        return refuseStart(authority.code, authority.message);
-      }
-      binding = reservation.binding;
+    } catch {
+      registry = [];
     }
+    const coordinator = workflow?.coordinator ?? null;
+    const authority = deriveActiveStartAuthority({
+      sessionId,
+      taskSession,
+      workflow:
+        workflow === undefined
+          ? null
+          : { id: workflow.state.id, status: workflow.state.status, type: workflow.state.type },
+      coordinator,
+      registry,
+    });
+    if (!authority.ok) return refuseStart(authority.code, authority.message);
+    if (workflow === undefined || coordinator === null) {
+      return refuseStart("coordinator-elsewhere", `workflow ${params.workflowId} holds no coordinator seat to adopt`);
+    }
+    const reservation = await reserveHandoffBinding(bindingInput, {
+      sessionId,
+      cwd: ctx.cwd,
+      taskSession,
+      executionBinding: executionBindingOf(harnessRoot, coordinator),
+    });
+    if (!reservation.ok) {
+      return outcome(false, true, `the new-iteration handoff binding was refused (${reservation.code}): ${reservation.message}`, {
+        code: reservation.code,
+      });
+    }
+    const binding = reservation.binding;
 
     // Durable re-check after every await: a concurrent arm (this instance or
     // another one over the same session) must be visible here as a binding.
@@ -1312,19 +841,10 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
   /* -------------------------------------------------------------- fire --- */
 
-  /**
-   * Completion input shape is checked here (one to three selected returns,
-   * bound plan evidence, and the coordinator envelope path); E2 verifies the
-   * selected role order, receipt authenticity and current artifact bytes.
-   */
+  /** ACTIVE completion witnesses; E2 verifies role order and artifact bytes. */
   const completionInputOf = (params: ToolParams, binding: HandoffBinding): Phase1CompletionInput | null => {
     const reviews = params.reviews;
     const plans = params.plans;
-    // The ACTIVE route carries its coordinator identity in the binding's DB
-    // session reference, so the FILE route's envelope path is neither required
-    // nor forwarded there.
-    const active = binding.executionBinding != null;
-    const envelopePath = params.coordinatorSessionPath;
     if (
       reviews === undefined ||
       reviews.length < 1 ||
@@ -1332,14 +852,12 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       plans === undefined ||
       plans.length === 0 ||
       typeof params.mainWorktreeBranch !== "string" ||
-      params.mainWorktreeBranch === "" ||
-      (!active && (typeof envelopePath !== "string" || envelopePath === ""))
+      params.mainWorktreeBranch === ""
     ) {
       return null;
     }
     return {
       workflowId: binding.workflowId,
-      ...(active ? {} : { coordinatorSessionPath: envelopePath as string }),
       mainWorktreeBranch: params.mainWorktreeBranch,
       reviews: reviews as unknown as Phase1CompletionInput["reviews"],
       plans,
@@ -1428,9 +946,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       return outcome(
         false,
         true,
-        record.binding.executionBinding != null
-          ? "the completion checkpoint is incomplete: selected ordered specialist returns (including the final writing-specialist return) and the bound plan evidence are required."
-          : "the completion checkpoint is incomplete: selected ordered specialist returns (including the final writing-specialist return), the bound plan evidence and the coordinator envelope path are required.",
+        "the completion checkpoint is incomplete: selected ordered specialist returns (including the final writing-specialist return) and the bound plan evidence are required.",
         { code: "invalid-completion-input" },
       );
     }
@@ -1571,15 +1087,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       observedModel: actual,
       reason: `Phase 1 complete for ${record.binding.workflowId}; the coordinator continues on ${targetSpec}`,
     });
-    // Bound site with a completed binding: the completion notice title carries
-    // the observed workflow id and status from its own snapshot.
-    const completedObserved = observedWorkflowStatus(record.binding);
     const completedDetail = `model handoff complete for this coordinator session: ${SLOW_SPEC} was used for Prepare and the session now runs ${actual ?? targetSpec} after a verified full Phase 1 of ${record.binding.workflowId}.${appended ? "" : " (The completion record could not be appended.)"}`;
-    notice(
-      completedObserved !== null
-        ? statusNotice({ workflowId: completedObserved.id, status: completedObserved.status, detail: completedDetail })
-        : fallbackNotice({ subject: "Model handoff complete", detail: completedDetail }),
-    );
+    notice(fallbackNotice({ subject: "Model handoff complete", detail: completedDetail }));
     return outcome(
       true,
       false,
@@ -1605,12 +1114,11 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: TOOL_NAME,
     label: "Model handoff",
     description:
-      'Morning Star coordinator model handoff. `{operation:"start"}` is the PM\'s explicit call once the direction is locked and before the Phase 1 draft is written, and it arms @slow for this coordinator session when the native modelHandoff preference is enabled. The coordinator authority for it is derived from host/engine facts rather than from the call: on an ACTIVE execution authority the DB workflow/coordinator view is the authority (the named workflow must be a running iteration whose coordinator seat is this session), while the pre-activation file route derives it from the task-session ledger, the workflow\'s session envelopes and the root register. `{operation:"phase1-complete"}` is the completion checkpoint: it validates the frozen Phase 1 evidence on the route the recorded binding names and then switches only this coordinator session to the saved handoffTarget. Not a user activation command; no role mappings, workflow lifecycle or other session is written.',
+      "Morning Star coordinator model handoff. `{operation:\"start\"}` is the PM's direction-lock call: when the native modelHandoff preference is enabled, the host derives the ACTIVE DB coordinator authority and arms this session on @slow. `{operation:\"phase1-complete\"}` validates the frozen Phase 1 evidence against ACTIVE execution facts and then switches only this coordinator session to the saved handoffTarget. No caller-supplied authority, identity, root or path is accepted; no workflow lifecycle or other session is written.",
     parameters: z
       .object({
         operation: z.enum(["start", "phase1-complete"]),
         workflowId: z.string(),
-        coordinatorSessionPath: z.string().optional(),
         mainWorktreeBranch: z.string().optional(),
         reviews: z.array(specialistReceipt).optional(),
         plans: z.array(planEvidence).optional(),
@@ -1652,16 +1160,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     leaf: ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init"),
   });
 
-  /**
-   * The documented OPTIONAL keys of one `mstar_coordinator` call, advertised
-   * verbatim by the registered schema. They are deliberately untyped
-   * (`z.unknown()`): the registered schema is the host-facing advertisement of
-   * what a caller MAY send, and the handler's own `CoordinatorShapeContract`
-   * classifier in `../coordinator-identity.ts` is the single place a supplied
-   * value is judged. Typing them here would make the host's parameter parser
-   * answer a mixed call with a schema-library message naming one class at a
-   * time — exactly the multi-round repair this boundary exists to prevent.
-   */
+  /** OPTIONAL coordinator operation fields advertised to the ACTIVE tool. */
   const coordinatorAdmissionFields = {
     workflowId: z.unknown().optional().describe("string: the explicitly named workflow this call addresses."),
     expected: z
@@ -1671,100 +1170,41 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     operationId: z
       .unknown()
       .optional()
-      .describe(
-        "string: the ACTIVE route's operation id (idempotency key); the adapter mints a fresh one when it is omitted. The pre-activation file form never mints one \u2014 it requires the audited id it was authorized under.",
-      ),
+      .describe("string: ACTIVE idempotency key; omitted, the adapter mints one."),
     reason: z
       .unknown()
       .optional()
-      .describe("string: the recovery's non-empty audited reason \u2014 required by BOTH recovery forms."),
+      .describe("string: the non-empty audited reason for ACTIVE recovery."),
     attestation: z
       .unknown()
       .optional()
-      .describe("object: the ACTIVE recovery's operator activation-attestation document, validated by the engine."),
-    authorizationRef: z
-      .unknown()
-      .optional()
-      .describe("string: the pre-activation recovery's audited authorization reference."),
-    stoppedSessionIds: z
-      .unknown()
-      .optional()
-      .describe("string[]: the pre-activation recovery's stop proof naming the recorded holder."),
+      .describe("object: the operator's activation-attestation document; the engine validates its contents."),
   } as const;
 
   pi.registerTool({
     name: COORDINATOR_TOOL_NAME,
     label: "Coordinator identity",
     description:
-      'Morning Star coordinator identity entry. The control harness root and the native session id are derived from the host \u2014 never from the call. `{operation:"bind", workflowId}` binds THIS host session as the coordinator of the explicitly named workflow and works on both routes: under an ACTIVE execution authority the engine resolves the workflow\'s current token from its own header and the adapter mints the operation id when it is omitted, so the ordinary call needs nothing else (supply `expected` only to pin your own CAS value \u2014 an omitted token never turns an identical retry into a conflict, and a repeated bind under the same `operationId` is the replayed receipt), while a pre-activation root answers the same call with the managed Prepare bootstrap and refuses those two CAS fields instead of ignoring them. `{operation:"show-recovery", workflowId}` reads the recorded coordinator and the observed state without writing. `{operation:"recover"}` replaces a recorded holder the prior owner can no longer authenticate: an ACTIVE root takes `priorSessionId` (the recorded holder, or null ONLY when the workflow records no coordinator at all), `reason` and the operator\'s own `attestation` document (its token is read from the addressed authority and its operation id derived like the bind\'s); a pre-activation root takes the audited `operationId`, `reason`, `authorizationRef` and `stoppedSessionIds`. No operation accepts a session id, root, caller role, authority flag, credential path or force flag, and a call carrying any unusable field is answered with ONE refusal that names every such field at once \u2014 forbidden keys, absent required keys and unusable values together \u2014 so a single repair is enough and a rejected value is never echoed back. A `store.schema-unsupported` refusal names the loaded entry that answered: refresh the installed package and start a NEW host PROCESS to load the refreshed registration \u2014 on the readable OMP 18.3 SDK, a new chat or session inside the SAME process reuses the already-loaded registration; this is not proof of unknown live 18.8 replacement mechanics. An inventory listing or a Restart screen is not proof that a matching entry was loaded. A new host identity never inherits an existing coordinator binding, so an existing holder is replaced only through this recovery with authorization to stop the exact prior holder and its stop attestation/proof; the separately launched public MCP route serves the same operations with an independently acquired identity. A `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool. The host treats a `null` supplied for the OPTIONAL `expected` or `operationId` as an omission, not a value: on the ACTIVE route the engine then resolves the workflow token and the adapter mints the operation id (the safe behaviour). A pre-activation FILE bind carries neither control (offering either is refused, never partially honoured); FILE recovery requires its audited `operationId` \u2014 absence of that field is the missing-mandatory error \u2014 and never accepts `expected`. REQUIRED nullable `priorSessionId` is the deliberate exception \u2014 its explicit `null` on the ACTIVE route is the "this workflow records no coordinator at all" claim and is preserved, distinct from an absent required field.',
-    // RAW ADMISSION: this registered schema ADVERTISES the documented keys; it
-    // is not the semantic gate. A typed/`.strict()` union here rejected a mixed
-    // call (a forbidden identity key, an absent required key, an unusable value)
-    // inside the host's own parameter parsing, so the caller got a schema-library
-    // message naming one class at a time instead of the ONE aggregated refusal
-    // the handler owns. Every arm is therefore `.passthrough()`, and every field
-    // except `priorSessionId` is left untyped, so the canonical
-    // `CoordinatorShapeContract` classifier in `../coordinator-identity.ts` stays
-    // the single place the valid-field rules live (forbidden → missing → invalid,
-    // plus the separate `unauthorized` proof verdict) and every invalid value
-    // reaches it BY NAME instead of dying in the schema library.
-    //
-    // This host's own validation (see the description) runs a normalization pass
-    // before the handler that DELETES a supplied `null` from any field declared
-    // OPTIONAL here. For the shared OPTIONAL keys that is the accepted SDK
-    // convention — a model uses `null` to mean "omitted" — and the classifier
-    // treats the resulting omission as "not supplied".
-    //
-    // `priorSessionId` is the one EXCEPTION: a supplied `null` is the documented
-    // explicit "this workflow records no coordinator at all" claim, not an
-    // omission, so it must survive. The recover arm therefore declares it
-    // REQUIRED (a required field is never stripped), and declares it as the
-    // explicit JSON-value union above — NOT `z.unknown()` — because an untyped
-    // field vanishes from the wire advertisement: the union keeps the field
-    // NAMED and discoverable while still admitting every wrong type (number,
-    // boolean, array, object) so the classifier can name it. The general arm
-    // covers bind / show-recovery / a holderless recover and deliberately does NOT
-    // declare `priorSessionId`: any declaration there (even `unknown().optional()`)
-    // would re-introduce the optional-null strip, and a narrower one would
-    // re-reject an invalid value.
-    //
-    // The schema still enforces `operation` as the discriminator, so a call with
-    // no operation — or one outside `bind | show-recovery | recover` — is refused
-    // by the schema itself rather than by the handler's classifier.
+      'Morning Star coordinator identity entry. The host derives the control root and native session id. `{operation:"bind", workflowId}` binds this session under ACTIVE DB authority, resolving omitted CAS inputs inside the engine. `{operation:"show-recovery", workflowId}` reads current workflow and coordinator facts. `{operation:"recover"}` replaces the explicitly named prior coordinator (or `null` only when none is recorded), with the operator attestation validated by the engine. No operation accepts a caller-selected identity, root or credential path.',
     parameters: z
       .union([
         z
           .object({
-            operation: z.literal("recover").describe("The coordinator operation this call performs."),
-            // The one field with a NON-string legitimate shape. It is REQUIRED
-            // (so this host's own optional-null normalization cannot delete the
-            // explicit `null` "records no coordinator at all" claim) and declared
-            // as an explicit JSON-value union over the SDK's own scalar builders —
-            // NOT `z.unknown()` — so the wire advertisement still NAMES the field.
-            // The union admits every JSON value a caller could wrongly supply
-            // (number, boolean, array, object) and `null`, so each reaches the
-            // classifier and is named; `undefined` absence is the general arm's
-            // business. This is a transport-shape declaration only: the
-            // string-vs-null MEANING is still decided solely by the classifier,
-            // and no second DSL is added.
+            operation: z.literal("recover"),
             priorSessionId: z
               .union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown()), z.record(z.unknown())])
-              .describe(
-                "string|null: the ACTIVE recovery's recorded holder, or null only when the workflow records none.",
-              ),
+              .describe("string|null: the ACTIVE recovery's recorded coordinator session, or null only when none is recorded."),
             ...coordinatorAdmissionFields,
           })
           .passthrough(),
         z
           .object({
-            operation: z
-              .enum(["bind", "show-recovery", "recover"])
-              .describe("The coordinator operation this call performs."),
+            operation: z.enum(["bind", "show-recovery", "recover"]),
             ...coordinatorAdmissionFields,
           })
           .passthrough(),
       ])
-      .describe("Coordinator operation: bind | show-recovery | recover"),
+      .describe("ACTIVE coordinator operation: bind | show-recovery | recover"),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const facts = coordinatorFacts(ctx);
       const result =
@@ -1780,7 +1220,6 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       };
     },
   });
-
   /* ------------------------------------------------------------ events --- */
 
   // The host's own input event is the only source of the entry route: it is
