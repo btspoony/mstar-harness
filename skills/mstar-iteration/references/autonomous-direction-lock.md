@@ -46,7 +46,7 @@ Persistence has three ordered steps; none invents human approval:
 
 ### What counts toward the budget（HARD）
 
-Count only **business delivery plans** registered in compass / the workflow registration (ACTIVE: store execution authority; pre-activation: snapshot) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
+Count only **business delivery plans** registered in compass / the workflow registration (ACTIVE: store execution authority) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
 
 **Do not count** harness / process work as plans (and do not invent plans whose sole job is process):
 
@@ -75,7 +75,7 @@ When a free-text direction / feedback constraint is supplied by the caller:
 
 Resolve `iteration_base_branch` and `target_branch` in order（first hit wins per field）:
 
-1. Workflow `branch.base` / `branch.target` from ACTIVE execution authority (`mstar status validate`; pre-activation: snapshot fields); absent registration goes through `mstar iteration register` against current authority, never handwritten root / snapshot writes
+1. Workflow `branch.base` / `branch.target` from the ACTIVE execution authority (`mstar status validate`); absent registration goes through `mstar iteration register` against that authority, never handwritten root / snapshot writes
 2. Existing / prior iteration compass frontmatter
 3. Current git branch **only if** it is already a documented delivery, integration, or project-policy branch（not merely “whatever HEAD is”）
 4. Still missing → **STOP** — escalate; **never** substitute `main` / `master` because those names exist
