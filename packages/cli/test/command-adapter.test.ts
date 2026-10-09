@@ -200,6 +200,16 @@ describe("generated CLI adapter", () => {
       { path: "argv[6]", argvIndex: 6, token: "extra" },
     ]);
   });
+  test("excess attribution skips every variadic option value before later options", () => {
+    const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+    const envelope = mapParserError(error, [
+      "node", "mstar", "worktree", "cleanup", "--worktree", "/a", "/b", "--apply", "BADPOS",
+    ]);
+    expect(envelope?.details?.diagnostics).toMatchObject([
+      { path: "argv[8]", argvIndex: 8, token: "BADPOS" },
+    ]);
+  });
+
 
 
 
@@ -243,6 +253,17 @@ describe("generated CLI adapter", () => {
         received: "undefined",
       }));
       expect(diagnostics.some((entry) => entry.path?.startsWith("payload."))).toBe(true);
+      const malformed = await run(["issue", "add", "--payload", "{", "--harness", harness], undefined, false, invocation);
+      expect(malformed.status).toBe(2);
+      const malformedBody = JSON.parse(malformed.stdout) as {
+        status?: string;
+        details?: { diagnostics?: Array<{ path: string; code: string }> };
+      };
+      expect(malformedBody.status).toBe("usage");
+      expect(malformedBody.details?.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "payload", code: "invalid_json" }),
+        expect.objectContaining({ path: "actor", code: "required" }),
+      ]));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
