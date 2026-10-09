@@ -57,7 +57,6 @@ import {
   type ArtifactStore,
 } from "../src/store.js";
 import { withProtectedWrite } from "../src/coordination-write.js";
-import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore } from "../src/store-db.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -150,11 +149,13 @@ function memoryStore(): ArtifactStore {
   };
 }
 
-/** A control root holding a store whose execution authority is still `legacy`
- * (its schema has the execution tables; nothing was activated). */
+/** A legacy-route control root. `initializeStore` now creates ACTIVE
+ * execution authority, so restore the legacy state explicitly for tests whose
+ * purpose is to exercise the pre-activation transport behavior. */
 async function legacyControlRoot(label: string): Promise<string> {
   const root = tmpRoot(label);
   const handle = await initializeStore({ harnessDir: root });
+  handle.db.prepare("update execution_meta set authority_state = 'legacy' where id = 1").run();
   handle.close();
   return root;
 }
@@ -162,8 +163,9 @@ async function legacyControlRoot(label: string): Promise<string> {
 /** A control root whose execution authority is ACTIVE — the authority an
  * injected store's protected targets must be judged against. */
 async function activeControlRoot(label: string): Promise<string> {
-  const root = await legacyControlRoot(label);
-  await initializeExecutionAuthority({ harnessDir: root });
+  const root = tmpRoot(label);
+  const handle = await initializeStore({ harnessDir: root });
+  handle.close();
   return root;
 }
 
