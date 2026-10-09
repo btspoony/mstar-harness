@@ -269,7 +269,6 @@ export type {
 export {
   assertCatalogCompleteness,
   evaluatePhaseGate,
-  evaluatePostMergeClose,
   evaluatePostMergeCloseFromExecutionAuthority,
   readRegisteredWorkflowFromExecutionAuthority,
   parseCompassFrontmatter,
