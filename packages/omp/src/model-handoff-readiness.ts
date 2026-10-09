@@ -22,7 +22,6 @@ import {
   resolveRegisteredPlanFile,
   resumeExecutionSession,
   resolveWorkflowDir,
-  showPrepareCoordinatorRecovery,
   validateCompassFrontmatter,
 } from "@mstar-harness/engine";
 import type {
@@ -31,7 +30,6 @@ import type {
   ExecutionPlanView,
   ExecutionRead,
   ExecutionState,
-  PrepareCoordinatorRecoveryView,
 } from "@mstar-harness/engine";
 // The one reviewed host-side constructor of the §3.1 binding value a durable
 // record persists (coordinator-identity.ts). E1 reuses it instead of declaring a
@@ -131,10 +129,8 @@ function bindingRefusal(code: HandoffRefusalCode, message: string): HandoffBindi
 }
 
 /**
- * One DB workflow view of the authoritative read, exactly as the engine
- * projects it: the lifecycle header, its plan views and the session holding the
- * coordinator seat. Both ACTIVE arms admit against this shape and never against
- * a synthesized `WorkflowSnapshot`.
+ * One ACTIVE DB workflow view carries the authoritative lifecycle, plan views
+ * and session holding the coordinator seat.
  */
 type ActiveWorkflowView = ExecutionState["workflows"][number];
 
@@ -157,18 +153,9 @@ function isExecutionBindingValue(value: unknown): value is ExecutionBinding {
 }
 
 /**
- * The E1 ACTIVE arm (§6): adopt the DB session binding the host acquired for
- * the named workflow.
- *
- * The supplied value must describe exactly this coordinator: the canonical
- * control root, this host session, this workflow, role `coordinator`, a null
- * plan and a positive epoch. It is then re-resumed against the CURRENT store —
- * a foreign root, a stale epoch, a revoked/suspended row or a reference copied
- * from another session refuses here, and no coordinator envelope is ever
- * consulted as a fallback — and the workflow's DB authority must name this
- * session as its coordinator and still be a running iteration. Only the derived
- * paths and the validated binding are returned: nothing is written, and the
- * retired register/snapshot are never opened.
+ * Adopt the session binding for the named workflow under the ACTIVE DB
+ * authority. The binding must match this host session, canonical control root,
+ * workflow and coordinator role; it is re-resumed against the current store.
  */
 async function adoptActiveHandoffBinding(
   input: HandoffBindingInput,
@@ -384,53 +371,21 @@ const CODE_ORDER: readonly Phase1RefusalCode[] = [
   "execution.consumer-not-ready",
 ];
 
-/**
- * The identity subreasons of prerequisite contract §5. They refine the broad
- * `binding-invalid` gate rather than replacing it: an acquisition that carries
- * no id is `identity-missing`, a value that does not address the scope it was
- * checked against is `identity-mismatch`, a recorded owner whose proof this
- * session does not hold is `foreign-owner`, and the three `recovery-*` values
- * say why the narrow JSON Prepare repair is **not** currently admitted.
- */
-export type Phase1IdentityDetail =
-  | "identity-missing"
-  | "identity-mismatch"
-  | "foreign-owner"
-  | "recovery-not-prepare"
-  | "recovery-stale"
-  | "recovery-unauthorized";
+/** Safe identity subreasons refining the broad `binding-invalid` gate. */
+export type Phase1IdentityDetail = "identity-missing" | "identity-mismatch" | "foreign-owner";
 
-/**
- * The path subreasons of §5: a pointer that is not the canonical registered
- * plan file (`plan-pointer-invalid`), a pointer that resolves to a file whose
- * own declared `plan_id` disagrees (`plan-identity-mismatch`), and a compass
- * that is genuinely not locked (`prepare-unlocked`).
- */
+/** Safe plan-path and compass subreasons. */
 export type Phase1PathDetail = "plan-pointer-invalid" | "plan-identity-mismatch" | "prepare-unlocked";
 
-/**
- * Safe §4 classification of the *form* a refused plan pointer was received in
- * — the axis the shared resolver accepts (a canonical absolute path or a
- * normalized harness-relative one). It is a classification only: the pointer's
- * own value is never projected, because a stored row may hold any string at all
- * (an envelope, credential or session path included).
- */
+/** Safe pointer-form classification; the stored path value is never projected. */
 export type Phase1PointerForm = "canonical-absolute" | "harness-relative";
 
-/** Safe label of where an observed identity or pointer value came from. */
-export type Phase1DiagnosticSource =
-  | "host-session"
-  | "snapshot-coordinator"
-  | "session-envelope"
-  | "recovery-view"
-  | "plan-row"
-  | "execution-authority";
+/** Safe source label for an observed identity or plan pointer. */
+export type Phase1DiagnosticSource = "host-session" | "plan-row" | "execution-authority";
 
 /**
- * One typed refinement of a broad refusal code (§5). It carries the subject,
- * the safe source label, the public ids already in play, the canonical
- * base/target of a plan pointer and the next supported operation — never an
- * envelope path, credential, session JSON or environment payload.
+ * One typed refinement of a broad refusal code. It carries safe source labels,
+ * public ids, canonical plan paths and the next supported operation.
  */
 export type Phase1Diagnostic = Readonly<{
   /** The broad gate code this detail refines; always also present in `codes`. */
@@ -457,54 +412,14 @@ export type Phase1Diagnostic = Readonly<{
 /** The named next steps a diagnostic offers instead of a bare refusal. */
 const NEXT_BIND =
   'call `mstar_coordinator` with {operation:"bind", workflowId} from this workflow\'s coordinator session';
-const NEXT_RECOVER =
-  'call `mstar_coordinator` with {operation:"recover", …} from this session, naming the recorded holder in stoppedSessionIds';
-const NEXT_RECOVERY_VIEW =
-  'call `mstar_coordinator` with {operation:"show-recovery", workflowId} to read the current recovery verdict';
 const NEXT_ACTIVE_RECOVER =
   'call `mstar_coordinator` with {operation:"recover", workflowId, …} under the current store authority from this session';
 const NEXT_COORDINATOR_EVIDENCE =
-  "re-run this checkpoint with the workflow's recorded coordinator envelope and the ordered specialist returns";
+  "re-run this checkpoint with the ordered specialist returns and bound plan evidence";
 const NEXT_REGISTERED_PLAN =
-  "register the row through `mstar iteration register`, or repair it with the guarded Prepare plan-file correction";
+"register the plan row through `mstar iteration register` under ACTIVE execution authority";
 const NEXT_LOCK_COMPASS = "lock the reviewed delivery compass, then re-run this checkpoint";
 
-/**
- * §5 classification of one engine recovery-admission blocker into the shared
- * identity-detail vocabulary. The engine's own reason union is the input
- * (`packages/engine/src/coordination.ts`), so the readiness diagnostic and the
- * `mstar_coordinator` view never disagree about the same blocker.
- */
-export function identityDetailOfRecoveryBlocker(code: string): Phase1IdentityDetail {
-  if (code === "unauthorized") return "recovery-unauthorized";
-  if (code === "stale") return "recovery-stale";
-  if (code === "foreign-owner") return "foreign-owner";
-  return "recovery-not-prepare";
-}
-
-/** Whether the narrow JSON Prepare repair is admitted, and what to do next. */
-type RecoveryVerdict = Readonly<{ detail: Phase1IdentityDetail | null; next: string }>;
-
-/**
- * The recovery verdict of one workflow, read through the engine's own read-only
- * §3.3 view — the same view `mstar_coordinator {operation:"show-recovery"}`
- * projects. A readable, admitted verdict names the recovery operation as the
- * next step; an inadmissible lifecycle contributes its typed `recovery-*`
- * detail instead. The view is read-only and never throws past this boundary: an
- * unreadable verdict says so rather than turning into an identity verdict.
- */
-async function recoveryVerdict(controlRoot: string, harnessRoot: string, workflowId: string): Promise<RecoveryVerdict> {
-  let view: PrepareCoordinatorRecoveryView;
-  try {
-    view = await showPrepareCoordinatorRecovery({ cwd: controlRoot, harnessDir: harnessRoot, workflowId });
-  } catch {
-    return { detail: null, next: NEXT_RECOVERY_VIEW };
-  }
-  if (view.allowed) return { detail: null, next: NEXT_RECOVER };
-  const blocker = view.blockers[0];
-  if (blocker === undefined) return { detail: "recovery-not-prepare", next: NEXT_RECOVERY_VIEW };
-  return { detail: identityDetailOfRecoveryBlocker(blocker.code), next: NEXT_RECOVERY_VIEW };
-}
 
 export type Phase1Readiness =
   | { ready: true; binding: HandoffBinding; integrationHead: string; receipt: Phase1Receipt }
@@ -604,10 +519,9 @@ function gitPath(cwd: string, name: string): string | null {
   return isAbsolute(raw) ? raw : join(cwd, raw);
 }
 
-/** Id of a snapshot plan row (`id`, else the legacy `plan_id`). */
+/** Id of a registered ACTIVE plan row. */
 function rowId(row: unknown): string | null {
-  if (!isPlainObject(row)) return null;
-  return isNonEmptyString(row.id) ? row.id : isNonEmptyString(row.plan_id) ? row.plan_id : null;
+  return isNonEmptyString(row.id) ? row.id : null;
 }
 
 function orderedCodes(codes: Set<Phase1RefusalCode>): readonly Phase1RefusalCode[] {
@@ -734,16 +648,8 @@ export async function inspectPhase1Readiness(
   }
   const iterationArea = join(iterationDir, binding.workflowId);
   const expectedCompass = canonicalizeNearestExisting(join(iterationDir, binding.workflowId, COMPASS_FILE));
-  // Ownership before any artifact read: the bound paths must be exactly the ones
-  // that follow from the Git-derived control root and the explicitly named
-  // workflow. A binding that names any other location is refused here, before
-  // the root register, the snapshot or the compass is even opened.
-    // --- ACTIVE arm: the DB root/workflow/plan views -------------------------
-    // No retired document is opened here: the register row, the lifecycle
-    // header, the branch anchors, the integration checkout, the coordinator
-    // seat and the registered plan rows all come from the authoritative DB
-    // read, and the adopted reference is re-resumed against the CURRENT store.
-    const session = adopted.session;
+  // The bound paths were re-derived from the Git-derived control root above.
+  const session = adopted.session;
     if (
       !isExecutionBindingValue(binding.executionBinding) ||
       session.workflowId !== binding.workflowId ||
@@ -770,9 +676,7 @@ export async function inspectPhase1Readiness(
     try {
       await resumeExecutionSession(executionContextFor(context, identity), session);
     } catch {
-      // A stale epoch, a revoked/suspended row, a foreign store or a copied
-      // reference: the adopted binding is no longer this session's, and no
-      // envelope or snapshot is consulted as a fallback.
+      // The host binding is stale or no longer belongs to this session.
       fail("binding-invalid");
       diagnose({
         code: "binding-invalid",
@@ -790,10 +694,8 @@ export async function inspectPhase1Readiness(
     try {
       authorityRead = await readExecutionAuthority(context, { workflowId: binding.workflowId });
     } catch {
-      // The authority itself cannot serve this checkpoint. That is the frozen
-      // `execution.consumer-not-ready` verdict — the same code the FILE arm
-      // reports when an ACTIVE authority owns the root — and never a verdict
-      // derived from retired bytes.
+      // The ACTIVE authority cannot serve this checkpoint; its evidence is
+      // unavailable, never inferred from retired document bytes.
       fail("execution.consumer-not-ready");
       return verdict();
     }
@@ -917,9 +819,7 @@ export async function inspectPhase1Readiness(
     fail("binding-invalid");
   }
 
-  // Registered plans: compass registration and the lifecycle's plan rows agree
-  // exactly — from the DB plan views on the ACTIVE arm, from the snapshot rows
-  // on the FILE arm.
+  // Compass registration and ACTIVE lifecycle plan rows must agree exactly.
   const registered = Array.isArray(compass.plans) ? compass.plans.filter(isNonEmptyString) : [];
   const rowIds = rows.map(rowId).filter((id): id is string => id !== null);
   if (
@@ -963,9 +863,7 @@ export async function inspectPhase1Readiness(
   if (!plansComplete) fail("prepare-not-locked");
 
   if (plansComplete) {
-    // The canonical plan root the resolver owns — the same one registration and
-    // the guarded Prepare correction resolve against, including a `.mstarc`
-    // declared or external `{PLAN_DIR}`.
+    // Resolve the registered plan path through the configured plan root.
     const planBase = canonicalizeNearestExisting(planArea);
     for (const plan of receiptPlans) {
       const row = rows.find((candidate) => rowId(candidate) === plan.planId);
@@ -1007,11 +905,8 @@ export async function inspectPhase1Readiness(
             workflowId: binding.workflowId,
             planId: plan.planId,
             source: "plan-row",
-            // §5 safe rendering: the stored row pointer is arbitrary text — it
-            // may be an envelope, credential or session path — so only its
-            // received *form* (§4's accepted axis) is projected, never the value
-            // it held. The canonical base/target name the file it should have
-            // registered.
+            // The stored pointer is arbitrary text and may include private path
+            // data, so only its received form is projected.
             received: isAbsolute(registeredFile) ? "canonical-absolute" : "harness-relative",
             base: planBase,
             target: join(planBase, `${plan.planId}.md`),
