@@ -50,16 +50,16 @@ export function failed(id: string, error: unknown): CommandEnvelope<never> {
     exitCode: error instanceof SddScriptError ? error.exitCode : 1,
     message,
    recovery: id === "sdd.workspace"
-        ? "Supply the plan id whose SDD workspace is requested; when the control harness root cannot be resolved from the current directory, provide that control root."
+        ? "Set the plan id whose SDD workspace is requested and the control root only when it cannot be resolved from the current directory. Run mstar sdd workspace <plan-id>."
         : id === "sdd.task-brief"
-          ? "Correct the plan file and task number, then retry extraction to the intended output file."
+          ? "Correct the plan file, task number, and output file. Run mstar sdd task-brief <plan-file> <task-number> <output-file>."
           : id === "sdd.review-package"
-            ? "Verify the base and head refs resolve in the feature worktree and choose a writable review-package path."
+            ? "Verify both refs resolve in the feature worktree and choose a writable package path. Run mstar sdd review-package <base> <head> <output-file>."
             : id === "sdd.check-context"
-              ? "Correct the context document and requested action seam to match the resolved SDD execution context."
+              ? "Align the context document and requested action seam with the resolved SDD execution context. Run mstar sdd check-context."
               : id === "sdd.evidence.capture"
-                ? "Use the exact authorized argv and execution context, then correct the reported evidence destination or child-process failure."
-                : "Select the retained evidence bundle by its SDD directory, plan, task, and run identifiers, then correct the reported target or integrity issue."});
+                ? "The exact authorized argv and execution context are required; the evidence destination or child-process failure must be corrected. Run mstar sdd evidence capture <literal-argv...>."
+                : "Select the retained evidence bundle by SDD directory, plan, task, and execution identifiers and correct its target or integrity issue. Run mstar sdd evidence verify."});
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);

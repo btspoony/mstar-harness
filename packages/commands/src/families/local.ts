@@ -242,7 +242,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         };
         return errors.length === 0
           ? ok("doctor", data)
-          : refusalEnvelope({ command: "doctor", status: "refused", code: "doctor.unhealthy", exitCode: 1, message: `${errors.length} issue(s)`, details: data , recovery: "Resolve the checks listed in the doctor report, then run `mstar doctor` again."});
+          : refusalEnvelope({ command: "doctor", status: "refused", code: "doctor.unhealthy", exitCode: 1, message: `${errors.length} issue(s)`, details: data , recovery: "Resolve the health findings listed in the doctor report. Run mstar doctor."});
       },
     }),
     command("plugin.validate", {
@@ -255,7 +255,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const result = validateAgentPlugin(root);
         return result.ok
           ? ok("plugin.validate", { root, ...result })
-          : refusalEnvelope({ command: "plugin.validate", status: "refused", code: "plugin.invalid", exitCode: 1, message: result.errors.join("\n"), details: { root, ...result } , recovery: "Correct the plugin package errors listed in the validation report, then rerun `mstar plugin validate`."});
+          : refusalEnvelope({ command: "plugin.validate", status: "refused", code: "plugin.invalid", exitCode: 1, message: result.errors.join("\n"), details: { root, ...result } , recovery: "Correct the plugin package errors listed in the validation report. Run mstar plugin validate."});
       },
     }),
     command("path.resolve", {
@@ -273,7 +273,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         if (harnessDir === null) {
           return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null,
-          } , recovery: "Select a project within an existing harness, then rerun `mstar path resolve`."});
+          } , recovery: "Set the starting path to a directory inside an existing harness. Run mstar path resolve."});
         }
         return ok("path.resolve", {
           startDir,

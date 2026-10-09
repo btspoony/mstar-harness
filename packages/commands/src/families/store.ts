@@ -45,16 +45,16 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
     : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message , recovery: id === "store.init"
-        ? "Choose an empty harness root for initialization or resolve the legacy files that block creation."
+        ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
         : id === "store.upgrade"
-          ? "Correct the operator input and legacy-store state reported by the upgrade diagnostic before retrying."
+          ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
           : id === "store.migrate"
-            ? "Correct the legacy migration source layout or manifest identified by the diagnostic before retrying the migration."
+            ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
             : id === "store.backup"
-              ? "Choose a writable backup destination and verify that the active store is readable before retrying."
+              ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
               : id === "store.activate"
-                ? "Correct the migration manifest and activation attestation so they identify the same verified store state."
-                : "Resolve the retirement preconditions and recorded activation evidence identified by the diagnostic before retrying."});
+                ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
+                : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire."});
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {

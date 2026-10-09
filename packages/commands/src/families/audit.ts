@@ -63,12 +63,12 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
     ? error.details as Record<string, unknown>
     : undefined;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "audit.scaffold"
-        ? "Provide a writable audit output directory and valid source paths, then retry the scaffold."
+        ? "Choose a writable audit output directory and valid source paths. Run mstar audit scaffold."
         : id === "audit.promote"
-          ? "Correct the selected plan and findings inputs so the promotion validates, then retry the promotion."
+          ? "Correct the selected plan and findings inputs so promotion validation succeeds. Run mstar audit promote."
           : id === "audit.secret-scan"
-            ? "Run the scan from a readable Git checkout and correct the reported file-access or scanner failure before retrying."
-            : "Correct the reported supply-chain source or dependency metadata issue, then rerun the check."});
+            ? "Resolve the reported Git checkout, file-access, or scanner failure. Run mstar audit secret-scan."
+            : "Correct the reported source or dependency metadata issue. Run mstar audit supply-chain."});
 }
 function required(value: string | undefined, label: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${label} is required`, 2);
@@ -225,14 +225,14 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const result = scanSecrets(files);
       return result.unreadableFiles > 0 || result.findings.length > 0
         ? refusalEnvelope({ command: id, status: "refused", code: result.unreadableFiles > 0 ? "audit.secret-scan.incomplete" : "audit.secret-scan.findings", exitCode: 1, message: result.unreadableFiles > 0 ? `failed to read ${result.unreadableFiles} tracked files; refusing to report clean` : `${result.findings.length} secret findings`, details: { findings: result.findings, unreadableFiles: result.unreadableFiles } , recovery: result.unreadableFiles > 0 && result.findings.length > 0
-            ? "Restore access to each unreadable tracked file and remediate every reported credential by rotating or revoking it and purging it from tracked content, then rerun the secret scan."
+            ? "Restore access to each unreadable tracked file and rotate or revoke every reported credential before purging it from tracked content. Run mstar audit secret-scan."
             : result.unreadableFiles > 0
-              ? "Restore read access to every unreadable tracked file, then rerun the secret scan."
-              : "Remediate every reported credential by rotating or revoking it and purging it from tracked content, then rerun the secret scan."})
+              ? "Restore read access to every unreadable tracked file. Run mstar audit secret-scan."
+              : "Rotate or revoke every reported credential and purge it from tracked content. Run mstar audit secret-scan."})
         : ok(id, { findings: [], unreadableFiles: 0, filesScanned: files.length });
     }
     const result = supplyChainChecks(root);
-    return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: "audit.supply-chain.findings", exitCode: 1, message: `${result.findings.length} supply-chain findings`, details: { findings: result.findings, violations: result.violations } , recovery: "Resolve the listed dependency and policy violations, then rerun the supply-chain check."});
+    return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: "audit.supply-chain.findings", exitCode: 1, message: `${result.findings.length} supply-chain findings`, details: { findings: result.findings, violations: result.violations } , recovery: "Resolve the listed dependency and policy violations. Run mstar audit supply-chain."});
   } catch (error) { return failure(id, error); }
 }
 function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {

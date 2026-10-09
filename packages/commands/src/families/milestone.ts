@@ -23,14 +23,14 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
     ? error.code
     : `${id}.internal-error`;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id }, recovery: id === "milestone.add"
-      ? "Supply a unique milestone name, project ordinal, and the current store revision before retrying the add."
+      ? "Set a unique milestone name, project ordinal, and current store revision. Run mstar milestone add --project <project> --name <name> --ordinal <ordinal> --expect-store <revision> --operation <operation-id>."
       : id === "milestone.update"
-        ? "Read the current milestone and store revision, then resubmit only the intended patch."
+        ? "Read the current milestone and store revision and retain only the intended patch. Run mstar milestone update --project <project> --id <id> --expect-store <revision> --operation <operation-id>."
         : id === "milestone.assign"
-          ? "Verify the issue and milestone ids and use the current issue and store revisions before retrying assignment."
+          ? "Verify the issue and milestone ids and current issue and store revisions. Run mstar milestone assign --project <project> --issue <issue-id> --reason <reason> --expect-issue <revision> --expect-store <revision> --operation <operation-id> --session <session-id> --actor <actor>."
           : id === "milestone.list"
-            ? "Select an existing project and correct the reported store-read cause before listing milestones again."
-            : "Select an existing milestone in the project and correct the reported store-read cause before checking its status again." });
+            ? "Select an existing project and resolve the reported store-read cause. Run mstar milestone list --project <project>."
+            : "Select an existing milestone in the project and resolve the reported store-read cause. Run mstar milestone status --project <project> --id <id>." });
 }
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {

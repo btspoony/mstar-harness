@@ -28,10 +28,10 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "sdd.exec"
-        ? "Verify the admitted executable exists, the context names the intended feature worktree, and the child has the required working directory and environment."
+        ? "Verify the admitted executable, feature-worktree context, working directory, and child environment. Run mstar sdd exec <command> <args...>."
         : id === "worktree.cleanup"
-          ? "Review the cleanup plan and correct the reported ownership, merge-evidence, checkout, or worktree-state blocker before applying cleanup."
-          : "Verify the requested base ref and source checkout are reachable, then correct the worktree setup inputs before retrying."});
+          ? "Correct the reported ownership, merge-evidence, checkout, or worktree-state blocker before cleanup. Run mstar worktree cleanup --workflow <workflow-id>."
+          : "Verify the base ref and source checkout are reachable and correct the worktree setup inputs. Run mstar pr-review worktree-setup --path <worktree-path> --branch <branch>."});
 }
 
 function definitions(): readonly CommandDefinition[] {
