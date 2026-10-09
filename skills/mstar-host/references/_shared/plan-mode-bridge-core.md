@@ -6,7 +6,7 @@ Each per-host bridge (`cursor-plan-mode-bridge.md`, `kimi-plan-mode-bridge.md`, 
 
 ## Dual-write SSOT rule
 
-The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**. Under ACTIVE, Morning Star execution authority is `{HARNESS_DIR}/store.db`: registry/workflow/plan rows, sessions, leases and frozen inputs. The main plan in `{PLAN_DIR}/<plan-id>-<name>.md` and iteration compass remain authored artifacts. Read state via `mstar status validate` / `mstar plan show`; mutate only through public workflow/plan verbs. Root `status.json`, workflow snapshot and session JSON are pre-activation / engine-absent fallback only; ACTIVE refuses their reads/writes (`execution.consumer-not-ready` / `execution.direct-write-refused`). Never treat host UI alone as handoff.
+The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**. Under ACTIVE, Morning Star execution authority is `{HARNESS_DIR}/store.db`: registry/workflow/plan rows, sessions, leases and frozen inputs. The main plan in `{PLAN_DIR}/<plan-id>-<name>.md` and iteration compass remain authored artifacts. Read state via `mstar status validate` / `mstar plan show`; mutate only through public workflow/plan verbs. A control root with no ACTIVE store has no execution authority: bootstrap it with `mstar harness scaffold` + `mstar store init` (or `mstar store upgrade` to import historical file state), or track the work in conversation (no-plan mode) — the retired file route's `status.json` / snapshot reads and writes refuse (`execution.consumer-not-ready` / `execution.direct-write-refused`). Never treat host UI alone as handoff.
 
 **Iteration Phase 1 exception**: until the current-design prototype checkpoint passes, the session carrier is not a formal plan to mirror/register. Use § `mstar-iteration Phase 1 in Plan mode` below instead of the early formal dual-write/bootstrap sequence. Initialization and every package write still obey actual host permissions.
 
@@ -14,7 +14,7 @@ The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**
 
 1. User explicit instructions (this turn)
 2. Project `AGENTS.md` / `CLAUDE.md`
-3. **store.db execution authority + authored `{PLAN_DIR}` plan** (file state only pre-activation fallback)
+3. **store.db execution authority + authored `{PLAN_DIR}` plan**
 4. Host session plan / todos / UI (session UX mirror) — the host bridge names its surfaces
 
 **NEVER** cite only a host plan path / session todo list / chat summary in Assignment **Plan Path**, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
@@ -23,7 +23,7 @@ The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**
 
 1. **Read** (minimum): `mstar-conventions`, `mstar-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
 2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
-3. **Initialize** absent directories and process-artifact gitignore per `mstar-conventions`; the v2 empty `status.json` template / `scaffoldHarness` is pre-activation bootstrap, never an ACTIVE write route. Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
+3. **Initialize** absent directories and process-artifact gitignore per `mstar-conventions` (`mstar harness scaffold`), then create/activate the store (`mstar store init`, or `mstar store upgrade` for historical file state). Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
 
 ## Build resume contract
 
@@ -47,8 +47,8 @@ Not allowed in the parent Build session by default: product implementation, test
 
 | Todo ID (use in title) | Goal | On-disk outcome |
 |------------------------|------|-----------------|
-| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, process-artifact gitignore; empty v2 status template only pre-activation |
-| **`spec-register`** | Register plan in SSOT | ACTIVE registry/workflow/plan rows via `mstar workflow register`, prepared inputs via `mstar plan prepare`; authored spec/plan linkage (file state only pre-activation) |
+| **`harness-init`** | Bootstrap harness tree | `{HARNESS_DIR}/`, `{PLAN_DIR}/`, process-artifact gitignore via `mstar harness scaffold`, then `mstar store init` for the ACTIVE store |
+| **`spec-register`** | Register plan in SSOT | ACTIVE registry/workflow/plan rows via `mstar workflow register`, prepared inputs via `mstar plan prepare`; authored spec/plan linkage |
 | **`mirror-plan`** | SSOT main plan file | `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes aligned to the host plan body |
 
 `spec-register` is an authorized domain operation (engine producer primitives), declares the workflow's delivery kind, and blocks implementation until complete — plan-mode resumes owe the same registration obligation. Semantics → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`.

@@ -29,9 +29,9 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an
 
 ## Coordination transport (no host-native seat)
 
-This host ships no native execution transport: skills, commands and role subagents mount as text, so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the active route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`), or the pre-activation file route while the control root's execution authority is not active (`--session <absolute-json>` + a row revision). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).
+This host ships no native execution transport: skills, commands and role subagents mount as text, so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the ACTIVE route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).
 
-Restarting this host or opening a new session does **not** re-issue an identity: a launcher that mints a local identity mints a **new** one, and a copied id is never claimed. A stopped or unreachable coordinator is replaced only by the explicit recovery verb that owns the current authority (`mstar session recover` on the active route, or the guarded Prepare recovery on the file route) — never by restarting a process, re-running a command, or editing a document.
+Restarting this host or opening a new session does **not** re-issue an identity: a launcher that mints a local identity mints a **new** one, and a copied id is never claimed. A stopped or unreachable coordinator is replaced only by the explicit recovery verb that owns the current authority (`mstar session recover`) — never by restarting a process, re-running a command, or editing a document.
 
 ## Skill loading
 
@@ -48,7 +48,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 - Codex does not imply an OpenCode-style `question` tool.
 - If a structured user-input tool is available in the active mode, use it for concise 1-3 choice decisions.
 - Otherwise ask one concise Markdown question only after codebase exploration cannot answer it.
-- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or store.db registry/workflow/plan rows (status.json + snapshot files only pre-activation).
+- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or store.db registry/workflow/plan rows.
 - Codex Goal Mode objective is completion criteria for the host thread, not Morning Star Done authority; mirror it into the SSOT plan when the work is implementation-sized.
 
 ## Dispatch and role execution
