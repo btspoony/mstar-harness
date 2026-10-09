@@ -3,12 +3,10 @@ import path from "node:path";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import {
-  WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
-  adoptTerminalWorkflow, commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
-  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
-  recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
-  resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore,
-  showPrepareWorkflow,
+  WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES,
+  adoptTerminalWorkflow, createFsStore, decodeExecutionSessionRef,
+  executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, registerShippedCatalogExecution,
+  resolveExecutionReadRoute, resolveProcessHarnessDir, setArtifactStore,
   type ActivationAttestation,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence,
   type WorkflowExecutionOperation, type WorkflowExecutionPolicy,
@@ -33,22 +31,6 @@ const attestationRules = activationAttestationDocumentConstraints
   .join(" ");
 
 
-/**
- * The ACTIVE registration refusal: `expect` and `operation` are required (the
- * store's root token and the caller's replay id). Session identity is NOT —
- * it is creator attribution; an unset identity registers a NULL creator that
- * the first coordinator bind adopts.
- */
-function activeRegistrationRefusal(id: string, missing: readonly string[]): CommandEnvelope<never> {
-  const recovery = [
-    "For workflow.register and iteration.register, expect is the store's root execution token from mstar status validate; for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate; for other workflow-scoped writes, use that addressed scope's own token.",
-    "operation is your own replay id.",
-    "Session identity is optional at registration: supply it when the transport has one " +
-      `(${IDENTITY_SUPPLIES}); an unset identity registers a NULL creator that the first coordinator bind adopts.`,
-    ...(missing.includes("sessionRef") ? ["sessionRef is the active session reference returned by the plan bind receipt; pass it as --session-ref on the CLI or sessionRef in MCP input."] : []),
-  ].join(" ");
-  return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `Active registration is missing ${missing.join(", ")}. ${recovery}` });
-}
 
 class WorkflowInputError extends Error {}
 function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
@@ -128,18 +110,6 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     details: refusalDetails ?? {},
     recovery: supportedRecovery,
   });
-}
-function object(value: unknown, field: string): Record<string, unknown> {
-  let parsed: unknown = value;
-  if (typeof value === "string") {
-    try {
-      parsed = JSON.parse(value) as unknown;
-    } catch {
-      throw new WorkflowInputError(`${field} must be a JSON object`);
-    }
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new WorkflowInputError(`${field} must be an object`);
-  return parsed as Record<string, unknown>;
 }
 function absolute(value: string | undefined, field: string): string {
   if (value === undefined || !path.isAbsolute(value)) throw new WorkflowInputError(`${field} must be an absolute path`);
@@ -241,25 +211,15 @@ function readAdoptionAttestation(documentPath: string): ActivationAttestation {
   }
 }
 
-async function assertLegacyRoute(harnessDir: string, operation: string): Promise<void> {
-  if (await resolveExecutionReadRoute({ harnessDir }) === "execution") {
-    throw new StoreError(
-      "execution.consumer-not-ready",
-      `state: active. Upgrade outcome: not required; ${operation}: the pre-activation form is retired. ` +
-        `Nothing was written; use the active DB form with the current execution token under an independently acquired identity.`,
-    );
-}
-}
 function schema() {
   return z.object({
     workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), planId: z.string().min(1).optional(),
     planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS).optional(),
     project: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
     completionPolicy: z.string().min(1).optional(), startedAt: z.string().min(1).optional(), expect: z.string().min(1).optional(),
-    operation: z.string().min(1).optional(), file: z.string().min(1).optional(), declareKind: z.string().min(1).optional(),
-    at: z.string().min(1).optional(), session: z.string().min(1).optional(), sessionRef: z.string().min(1).optional(),
-    sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(), reason: z.string().min(1).optional(),
-    stopped: z.array(z.string()).optional(), attestation: z.string().min(1).optional(),
+    operation: z.string().min(1).optional(), file: z.string().min(1).optional(),
+    sessionRef: z.string().min(1).optional(), sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(),
+    reason: z.string().min(1).optional(), stopped: z.array(z.string()).optional(), attestation: z.string().min(1).optional(),
     operationId: z.string().min(1).optional(), authorizationRef: z.string().min(1).optional(), input: z.unknown().optional(),
     phase: z.string().min(1).optional(), status: z.string().min(1).optional(), path: z.string().min(1).optional(),
     compass: z.string().min(1).optional(), policy: z.unknown().optional(), json: z.boolean().optional(),
@@ -289,96 +249,34 @@ function makeDefinition(
         { name: "planTitle", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
         { name: "planFile", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
         { name: "deliveryKind", ownership: "caller" as const, route: "cli" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
-        { name: "expect", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "operation" }, constraint: "supply together with operation to select active registration" },
-        { name: "operation", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "expect" }, constraint: "supply together with expect to select active registration" },
+        { name: "expect", ownership: "caller" as const, route: "cli" as const, required: false, tokenKind: "root" as const, constraint: "optional checked constraint on the current root execution token" },
+        { name: "operation", ownership: "caller" as const, route: "cli" as const, required: false, constraint: "optional pinned replay id" },
         { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
         { name: "planId", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
         { name: "planTitle", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
         { name: "planFile", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
         { name: "deliveryKind", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
-        { name: "expect", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "operation" }, constraint: "supply together with operation to select active registration" },
-        { name: "operation", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "expect" }, constraint: "supply together with expect to select active registration" },
+        { name: "expect", ownership: "caller" as const, route: "mcp" as const, required: false, tokenKind: "root" as const, constraint: "optional checked constraint on the current root execution token" },
+        { name: "operation", ownership: "caller" as const, route: "mcp" as const, required: false, constraint: "optional pinned replay id" },
       ],
+    } : {}),
+    ...(id === "iteration.register" ? {
+      requirements: (["cli", "mcp"] as const).flatMap((route) => [
+        { name: "expect", ownership: "caller" as const, route, required: false, tokenKind: "root" as const, constraint: "optional checked constraint on the current root execution token" },
+        { name: "operation", ownership: "caller" as const, route, required: false, constraint: "optional pinned replay id" },
+      ]),
     } : {}),
     ...(id === "workflow.evidence" ? {
       requirements: [
         { name: "workflow", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "file", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "absolute path to UTF-8 JSON file; supply exactly one of file or declareKind" },
-        { name: "declareKind", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "file", present: false }, constraint: `pre-activation one-time declaration; one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}; supply exactly one of file or declareKind` },
-        { name: "branchSource", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "source branch required for the one-time development declaration" },
-        { name: "branchTarget", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "target branch required for the one-time development declaration" },
-        { name: "completionPolicy", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", equals: "verification/report-only" }, constraint: "registered fulfilment policy required for report-only declaration" },
+        { name: "file", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "absolute path to UTF-8 JSON file containing delivery evidence" },
         { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
-        { name: "file", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "absolute path to UTF-8 JSON file; supply exactly one of file or declareKind" },
-        { name: "declareKind", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "file", present: false }, constraint: `pre-activation one-time declaration; one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}; supply exactly one of file or declareKind` },
-        { name: "branchSource", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "source branch required for the one-time development declaration" },
-        { name: "branchTarget", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "target branch required for the one-time development declaration" },
-        { name: "completionPolicy", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", equals: "verification/report-only" }, constraint: "registered fulfilment policy required for report-only declaration" },
+        { name: "file", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "absolute path to UTF-8 JSON file containing delivery evidence" },
         ...(["cli", "mcp"] as const).flatMap((route) => [
           { name: "sessionRef", ownership: "caller" as const, route, required: false, tokenKind: "workflow" as const, constraint: "when supplied, exec-session-v1 coordinator reference for this workflow; ACTIVE writes always require the acquired current operator identity" },
           { name: "expect", ownership: "caller" as const, route, required: false, tokenKind: "workflow" as const, constraint: "optional workflow CAS token on the ACTIVE operation route" },
           { name: "operation", ownership: "caller" as const, route, required: false, constraint: "ACTIVE write replay id; omitted creates one fresh id for this invocation; explicit values are preserved" },
-          { name: "session", ownership: "caller" as const, route, required: false, constraint: "optional legacy pre-activation session path; refused on ACTIVE writes" },
-          { name: "at", ownership: "caller" as const, route, required: false, constraint: "optional legacy pre-activation RFC3339 timestamp; omitted defaults to current time" },
         ]),
-      ],
-    } : {}),
-    ...(id === "workflow.recover-coordinator" ? {
-      requirements: [
-        {
-          name: "attestation",
-          ownership: "caller" as const,
-          route: "cli" as const,
-          required: true,
-          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
-          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
-        },
-        {
-          name: "attestation",
-          ownership: "caller" as const,
-          route: "mcp" as const,
-          required: true,
-          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
-          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
-        },
-      ],
-    } : {}),
-    ...(id === "workflow.show-prepare" ? {
-      requirements: [
-        { name: "session", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "session", ownership: "caller" as const, route: "mcp" as const, required: true },
-      ],
-    } : {}),
-    ...(id === "workflow.amend-prepare" ? {
-      requirements: [
-        { name: "session", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "input", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "session", ownership: "caller" as const, route: "mcp" as const, required: true },
-        { name: "input", ownership: "caller" as const, route: "mcp" as const, required: true },
-      ],
-    } : {}),
-    ...(id === "workflow.recover-coordinator" ? {
-      requirements: [
-        ...(["session", "operationId", "reason", "authorizationRef", "stopped"] as const).flatMap((name) => [
-          { name, ownership: "caller" as const, route: "cli" as const, required: true },
-          { name, ownership: "caller" as const, route: "mcp" as const, required: true },
-        ]),
-        {
-          name: "attestation",
-          ownership: "caller" as const,
-          route: "cli" as const,
-          required: true,
-          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
-          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
-        },
-        {
-          name: "attestation",
-          ownership: "caller" as const,
-          route: "mcp" as const,
-          required: true,
-          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
-          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
-        },
       ],
     } : {}),
     ...(id === "workflow.adopt-terminal" ? {
@@ -466,8 +364,8 @@ function makeDefinition(
 
 /**
  * Structural discovery shape for the engine-owned WorkflowDeliveryEvidence.
- * `recordWorkflowDelivery` / `mutateExecutionWorkflow` remain the validators;
- * the `WorkflowDeliveryEvidence` type and deliveryEvidenceViolations are the
+ * `mutateExecutionWorkflow` validates delivery evidence; the
+ * `WorkflowDeliveryEvidence` type and deliveryEvidenceViolations are the
  * contract authorities for members, partial updates, lifecycle kind and
  * provider/fulfilment invariants.
  */
@@ -498,7 +396,7 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
 export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
   const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
   const defs: CommandDefinition[] = [
-    makeDefinition("workflow.register", "Register a standalone plan workflow using create-only catalog registration and active DB CAS when selected.", "write", commonRegister, async (input, context) => {
+    makeDefinition("workflow.register", "Register a standalone plan workflow on the ACTIVE execution authority.", "write", commonRegister, async (input, context) => {
       try {
         const required = [input.workflow, input.planId, input.planTitle, input.planFile, input.deliveryKind];
         if (required.some((value) => value === undefined || value.trim() === "")) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, planId, planTitle, planFile and deliveryKind are required" });
@@ -506,140 +404,67 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
         if (harnessDir === null) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "harness dir not found; supply harness" });
         const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
-        setArtifactStore(createFsStore(harnessDir));
-        if (input.expect !== undefined || input.operation !== undefined) {
-          if (input.expect === undefined || input.operation === undefined) {
-            return activeRegistrationRefusal("workflow.register", [
-              ...(input.expect === undefined ? ["expect"] : []),
-              ...(input.operation === undefined ? ["operation"] : []),
-            ]);
-          }
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow!, role: "coordinator" };
-          const { catalogRevision } = await readCatalogRevisions({ harnessDir });
-          const canonicalPlanAbs = path.isAbsolute(input.planFile!) ? path.resolve(input.planFile!) : path.join(harnessDir, input.planFile!);
-          const plansRelative = path.relative(resolvePlanDir(harnessDir), canonicalPlanAbs);
-          const relativePath = plansRelative === ".." || plansRelative.startsWith(`..${path.sep}`) || path.isAbsolute(plansRelative) ? input.planFile! : plansRelative;
-          // Creator attribution is optional: an unset session id registers a
-          // NULL creator that the first coordinator bind adopts.
-          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
-        }
-        await assertLegacyRoute(harnessDir, "workflow register");
-        return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));
-      } catch (error) { return engineRefusal("workflow.register", error); }
+        const identity: ExecutionIdentity = context.executionIdentity ?? {
+          source: context.host === undefined ? "local" : "host",
+          sessionId: context.sessionId ?? "",
+          workflowId: input.workflow!,
+          role: "coordinator",
+        };
+        return ok("workflow.register", await registerShippedCatalogExecution(
+          executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }),
+          {
+            actor: "mcp:workflow-register",
+            workflow,
+            ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+            ...(input.operation === undefined ? {} : { operationId: input.operation }),
+          },
+        ));
+      } catch (error) {
+        return engineRefusal("workflow.register", error);
+      }
     }, [{ key: "sessionId", context: "sessionId" }], {
-      expect: `CAS expectation: ${TOKEN_SUPPLIES.root}`,
+      expect: `Optional checked CAS constraint: ${TOKEN_SUPPLIES.root}`,
       planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
     }),
-    makeDefinition("workflow.evidence", "Record delivery evidence or a one-time kind declaration. `--file` is a pathname (never inline JSON): it must be absolute and name a UTF-8 JSON file containing a non-empty object with at least one member. For `development`, members are any subset of compound {outcome: created|updated|skipped, reason?: non-empty string; reason is required for skipped}, pr {repo, head, target: non-empty strings}, and merge {provider, evidence: non-empty strings}; for `verification/report-only`, the only member is completion {policy, evidence: non-empty strings}. Omit untouched members; supplied members are complete blocks, not sub-field patches. `completion.policy` must match the registered `completion_policy` for lifecycle completion; a mismatched report may be recorded and corrected by another evidence update before close. A matching non-empty completion on a Done row is frozen; edit its referenced document in place, or use a separate workflow for a different completed intent. Done alone does not freeze other evidence. PR identity is immutable once recorded: keep its registered repo/head/target for that delivery, or use a separate workflow for a different PR. The declared delivery_kind selects permitted members and is never inferred. The pre-activation FILE route writes snapshots; ACTIVE workflows use the DB-backed coordinator evidence operation and close guard.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
+    makeDefinition("workflow.evidence", "Record delivery evidence through the ACTIVE coordinator operation. `--file` is a pathname (never inline JSON): it must be absolute and name a UTF-8 JSON file containing a non-empty object with at least one member. For `development`, members are any subset of compound {outcome: created|updated|skipped, reason?: non-empty string; reason is required for skipped}, pr {repo, head, target: non-empty strings}, and merge {provider, evidence: non-empty strings}; for `verification/report-only`, the only member is completion {policy, evidence: non-empty strings}. Omit untouched members; supplied members are complete blocks, not sub-field patches. `completion.policy` must match the registered `completion_policy` for lifecycle completion; a mismatched report may be recorded and corrected by another evidence update before close. A matching non-empty completion on a Done row is frozen; edit its referenced document in place, or use a separate workflow for a different completed intent. Done alone does not freeze other evidence. PR identity is immutable once recorded: keep its registered repo/head/target for that delivery, or use a separate workflow for a different PR. The registered delivery kind selects permitted members. `--expect` and `--operation` optionally constrain this ACTIVE write.", "write", ["workflow", "file", "sessionRef", "expect", "operation", "harness"], async (input, context) => {
       try {
         if (input.workflow === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow is required" });
-        if ((input.file === undefined) === (input.declareKind === undefined)) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "provide exactly one of file or declareKind" });
-        if (input.declareKind !== undefined && !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(input.declareKind)) {
-          return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: `--declare-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` });
-        }
+        if (input.file === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "file is required" });
         const root = resolveProcessHarnessDir(context.cwd, input.harness);
         if (root === null) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "harness dir not found; supply harness" });
-        setArtifactStore(createFsStore(root));
-        const workflowDir = path.join(resolveWorkflowDir(root, { harnessDir: root }), input.workflow);
-        if (input.declareKind !== undefined) {
-          if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "declareKind is pre-activation only" });
-          await assertLegacyRoute(root, "workflow evidence --declare-kind");
-          const result = await declareWorkflowDeliveryKind(input.workflow, workflowDir, { deliveryKind: input.declareKind as never, ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) });
-          return ok("workflow.evidence", result);
-        }
         const evidence = parseWorkflowJson<Record<string, unknown>>(
           readFileSync(absolute(input.file, "file"), "utf8"), "evidence file", "workflow.evidence.file-malformed",
         );
-        const active = (await resolveExecutionReadRoute({ harnessDir: root })) === "execution";
-        if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined || active) {
-          if (context.sessionId === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: `active evidence requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
-          if (input.at !== undefined || input.session !== undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active evidence cannot use legacy session or at fields" });
-          if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active evidence requires a full workflow execution token" });
-          const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
-          const acquired = context.executionIdentity;
-          if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator")) {
-            return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
-          }
-          if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
-            return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired identity must address the selected workflow's coordinator seat" });
-          }
-          const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
-          return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
-            workflowId: input.workflow,
-            ...(ref === undefined ? {} : { session: ref }),
-            ...(input.expect === undefined ? {} : { expected: input.expect as never }),
-            operationId: input.operation ?? randomUUID(),
-            operation: { kind: "delivery", delivery: evidence },
-          }));
+        if (context.sessionId === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: `active evidence requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
+        const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+        const acquired = context.executionIdentity;
+        if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator")) {
+          return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
         }
-        await assertLegacyRoute(root, "workflow evidence");
-        return ok("workflow.evidence", await recordWorkflowDelivery(input.workflow, workflowDir, { evidence, ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) }));
+        if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
+          return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired identity must address the selected workflow's coordinator seat" });
+        }
+        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+        return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+          workflowId: input.workflow,
+          ...(ref === undefined ? {} : { session: ref }),
+          ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+          operationId: input.operation ?? randomUUID(),
+          operation: { kind: "delivery", delivery: evidence },
+        }));
       } catch (error) { return engineRefusal("workflow.evidence", error); }
     }, [{ key: "sessionId", context: "sessionId" }], {
-      expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
+      expect: `Optional CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
       file: "Path-only wire: absolute path to a UTF-8 JSON file; inline JSON text is not accepted.",
     }, { delivery: deliveryEvidenceSchema }),
-    makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
-      try { if (input.session === undefined) return refusalEnvelope({ command: "workflow.show-prepare", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session is required" }); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return engineRefusal("workflow.show-prepare", error); }
-    }),
-    makeDefinition("workflow.amend-prepare", "Append approved Prepare rows under the current coordinator and row state.", "write", ["session", "input"], async (input, context) => {
-      try {
-        if (input.session === undefined || input.input === undefined) return refusalEnvelope({ command: "workflow.amend-prepare", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session and input patch are required" });
-        const sessionPath = absolute(input.session, "session");
-        const envelope = readSessionEnvelope(sessionPath);
-        await assertLegacyRoute(envelope.harness_root, "workflow amend-prepare");
-        return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, patch: object(input.input, "input") as never }));
-      } catch (error) { return engineRefusal("workflow.amend-prepare", error); }
-    }),
-    makeDefinition("workflow.recover-coordinator", "Recover a stopped workflow coordinator on the pre-activation FILE route: the prior session's coordinator binding is replaced and the exact prior claim is settled atomically. `--attestation <absolute-json>` supplies the operator's full ActivationAttestation, which the engine REQUIRES when an interrupted integration-merge claim is held; it is optional when no such claim exists. Reading the document is this command's admission step \u2014 the engine performs the authority discrimination. An ACTIVE execution authority is not this verb's transport: that route refuses here and points at `mstar session recover` with its existing supported flags. It does not resume a session: the engine settles the exact prior claim atomically as part of the replacement.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation", "harness"], async (input, context) => {
-      try {
-        if (context.sessionId === undefined || context.sessionId.trim() === "") {
-          return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: `recovery requires the main conversation session identity (${IDENTITY_SUPPLIES}).` });
-        }
-        if (input.session === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) {
-          return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session, operationId, reason, authorizationRef and stopped are required" });
-        }
-        // The admission step is reading the operator's stop document. The
-        // engine requires it when an interrupted mutex claim is held and
-        // performs the authority discrimination itself; the CLI never decides
-        // which transport applies.
-        const attestation = input.attestation === undefined
-          ? undefined
-          : parseWorkflowJson<ActivationAttestation>(
-            readFileSync(absolute(input.attestation, "attestation"), "utf8"),
-            "attestation document", "workflow.recover-coordinator.attestation-malformed",
-          );
-        const priorSessionPath = absolute(input.session, "session");
-        const prior = readSessionEnvelope(priorSessionPath);
-        // The ACTIVE authority is a different transport with its own supported
-        // verb (`mstar session recover`); this FILE verb never doubles as it.
-        if (await resolveExecutionReadRoute({ harnessDir: prior.harness_root }) === "execution") {
-          return refusalEnvelope({
-            command: "workflow.recover-coordinator",
-            status: "usage",
-            code: "command.invalid-input",
-            exitCode: 2,
-            message: "this FILE-route recovery does not apply on an ACTIVE execution authority; use `mstar session recover --workflow <id> (--prior-session <id>|--unowned) --reason <text> --attestation <absolute-json> --expect <token> --operation <id>` instead",
-          });
-        }
-        setArtifactStore(createFsStore(prior.harness_root));
-        return ok("workflow.recover-coordinator", await recoverPrepareCoordinator({
-          cwd: context.cwd,
-          harnessDir: prior.harness_root,
-          identity: { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: prior.workflow_id, role: "coordinator" },
-          priorSessionPath,
-          priorSessionId: prior.session_id,
-          operationId: input.operationId,
-          reason: input.reason,
-          authorizationRef: input.authorizationRef,
-          stoppedSessionIds: input.stopped,
-          ...(attestation === undefined ? {} : { attestation }),
-        }));
-      } catch (error) { return engineRefusal("workflow.recover-coordinator", error); }
-    }, [{ key: "sessionId", context: "sessionId" }], {
-      attestation: "absolute path to the operator's ActivationAttestation JSON \u2014 the engine requires it when an interrupted integration-merge claim is held",
-    }),
+    ...([
+      ["workflow.show-prepare", "workflow show-prepare", "The pre-activation Prepare workflow view is retired; use `mstar plan prepare` for the current DB-backed Prepare view."],
+      ["workflow.amend-prepare", "workflow amend-prepare", "Pre-activation Prepare amendments are retired; use `mstar plan prepare` to revise the current DB-backed Prepare configuration."],
+      ["workflow.recover-coordinator", "workflow recover-coordinator", "Pre-activation coordinator-session recovery is retired; use `mstar session recover` for ACTIVE coordinator recovery."],
+    ] as const).map(([id, label, recovery]) => makeDefinition(id, "Retired command; refuses without mutation.", "read", ["json"], async () =>
+      refusalEnvelope({ command: id, status: "refused", code: "workflow.verb-retired", exitCode: 1, message: `${label}: removed — ${recovery} This verb writes nothing.` }),
+    )),
     makeDefinition(
       "workflow.adopt-terminal",
       "Adopt an eligible unadopted terminal header without registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
@@ -763,23 +588,24 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       // (Greptile #301 issue 1).
       const compassRef = normalizeIterationCompassRef(input.compassRef, harnessDir, (detail) => new WorkflowInputError(detail));
       const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
-      setArtifactStore(createFsStore(harnessDir));
-      if (input.expect !== undefined || input.operation !== undefined) {
-        if (input.expect === undefined || input.operation === undefined) {
-          return activeRegistrationRefusal("iteration.register", [
-            ...(input.expect === undefined ? ["expect"] : []),
-            ...(input.operation === undefined ? ["operation"] : []),
-          ]);
-        }
-        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow, role: "coordinator" };
-        const { catalogRevision } = await readCatalogRevisions({ harnessDir });
-        // Creator attribution is optional: an unset session id registers a
-        // NULL creator that the first coordinator bind adopts.
-        return ok("iteration.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }), { operationId: input.operation, actor: "mcp:iteration-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "iteration", id: input.workflow, title: input.workflow, rootKind: "iterations", relativePath: input.workflow }], binding: { catalogKind: "iteration", catalogId: input.workflow } }, expected: input.expect as never }));
-      }
-      await assertLegacyRoute(harnessDir, "iteration register");
-      return ok("iteration.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:iteration-register", workflow }));
-    } catch (error) { return engineRefusal("iteration.register", error); }
-  }, [{ key: "sessionId", context: "sessionId" }], { expect: `CAS expectation: ${TOKEN_SUPPLIES.root}` }));
+      const identity: ExecutionIdentity = context.executionIdentity ?? {
+        source: context.host === undefined ? "local" : "host",
+        sessionId: context.sessionId ?? "",
+        workflowId: input.workflow,
+        role: "coordinator",
+      };
+      return ok("iteration.register", await registerShippedCatalogExecution(
+        executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }),
+        {
+          actor: "mcp:iteration-register",
+          workflow,
+          ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+          ...(input.operation === undefined ? {} : { operationId: input.operation }),
+        },
+      ));
+    } catch (error) {
+      return engineRefusal("iteration.register", error);
+    }
+  }, [{ key: "sessionId", context: "sessionId" }], { expect: `Optional checked CAS constraint: ${TOKEN_SUPPLIES.root}` }));
   return defs;
 }

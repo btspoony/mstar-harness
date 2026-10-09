@@ -7,17 +7,17 @@ import {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
-  createFsStore,
+  executionContextFor,
   SddScriptError,
   listAuditPlanIds,
   registerShippedCatalogExecution,
   resolveProcessHarnessDir,
   scanSecrets,
   scaffoldAuditPlan,
-  setArtifactStore,
   supplyChainChecks,
   WORKFLOW_DELIVERY_KINDS,
   type AuditFinding,
+  type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -40,7 +40,7 @@ const inputSchema = z.object({
   plans: z.string().optional(), workflow: z.string().optional(), deliveryKind: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), harness: z.string().optional(),
   path: z.string().optional(),
 });
-const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandEffect[]; description: string }> = {
+const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown; context?: "sessionId" }[]; effects: readonly CommandEffect[]; description: string }> = {
   scaffold: { args: [{ key: "findings", required: true, variadic: false }], options: [
     { key: "dir", flags: "--dir <out-dir>", required: false, help: "Defaults to audit-<date> under the current directory." }, { key: "sha", flags: "--sha <commit>", required: false, help: "Defaults to the current Git HEAD short SHA; uses unknown if Git cannot resolve it." },
     { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to today's UTC date." }, { key: "repo", flags: "--repo <name>", required: false },
@@ -49,7 +49,7 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
     { key: "plans", flags: "--plans <ids>", required: false, help: "May be inferred only when the audit directory contains one plan; when it contains multiple plans, select explicitly." }, { key: "workflow", flags: "--workflow <id>", required: false },
     { key: "deliveryKind", flags: "--delivery-kind <kind>", required: true, help: `One of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}.` }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
     { key: "branchTarget", flags: "--branch-target <branch>", required: false }, { key: "completionPolicy", flags: "--completion-policy <text>", required: false },
-    { key: "harness", flags: "--harness <dir>", required: false },
+    { key: "harness", flags: "--harness <dir>", required: false }, { key: "sessionId", flags: "--session-id <session-id>", required: false, context: "sessionId" },
   ], effects: ["read", "write"], description: "Promote selected audit plans; development requires branchSource and branchTarget, while verification/report-only requires completionPolicy." },
   "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values; path defaults to the current directory." },
   "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root; path defaults to the current directory." },
@@ -221,12 +221,23 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) throw new SddScriptError(`--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`, 2);
       const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
       if (harnessDir === null) throw new Error(`harness dir not found from ${context.cwd} — pass --harness`);
-      setArtifactStore(createFsStore(harnessDir));
-      const result = await registerShippedCatalogExecution({ harnessDir }, {
-        operationId: randomUUID(), actor: "mcp:audit-promote",
+      const workflowId = input.workflow ?? context.executionIdentity?.workflowId ?? path.basename(auditDir);
+      const identity: ExecutionIdentity = context.executionIdentity ?? {
+        source: context.host === undefined ? "local" : "host",
+        sessionId: context.sessionId ?? "",
+        workflowId,
+        role: "coordinator",
+      };
+      const result = await registerShippedCatalogExecution(executionContextFor(
+        { harnessDir },
+        identity,
+        { allowUnsetSessionId: true },
+      ), {
+        operationId: randomUUID(),
+        actor: "mcp:audit-promote",
         workflow: { kind: "audit", outDir: auditDir, selected, options: {
           harnessDir, deliveryKind: deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-          ...(input.workflow !== undefined ? { workflowId: input.workflow } : {}),
+          workflowId,
           ...(input.branchSource !== undefined ? { branchSource: input.branchSource } : {}),
           ...(input.branchTarget !== undefined ? { branchTarget: input.branchTarget } : {}),
           ...(input.completionPolicy !== undefined ? { completionPolicy: input.completionPolicy } : {}),
@@ -258,7 +269,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
 function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
   const contract = contracts[verb];
   const id = idFor(verb);
-  const fields = [...contract.args.map(({ key }) => key), ...contract.options.map(({ key }) => key)];
+  const fields = [...contract.args.map(({ key }) => key), ...contract.options.filter(({ context }) => context === undefined).map(({ key }) => key)];
   const input = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never);
   const routes = ["cli", "mcp"] as const;
   const requirements = routes.flatMap((route) => {
