@@ -31,7 +31,7 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 同一命令按先 terminal、再 unregister 的语义关闭 lifecycle：从 DB 根 register（`execution_registry`）注销。
 
 - **顺序固定**：先有效终态，后注销；由 DB 事务执行，不手写文件
-- unregister 失败显式报告 partial close，重试只补 unregister，不回滚 running / 重写 `ended_at`
+- close 是**一个事务的整体**：终态写入与 DB 根 register 注销在同一事务提交，任一失败整笔回滚 —— workflow 保持 running + registered（可恢复）；重试把 close 作为整体重跑（无 partial-close 模型、无只补 unregister 的重试），已提交的 close 重试为幂等 replay，不重写 `ended_at`。
 - fully closed retry 不再变更权威目标（DB 行），输出 already-closed
 
 ## §6.3 Projection reconciliation（当前执行权威）
