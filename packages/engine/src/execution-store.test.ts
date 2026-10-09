@@ -1836,6 +1836,51 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     expect(executionFootprint(context)).toEqual(footprint);
   });
 
+  test("a caller-supplied sentinel never impersonates the omitted freshness (BUG-201)", async () => {
+    const fixture = await createdWorkflow("session-sentinel-collision");
+    const { context } = fixture;
+    const caller = sessionCaller("wf-1", "host-coord");
+    const operationId = "bind-sentinel-collision";
+
+    // The omitted bind commits under the caller's own operation id: the request
+    // fingerprint tags the omitted freshness with a value no caller can express,
+    // not the ordinary string `"current"`.
+    const bound = await bindExecutionSession(domainContext(context, caller), { workflowId: "wf-1", operationId });
+    expect(bound.replayed).toBe(false);
+    const footprint = executionFootprint(context);
+
+    // The SAME operation id retried with an explicit `expected: "current"` is a
+    // CHANGED request — the sentinel string no longer collides with the omitted
+    // fingerprint, so it refuses `execution.operation-conflict` instead of
+    // replaying the omitted commit. Freshness the caller never supplied cannot
+    // be manufactured after the fact.
+    await expect(
+      bindExecutionSession(domainContext(context, caller), {
+        workflowId: "wf-1",
+        expected: "current" as ExecutionToken,
+        operationId,
+      }),
+    ).rejects.toMatchObject({ code: "execution.operation-conflict" });
+
+    // A malformed explicit token with NO replay context refuses on the token
+    // itself — `parseExecutionToken` is reached and the six-part grammar is
+    // enforced, never a silent acceptance.
+    await expect(
+      bindExecutionSession(domainContext(context, caller), {
+        workflowId: "wf-1",
+        expected: "current" as ExecutionToken,
+        operationId: "bind-supplied-malformed",
+      }),
+    ).rejects.toMatchObject({ code: "execution.token-invalid" });
+
+    // The omitted form still replays identically, and no refusal above committed.
+    const replayed = await bindExecutionSession(domainContext(context, caller), { workflowId: "wf-1", operationId });
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.token).toBe(bound.token);
+    expect(replayed.data).toEqual(bound.data);
+    expect(executionFootprint(context)).toEqual(footprint);
+  });
+
   test("two concurrent binds on one coordinator token commit exactly one owner", async () => {
     const fixture = await createdWorkflow("session-contention");
     const { context, workflowToken } = fixture;
