@@ -8,7 +8,6 @@
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import { decodeExecutionSessionRef, resumeExecutionSession } from "./execution-session.js";
 import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js";
 import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
@@ -1322,6 +1321,7 @@ function requireCaptureSeat(actor: string): void {
  * only as a checked constraint on that independently acquired identity.
  */
 async function readScopedSession(context: ExecutionContext, sessionRefWire: string | undefined): Promise<ExecutionSessionRef> {
+  const { decodeExecutionSessionRef, resumeExecutionSession } = await import("./execution-session.js");
   let sessionRef: ExecutionSessionRef | undefined;
   if (sessionRefWire !== undefined) {
     try {
