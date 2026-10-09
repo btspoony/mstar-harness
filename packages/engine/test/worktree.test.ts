@@ -222,12 +222,16 @@ describe("assertMainWorktreeResidency — recorded-branch equality primitive", (
     expect(severitiesOf(result)).toEqual(["high"]);
     expect(result.violations[0]!.message).toContain("feature/x");
     expect(result.violations[0]!.message).toContain("main");
+    const fix = result.violations[0]!.fix ?? "";
+    expect(fix).toContain("git -C '/repo/main' status --short");
+    expect(fix).toContain("git -C '/repo/main' checkout 'main'");
   });
 
   test("detached main (empty branch) → worktree.main.residency-switched", () => {
     const result = assertMainWorktreeResidency({ root: "/repo/main", branch: "" }, "main");
     expect(result.ok).toBe(false);
     expect(codesOf(result)).toContain("worktree.main.residency-switched");
+    expect(result.violations[0]!.fix).toContain("checkout 'main'");
   });
 });
 
@@ -1470,7 +1474,11 @@ describe("workflowEntryPreDispatchCheck", () => {
       expect(codes).toContain("worktree.entry.integration-dirty");
       expect(codes).toContain("lease.merge-lease.missing-holder");
       expect(result.lease).toEqual({ claimed: true, lease: {} });
-      expect(result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix).toContain("mstar workflow integration-worktree");
+      expect(result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix).toContain("mstar plan prepare");
+      expect(result.violations.find((entry) => entry.code === "worktree.entry.integration-branch-mismatch")?.fix).toContain(`git -C '${integration}' checkout 'wrong'`);
+      const dirtyFix = result.violations.find((entry) => entry.code === "worktree.entry.integration-dirty")?.fix ?? "";
+      expect(dirtyFix).toContain(`git -C '${integration}' status --short`);
+      expect(dirtyFix).toContain("Do not use git clean or reset");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -1484,5 +1492,20 @@ describe("workflowEntryPreDispatchCheck", () => {
     });
     expect(result.violations.map((entry) => entry.code)).toContain("worktree.entry.integration-missing");
     expect(result.violations.map((entry) => entry.code)).toContain("worktree.main.unresolved");
+    expect(result.violations.find((entry) => entry.code === "worktree.entry.integration-missing")?.fix).toContain("git worktree add '/missing/integration' 'integration'");
+    expect(result.violations.find((entry) => entry.code === "worktree.main.unresolved")?.fix).toContain("git worktree list --porcelain");
   });
+});
+test("workflow entry recovery identifies the owner before switching main", () => {
+  const result = workflowEntryPreDispatchCheck({
+    workflowId: "wf-current",
+    branch: { base: "main", target: "release", integration: "integration" },
+    integrationWorktreePath: "/missing/integration",
+    mainWorktree: { root: "/repo/main", branch: "integration/wf-owner" },
+    lifecycleBranches: [{ branch: "integration/wf-owner", workflowId: "wf-owner", planId: "plan-owner" }],
+  });
+  const recovery = result.violations.find((item) => item.message.includes("owned by workflow wf-owner"))?.fix ?? "";
+  expect(recovery).toContain("mstar status workflow-close --workflow wf-owner");
+  expect(recovery).toContain("mstar status validate");
+  expect(recovery).toContain("checkout 'main'");
 });

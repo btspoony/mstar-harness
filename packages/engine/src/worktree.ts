@@ -151,7 +151,7 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
         "high",
         "worktree.main.residency-switched",
         `main worktree "${main.root}" is detached (no branch checked out) \u2014 residency cannot match the recorded expectation ${JSON.stringify(expectedBranch)}`,
-        "check out the recorded main-worktree branch in the main worktree",
+        `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`,
       ),
     );
   } else if (main.branch !== expectedBranch) {
@@ -160,7 +160,7 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
         "high",
         "worktree.main.residency-switched",
         `main worktree "${main.root}" is on branch "${main.branch}", expected the recorded branch "${expectedBranch}" \u2014 residency is checked against the value recorded at lifecycle start, never re-pointed at the observed branch`,
-        "restore the recorded branch in the main worktree; re-record at lifecycle start only through the owning workflow",
+        `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`,
       ),
     );
   }
@@ -259,29 +259,34 @@ export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInp
   const violations: ValidationResult[] = [];
   const { base = "", target = "", integration = "" } = input.branch;
   for (const [key, value] of [["base", base], ["target", target], ["integration", integration]] as const) {
-    if (value.trim() === "") violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, "Run mstar workflow integration-worktree or mstar plan prepare to record the workflow branch metadata."));
+    if (value.trim() === "") violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, `Run mstar status validate to inspect workflow "${input.workflowId}" branch metadata; correct it through the owning coordinator's supported Prepare operation (mstar workflow integration-worktree or mstar plan prepare), then rerun mstar worktree check --workflow ${input.workflowId} --entry.`));
   }
   if (input.mainWorktree === null) {
-    violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run from inside the repository so the main worktree can be discovered."));
+    violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
   } else {
     const expected = base.trim();
-    if (expected === "") violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, "Run mstar workflow integration-worktree or mstar plan prepare to record branch.base."));
+    if (expected === "") violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, `Run mstar status validate to inspect workflow "${input.workflowId}" branch metadata; restore the registered branch.base through the owning coordinator's supported Prepare operation, then rerun mstar worktree check --workflow ${input.workflowId} --entry.`));
     else violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
     const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree!.branch && entry.branch !== expected);
-    if (owner) violations.push(violation("high", "worktree.main.residency-switched", `main worktree branch "${owner.branch}" is owned by workflow ${owner.workflowId ?? "unknown"}`, "Have the owning workflow coordinator finish or correct its branch metadata."));
+    if (owner) {
+      const recovery = owner.workflowId === null
+        ? `Run mstar status validate to identify the active lifecycle owner of branch "${owner.branch}", then coordinate its supported close process before switching branches.`
+        : `Coordinate with workflow ${owner.workflowId}'s coordinator; if its lifecycle is ready to close, run mstar status workflow-close --workflow ${owner.workflowId} --reason <reason>, verify ownership is released with mstar status validate, then restore the recorded branch using git -C ${shellQuote(input.mainWorktree.root)} checkout ${shellQuote(expected)}.`;
+      violations.push(violation("high", "worktree.main.residency-switched", `main worktree branch "${owner.branch}" is owned by workflow ${owner.workflowId ?? "unknown"}`, recovery));
+    }
   }
   const integrationPath = input.integrationWorktreePath?.trim() ?? "";
   if (integrationPath === "") {
-    violations.push(violation("high", "worktree.entry.integration-path-missing", `workflow "${input.workflowId}" has no recorded integration_worktree_path`, "Run mstar workflow integration-worktree to register the integration checkout."));
+    violations.push(violation("high", "worktree.entry.integration-path-missing", `workflow "${input.workflowId}" has no recorded integration_worktree_path`, `Create a dedicated checkout with \`git worktree add <absolute-path> ${shellQuote(integration)}\`, then register it through \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path <absolute-path>\`.`));
   } else if (!existsSync(integrationPath)) {
-    violations.push(violation("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, "Run mstar workflow integration-worktree to create and record the integration checkout."));
+    violations.push(violation("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, `Create the recorded checkout with \`git worktree add ${shellQuote(integrationPath)} ${shellQuote(integration)}\`, then register or verify it with \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path ${shellQuote(integrationPath)}\`.`));
   } else {
     const probe = probeBranch(integrationPath, opts);
-    if ("error" in probe) violations.push(violation("high", "worktree.entry.integration-branch-probe-failed", `cannot probe integration branch: ${probe.error}`, "Run mstar workflow integration-worktree to repair the integration checkout."));
-    else if (probe.branch !== integration) violations.push(violation("high", "worktree.entry.integration-branch-mismatch", `integration worktree is on "${probe.branch}", expected branch.integration "${integration}"`, "Run mstar workflow integration-worktree to align the integration checkout."));
+    if ("error" in probe) violations.push(violation("high", "worktree.entry.integration-branch-probe-failed", `cannot probe integration branch: ${probe.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\` and \`git -C ${shellQuote(integrationPath)} branch --show-current\`; restore the accessible recorded checkout before rerunning mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry.`));
+    else if (probe.branch !== integration) violations.push(violation("high", "worktree.entry.integration-branch-mismatch", `integration worktree is on "${probe.branch}", expected branch.integration "${integration}"`, `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(integrationPath)} checkout ${shellQuote(integration)}\` to restore recorded branch.integration.`));
     const status = probeStatus(integrationPath, opts);
-    if ("error" in status) violations.push(violation("high", "worktree.entry.integration-status-probe-failed", `cannot inspect integration worktree status: ${status.error}`, "Run mstar workflow integration-worktree after the checkout is accessible."));
-    else if (status.status.trim() !== "") violations.push(violation("high", "worktree.entry.integration-dirty", "integration worktree has uncommitted changes", "Clean or commit the integration worktree before entry."));
+    if ("error" in status) violations.push(violation("high", "worktree.entry.integration-status-probe-failed", `cannot inspect integration worktree status: ${status.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\`, then run \`git -C ${shellQuote(integrationPath)} status --short\` once the checkout is accessible.`));
+    else if (status.status.trim() !== "") violations.push(violation("high", "worktree.entry.integration-dirty", "integration worktree has uncommitted changes", `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; commit intended changes or explicitly restore only changes you own, then rerun mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry. Do not use git clean or reset as automatic cleanup.`));
   }
   const lease = input.integrationLease == null ? { claimed: false } : { claimed: true, lease: input.integrationLease };
   if (lease.claimed) {
