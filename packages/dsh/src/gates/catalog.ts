@@ -51,7 +51,6 @@ import {
   listRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
-import type { CatalogRegistrationRefusal } from './workflow-selection.ts'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -73,7 +72,7 @@ import type {
 } from '../types.ts'
 import { CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
-import { catalogRegistrationRefusal, readExecutionWorkflowSource, refusalOf, type SessionHint } from './workflow-selection.ts'
+import { readExecutionWorkflowSource, refusalOf, type SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
@@ -196,10 +195,7 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
   // authority hands its own state over): the sections below never re-read a
   // retired document to find out what the selection was about.
   const snapshot = authority?.kind === 'active' ? authority.snapshot : undefined
-  const refusal = facts?.selectionRefusal
-  const selection = resolved !== undefined && resolved.kind === 'active' && refusal !== undefined
-    ? { kind: 'error' as const, code: refusal.code, message: refusal.message }
-    : resolved
+  const selection = resolved
   const iteration = harnessDir !== null ? iterationGateSource(harnessDir, selection, snapshot) : undefined
   return {
     version: pluginVersion(),
@@ -439,16 +435,7 @@ async function readBuildFacts(harnessDir: string | null, hint: SessionHint | und
   if (harnessDir === null) return undefined
   const facts = await readStoreFacts(harnessDir)
   const authority = await readExecutionWorkflowSource({ harnessDir }, hint)
-  const selection = authority.kind === 'active'
-    ? ({ kind: 'active', workflowId: authority.workflowId, dir: authority.dir } as const)
-    : authority.kind === 'error'
-      ? authority.selection
-      : authority.kind === 'unavailable'
-        ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
-        : ({ kind: 'error', code: 'status.missing', message: 'no ACTIVE execution workflow is registered' } as const)
-  if (selection.kind !== 'active') return { ...facts, authority }
-  const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
-  return refusal === null ? { ...facts, authority } : { ...facts, authority, selectionRefusal: refusal }
+  return { ...facts, authority }
 }
 
 /** Model-facing rendering of the unified engine-status catalog (the `<mstar_engine_status>` block). */
@@ -768,23 +755,7 @@ interface StoreFacts {
   readonly residuals: readonly HarnessResidualView[]
   readonly residualFindings: readonly ResidualFindingView[] | null
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
-  /**
-   * The catalog-registration refusal for the SELECTED workflow, when the store
-   * reports one: the state renders it as a structured selection error instead
-   * of presenting a half-registered lifecycle as healthy.
-   */
-  readonly selectionRefusal?: CatalogRegistrationRefusal
-  /**
-   * §5 (plan S4) the ONE route decision the async pre-read made for this
-   * build: the execution authority's own active-set answer (`active` with the
-   * selected lifecycle's materialized state, `error`, `unavailable`) or
-   * `files` when the pre-activation file route still answers. Absent only on
-   * the synchronous build (no pre-read ran) — that build decides through the
-   * engine's synchronous legacy-reader guard
-   * ({@link syncAuthoritySelection}), so it refuses on an ACTIVE/unreadable
-   * authority instead of presenting a file-derived selection as the
-   * authority's.
-   */
+  /** The one ACTIVE/error/unavailable execution-authority verdict for this build. */
   readonly authority?: ExecutionWorkflowSourceRead
 }
 
