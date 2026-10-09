@@ -84,7 +84,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Delivery Branch Policy
 
-> Mirror of frontmatter; keep in sync with workflow branch anchors (ACTIVE: store execution authority; pre-activation: snapshot `branch`).
+> Mirror of frontmatter; keep in sync with the ACTIVE workflow branch anchors (store execution authority).
 
 | Field | Value |
 |-------|-------|
