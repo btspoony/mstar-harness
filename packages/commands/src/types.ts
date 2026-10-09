@@ -17,6 +17,7 @@ export type DecodeResult<T> =
 export type PayloadDescriptor = Readonly<{
   schema: ZodType;
   help?: string;
+  registryName?: string;
 }>;
 
 export type CommandRequirementOwnership = "caller" | "derivable" | "unknown";

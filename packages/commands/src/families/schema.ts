@@ -28,6 +28,7 @@ export type CommandSchemaDescriptor = {
   defaults: Readonly<Record<string, unknown>>;
   input: unknown;
   payloadSchemas: Readonly<Record<string, unknown>>;
+  payloadFields: Readonly<Record<string, readonly ({ name: string } & PayloadFieldSchema)[]>>;
 };
 
 /**
@@ -165,6 +166,12 @@ function commandSchemaDescriptor(definition: CommandDefinition): CommandSchemaDe
     input,
     payloadSchemas: Object.fromEntries(
       Object.entries(definition.payloads ?? {}).map(([name, descriptor]) => [name, descriptor.schema.toJSONSchema()]),
+    ),
+    payloadFields: Object.fromEntries(
+      Object.entries(definition.payloads ?? {}).flatMap(([name, descriptor]) => descriptor.registryName === undefined
+        ? []
+        : [[name, Object.entries(ISSUE_PAYLOAD_SCHEMAS[descriptor.registryName as IssuePayloadName] as Record<string, PayloadFieldSchema>)
+          .map(([fieldName, field]) => ({ name: fieldName, ...field }))]]),
     ),
   };
 }

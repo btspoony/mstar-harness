@@ -466,8 +466,17 @@ describe("generated CLI adapter", () => {
     const worktreeMcp = renderCommandContract(worktree, "mcp");
     expect(worktreeMcp).toContain("Payload fields: tracks");
     expect(worktreeMcp).not.toContain("arrive as JSON strings");
+    for (const id of ["issue.close", "issue.reopen"]) {
+      const definition = getCommandDefinitions().find((candidate) => candidate.id === id);
+      if (definition === undefined) throw new Error(`${id} definition missing`);
+      const help = renderCommandContract(definition, "cli");
+      expect(help).toContain("reason (required) (string)");
+      if (id === "issue.close") {
+        expect(help).toContain("references (requiredWhen: close) (string[])");
+        expect(help).toContain("alignmentRef (requiredWhen: close or waive) (string)");
+      }
+    }
   });
-
   test("host detect is a real read", async () => {
     const result = await run(["host", "detect", "--signals", "question"]);
     expect(result.status).toBe(0);

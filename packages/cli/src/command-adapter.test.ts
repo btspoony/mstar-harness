@@ -1,6 +1,18 @@
 import { encodeExecutionSessionRef, serializeExecutionValue, type ExecutionIdentity } from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions, getCommandSchemas, type InvocationContext } from "@mstar-harness/commands";
-import { mintedIdentityScopeProblem, resolveCliSessionIdentity } from "./command-adapter";
+import { mintedIdentityScopeProblem, renderCommandContract, resolveCliSessionIdentity } from "./command-adapter";
+import { afterEach, expect, test } from "bun:test";
+test("issue payload help uses registry field requiredness", () => {
+  const definitions = getCommandDefinitions();
+  const close = definitions.find((definition) => definition.id === "issue.close");
+  const reopen = definitions.find((definition) => definition.id === "issue.reopen");
+  if (close === undefined || reopen === undefined) throw new Error("issue definitions missing");
+  const closeHelp = renderCommandContract(close, "cli");
+  expect(closeHelp).toContain("reason (required) (string)");
+  expect(closeHelp).toContain("references (requiredWhen: close) (string[])");
+  expect(closeHelp).toContain("alignmentRef (requiredWhen: close or waive) (string)");
+  expect(renderCommandContract(reopen, "cli")).toContain("reason (required) (string)");
+});
 
 const originalSessionId = process.env.MSTAR_HOST_SESSION_ID;
 const originalMinted = process.env.MSTAR_EXECUTION_IDENTITY;
