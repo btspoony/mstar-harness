@@ -101,6 +101,8 @@ export type WorkflowNote = Readonly<{
 /** The append receipt: the record id and whether it was already accepted. */
 export type WorkflowNoteAppendReceipt = Readonly<{ id: string; replayed: boolean }>;
 
+type WorkflowNoteRequest = Omit<WorkflowNote, "ts"> & Readonly<{ ts?: string }>;
+
 /** Stable refusal codes of the notes ledger. */
 export const EXECUTION_LEDGER_ERROR_CODES = [
   "execution-ledgers.record-invalid",
@@ -181,7 +183,7 @@ function parseWorkflowNote(value: unknown): WorkflowNote | null {
 }
 
 /** Serialize a new ledger record in a stable key order, without a final LF. */
-function canonicalNoteLine(note: WorkflowNote): string {
+function canonicalNoteLine(note: WorkflowNote & { ts: string }): string {
   return JSON.stringify({
     version: 1,
     id: note.id,
@@ -266,7 +268,7 @@ function scanLedger(bytes: Buffer): LedgerScan {
 type AppendDecision = Readonly<{ kind: "replay" | "append"; terminateTail: boolean }>;
 
 /** Deduplicate by record id and request fields, never serialized byte identity. */
-function decideAppend(scan: LedgerScan, note: WorkflowNote): AppendDecision {
+function decideAppend(scan: LedgerScan, note: WorkflowNoteRequest): AppendDecision {
   let replayed = false;
   for (let index = 0; index <= scan.lines.length; index++) {
     const entry = index < scan.lines.length ? scan.lines[index]!.line : parseLedgerLine(scan.tail);
@@ -274,7 +276,7 @@ function decideAppend(scan: LedgerScan, note: WorkflowNote): AppendDecision {
     const record = entry.record;
     if (
       record.workflowId !== note.workflowId || record.sessionId !== note.sessionId ||
-      record.ts !== note.ts || record.text !== note.text
+      (note.ts !== undefined && record.ts !== note.ts) || record.text !== note.text
     ) {
       throw new ExecutionLedgerError(
         "execution-ledgers.id-conflict",
@@ -539,14 +541,13 @@ async function withExecutionMaintenanceLock<T>(context: StoreContext, fn: () => 
  * ------------------------------------------------------------------------ */
 
 /** Validate one incoming record and its provenance against the bound session. */
-function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNote): void {
+function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNoteRequest): void {
   assertWorkflowId(session.workflowId, "execution session workflow id");
-  const record = parseWorkflowNote(note);
+  const record = parseWorkflowNote(note.ts === undefined ? { ...note, ts: "pending" } : note);
   if (record === null) {
     throw new ExecutionLedgerError(
       "execution-ledgers.record-invalid",
-      `a note is exactly {version:1,id,workflowId,sessionId,kind:"note",ts,text} with non-empty id/workflowId/sessionId/ts ` +
-        `and a string text.`,
+      `a note is exactly {version:1,id,workflowId,sessionId,kind:"note",text} with an optional non-empty ts and string text.`,
     );
   }
   if (record.workflowId !== session.workflowId || record.sessionId !== session.sessionId) {
@@ -579,10 +580,9 @@ function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNote): void
 export async function appendWorkflowNote(
   context: ExecutionContext,
   session: ExecutionSessionRef,
-  note: WorkflowNote,
+  note: WorkflowNoteRequest,
 ): Promise<WorkflowNoteAppendReceipt> {
   assertNoteScope(session, note);
-  const line = Buffer.from(`${canonicalNoteLine(note)}\n`, "utf8");
   const ledgerPath = workflowNotesLedgerPath(context, session.workflowId);
   return withExecutionMaintenanceLock(context, async () => {
     prepareWorkflowBodyDir(context, session, dirname(ledgerPath));
@@ -597,7 +597,9 @@ export async function appendWorkflowNote(
           // The final synchronous identity check, immediately before the mutation.
           assertExecutionSessionCurrent(context, session);
           if (decision.terminateTail || decision.kind === "append") {
-            const appended = decision.kind === "append" ? line : Buffer.from("\n");
+            const appended = decision.kind === "append"
+              ? Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}\n`, "utf8")
+              : Buffer.from("\n");
             commitLedgerLine({
               path: ledgerPath,
               retained,

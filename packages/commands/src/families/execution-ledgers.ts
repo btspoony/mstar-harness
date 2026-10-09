@@ -215,7 +215,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
             workflowId: input.workflow,
             sessionId: ref.sessionId,
             kind: "note",
-            ts: input.ts ?? new Date().toISOString(),
+            ...(input.ts === undefined ? {} : { ts: input.ts }),
             text: input.text,
           });
           return ok(APPEND_ID, receipt);
