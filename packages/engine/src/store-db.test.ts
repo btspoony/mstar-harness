@@ -363,6 +363,79 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 });
+/* ------------------------------------------------------------------------ *
+ * Read-open convergence across a same-process writer's DEFERRED cleanup: Bun
+ * 1.4.0's node:sqlite completes a closed handle's checkpoint and sidecar
+ * removal on COLLECTION, so a read-only open can have its `-wal`/`-shm`
+ * deleted underneath it and report SQLITE_CANTOPEN ("unable to open database
+ * file") for a store that is entirely intact. `openStore(…, "read")` re-runs
+ * the existing journal preparation on a bounded budget and converges once the
+ * cleanup settles; a store that STAYS unreadable keeps the same refusal.
+ * ------------------------------------------------------------------------ */
+
+describe("store-db read-open converges across the writer-close window", () => {
+  // The window closes on the runtime's next collection, which is exactly why
+  // it is invisible to a plain open. Forcing a minor collection between the
+  // writer close and the read opens it deterministically enough to make a
+  // regression (a single-shot open) fail instead of flaking; without it the
+  // read happens to succeed and the case would prove nothing. This suite runs
+  // under Bun like its siblings (see `Bun.gc` in execution-store.test.ts).
+  const collectGarbage = (): void => Bun.gc(false);
+  /** A store with one committed issue, so convergence is proven by a real read. */
+  const seedStoreWithIssue = async (dir: string): Promise<void> => {
+    const writer = await initializeStore({ harnessDir: dir });
+    writer.db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+        " values ('I-000901', 'p', 'window issue', 'bug', 'high', 'i', 'a', '2026-09-18T00:00:00.000Z', '2026-09-18T00:00:00.000Z', 'read-open-window')",
+    ).run();
+    writer.close();
+  };
+
+  test("a read right after a writer close converges without a reader seal", async () => {
+    const dir = mkdtempSync(join(ROOT, "read-open-window-"));
+    await seedStoreWithIssue(dir);
+    collectGarbage?.(false);
+    const reader = await openStore({ harnessDir: dir }, "read");
+    expect(reader.epoch).toBe(1);
+    expect(reader.schemaVersion).toBe(MIGRATIONS.length);
+    // Convergence is a real readable store, not merely an opened handle.
+    expect(reader.db.prepare("select title from issues where id = 'I-000901'").get()).toEqual({ title: "window issue" });
+    reader.close();
+  });
+
+  test("a loop of close-then-read converges every iteration", async () => {
+    for (let iteration = 0; iteration < 20; iteration++) {
+      const dir = mkdtempSync(join(ROOT, `read-open-loop-${iteration}-`));
+      await seedStoreWithIssue(dir);
+      collectGarbage?.(false);
+      const reader = await openStore({ harnessDir: dir }, "read");
+      expect(reader.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+      reader.close();
+    }
+  });
+
+  test("a store that stays unreadable still refuses store.corrupt with the CANTOPEN detail", async () => {
+    // A WAL-format header whose file size is not a whole number of the page
+    // size it claims: every read-only open of this file reports SQLITE_CANTOPEN
+    // and the shape never becomes readable, so the bounded retry is spent and
+    // the SAME refusal stands. This is the honest-classification boundary: the
+    // transient-window retry is not a general "try again until it works".
+    const dir = mkdtempSync(join(ROOT, "read-open-persistent-"));
+    const bytes = Buffer.alloc(100);
+    bytes.write("SQLite format 3\u0000", 0, "latin1");
+    bytes.writeUInt16BE(4096, 16);
+    bytes[18] = 2;
+    bytes[19] = 2;
+    bytes[21] = 64;
+    bytes[22] = 32;
+    bytes[23] = 32;
+    writeFileSync(join(dir, "store.db"), bytes);
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    // The refused shape gains no sidecar, exactly as before this change.
+    expect(existsSync(join(dir, "store.db-wal"))).toBe(false);
+  });
+});
+
 describe("migration 7 - project_milestones", () => {
   test("milestone fresh install and retry retain the current schema", async () => {
     const dir = mkdtempSync(join(ROOT, "milestone-fresh-"));

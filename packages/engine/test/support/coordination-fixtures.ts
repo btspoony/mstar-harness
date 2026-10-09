@@ -532,26 +532,30 @@ export async function storeBacked(fixture: Fixture, plans: string[] = [PLAN_ID])
     );
   }
   // Seal IMMEDIATELY, while the writes above are still the most recent store
-  // activity: the read-only open that follows can otherwise land in the
-  // documented window (see `sealStoreForReaders` — this runtime checkpoints and
-  // removes a closed handle's empty sidecars when it collects the handle, and a
-  // first read-only open of that quiesced WAL shape fails `store.corrupt` /
-  // SQLITE_CANTOPEN). Taking the read here keeps the fixture deterministic for
-  // every test that reads the store later, instead of leaving it to allocation
-  // timing.
+  // activity: the read-only open that follows can otherwise land in the window
+  // `sealStoreForReaders` documents (this runtime checkpoints and removes a
+  // closed handle's empty sidecars when it collects the handle). `openStore`
+  // now converges across that window by itself, so this is belt-and-braces —
+  // kept because it also leaves the file in its readable shape for every test
+  // that reads the store later, independent of the engine's own retry.
   await sealStoreForReaders(fixture);
   return context;
 }
 
 /**
  * Read the fixture store once in THIS process before a child process reads it.
- * Workflow-boundary difference, not an engine behavior: under `bun test` a
- * child's first read-only open of a store whose last writer ran in the runner
- * intermittently fails `store.corrupt` (driver `SQLITE_CANTOPEN`), while the
- * same file opens fine from a plain-script parent (task-3 report §observations).
- * A reader in this process leaves the file readable for the children below, so
- * the child under test exercises the case it was written for and still opens
- * the store query-only through the engine.
+ * The window it avoids is the Bun 1.4.0 `node:sqlite` writer-close race: the
+ * runtime completes a closed handle's checkpoint and sidecar removal on
+ * COLLECTION, so a read-only open can have its `-wal`/`-shm` deleted underneath
+ * it and fail `store.corrupt` (driver `SQLITE_CANTOPEN`).
+ *
+ * `openStore` now converges across that window on its own (its bounded
+ * transient-CANTOPEN retry re-runs the journal preparation), so the seal is a
+ * BELT-AND-BRACES read — kept rather than removed because it also settles the
+ * file into its readable shape for the children below, which is a fixture
+ * determinism concern independent of the engine retry. A reader here leaves the
+ * file readable for the children, so the child under test exercises the case it
+ * was written for and still opens the store query-only through the engine.
  */
 export async function sealStoreForReaders(fixture: Fixture): Promise<void> {
   const handle = await openStore({ harnessDir: fixture.harness }, "read");

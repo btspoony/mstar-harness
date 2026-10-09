@@ -17,6 +17,7 @@
  */
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -1738,6 +1739,40 @@ function isOpenLevelFailure(error: unknown): boolean {
   return /unable to open database file|disk I\/O error/i.test(String(err?.message ?? ""));
 }
 
+/**
+ * Is this a failure the SAME-PROCESS writer-close window produces, rather than
+ * a real store verdict? Bun 1.4.0's `node:sqlite` completes a closed handle's
+ * cleanup — checkpoint, then removal of the now-empty `-wal`/`-shm` — when the
+ * handle is COLLECTED, so a read-only open (or a read through it) can have its
+ * sidecars deleted underneath it and report SQLITE_CANTOPEN "unable to open
+ * database file" for a store that is entirely intact. The window is transient:
+ * once the deferred cleanup settles, the same open converges.
+ *
+ * Only that shape is transient, and only while the database FILE itself still
+ * exists: a missing file is the caller's own `store.not-initialized` decision
+ * (taken before this open) and a persistent CANTOPEN — a shape that never
+ * becomes readable — keeps its existing refusal once the budget is spent. Every
+ * non-CANTOPEN failure (BUSY, an I/O error, a content verdict) is never
+ * retried, so no genuine refusal is deferred or weakened.
+ */
+function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
+  const err = error as { errcode?: unknown; message?: string };
+  const cantopen = err?.errcode === 14 || /unable to open database file/i.test(String(err?.message ?? ""));
+  return cantopen && existsSync(dbPath);
+}
+
+/** Bounded retry budget for a read open that meets a same-process writer's
+ * deferred cleanup. Only reached after a transient CANTOPEN, so a healthy
+ * store pays nothing for it. This is a deliberate bounded workaround for the
+ * Bun 1.4.0 `node:sqlite` collection-timed cleanup defect: it removes once the
+ * runtime quiesces a closed handle's sidecars at close (removal path tracked
+ * against issue I-000483 in the harness store). */
+const READ_OPEN_ATTEMPTS = 5;
+/** Delay before the next read-open attempt. The observed window closes on the
+ * runtime's next collection, which the retry's own allocation and this yield
+ * reach; the whole budget stays in the low tens of milliseconds. */
+const READ_OPEN_BACKOFF_MS = 5;
+
 /** The probe's reused read-only connection: the store file it belongs to. */
 type ProbeConnection = { dbPath: string; dev: number; ino: number; db: StoreDb };
 
@@ -1995,6 +2030,13 @@ export type StoreHandle = {
  * (`ensureJournalForRead`), because a read-only connection cannot create the
  * journal it needs to read a WAL database. The schema and store identity are
  * verified on every request; drift/newer/corrupt refuses before mutation.
+ *
+ * A READ open is retried on a bounded budget when the store file itself still
+ * exists and the driver reports the transient CANTOPEN of a same-process
+ * writer-close window (`isTransientReadOpenFailure`). Each attempt re-runs the
+ * existing journal preparation and the whole content verification, so a
+ * settled store converges and nothing else changes: a persistent failure still
+ * refuses with the same code and message the single-shot open produced.
  */
 export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
@@ -2013,6 +2055,22 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
         `when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`,
     );
   }
+  const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await openStoreOnce(dbPath, mode);
+    } catch (error) {
+      if (attempt >= attempts || !isTransientReadOpenFailure(error, dbPath)) {
+        refuseOpenFailure(error, dbPath);
+      }
+      await sleep(READ_OPEN_BACKOFF_MS);
+    }
+  }
+}
+
+/** One open attempt: connect, then verify the schema and store identity on the
+ * same connection. The caller owns retrying the transient read-open window. */
+async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<StoreHandle> {
   let db: StoreDb;
   try {
     db = await connect(dbPath, mode);
