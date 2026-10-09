@@ -66,12 +66,12 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
     ? error.paths as string[]
     : [];
   const issueId = input?.id?.trim() || "<id>";
-  const recovery = id !== "issue.reopen"
-    ? undefined
-    : code === "store.operation-conflict"
-      ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
-      : code === "issue.revision-conflict"
-        ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue reopen --id ${issueId} --expect <current-revision>\` with the same non-empty reason payload.`
+  const recovery = code === "issue.revision-conflict"
+    ? `Run \`mstar issue show --id ${issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
+    : id !== "issue.reopen"
+      ? undefined
+      : code === "store.operation-conflict"
+        ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
         : code === "issue.invalid-disposition"
         ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
         : code === "issue.scope-refused"
@@ -288,7 +288,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
       (expectedRevisionVerbs[verb] === true && key === "expect"),
     ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
-      ? { help: "Current issue revision from `mstar issue show --id <id>`; the write checks this revision as a CAS precondition." }
+      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
       : {}),
     ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));

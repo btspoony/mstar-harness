@@ -281,9 +281,15 @@ function degradedCleanupSnapshot(value: unknown, fallbackId: string): WorkflowSn
     ...(branch ? { branch } : {}),
   };
 }
-function cleanupOwner(claims: CleanupClaim[]): CleanupClaim | null {
+function cleanupOwner(claims: CleanupClaim[], snapshots: readonly WorkflowSnapshot[]): CleanupClaim | null {
   const owners = new Map(claims.map((claim) => [JSON.stringify(claim), claim]));
-  return owners.size === 1 ? [...owners.values()][0]! : null;
+  if (owners.size === 1) return [...owners.values()][0]!;
+  if (owners.size < 2) return null;
+  const eligible = [...owners.values()].filter((owner) => {
+    const status = snapshots.find((snapshot) => snapshot.id === owner.workflowId)?.status;
+    return status !== "stopped" && status !== "failed";
+  });
+  return eligible.length === 1 ? eligible[0]! : null;
 }
 async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>): Promise<CommandEnvelope> {
   if (!input.workflow) throw new SddScriptError("usage: worktree cleanup --workflow <id>", 2);
@@ -356,7 +362,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   const assertedOwnerKeys = retainedOwnerKeys ?? new Set(records
     .filter((wt) => assertedPaths.has(pathKey(wt.path)))
     .flatMap((wt) => {
-      const owner = cleanupOwner([...claimsFor("path", wt.path), ...(wt.branch ? claimsFor("branch", wt.branch) : [])]);
+      const owner = cleanupOwner([...claimsFor("path", wt.path), ...(wt.branch ? claimsFor("branch", wt.branch) : [])], snapshots);
       return owner && (input.allWorkflows || owner.workflowId === input.workflow) ? [ownerKey(owner)] : [];
     }));
   for (const wt of records) {
@@ -366,7 +372,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
     const branchClaims = wt.branch ? claimsFor("branch", wt.branch) : [];
     const inScope = input.allWorkflows || [...pathClaims, ...branchClaims].some((claim) => claim.workflowId === input.workflow);
     const ownershipClaims = explicitlyAsserted ? [...pathClaims, ...branchClaims] : pathClaims;
-    if (inScope) targets.push({ kind: "worktree", ref: wt.path, branch: wt.branch ?? "", tip: wt.tip, owner: cleanupOwner(ownershipClaims) });
+    if (inScope) targets.push({ kind: "worktree", ref: wt.path, branch: wt.branch ?? "", tip: wt.tip, owner: cleanupOwner(ownershipClaims, snapshots) });
   }
   const local = (await git(invocation, ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads"], main.root)).split(/\r?\n/).filter(Boolean);
   for (const line of local) {
@@ -378,7 +384,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
       (assertedOwnerKeys.has(ownerKey(claim)) ||
         targets.some((target) => target.kind === "worktree" && target.owner && ownerKey(target.owner) === ownerKey(claim))));
     if (scoped && (!assertedPaths.size || retainedByAssertion)) {
-      targets.push({ kind: "local-branch", ref: branch!, branch: branch!, tip: tip ?? "", owner: cleanupOwner(claims) });
+      targets.push({ kind: "local-branch", ref: branch!, branch: branch!, tip: tip ?? "", owner: cleanupOwner(claims, snapshots) });
     }
   }
   const remoteEvidence: CleanupFacts["remoteEvidence"][number][] = [];
@@ -397,7 +403,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
       const branch = fullName!.replace(/^origin\//, "");
       const claims = claimsFor("branch", branch);
       if (!(input.allWorkflows || claims.some((claim) => claim.workflowId === input.workflow))) continue;
-      const owner = cleanupOwner(claims);
+      const owner = cleanupOwner(claims, snapshots);
       const ownerSnapshot = snapshots.find((snapshot) => snapshot.id === owner?.workflowId);
       const base = owner?.planId && ownerSnapshot?.type === "iteration" ? ownerSnapshot.branch?.integration : ownerSnapshot?.branch?.target;
       targets.push({ kind: "remote-branch", ref: fullName!, branch, tip: tip ?? "", owner });

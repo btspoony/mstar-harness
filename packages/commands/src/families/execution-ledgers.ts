@@ -64,11 +64,15 @@ function ok<T>(id: string, data: T): CommandEnvelope<T> {
 /** Preserve one engine error's code, details and recovery verbatim. */
 function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const { code, details, recovery } = engineErrorFacts(error);
+  // Rule #341 class 3: when the engine authors no recovery, the published
+  // operation contract is the supported exit; authored recovery stays verbatim.
+  const supportedRecovery = recovery ??
+    `Run \`mstar schema --command ${id}\` for this operation's published input contract, accepted values, and supported recovery facts.`;
   return refusalEnvelope({
     command: id, status: "refused", code: code ?? `${id}.refused`, exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
     ...(details === undefined ? {} : { details }),
-    ...(recovery === undefined ? {} : { recovery }),
+    recovery: supportedRecovery,
   });
 }
 
@@ -229,7 +233,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         arguments: [],
         options: [
           { key: "workflow", flags: "--workflow <id>", required: true },
-          { key: "file", flags: "--file <absolute-path>", required: false, help: "Read this absolute ledger path instead of the workflow's canonical notes.jsonl; omitted means the canonical path." },
+          { key: "file", flags: "--file <absolutePath>", required: false, help: "Read this absolute ledger path instead of the workflow's canonical notes.jsonl; omitted means the canonical path." },
           { key: "harness", flags: "--harness <path>", required: false },
         ],
       },

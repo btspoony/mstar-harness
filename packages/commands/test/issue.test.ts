@@ -223,11 +223,26 @@ describe("issue command family", () => {
       id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
       operationId: "stale-triage", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
-    expect(triaged).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
+    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`);
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
   });
+  test("stale close revision recovery names the CLI flag and close verb", async () => {
+    const context = await testContext();
+    const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-stale-close", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const receipt = added.data as { issueId: string; revision: number };
+    const closed = await definition("issue.close").execute({
+      id: receipt.issueId, payload: { reason: "done", references: ["qa.md"], alignmentRef: "QA approved" },
+      operationId: "stale-close", actor: "project-manager", expect: receipt.revision - 1,
+    }, context);
+    expect(closed.status === "refused" ? closed.details?.recovery : undefined).toBe(
+      `Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`,
+    );
+  });
+
   test("payload JSON strings decode and expose domain schema links", async () => {
     const context = await testContext();
     const command = definition("issue.add");
@@ -239,6 +254,26 @@ describe("issue command family", () => {
     expect(command.effects).toEqual(["write"]);
     expect(definition("issue.export").effects).toEqual(["read"]);
   });
+  test("--expect help documents revision CAS only for CAS-enforcing issue commands", () => {
+    const commands = getCommandDefinitions().filter((command) =>
+      command.id.startsWith("issue.") && command.cli.options.some((option) => option.key === "expect"),
+    );
+    const casVerbs = ["triage", "close", "waive", "duplicate", "supersede", "reopen", "link"];
+    const nonCasVerbs = ["add", "list", "show", "export", "occurrence"];
+    for (const verb of casVerbs) {
+      const command = commands.find((item) => item.id === `issue.${verb}`);
+      expect(command).toBeDefined();
+      const help = command?.cli.options.find((option) => option.key === "expect")?.help ?? "";
+      expect(help).toContain("revision CAS, not an execution token");
+    }
+    for (const verb of nonCasVerbs) {
+      const command = commands.find((item) => item.id === `issue.${verb}`);
+      expect(command).toBeDefined();
+      const help = command?.cli.options.find((option) => option.key === "expect")?.help ?? "";
+      expect(help).not.toContain("revision CAS");
+    }
+  });
+
   test("payload schema exposes registry constraints and refusals identify invalid and missing paths", async () => {
     const context = await testContext();
     const command = definition("issue.add");

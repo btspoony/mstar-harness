@@ -2032,8 +2032,8 @@ export async function adoptTerminalWorkflow(
       if (unattested.length > 0) {
         throw new ExecutionError(
           "execution.adoption-refused",
-          `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` +
-            `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` +
+          `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} \u2014 the ACTIVE ` +
+            `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} \u2014 as stopped/reloaded, so the settlement ` +
             `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` +
             `process itself. Add each listed session to the attestation's stoppedSessions and retry.`,
           {

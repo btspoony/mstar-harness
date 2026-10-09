@@ -128,6 +128,43 @@ describe("planWorktreeCleanup", () => {
       { kind: "local-branch", ref: "feature/plan-1", verdict: "remove", reason: "cleanup.remove.merged" },
     ]);
   });
+  test("stopped lifecycle row does not block a completed owner's cleanup target", () => {
+    const completed = snap({
+      id: "completed-owner",
+      type: "iteration",
+      status: "completed",
+      ended_at: "2026-09-13",
+      branch: { base: "main", integration: "main", target: "main" },
+      plans: [{ id: "plan-done", status: "Done", metadata: { working_branch: "feature/done", worktree_path: "/repo/.worktrees/done" } }],
+    });
+    const stopped = snap({
+      id: "stopped-owner",
+      type: "iteration",
+      status: "stopped",
+      ended_at: "2026-09-13",
+      branch: { base: "main", target: "main" },
+      plans: [{ id: "plan-stale", status: "InProgress", metadata: { working_branch: "feature/done", worktree_path: "/repo/.worktrees/done" } }],
+    });
+    const facts: CleanupFacts = {
+      ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true }), worktree("/repo/.worktrees/done", "feature/done")]),
+      snapshots: [completed, stopped],
+      targets: [target({ kind: "worktree", ref: "/repo/.worktrees/done", branch: "feature/done", owner: { workflowId: "completed-owner", planId: "plan-done" } })],
+      mergedLocalBranches: { main: ["main", "feature/done"] },
+    };
+    expect(planWorktreeCleanup(completed, facts)).toEqual([
+      { kind: "worktree", ref: "/repo/.worktrees/done", verdict: "remove", reason: "cleanup.remove.merged" },
+    ]);
+  });
+
+  test("running lifecycle non-Done row still blocks a cleanup target", () => {
+    const facts: CleanupFacts = {
+      ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true }), worktree("/repo/.worktrees/plan-2", "feature/plan-2")]),
+      targets: [target({ kind: "worktree", ref: "/repo/.worktrees/plan-2", branch: "feature/plan-2", owner: { workflowId: "iter-parent", planId: "plan-2" } })],
+    };
+    expect(planWorktreeCleanup(iterParent, facts)).toEqual([
+      { kind: "worktree", ref: "/repo/.worktrees/plan-2", verdict: "refuse", reason: "cleanup.refuse.non-terminal" },
+    ]);
+  });
 
   test("removes the owned attached worktree while its branch stays refused as checked-out until replan", () => {
     const facts: CleanupFacts = {

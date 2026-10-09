@@ -258,7 +258,9 @@ describe("mstar issue CLI bundle", () => {
     ], root);
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
-    expect(String(jsonOf(stale).message)).toContain("Recovery: Run `mstar issue show --id I-000001`");
+    expect(String(jsonOf(stale).message)).toContain(
+      "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
+    );
     const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
   });
@@ -299,7 +301,16 @@ describe("mstar issue CLI bundle", () => {
     ], root);
     expect(result.exitCode).toBe(0);
     expect(jsonOf(result).status).toBe("ok");
-    expect((jsonOf(result).data as { revision: number }).revision).toBe(Number(expectedRevision) + 1);
+    expect(jsonOf(result).data).toMatchObject({ revision: Number(expectedRevision) + 1 });
+    const stale = runBundle("bun-shebang", [
+      "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
+      "--operation-id", "link-stale", "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
+    expect(String(jsonOf(stale).message)).toContain(
+      "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
+    );
   });
 
   test("capture reports every missing payload field in one refusal", async () => {
