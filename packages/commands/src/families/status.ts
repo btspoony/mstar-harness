@@ -155,7 +155,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                   couldNotRead: "legacy status register is missing",
                   recovery: "Run `mstar store upgrade --operator <name>` to create or upgrade the store, import recognizable workflows, and report skipped items without moving their source files.",
                 },
-              }, "Restore or create the legacy status file at the reported path, then run mstar status validate.");
+              }, "Run mstar store upgrade --operator <name> to create the store, import recognizable workflows, and report skipped items, then rerun mstar status validate.");
             }
             return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, undefined, "Restore or create the status file at the reported path, then run mstar status validate.");
           }
@@ -269,12 +269,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           });
           if (!rootResolution.ok) throw Object.assign(new Error(rootResolution.problem.needed), {
             code: rootResolution.problem.code,
-            details: { recovery: { unresolved: [rootResolution.problem] } },
+            details: { recoveryFacts: { unresolved: [rootResolution.problem] } },
           });
           const target = resolveIntentTarget({ root: rootResolution.root, selection: { workflowId: workflow } });
           if (!target.ok) throw Object.assign(new Error(target.problem.needed), {
             code: target.problem.code,
-            details: { recovery: { unresolved: [target.problem] } },
+            details: { recoveryFacts: { unresolved: [target.problem] } },
           });
           setArtifactStore(createFsStore(rootResolution.root));
           const closed = await closeFileWorkflow({
@@ -286,12 +286,20 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           return ok("status.workflow-close", { ...closed, statusFile: path.join(rootResolution.root, "status.json") });
         } catch (error) {
           // A refused close reports the engine's own typed cause: the field
-          // facts and the `recovery` sidecar travel with the code and message.
+          // facts travel with the code and message, and the intent-resolution
+          // problems travel under `details.recoveryFacts` so they never collide
+          // with the envelope's own `recovery` string below.
           const code = engineCode(error, "workflow.close-refused");
           const details =
             error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
               ? error.details
               : undefined;
+          if (code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable") {
+            return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Select the control root that holds the workflow, then rerun mstar status workflow-close.");
+          }
+          if (code === "coordination.invalid-input" || code === "coordination.workflow-not-found" || code === "coordination.plan-not-found") {
+            return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Select a workflow and plan this control root holds, then rerun mstar status workflow-close.");
+          }
           return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Correct the reported workflow lifecycle problem, then rerun mstar status workflow-close.");
         }
       },
