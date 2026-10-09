@@ -34,6 +34,17 @@ async function activeFixture() {
 const handoffInput = { workflowId: WORKFLOW_ID, entry: "iteration-start", intent: "new-iteration", authority: "coordinator" } as const;
 
 describe("ACTIVE prerequisite handoff and write gates", () => {
+  test("a missing ACTIVE root fails closed instead of reserving a file binding", async () => {
+    const result = await reserveHandoffBinding(handoffInput, {
+      sessionId: "host-session",
+      cwd: "/",
+      taskSession: false,
+      executionBinding: null,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("invalid-root");
+  });
+
   test("an ACTIVE graph refuses file-binding reservation without an adopted DB binding", async () => {
     const { fixture } = await activeFixture();
 
