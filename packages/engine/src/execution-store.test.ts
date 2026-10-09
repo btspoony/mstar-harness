@@ -1790,6 +1790,52 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     expect(executionFootprint(context)).toEqual(footprint);
   });
 
+  test("an omitted expected is resolved from the header and an identical retry replays without a conflict", async () => {
+    const fixture = await createdWorkflow("session-omitted-freshness");
+    const { context, storeId, epoch } = fixture;
+    const caller = sessionCaller("wf-1", "host-coord");
+
+    // The freshness-free request: the workflow and the caller's own operation id,
+    // nothing else. The verb resolves the workflow's CURRENT token from its own
+    // header inside the write transaction and commits.
+    const omitted = { workflowId: "wf-1", operationId: "bind-omitted-freshness" } satisfies SessionBind;
+    const bound = await bindExecutionSession(domainContext(context, caller), omitted);
+    expect(bound.replayed).toBe(false);
+    expect(bound.token).toBe(executionToken("session", storeId, epoch, ["wf-1", "coordinator", "host-coord"], 1));
+
+    // The first bind advanced the header revision; the unchanged retry carries NO
+    // token to re-present, so freshness the caller never supplied cannot turn it
+    // into `execution.operation-conflict`. It is the recorded replay.
+    const footprint = executionFootprint(context);
+    const replayed = await bindExecutionSession(domainContext(context, caller), omitted);
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.token).toBe(bound.token);
+    expect(replayed.data).toEqual(bound.data);
+    expect(executionFootprint(context)).toEqual(footprint);
+
+    // A stale SUPPLIED token still refuses: the omitted form never weakens an
+    // explicit CAS, and the same operation id with a different supplied token is
+    // an operation conflict, never a silent replay.
+    await expect(
+      bindExecutionSession(domainContext(context, sessionCaller("wf-1", "host-other")), {
+        workflowId: "wf-1",
+        expected: fixture.workflowToken,
+        operationId: "bind-omitted-freshness",
+      }),
+    ).rejects.toMatchObject({ code: "execution.operation-conflict" });
+    // A fresh caller with the stale token refuses on the CAS itself.
+    await expect(
+      bindExecutionSession(domainContext(context, sessionCaller("wf-1", "host-fresh")), {
+        workflowId: "wf-1",
+        expected: fixture.workflowToken,
+        operationId: "bind-stale-explicit",
+      }),
+    ).rejects.toMatchObject({ code: "execution.stale-token" });
+    // Every refusal above wrote nothing: the footprint is exactly the state the
+    // one accepted commit (and its replay) produced.
+    expect(executionFootprint(context)).toEqual(footprint);
+  });
+
   test("two concurrent binds on one coordinator token commit exactly one owner", async () => {
     const fixture = await createdWorkflow("session-contention");
     const { context, workflowToken } = fixture;

@@ -23,17 +23,21 @@
  * explicitly named workflow, and works on both routes:
  *
  * - `bind {workflowId}` under an ACTIVE execution authority
- *   (`resolveExecutionReadRoute` → `execution`) reads the workflow's current
- *   execution token from that authority and mints an engine-safe operation id,
- *   so no caller ever has to discover/read/copy a token first; explicit
- *   `expected`/`operationId` values are still honored and re-checked by the
- *   engine. The pre-activation file route answers the same shape with the
+ *   (`resolveExecutionReadRoute` → `execution`) forwards an omitted `expected`
+ *   as omitted and mints a missing operation id, so no caller ever has to
+ *   discover/read/copy a token first: the engine resolves the workflow's current
+ *   token from its own header inside the write transaction (CAS against what the
+ *   store holds) while the fingerprint stays independent of that freshness, so
+ *   an identical retry under the same caller-supplied id is the recorded replay.
+ *   Explicit `expected`/`operationId` values are still honored and re-checked by
+ *   the engine. The pre-activation file route answers the same shape with the
  *   unchanged managed Prepare bootstrap.
  * - `recover` keeps the two authority-specific proofs: the ACTIVE form calls the
  *   existing DB recovery verb with `priorSessionId`, `reason` and the operator's
- *   own `ActivationAttestation` document (its token and operation id are
- *   derived exactly like the bind's), while the pre-activation file route keeps
- *   the audited `authorizationRef`/`stoppedSessionIds` JSON recovery, unchanged.
+ *   own `ActivationAttestation` document (its token is read from the addressed
+ *   authority like before, and its operation id is derived exactly like the
+ *   bind's), while the pre-activation file route keeps the audited
+ *   `authorizationRef`/`stoppedSessionIds` JSON recovery, unchanged.
  *
  * A field the answering authority cannot honor refuses by name — an active CAS
  * field on a file root, a JSON stop proof on an ACTIVE root — so a fallback
@@ -80,17 +84,19 @@ export const COORDINATOR_TOOL_NAME = "mstar_coordinator";
 
 /**
  * The ordinary `bind` input: the operation, the explicitly named workflow and —
- * never required — the caller's own CAS values. Under an ACTIVE authority the
- * adapter derives a missing `expected` from the addressed authority itself and
- * mints a missing `operationId`, so an ordinary call needs no discover/read/copy
- * ladder; supplied values are forwarded verbatim and re-checked by the engine.
+ * never required — the caller's own CAS values. Under an ACTIVE authority an
+ * omitted `expected` is FORWARDED as omitted (the engine resolves the workflow's
+ * current token from its own header inside the write transaction) and a missing
+ * `operationId` is minted once here, so an ordinary call needs no
+ * discover/read/copy ladder; supplied values are forwarded verbatim and
+ * re-checked by the engine.
  */
 export type CoordinatorBindRequest = Readonly<{
   operation: "bind";
   workflowId: string;
-  /** Full `exec-v1:workflow:…` token of the addressed workflow, re-checked by the engine. */
+  /** Full `exec-v1:workflow:…` token of the addressed workflow, re-checked by the engine; omitted, the engine resolves the current token itself. */
   expected?: string;
-  /** Operation id: an identical retry is a replay, a different request refuses. */
+  /** Operation id: an identical retry is the replay, a different request refuses. */
   operationId?: string;
 }>;
 
@@ -217,7 +223,7 @@ export type CoordinatorAuthorityDeps = Readonly<{
     harnessDir: string;
     identity: ExecutionIdentity;
     workflowId: string;
-    expected: ExecutionToken;
+    expected?: ExecutionToken;
     operationId: string;
   }) => Promise<ExecutionReceipt<ExecutionSessionRef>>;
   recover: (input: {
@@ -600,58 +606,70 @@ function coordinatorHostFacts(
 }
 
 /**
- * The engine-safe defaults of an ACTIVE call's two CAS controls, derived so an
- * ordinary call carries only the operation and the workflow:
- *
- * - `expected` is the workflow's CURRENT execution token, read from the very
- *   authority the call addresses — never a caller-invented or cached value, and
- *   re-checked by the engine inside its own write transaction;
- * - `operationId` is a fresh host-minted id when the caller names none, so a
- *   repeated call is a second attempt the engine's own holder guard answers
- *   truthfully instead of a replay nobody asked for. A caller-supplied id is
- *   forwarded verbatim and makes an identical retry the replay.
+ * The operation id one ACTIVE call carries: the caller's own supplied id,
+ * forwarded verbatim so an identical retry is the engine's own replay, or a
+ * fresh host-minted id when the caller names none — so a repeated call is a
+ * second attempt the engine's holder guard answers truthfully instead of a
+ * replay nobody asked for. The minted id is labelled with the operation that
+ * produced it, so an agent reading a replayed `operationId` sees which verb
+ * committed it.
  */
-async function activeControlsOf(
+function activeOperationId(request: Record<string, unknown>, operation: "bind" | "recover"): string {
+  const supplied = request.operationId;
+  return isNonEmpty(supplied) ? supplied : `coordinator-${operation}-${randomUUID()}`;
+}
+
+/**
+ * The CAS value the ACTIVE RECOVERY presents, derived so an ordinary call
+ * carries only the operation and the workflow. `expected` is the workflow's
+ * CURRENT execution token, read from the very authority the call addresses —
+ * never a caller-invented or cached value — and re-checked by the engine inside
+ * its own write transaction, which is what makes a stale value a real refusal
+ * instead of a value this adapter could have masked.
+ *
+ * The BIND deliberately does not read here: it forwards an omitted `expected`
+ * as omitted and the engine resolves the workflow's current token from its own
+ * header inside the write transaction, so freshness the caller never supplied
+ * stays out of the bind's request fingerprint and an identical retry is served
+ * as the recorded replay. `recoverExecutionCoordinator` is the verb that
+ * REQUIRES an explicit token, so only the recovery resolves one here.
+ */
+async function activeRecoveryExpected(
   authority: CoordinatorAuthorityDeps,
   harnessRoot: string,
   workflowId: string,
   request: Record<string, unknown>,
-): Promise<{ ok: true; expected: string; operationId: string } | { ok: false; outcome: CoordinatorIdentityOutcome }> {
-  // A supplied token is forwarded verbatim — the shared shape gate already
-  // refused an empty one — and is re-checked by the engine inside its own write
-  // transaction, which is what makes a stale value a real refusal instead of a
-  // value this adapter could have masked.
-  let expected = request.expected as string | undefined;
-  if (expected === undefined) {
-    let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
-    try {
-      read = await authority.read({ harnessDir: harnessRoot, workflowId });
-    } catch (error) {
-      return { ok: false, outcome: engineRefusal(error, { workflowId, harnessRoot }) };
-    }
-    // The engine requires the exact workflow token; a read that returned without
-    // one cannot be turned into a CAS value here.
-    if (!isNonEmpty(read.token)) {
-      return {
-        ok: false,
-        outcome: refuse(
-          "execution.token-unavailable",
-          `the execution authority read of workflow ${workflowId} returned no workflow token, so no CAS value can be derived; supply \`expected\` explicitly`,
-          { workflowId, harnessRoot },
-        ),
-      };
-    }
-    expected = read.token;
+): Promise<{ ok: true; expected: ExecutionToken } | { ok: false; outcome: CoordinatorIdentityOutcome }> {
+  const supplied = request.expected as string | undefined;
+  if (supplied !== undefined) return { ok: true, expected: supplied as ExecutionToken };
+  let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
+  try {
+    read = await authority.read({ harnessDir: harnessRoot, workflowId });
+  } catch (error) {
+    return { ok: false, outcome: engineRefusal(error, { workflowId, harnessRoot }) };
   }
-  const supplied = request.operationId;
-  return { ok: true, expected, operationId: isNonEmpty(supplied) ? supplied : `coordinator-bind-${randomUUID()}` };
+  // The engine requires the exact workflow token; a read that returned without
+  // one cannot be turned into a CAS value here.
+  if (!isNonEmpty(read.token)) {
+    return {
+      ok: false,
+      outcome: refuse(
+        "execution.token-unavailable",
+        `the execution authority read of workflow ${workflowId} returned no workflow token, so no CAS value can be derived; supply \`expected\` explicitly`,
+        { workflowId, harnessRoot },
+      ),
+    };
+  }
+  return { ok: true, expected: read.token as ExecutionToken };
 }
 
 /**
  * The ACTIVE arm of a bind: the DB session API records the binding under the
- * host-derived identity, with the CAS controls derived when the caller omits
- * them. A supplied-but-unusable control is already answered by the shared shape
- * gate, before any authority is probed.
+ * host-derived identity. An omitted `expected` is forwarded as omitted (the
+ * engine resolves the workflow's current token inside its own write
+ * transaction) and a missing `operationId` is minted here. A supplied-but-
+ * unusable control is already answered by the shared shape gate, before any
+ * authority is probed.
  */
 async function bindActiveCoordinator(
   request: Record<string, unknown>,
@@ -666,15 +684,20 @@ async function bindActiveCoordinator(
   } catch (error) {
     return refusalOf(error, { workflowId });
   }
-  const controls = await activeControlsOf(authority, harnessRoot, workflowId, request);
-  if (!controls.ok) return controls.outcome;
+  // The controls are the caller's own: an omitted `expected` is forwarded as
+  // omitted (the engine resolves the workflow's current token from its own
+  // header inside the write transaction), which keeps freshness the caller
+  // never supplied out of the request fingerprint so an identical retry is the
+  // replay. The operation id is forwarded verbatim or minted once here.
+  const expected = request.expected as ExecutionToken | undefined;
+  const operationId = activeOperationId(request, "bind");
   try {
     const bound = await authority.bind({
       harnessDir: harnessRoot,
       identity,
       workflowId,
-      expected: controls.expected as ExecutionToken,
-      operationId: controls.operationId,
+      ...(expected === undefined ? {} : { expected }),
+      operationId,
     });
     // The DB session reference is an identity, not a credential: the text
     // names the already-public workflow/session ids and the store epoch, and
@@ -801,11 +824,32 @@ export async function bindCoordinatorIdentity(
  */
 export type CoordinatorRecoveryTarget = Readonly<{ priorSessionPath: string; priorSessionId: string }>;
 
+/**
+ * The refusal of one target read that carries the engine's OWN structured
+ * record when there is one. `error` is the thrown `StoreError` (or other
+ * engine error) the authority veto produced, kept whole so the boundary can
+ * project its complete details and the loaded-module provenance through the
+ * ONE shared engine-refusal path instead of rebuilding a code/message pair.
+ */
+export type CoordinatorRecoveryTargetRefusal = Readonly<{
+  code: string;
+  message: string;
+  /** The thrown engine record, when the refusal came from the engine itself. */
+  error?: unknown;
+  /**
+   * Adapter-owned redirect guidance the reader appends AFTER the engine's own
+   * message (the ACTIVE-veto redirect to the DB recovery verb). It is composed
+   * at the boundary behind whatever recovery advice the engine path adds, so
+   * neither text is lost.
+   */
+  guidance?: string;
+}>;
+
 /** How the adapter resolves the recorded prior holder; injectable for fixtures. */
 export type CoordinatorRecoveryTargetReader = (input: {
   harnessRoot: string;
   workflowId: string;
-}) => { ok: true; target: CoordinatorRecoveryTarget } | { ok: false; code: string; message: string };
+}) => { ok: true; target: CoordinatorRecoveryTarget } | ({ ok: false } & CoordinatorRecoveryTargetRefusal);
 
 /** The default target reader: the snapshot's own top-level coordinator binding. */
 export const readStoredCoordinatorTarget: CoordinatorRecoveryTargetReader = ({ harnessRoot, workflowId }) => {
@@ -845,23 +889,34 @@ export const readStoredCoordinatorTarget: CoordinatorRecoveryTargetReader = ({ h
  * (`execution.consumer-not-ready`) and adds the redirect this adapter owes the
  * caller: recovery then belongs to the existing DB recovery verb with its
  * execution token and stop attestation, never to this JSON path. A store that
- * exists and cannot be read keeps ITS own refusal code and message — masking it
+ * exists and cannot be read keeps ITS own refusal code, message AND engine
+ * record — the thrown `StoreError` travels with the refusal so the boundary can
+ * project its schema-version facts and the loaded-module provenance; masking it
  * as a Prepare refusal would hide a real store fault.
  */
 function authorityRefusal(
   harnessRoot: string,
-): { ok: false; code: string; message: string } | undefined {
+): ({ ok: false } & CoordinatorRecoveryTargetRefusal) | undefined {
   try {
     assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
   } catch (error) {
     const code = codeOf(error);
-    const message =
-      code === "execution.consumer-not-ready"
-        ? `${messageOf(error)} Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the ` +
-          `existing DB recovery verb (\`mstar session recover\`) with its execution token and stop attestation; ` +
-          `this JSON Prepare path never runs against an active store.`
-        : messageOf(error);
-    return { ok: false, code, message };
+    // The engine's own message stays FIRST and unmodified — its code, message
+    // and COMPLETE structured details are the caller's evidence. This adapter
+    // only APPENDS the redirect it owes for an ACTIVE authority, and it does so
+    // as separate guidance so the boundary can place it after whatever recovery
+    // advice the engine path adds for an incompatible loaded build.
+    if (code !== "execution.consumer-not-ready") return { ok: false, code, message: messageOf(error), error };
+    return {
+      ok: false,
+      code,
+      message: messageOf(error),
+      error,
+      guidance:
+        "Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the existing DB recovery " +
+        "verb (`mstar session recover`) with its execution token and stop attestation; this JSON Prepare path never " +
+        "runs against an active store.",
+    };
   }
   return undefined;
 }
@@ -1027,7 +1082,22 @@ export async function recoverCoordinatorIdentity(
   const stoppedSessionIds = request.stoppedSessionIds as readonly string[];
 
   const resolved = deps.target({ harnessRoot, workflowId });
-  if (!resolved.ok) return refuse(resolved.code, resolved.message, { workflowId });
+  if (!resolved.ok) {
+    // A refusal that carries the engine's own thrown record (the authority veto
+    // of an unreadable, drifted or incompatible store) is projected through the
+    // SHARED engine-refusal path, so its schema-version facts, `loadedEntry` and
+    // incompatible-loaded-build guidance reach the caller exactly as they do on
+    // the bind / show-recovery / ACTIVE-recovery branches. The adapter's own
+    // redirect guidance is composed at the boundary, behind whatever recovery
+    // advice that path adds, so neither text is lost. A refusal the adapter
+    // itself authored (an unreadable or unbound snapshot) has no engine record
+    // and keeps its own code and message.
+    if (resolved.error === undefined) return refuse(resolved.code, resolved.message, { workflowId });
+    const outcome = engineRefusal(resolved.error, { workflowId, harnessRoot });
+    return resolved.guidance === undefined
+      ? outcome
+      : { ...outcome, text: `${outcome.text} ${resolved.guidance}` };
+  }
   const { priorSessionPath, priorSessionId } = resolved.target;
   // The stop assertion is forwarded EXACTLY as the caller stated it: whether it
   // names the recorded holder is the engine's guard, checked against the
@@ -1094,9 +1164,10 @@ export async function recoverCoordinatorIdentity(
  * the caller-shape refusals (already aggregated by the shared classifier, which
  * validates the holder under the same public-session-id rule the JSON stop
  * assertion uses and keeps the missing attestation an `unauthorized` verdict)
- * and the host-derived identity. It derives the two CAS controls exactly like
- * the bind and never echoes the attestation body, a token or a path back to the
- * model.
+ * and the host-derived identity. It reads the workflow token from the addressed
+ * authority when the operator omits `expected` (the recovery verb REQUIRES an
+ * explicit token) and mints the operation id when omitted, and it never echoes
+ * the attestation body, a token or a path back to the model.
  */
 async function recoverActiveCoordinator(
   request: Record<string, unknown>,
@@ -1126,14 +1197,14 @@ async function recoverActiveCoordinator(
   } catch (error) {
     return refusalOf(error, { workflowId });
   }
-  const controls = await activeControlsOf(authority, harnessRoot, workflowId, request);
+  const controls = await activeRecoveryExpected(authority, harnessRoot, workflowId, request);
   if (!controls.ok) return controls.outcome;
   try {
     const result = await authority.recover({
       harnessDir: harnessRoot,
       identity,
-      expected: controls.expected as ExecutionToken,
-      operationId: controls.operationId,
+      expected: controls.expected,
+      operationId: activeOperationId(request, "recover"),
       priorSessionId: prior,
       reason: request.reason as string,
       attestation: request.attestation,

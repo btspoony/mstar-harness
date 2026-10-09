@@ -2218,12 +2218,24 @@ function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBi
   return { role: "coordinator", workflowId, sessionId: caller.sessionId, operationId };
 }
 
-function bindSessionRequestHash(caller: ExecutionCaller, bind: ResolvedBind, expected: ExecutionToken): string {
+/**
+ * §3.1 the request fingerprint of one session bind: the operation kind, the
+ * addressed workflow, the bind itself and the trusted caller — never the
+ * freshness the caller happened to present. An OMITTED `expected` is the stable
+ * `"current"` marker the verb resolves from the workflow's own header inside
+ * its write transaction (the same rule the terminal-adoption intent uses), so a
+ * retry that omits it carries the SAME fingerprint as the commit and is served
+ * as the recorded replay instead of a conflict against a token the first bind
+ * itself advanced. A SUPPLIED token stays part of the fingerprint and a strict
+ * CAS, so a retry presenting a different explicit token is an operation
+ * conflict and is never silently converted into a replay.
+ */
+function bindSessionRequestHash(caller: ExecutionCaller, bind: ResolvedBind, expected: ExecutionToken | undefined): string {
   return createHash("sha256").update(serializeExecutionValue({
     operation: BIND_SESSION_OPERATION,
     workflow_id: bind.workflowId,
     role: bind.role,
-    expected,
+    expected: expected ?? "current",
     caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId },
   }), "utf8").digest("hex");
 }
@@ -2948,10 +2960,22 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
  * holder and its stop/reload attestation; first-bind adoption is unavailable
  * once any coordinator record exists. Every refusal names the recorded facts and
  * the supported route, so the caller can act instead of guessing.
+ *
+ * `expected` is OPTIONAL: the same freshness-omitted rule the other domain verbs
+ * take. When it is omitted the verb resolves the workflow's CURRENT token from
+ * its own header inside this write transaction — never from a caller value and
+ * never from a pre-transaction read — so the ordinary `{workflowId,
+ * operationId}` call needs no discover/read/copy ladder and still CASes against
+ * what the store holds. The committed receipt is consulted FIRST, before that
+ * resolution, so an identical retry under the same operation id is the recorded
+ * replay rather than a conflict against the revision the first bind advanced. A
+ * SUPPLIED token keeps its strict-CAS semantics: a stale value refuses
+ * `execution.stale-token`, and the same operation id with a different supplied
+ * token stays `execution.operation-conflict`.
  */
 export async function bindExecutionSession(
   context: ExecutionContext,
-  input: { workflowId: string; expected: ExecutionToken; operationId: string },
+  input: { workflowId: string; expected?: ExecutionToken; operationId: string },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const bind = resolveBindRequest(context.caller, input);
   const requestHash = bindSessionRequestHash(context.caller, bind, input.expected);
@@ -2982,7 +3006,11 @@ export async function bindExecutionSession(
       return { ...receipt, operationId: bind.operationId, replayed: true };
     }
     const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
-    assertExecutionToken(input.expected, {
+    // The freshness is resolved INSIDE this transaction from the workflow's own
+    // header: an omitted `expected` is the current token, a supplied one is the
+    // strict CAS it always was.
+    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [bind.workflowId], header.revision);
+    assertExecutionToken(expected, {
       kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [bind.workflowId], revision: header.revision,
     });
     const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
