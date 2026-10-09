@@ -6,9 +6,9 @@
 
 每个 plan 的详细内容（任务清单、决策、Sign-off）。
 
-**命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。执行 plan 行的 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径（pre-activation：snapshot 行）。
+**命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。执行 plan 行的 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径。
 
-**身份与路径权威**：plan 的 id / title / 文档路径 / project-iteration 归属与 spec/knowledge 关系是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1；读法 `mstar catalog show plan <plan-id>`）。ACTIVE 的 `execution_plans` 行承载 **prepare 时从某个 catalog revision 复制来的冻结执行输入** `id/title/file`（`catalog_pin`；pre-activation：snapshot plan 行），**不是**可独立编辑的第二份 catalog。catalog 变更不静默刷新在途输入，进度更新也不改写它。从 tracked 正文发现候选用 `mstar catalog discover`（只读提案，含显式 `unknowns`），review 后 `mstar catalog import` 登记。
+**身份与路径权威**：plan 的 id / title / 文档路径 / project-iteration 归属与 spec/knowledge 关系是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1；读法 `mstar catalog show plan <plan-id>`）。ACTIVE 的 `execution_plans` 行承载 **prepare 时从某个 catalog revision 复制来的冻结执行输入** `id/title/file`（`catalog_pin`），**不是**可独立编辑的第二份 catalog。catalog 变更不静默刷新在途输入，进度更新也不改写它。从 tracked 正文发现候选用 `mstar catalog discover`（只读提案，含显式 `unknowns`），review 后 `mstar catalog import` 登记。
 
 ## Edit attribution (process-local SSOT)
 
@@ -97,15 +97,15 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 
 - **谁应更新**：`fullstack-dev` / `frontend-dev` / `fullstack-dev-2`、`qa-engineer`、`ops-engineer`、`architect`、`product-manager` 在**完成本人 Assignment 范围内的工作后**，须在主 plan（`<plan-id>-<plan-name>.md`）中把**对应条目**的 Markdown 任务标记为已完成（常见：`- [ ]` → `- [x]`；若项目用其它清单记号，保持同文件内一致）。与 Completion Report **并列**，作为跨会话可核对的**落盘痕迹**。
 - **范围**：**只勾选与当前任务直接对应、且已由本角色交付证据支撑的条目**；不得代为勾选他人负责或未完工项。若正文用分段、Owner 或角色标签区分任务，以 Assignment 与文内约定为准。
-- **与执行行 / frontmatter 的关系**：勾选任务**不**等于整条计划收口。store 执行 plan 行（pre-activation：snapshot `plans[].status`）及主 plan frontmatter 的 **`Done`** 仍**仅** PM / QA；是否推进 `InReview` 等按状态权限与 Assignment。
+- **与执行行 / frontmatter 的关系**：勾选任务**不**等于整条计划收口。store 执行 plan 行及主 plan frontmatter 的 **`Done`** 仍**仅** PM / QA；是否推进 `InReview` 等按状态权限与 Assignment。
 - **`qc-specialist*`**：**不得**修改主 plan（宿主仅允许 Assignment 指定的 review bundle `.md`）；审查结论落在 `{SDD_DIR}/review/` 内。若主 plan 需新增或勾选与审查相关的条目，由 `project-manager` 或 Assignment 明确授权的角色据报告回写。
 - **只读角色**：不直接改主 plan；将建议交给 `project-manager` 代为更新清单。
 
-Plan 正文与执行行必须保持一致；不一致时以 store plan 行状态为准（pre-activation：snapshot `plans[].status`），尽快纠正正文或经公共动词追加 notes（`workflows/<id>/notes.jsonl`）。
+Plan 正文与执行行必须保持一致；不一致时以 store plan 行状态为准，尽快纠正正文或经公共动词追加 notes（`workflows/<id>/notes.jsonl`）。
 
 ## Done 标记方式
 
 1. **Frontmatter**（首选）：添加 `status: Done` 和可选的 `done_at: YYYY-MM-DD`。
 2. **文件名**（备选）：重命名为 `DONE__<name>.md` 或 `<name>.done.md`。
 
-执行状态经 `mstar plan complete` 等公共 plan 动词写入 store；完成交付尾段后由 `mstar status workflow-close` 收口 root register。不要手写 root/snapshot 文件；其文件路由仅 pre-activation / engine-absent，ACTIVE 下读写被拒。主 plan 标记不是执行状态权威。
+执行状态经 `mstar plan complete` 等公共 plan 动词写入 store；完成交付尾段后由 `mstar status workflow-close` 收口 root register。不要手写 root `status.json` 或 workflow snapshot；它们是 migration sources / retained history，不是执行权威。主 plan 标记不是执行状态权威。
