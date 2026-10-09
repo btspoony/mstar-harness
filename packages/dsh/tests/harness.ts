@@ -15,6 +15,7 @@
  * (`ctx.waterfall('fs/write-intent', target, exec, () => undefined)`).
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -903,8 +904,10 @@ export async function seedActiveWorkflow(
   await mkdir(harnessDir, { recursive: true })
   let expected = activeExecutionTokens.get(harnessDir)
   if (expected === undefined) {
-    const store = await initializeStore({ harnessDir })
-    store.close()
+    if (!existsSync(join(harnessDir, 'store.db'))) {
+      const store = await initializeStore({ harnessDir })
+      store.close()
+    }
     expected = (await readExecutionState({ harnessDir })).token
   }
   if (activeExecutionTokens.has(`${harnessDir}:${workflowId}`)) {
@@ -949,7 +952,8 @@ export async function seedActiveWorkflow(
     },
   ).catch((error: unknown) => {
     if (typeof error === 'object' && error !== null && 'details' in error) {
-      throw new Error(JSON.stringify(error.details))
+      const cause = error as { code?: string; message?: string; details: unknown }
+      throw new Error(`${cause.code ?? 'execution.create-failed'}: ${cause.message ?? 'createExecutionWorkflow failed'}; details=${JSON.stringify(cause.details)}`)
     }
     throw error
   })

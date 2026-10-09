@@ -33,15 +33,15 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import {
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionState,
   importRoadmapAuthority,
   registerCatalogEntity,
   reviewRoadmapImport,
@@ -54,7 +54,7 @@ import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
 import { buildCatalogPayload, buildCatalogPayloadWithStore, catalogCacheKey } from '../src/gates/catalog.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, FakeLoaderRegistry, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -92,7 +92,7 @@ async function seedExecutionAuthority(
 ): Promise<void> {
   const handle = await initializeStore({ harnessDir })
   handle.close()
-  let token = (await initializeExecutionAuthority({ harnessDir })).token
+  let token = (await readExecutionState({ harnessDir })).token
   for (const workflow of workflows) {
     await registerCatalogEntity(
       { harnessDir },
@@ -378,8 +378,6 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
 describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4 §5 D5)', () => {
   /** The iteration workflow id the steering compass registers. */
   const ITERATION_WORKFLOW = 'iter-00000811-catalog-compass'
-  /** Minimal v2 root status.json (one active iteration workflow). */
-  const VALID_STATUS_JSON = v2Root([v2WorkflowEntry(ITERATION_WORKFLOW, 'iteration')])
 
   /** A minimal engine-shape-VALID delivery-compass frontmatter (spec D5 — the steering status value is the signal). */
   function compassDoc(status: 'active' | 'locked' | 'completed'): string {
@@ -398,23 +396,19 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
   }
 
   /** Boot with status.json + a delivery-compass seeded, run one pre-step, and return the catalog payload (the row's source carries none). */
+  /** Boot with an ACTIVE execution workflow and its referenced delivery compass. */
   async function payloadWithCompass(status: 'active' | 'locked' | 'completed'): Promise<MstarEngineStatusPayload> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compassstatus-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': VALID_STATUS_JSON,
-      // The selected snapshot's OWN `compass_ref` (harness-relative) is the
-      // only compass link the read path admits (D4) — never a directory scan.
-      [`workflows/${ITERATION_WORKFLOW}/snapshot.json`]: v2Snapshot(ITERATION_WORKFLOW, {
-        type: 'iteration',
-        compass_ref: 'iterations/iter-00000811-catalog-compass/delivery-compass.md',
-      }),
-      'iterations/iter-00000811-catalog-compass/delivery-compass.md': compassDoc(status),
-    })
-    const app = booted = await bootApp({ root })
+    await seedActiveWorkflow(harnessDir, ITERATION_WORKFLOW, [], {
+      type: 'iteration',
+      compass_ref: 'iterations/iter-00000811-catalog-compass/delivery-compass.md',
+    }, SESSION_ID, root, ITERATION_WORKFLOW)
+    await mkdir(join(harnessDir, 'iterations/iter-00000811-catalog-compass'), { recursive: true })
+    await writeFile(join(harnessDir, 'iterations/iter-00000811-catalog-compass/delivery-compass.md'), compassDoc(status))
+    const app = booted = await bootApp({ root, harnessDir })
     await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    return buildCatalogPayload(app.ctx, harnessDir)
+    return buildCatalogPayloadWithStore(app.ctx, harnessDir)
   }
 
   it('surfaces `compassStatus: active` when the steering compass is active (Phase 1 in flight)', async () => {
@@ -445,18 +439,14 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
 })
 
 describe('mstar-engine-status catalog — plan iterationRefs ', () => {
-  /** Boot with a v2 tree whose selected snapshot plans carry (or omit) `metadata.iteration_refs`, then return the state section. */
+  /** Boot an ACTIVE workflow whose plans carry `metadata.iteration_refs`. */
   async function stateWithPlans(plans: unknown[]): Promise<NonNullable<MstarEngineStatusPayload['state']>> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-iterationrefs-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-iterrefs')]),
-      'workflows/wf-iterrefs/snapshot.json': v2Snapshot('wf-iterrefs', { plans }),
-    })
-    const app = booted = await bootApp({ root })
+    await seedActiveWorkflow(harnessDir, 'wf-iterrefs', plans as never[], {}, SESSION_ID, root, 'wf-iterrefs')
+    const app = booted = await bootApp({ root, harnessDir })
     await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     if (state === null) throw new Error('expected a non-null state section')
     return state
   }
@@ -496,29 +486,22 @@ describe('catalog TTL invalidation — ledger change refreshes within the TTL ',
 Implement the invalidation.
 `
 
-  /** A v2 tree with one active workflow (`wf-1`) and an empty workflow ledger. */
-  async function seedV2Tree(root: string): Promise<string> {
+  /** A one-workflow ACTIVE execution tree. */
+  async function seedActiveTree(root: string): Promise<string> {
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
-      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-    })
+    await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, SESSION_ID, root, 'wf-1')
     return harnessDir
   }
 
   it('a ledger change within the TTL invalidates the cache — the next pre-step rebuilds fresh sources and the digest re-emits the changed row (AC-2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-invalidate-'))
-    const harnessDir = await seedV2Tree(root)
+    const harnessDir = await seedActiveTree(root)
     // REAL TTL (default 60000): a refresh at the second pre-step can only
     // come from the ledger-change invalidation — never from a TTL expiry.
-    const app = booted = await bootApp({ root })
-
-    // Pre-step 1 (turn 1): no ledger events yet — the row is injected once.
+    const app = booted = await bootApp({ root, harnessDir })
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    // No ledger events yet → the row carries no agent-flow line. The payload
-    // is not persisted on the row, so the rendered text — produced from the
-    // SAME payload — is the structured observable here.
+    // No ledger events yet → the row carries no agent-flow line; inspect the
+    // model-visible text from the actual pre-step decision.
     expect(textOf(lastMessage(first)!)).not.toContain('agent flow:')
 
     // One successful ledger record — the apply-bound invalidator deletes the
@@ -526,7 +509,7 @@ Implement the invalidation.
     // Final-state (Task 2 writer cutover): the record itself lands in the
     // ACTIVE workflow dir — the catalog reads the SAME file, so the
     // invalidation observable is the record's own line (no out-of-band write).
-    plugin.recordDispatch({ harnessDir, prompt: ASSIGNMENT, violations: [], hard: false })
+    plugin.recordDispatch({ harnessDir, resolvedWorkflowDir: join(harnessDir, 'workflows/wf-1'), prompt: ASSIGNMENT, violations: [], hard: false })
 
     // Pre-step 2 — SAME turn (step 2): the digest gate suppresses an
     // UNCHANGED row, so this re-injection can only be the digest text change
@@ -556,10 +539,7 @@ Implement the invalidation.
     const wsA = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-a-'))
     const wsB = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-'))
     for (const ws of [wsA, wsB]) {
-      await seedHarness(join(ws, '.mstar'), {
-        'status.json': v2Root([v2WorkflowEntry('wf-1')]),
-        'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-      })
+      await seedActiveWorkflow(join(ws, '.mstar'), 'wf-1', [], {}, 'seed-wf-1', ws, 'wf-1')
     }
     const stepFor = (cwd: string, turn: number, sessionId: string) => ({
       agent: { session: { header: { id: sessionId, cwd } } },
@@ -595,7 +575,7 @@ Implement the invalidation.
     // Final-state (Task 2 writer cutover): the record itself lands in A's
     // ACTIVE workflow dir — the catalog reads the SAME file, so the rebuild
     // observable is the record's own line (no out-of-band write).
-    plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), prompt: ASSIGNMENT, violations: [], hard: false })
+    plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), resolvedWorkflowDir: join(wsA, '.mstar/workflows/wf-1'), prompt: ASSIGNMENT, violations: [], hard: false })
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
     // fresh source carrying the new workflow-dir dispatch event).
@@ -613,8 +593,8 @@ Implement the invalidation.
 
   it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible within the TTL (only the record path invalidates)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cachehit-'))
-    const harnessDir = await seedV2Tree(root)
-    const app = booted = await bootApp({ root })
+    const harnessDir = await seedActiveTree(root)
+    const app = booted = await bootApp({ root, harnessDir })
 
     // Pre-step 1 (turn 1): no events → no agent-flow line.
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -658,7 +638,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
   /** The golden fixture's snapshot plans[] (legacy PlanRow shape verbatim). */
   const GOLDEN_PLANS = [
     {
-      plan_id: 'plan-a',
+      id: 'plan-a',
       title: 'Plan A',
       file: 'plans/plan-a.md',
       status: 'InProgress',
@@ -746,30 +726,30 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     '',
   ].join('\n')
 
-  it('v2 fixture tree → catalog row equal-shape vs the legacy-row golden (ZoneView shapes byte-compatible)', async () => {
+  it('ACTIVE fixture tree → catalog row equal-shape vs the legacy-row golden (ZoneView shapes byte-compatible)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-golden-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry(GOLDEN_WORKFLOW, 'iteration')]),
-      [`workflows/${GOLDEN_WORKFLOW}/snapshot.json`]: v2Snapshot(GOLDEN_WORKFLOW, {
-        type: 'iteration',
-        compass_ref: 'iterations/v2.2.0/delivery-compass.md',
-        plans: GOLDEN_PLANS,
-        branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
-        execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
-        integration_worktree_path: '/integration/worktree',
-      }),
       'projects/_default/residuals.json': JSON.stringify(GOLDEN_REGISTER),
       'projects/_default/roadmap.md': GOLDEN_ROADMAP,
-      [`workflows/${GOLDEN_WORKFLOW}/agent-flow.jsonl`]: `${GOLDEN_FLOW_LINES.map((line) => JSON.stringify(line)).join('\n')}\n`,
       'iterations/v2.2.0/delivery-compass.md': GOLDEN_COMPASS,
       'knowledge/README.md': GOLDEN_KNOWLEDGE,
     })
-    const app = booted = await bootApp({ root })
     // The issue/catalog authority: a real store holding the golden open issues
     // and the golden knowledge document row.
     await seedStore(harnessDir)
+    await seedActiveWorkflow(harnessDir, GOLDEN_WORKFLOW, GOLDEN_PLANS, {
+      type: 'iteration',
+      compass_ref: 'iterations/v2.2.0/delivery-compass.md',
+      branch: { base: 'dev-dsh', integration: 'iteration/v2.2.0', target: 'dev-dsh' },
+      execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
+      integration_worktree_path: '/integration/worktree',
+    }, SESSION_ID, root, GOLDEN_WORKFLOW)
+    await writeFile(
+      join(harnessDir, 'workflows', GOLDEN_WORKFLOW, plugin.AGENT_FLOW_FILE),
+      `${GOLDEN_FLOW_LINES.map((line) => JSON.stringify(line)).join('\n')}\n`,
+    )
+    const app = booted = await bootApp({ root, harnessDir })
     const project = await registerCatalogEntity(
       { harnessDir },
       { kind: 'project', id: '_default', title: 'Golden project', rootKind: 'projects', relativePath: 'projects/_default' },
@@ -857,11 +837,9 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       },
     })
 
-    // The iteration section: the gate evaluates the SELECTED snapshot (the
-    // evaluated-doc path is the snapshot, not the root status.json).
+    // The iteration section evaluates the selected ACTIVE workflow snapshot.
     expect(payload.iteration).toMatchObject({
       iterationId: GOLDEN_WORKFLOW,
-      statusPath: join(harnessDir, `workflows/${GOLDEN_WORKFLOW}/snapshot.json`),
       compassPath: join(harnessDir, 'iterations/v2.2.0/delivery-compass.md'),
       gate: { transition: 'phase-2-execute', all_plans_done: false, ok: true },
       compassStatus: 'active',
@@ -880,9 +858,8 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-roadmap-authority-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, { 'status.json': v2Root([]) })
-    booted = await bootApp({ root })
     await seedStore(harnessDir)
+    booted = await bootApp({ root, harnessDir })
     const project = await registerCatalogEntity(
       { harnessDir },
       { kind: 'project', id: 'project-a', title: 'Project A', rootKind: 'projects', relativePath: 'projects/project-a' },
@@ -906,109 +883,21 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(payload.state?.project.openResiduals).toEqual([{ severity: 'high', count: 1 }])
   })
 
-  it('no snapshots → clear error (never a root v1 read)', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-nosnapshot-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    // v2 root with an EMPTY active set and no workflows/ dir at all.
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([]),
-    })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row } = catalogRowOf(decision)
+  // Disposition — retired v2-root/no-snapshot fixture: the ACTIVE empty-store no-active case is covered by the execution-authority verdict fixture below.
 
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
-    expect(state).not.toBeNull()
-    if (state === null) return
-    expect(state.selection).toEqual({
-      kind: 'error',
-      code: 'workflow.selection.no-snapshot',
-      message: expect.stringContaining('no workflow snapshot'),
-    })
-    // The aggregates are empty by construction — never a root v1 read.
-    expect(state.plans).toEqual([])
-    expect(state.agentFlow).toBeNull()
-    // No snapshot → no iteration gate row either.
-    expect(buildCatalogPayload(app.ctx, harnessDir).iteration).toBeUndefined()
-    // The model text carries the clear error.
-    expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.no-snapshot)')
-  })
+  // Disposition — removed snapshot-unreadable file-route coverage; ACTIVE workflow snapshots are persisted execution-graph records, not workflow-directory JSON files.
 
-  it('active selection whose snapshot is missing/unreadable → structured snapshot-unreadable error, never a silent null state (S-d)', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-snapmissing-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    // An ACTIVE workflow entry whose snapshot.json is MISSING: the selection
-    // itself resolves, but the snapshot read cannot — the state section must
-    // stay PRESENT with the operator-visible reason (not degrade to null).
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-ghost')]),
-    })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row } = catalogRowOf(decision)
+  // Disposition — removed v1 `status.json` migration-required assertions; the active catalog consumes only registered store workflows.
 
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
-    expect(state).not.toBeNull()
-    if (state === null) return
-    expect(state.selection).toEqual({
-      kind: 'error',
-      code: 'workflow.selection.snapshot-unreadable',
-      message: expect.stringContaining('cannot read the selected workflow snapshot'),
-    })
-    // Empty aggregates by construction — never a root v1 read.
-    expect(state.plans).toEqual([])
-    expect(state.agentFlow).toBeNull()
-    // The model text carries the clear error too.
-    expect(textOf(row)).toContain('workflow selection: ERROR (workflow.selection.snapshot-unreadable)')
-  })
-
-  it('a v1 (unmigrated) root → migration-required error — the v1 plans[] are never read (no dual-read)', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-v1root-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    // A v1 root carrying plans — the catalog must NOT fall back to them.
-    await seedHarness(harnessDir, {
-      'status.json': JSON.stringify({
-        version: 1,
-        updated_at: '2026-08-08',
-        plans: [{ id: 'plan-a', status: 'Todo' }],
-        residual_findings: {},
-        metadata: {},
-      }),
-    })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row } = catalogRowOf(decision)
-
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
-    expect(state).not.toBeNull()
-    if (state === null) return
-    expect(state.selection).toEqual({
-      kind: 'error',
-      code: 'status.migration-required',
-      message: expect.stringContaining('mstar migrate'),
-    })
-    // The v1 plans are NOT projected (no dual-read).
-    expect(state.plans).toEqual([])
-    expect(textOf(row)).toContain('workflow selection: ERROR (status.migration-required)')
-  })
-
-  it('multiple active workflows unbound → picker error + empty aggregates (never workflows[0])', async () => {
+  it('multiple ACTIVE workflows unbound → picker error + empty aggregates', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-multiactive-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }] }),
-    })
-    const app = booted = await bootApp({ root })
+    await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {}, 'seed-wf-a', root, 'wf-a')
+    await seedActiveWorkflow(harnessDir, 'wf-b', [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }], {}, 'seed-wf-b', root, 'wf-b')
+    const app = booted = await bootApp({ root, harnessDir })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
     const state = payload.state
     expect(state).not.toBeNull()
     if (state === null) return
@@ -1076,38 +965,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     })
   })
 
-  it('no active workflows → the latest terminal snapshot by mtime (history view); non-terminal snapshots are skipped', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-terminal-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([]),
-      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-18', plans: [{ id: 'plan-old', title: 'Plan old', file: 'plans/plan-old.md', status: 'Done' }] }),
-      'workflows/wf-new/snapshot.json': v2Snapshot('wf-new', { status: 'completed', ended_at: '2026-08-19', plans: [{ id: 'plan-new', title: 'Plan new', file: 'plans/plan-new.md', status: 'Done' }] }),
-      // A non-terminal snapshot NOT in the root active set is inconsistent —
-      // the terminal filter must skip it (never selected).
-      'workflows/wf-running/snapshot.json': v2Snapshot('wf-running', { plans: [{ id: 'plan-running', title: 'Plan running', file: 'plans/plan-running.md', status: 'InProgress' }] }),
-    })
-    // Deterministic mtimes: wf-old older, wf-new newer (the selection is by
-    // file mtime, not by the snapshot's updated_at).
-    const oldPath = join(harnessDir, 'workflows/wf-old/snapshot.json')
-    const newPath = join(harnessDir, 'workflows/wf-new/snapshot.json')
-    const runningPath = join(harnessDir, 'workflows/wf-running/snapshot.json')
-    const base = Date.now() / 1000
-    await utimes(oldPath, base - 200, base - 200)
-    await utimes(newPath, base - 100, base - 100)
-    await utimes(runningPath, base - 50, base - 50)
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-    const { row } = catalogRowOf(decision)
-
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
-    expect(state).not.toBeNull()
-    if (state === null) return
-    expect(state.selection).toEqual({ kind: 'terminal', workflowId: 'wf-new', dir: 'workflows/wf-new' })
-    expect(state.plans).toEqual([{ id: 'plan-new', status: 'Done', doneAt: null, iterationRefs: [] }])
-    expect(textOf(row)).toContain('workflow: wf-new (terminal)')
-  })
+  // Disposition — removed terminal-snapshot mtime selection; that fallback depended on scanning retired workflow-directory snapshots.
 })
 
 describe('mstar-engine-status catalog — state plans/row-scope join cap (spec D4)', () => {
@@ -1147,20 +1005,16 @@ describe('mstar-engine-status catalog — state plans/row-scope join cap (spec D
     if (line === undefined) throw new Error(`missing ${prefix} line`)
     return line
   }
-  /** Boot a one-workflow tree whose snapshot carries `count` leased plans; return the catalog text + state. */
+  /** Boot a one-workflow ACTIVE tree whose snapshot carries `count` leased plans. */
   const catalogFor = async (count: number) => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cap-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
     const plans = Array.from({ length: count }, (_, index) => capRow(index))
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-cap')]),
-      'workflows/wf-cap/snapshot.json': v2Snapshot('wf-cap', { plans }),
-    })
-    const app = booted = await bootApp({ root })
+    await seedActiveWorkflow(harnessDir, 'wf-cap', plans, {}, SESSION_ID, root, 'wf-cap')
+    const app = booted = await bootApp({ root, harnessDir })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const state = buildCatalogPayload(app.ctx, harnessDir).state
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     if (state === null) throw new Error('missing state')
     return { text: textOf(row), state }
   }
@@ -1259,13 +1113,9 @@ Pick.
   it('two same-cwd sessions with different picks keep their own plans/ledger within TTL; one ledger invalidation refreshes both', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-isolate-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }] }),
-    })
-    const app = booted = await bootApp({ root })
+    await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {}, 'seed-wf-a', root, 'wf-a')
+    await seedActiveWorkflow(harnessDir, 'wf-b', [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }], {}, 'seed-wf-b', root, 'wf-b')
+    const app = booted = await bootApp({ root, harnessDir })
     expect(updateWorkflowSessionBinding(harnessDir, 's-A', root, { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 0 }).kind).toBe('written')
     expect(updateWorkflowSessionBinding(harnessDir, 's-B', root, { selectedWorkflowId: 'wf-b', excludedBeforeSeq: 0 }).kind).toBe('written')
 
@@ -1297,6 +1147,7 @@ Pick.
 
     plugin.recordDispatch({
       harnessDir,
+      resolvedWorkflowDir: join(harnessDir, 'workflows/wf-a'),
       prompt: ASSIGNMENT,
       violations: [],
       hard: false,
@@ -1310,25 +1161,13 @@ Pick.
     expect(textOf(rowB3)).toContain('by role: architect 1')
   })
 
-  it('unbound multi-active plus a newer terminal snapshot stays the picker error (never history)', async () => {
+  it('an unbound session with multiple ACTIVE workflows remains a picker error', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-terminal-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }] }),
-      'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', {
-        status: 'completed',
-        ended_at: '2026-08-19',
-        plans: [{ id: 'plan-old', status: 'Done' }],
-      }),
-    })
-    const oldPath = join(harnessDir, 'workflows/wf-old/snapshot.json')
-    const now = Date.now() / 1000
-    await utimes(oldPath, now + 100, now + 100)
-    const app = booted = await bootApp({ root })
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {}, 'seed-wf-a', root, 'wf-a')
+    await seedActiveWorkflow(harnessDir, 'wf-b', [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }], {}, 'seed-wf-b', root, 'wf-b')
+    const app = booted = await bootApp({ root, harnessDir })
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
     expect(payload.state?.selection).toEqual({
       kind: 'error',
       code: 'workflow.selection.unbound-multi-active',
@@ -1343,7 +1182,6 @@ Pick.
   it('state, direction and iteration gate all come from the same selected workflow', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-cohere-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
     const compass = (id: string, direction: string): string => [
       '---',
       `iteration_id: ${id}`,
@@ -1358,23 +1196,18 @@ Pick.
       `- **Problem statement:** ${direction}`,
       '',
     ].join('\n')
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration'), v2WorkflowEntry('wf-b', 'iteration')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
-        type: 'iteration',
-        compass_ref: 'iterations/wf-a/delivery-compass.md',
-        plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }],
-      }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
-        type: 'iteration',
-        compass_ref: 'iterations/wf-b/delivery-compass.md',
-        plans: [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }],
-      }),
-      'iterations/wf-a/delivery-compass.md': compass('wf-a', 'Direction A.'),
-      'iterations/wf-b/delivery-compass.md': compass('wf-b', 'Direction B.'),
-    })
-    const app = booted = await bootApp({ root })
-    const payload = buildCatalogPayload(app.ctx, harnessDir, {
+    await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {
+      type: 'iteration', compass_ref: 'iterations/wf-a/delivery-compass.md',
+    }, 'seed-wf-a', root, 'wf-a')
+    await seedActiveWorkflow(harnessDir, 'wf-b', [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }], {
+      type: 'iteration', compass_ref: 'iterations/wf-b/delivery-compass.md',
+    }, 'seed-wf-b', root, 'wf-b')
+    await mkdir(join(harnessDir, 'iterations/wf-a'), { recursive: true })
+    await mkdir(join(harnessDir, 'iterations/wf-b'), { recursive: true })
+    await writeFile(join(harnessDir, 'iterations/wf-a/delivery-compass.md'), compass('wf-a', 'Direction A.'))
+    await writeFile(join(harnessDir, 'iterations/wf-b/delivery-compass.md'), compass('wf-b', 'Direction B.'))
+    const app = booted = await bootApp({ root, harnessDir })
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir, {
       cwd: root,
       sessionId: 's-A',
       selectedWorkflowId: 'wf-a',
@@ -1419,18 +1252,13 @@ describe('D4 catalog identity encoding + selected compass path', () => {
   it('refuses a compass_ref whose basename is not delivery-compass.md', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-basename-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
-        type: 'iteration',
-        compass_ref: 'iterations/wf-a/notes.md',
-        plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }],
-      }),
-      'iterations/wf-a/notes.md': compassDoc('wf-a', 'Stolen direction.'),
-    })
-    const app = booted = await bootApp({ root })
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {
+      type: 'iteration', compass_ref: 'iterations/wf-a/notes.md',
+    }, SESSION_ID, root, 'wf-a')
+    await mkdir(join(harnessDir, 'iterations/wf-a'), { recursive: true })
+    await writeFile(join(harnessDir, 'iterations/wf-a/notes.md'), compassDoc('wf-a', 'Stolen direction.'))
+    const app = booted = await bootApp({ root, harnessDir })
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
     expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
     expect(payload.state?.direction).toBeNull()
     expect(payload.iteration).toBeUndefined()
@@ -1443,19 +1271,14 @@ describe('D4 catalog identity encoding + selected compass path', () => {
     await mkdir(harnessDir, { recursive: true })
     const outsideFile = join(outsideDir, 'delivery-compass.md')
     await writeFile(outsideFile, compassDoc('wf-a', 'Escaped direction.'))
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a', 'iteration')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
-        type: 'iteration',
-        compass_ref: 'iterations/wf-a/delivery-compass.md',
-        plans: [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }],
-      }),
-    })
+    await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {
+      type: 'iteration', compass_ref: 'iterations/wf-a/delivery-compass.md',
+    }, SESSION_ID, root, 'wf-a')
     await mkdir(join(harnessDir, 'iterations/wf-a'), { recursive: true })
     await symlink(outsideFile, join(harnessDir, 'iterations/wf-a/delivery-compass.md'))
     try {
-      const app = booted = await bootApp({ root })
-      const payload = buildCatalogPayload(app.ctx, harnessDir)
+      const app = booted = await bootApp({ root, harnessDir })
+      const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
       expect(payload.state?.selection).toEqual({ kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' })
       expect(payload.state?.direction).toBeNull()
       expect(payload.iteration).toBeUndefined()
