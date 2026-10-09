@@ -1007,8 +1007,8 @@ function rawTargetStoreError(filePath: string, error: unknown): CoordinationErro
   // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
   return new CoordinationError(
     "coordination.store",
-    `cannot write migration target ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
-    { path: filePath },
+    "Cannot write the migration target. Inspect the reported path and filesystem cause, then correct the target filesystem state before retrying.",
+    { path: filePath, cause: error instanceof Error ? error.message : String(error) },
   );
 }
 

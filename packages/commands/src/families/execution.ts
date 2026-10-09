@@ -108,7 +108,11 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       : undefined;
     return error instanceof SddScriptError
       ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...(details === undefined ? {} : { details }) })
-      : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+      : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "store.execution.restore-preview"
+          ? "Select a readable execution backup and a writable preview destination, then rerun the preview."
+          : id === "store.execution.restore"
+            ? "Correct the backup preview, operator authorization, or target store state named by the diagnostic before retrying restore."
+            : "Choose a writable export destination or omit --out to receive the execution export on stdout."});
   }
 }
 

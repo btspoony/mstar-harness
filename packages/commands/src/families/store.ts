@@ -44,7 +44,17 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
     : `${id}.internal-error`;
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
-    : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message });
+    : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message , recovery: id === "store.init"
+        ? "Choose an empty harness root for initialization or resolve the legacy files that block creation."
+        : id === "store.upgrade"
+          ? "Correct the operator input and legacy-store state reported by the upgrade diagnostic before retrying."
+          : id === "store.migrate"
+            ? "Correct the legacy migration source layout or manifest identified by the diagnostic before retrying the migration."
+            : id === "store.backup"
+              ? "Choose a writable backup destination and verify that the active store is readable before retrying."
+              : id === "store.activate"
+                ? "Correct the migration manifest and activation attestation so they identify the same verified store state."
+                : "Resolve the retirement preconditions and recorded activation evidence identified by the diagnostic before retrying."});
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {

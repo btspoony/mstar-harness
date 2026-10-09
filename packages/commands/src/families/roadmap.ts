@@ -123,7 +123,13 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } , recovery: id === "roadmap.import"
+        ? "Align the source document with the saved review and its observed project and roadmap revisions before retrying the import."
+        : id === "roadmap.replace"
+          ? "Read the current project and roadmap revisions, then retry with the complete intended roadmap content."
+          : id === "roadmap.show"
+            ? "Select the registered project id and correct the reported store-read cause before showing its roadmap again."
+            : "Verify the project id names an existing registered project, then retry the roadmap export."});
 }
 function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");

@@ -777,7 +777,7 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
       if (drifted.length > 0) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `refusing to re-register workflow ${JSON.stringify(entry.id)}: it is coordinated and its ${drifted.join("/")} must not change`,
+          "Cannot re-register a coordinated workflow with changed coordinated fields. Inspect the registered workflow with mstar status validate.",
           { workflow_id: entry.id, fields: [...drifted] },
         );
       }
@@ -949,7 +949,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
       ) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `refusing to unregister workflow ${JSON.stringify(id)}: it is coordinated and still running`,
+          "Cannot unregister a coordinated workflow while it is running. Inspect the registered workflow with mstar status validate.",
           { workflow_id: id },
         );
       }

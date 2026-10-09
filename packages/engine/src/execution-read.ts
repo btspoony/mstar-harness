@@ -59,8 +59,8 @@ import type { StoreContext } from "./store-db.js";
  */
 export type ExecutionReadSelection = { workflowId?: string; planId?: string };
 
-function invalidSelection(detail: string): CoordinationError {
-  return new CoordinationError("coordination.invalid-input", detail);
+function invalidSelection(detail: string, details?: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.invalid-input", detail, details);
 }
 
 /**
@@ -73,11 +73,12 @@ export function assertExecutionSelection(selection: ExecutionReadSelection | und
   const { workflowId, planId } = candidate;
   if (workflowId !== undefined && !isNonEmptyString(workflowId)) {
     throw invalidSelection(
-      `a read selection names the workflow it addresses with a non-empty id \u2014 got ${JSON.stringify(workflowId)}`,
+      "Invalid read selection: provide a non-empty workflow id. Inspect registered workflows with mstar status validate.",
+      { workflow_id: workflowId },
     );
   }
   if (planId !== undefined && !isNonEmptyString(planId)) {
-    throw invalidSelection(`a read selection names the plan it addresses with a non-empty id \u2014 got ${JSON.stringify(planId)}`);
+    throw invalidSelection("Invalid read selection: provide a non-empty plan id. Inspect plan rows with mstar status validate.", { plan_id: planId });
   }
   if (planId !== undefined && workflowId === undefined) {
     throw invalidSelection(

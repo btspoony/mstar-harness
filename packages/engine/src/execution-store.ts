@@ -577,6 +577,7 @@ function authorityEpochRefusal(input: {
     presented_epoch: input.presentedEpoch,
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
+    needed: problem.needed,
     available_work: problem.availableWork,
     recovery: unresolvedRecovery({
       target: input.target ?? {},
@@ -1237,7 +1238,7 @@ export async function readExecutionCleanupSnapshots(
   context: StoreContext,
   workflowId: string,
 ): Promise<{ selected: WorkflowSnapshot; workflows: readonly WorkflowSnapshot[] }> {
-  if (!isNonEmptyString(workflowId)) throw new CoordinationError("coordination.invalid-input", "workflowId must be non-empty");
+  if (!isNonEmptyString(workflowId)) throw new CoordinationError("coordination.invalid-input", "Invalid workflowId: provide a non-empty value. Inspect registered workflows with mstar status validate.");
   return withExecutionReadTransaction(context, (tx) => {
     const store = { storeId: tx.storeId, epoch: tx.epoch };
     const registered = readExecutionGraph(tx.db, store, tx.execution);
@@ -1252,8 +1253,7 @@ export async function readExecutionCleanupSnapshots(
     if (selected === undefined) {
       throw new CoordinationError(
         "coordination.workflow-not-found",
-        `the execution authority holds no workflow ${JSON.stringify(workflowId)}. ` +
-          `List registered workflow ids via mstar status validate (data.workflows[].id), then re-run mstar worktree cleanup --workflow <listedId>; if no registered workflow remains, there is nothing to clean.`,
+        "The requested workflow is not registered in this execution authority. Inspect registered workflows with mstar status validate; if none remain, no workflow-scoped cleanup can be selected.",
         { workflow_id: workflowId },
       );
     }
@@ -1436,8 +1436,10 @@ const OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
  */
 export function assertOperationId(value: unknown): string {
   if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
-    throw invalidInput(
-      `an operation id must be a nonempty ASCII [A-Za-z0-9._:-]+ string of at most 128 characters \u2014 got ${JSON.stringify(value)}`,
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      "Invalid operation id: provide 1–128 ASCII characters from [A-Za-z0-9._:-]. Inspect workflow authority with mstar status validate.",
+      { rejectedValue: value },
     );
   }
   return value;
@@ -1539,15 +1541,17 @@ export function resolveCreateWorkflow(
   operationId: unknown,
 ): ResolvedCreation {
   if (!isPlainObject(caller)) {
-    throw invalidInput("the execution caller needs a coordinator caller object");
+    throw invalidInput("Invalid execution caller: provide a coordinator caller object. Inspect workflow authority with mstar status validate.");
   }
   assertOperationId(operationId);
   const entryGate = validateWorkflowEntry(entry);
   const snapshotGate = validateWorkflowSnapshot(snapshot);
   const violations = [...entryGate.violations, ...snapshotGate.violations];
   if (violations.length > 0) {
-    throw invalidInput(
-      `the workflow entry/snapshot does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`,
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      "Workflow entry/snapshot is invalid. Inspect registered workflow state with mstar status validate.",
+      { violations: violations.map(({ code, message }) => ({ code, message })) },
     );
   }
   const workflow = entry as WorkflowEntry;
@@ -1590,7 +1594,7 @@ export function resolveCreateWorkflow(
   for (const row of doc.plans) {
     const planId = rowPlanId(row) as string;
     if (seen.has(planId)) {
-      throw invalidInput(`snapshot ${workflowId} lists plan ${planId} twice \u2014 a plan row is one identity`);
+      throw new CoordinationError("coordination.invalid-input", "Snapshot contains a duplicate plan identity. Inspect workflow rows with mstar status validate.", { workflow_id: workflowId, plan_id: planId });
     }
     seen.add(planId);
     // The row's own coordination block is accepted execution evidence
@@ -2068,11 +2072,11 @@ type SessionAddress = { workflowId: string; role: "coordinator"; sessionId: stri
 type ResolvedBind = { role: "coordinator"; workflowId: string; sessionId: string; operationId: string };
 
 function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBind {
-  if (!isPlainObject(input)) throw invalidInput("a session bind needs a request object");
-  if (!isNonEmptyString(caller?.sessionId)) throw invalidInput("the execution caller needs a non-empty session identity");
+  if (!isPlainObject(input)) throw invalidInput("Invalid session bind: provide a request object. Inspect workflow authority with mstar status validate.");
+  if (!isNonEmptyString(caller?.sessionId)) throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
   const { workflowId } = input;
   const operationId = assertOperationId(input.operationId);
-  if (!isNonEmptyString(workflowId)) throw invalidInput("a session bind needs a non-empty workflowId");
+  if (!isNonEmptyString(workflowId)) throw invalidInput("Invalid session bind: provide a non-empty workflowId. Inspect registered workflows with mstar status validate.");
   if (caller.role !== "coordinator" || caller.workflowId !== workflowId) {
     throw new ExecutionError("execution.scope-mismatch", "the session bind must address the trusted caller's coordinator workflow");
   }
@@ -2419,7 +2423,7 @@ export function requireWorkflowState(
   if (row === undefined) {
     throw new CoordinationError(
       "coordination.workflow-not-found",
-      `workflow ${workflowId} is not in the execution authority`,
+      "Workflow is not in the execution authority. Inspect registered workflows with mstar status validate.",
       { workflow_id: workflowId },
     );
   }
@@ -2468,7 +2472,7 @@ export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: 
  */
 export function readWorkflowSessionRows(tx: ExecutionTransaction, workflowId: string, role: "coordinator"): SessionRow[] {
   if (role !== "coordinator") {
-    throw new CoordinationError("coordination.identity-mismatch", `this authority holds only coordinator session rows \u2014 got ${String(role)}`, {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution authority supports coordinator session rows only. Inspect registered workflow authority with mstar status validate.", {
       role,
     });
   }
@@ -2488,7 +2492,7 @@ export function revokeSessionRow(
   if (input.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `this authority revokes only coordinator session rows \u2014 got ${String(input.role)}`,
+      "Execution authority can revoke coordinator session rows only. Inspect registered workflow authority with mstar status validate.",
       { role: input.role },
     );
   }
@@ -2629,7 +2633,7 @@ export async function readPlanOperationReplayBeforeProof<T>(
   if (caller.role !== "coordinator" || caller.sessionId !== read.sessionId || caller.workflowId !== read.workflowId) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "the trusted caller is not the coordinator session this plan address was resolved for",
+      "Trusted caller does not match the coordinator session resolved for this plan address. Inspect workflow authority with mstar status validate.",
       { session_id: read.sessionId, workflow_id: read.workflowId },
     );
   }
@@ -2778,19 +2782,19 @@ export type ResolvedPlanRead = {
 
 /** Resolve an explicit plan address against the caller's coordinator identity. */
 export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planId: unknown): ResolvedPlanRead {
-  if (!isPlainObject(session)) throw invalidInput("a plan read needs an execution session reference");
+  if (!isPlainObject(session)) throw invalidInput("Invalid plan read: provide an execution session reference. Inspect workflow authority with mstar status validate.");
   const { storeId, epoch, workflowId, role, sessionId } = session;
   if (
     !isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 ||
     !isNonEmptyString(workflowId) || !isNonEmptyString(sessionId) || role !== "coordinator"
   ) {
-    throw invalidInput("a coordinator session reference needs storeId, epoch, workflowId, role and sessionId");
+    throw invalidInput("Invalid coordinator session reference: provide storeId, positive epoch, workflowId, role, and sessionId. Inspect workflow authority with mstar status validate.");
   }
-  if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the explicit plan id it selects");
+  if (!isNonEmptyString(planId)) throw invalidInput("Invalid plan read: provide the explicit plan id. Inspect workflow rows with mstar status validate.");
   if (caller.role !== "coordinator" || caller.sessionId !== sessionId || caller.workflowId !== workflowId) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "the trusted caller does not match the coordinator session reference",
+      "Trusted caller does not match the coordinator session reference. Inspect workflow authority with mstar status validate.",
     );
   }
   return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
@@ -2850,7 +2854,7 @@ export async function bindExecutionSession(
     if (view.state.status !== "running") {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `workflow ${bind.workflowId} is ${String(view.state.status)} \u2014 a coordinator session binds only to a running lifecycle`,
+        "Coordinator session binding requires a running workflow lifecycle. Inspect current workflow state with mstar status validate.",
         { workflow_id: bind.workflowId, status: view.state.status },
       );
     }
@@ -3004,6 +3008,7 @@ function sessionBindRefusal(input: {
     ...input.facts,
     sources_tried: problem.sourcesTried,
     current_facts: problem.currentFacts,
+    needed: problem.needed,
     available_work: problem.availableWork,
     recovery: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] }),
   });
@@ -3068,7 +3073,7 @@ export function readExecutionPlanWitness(tx: ExecutionTransaction, read: Resolve
   if (view === undefined || token === undefined) {
     throw new CoordinationError(
       "coordination.plan-not-found",
-      `workflow ${read.workflowId} holds no plan ${read.planId}`,
+      "The addressed workflow holds no matching plan. Inspect plan rows with mstar status validate.",
       { workflow_id: read.workflowId, plan_id: read.planId },
     );
   }
@@ -3107,13 +3112,13 @@ export type ResolvedWorkflowWrite = {
  */
 export function resolveWorkflowWrite(caller: ExecutionCaller, session: unknown, workflowId: unknown): ResolvedWorkflowWrite {
   if (caller?.role !== "coordinator") throw new ExecutionError("execution.scope-mismatch", "workflow writes require the coordinator identity");
-  if (!isNonEmptyString(caller.sessionId)) throw invalidInput("the execution caller needs a non-empty session identity");
-  if (!isNonEmptyString(workflowId)) throw invalidInput("a workflow operation needs the non-empty workflow id it addresses");
-  if (!isPlainObject(session)) throw invalidInput("a workflow operation needs an execution session reference");
+  if (!isNonEmptyString(caller.sessionId)) throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
+  if (!isNonEmptyString(workflowId)) throw invalidInput("Invalid workflow operation: provide the non-empty workflow id it addresses. Inspect registered workflows with mstar status validate.");
+  if (!isPlainObject(session)) throw invalidInput("Invalid workflow operation: provide an execution session reference. Inspect workflow authority with mstar status validate.");
   const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId } = session;
   if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 ||
     !isNonEmptyString(boundWorkflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
-    throw invalidInput("a workflow operation needs a valid coordinator session reference");
+    throw invalidInput("Invalid workflow operation: provide a valid coordinator session reference. Inspect workflow authority with mstar status validate.");
   }
   if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId) {
     throw new ExecutionError("execution.scope-mismatch", "the trusted caller does not match the supplied coordinator reference");
@@ -3199,7 +3204,7 @@ export async function readExecutionPlan(
   addressedPlanId?: string,
 ): Promise<ExecutionRead<ExecutionPlanView>> {
   const planId = typeof sessionOrPlanId === "string" ? sessionOrPlanId : addressedPlanId;
-  if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the plan id it selects");
+  if (!isNonEmptyString(planId)) throw invalidInput("Invalid plan read: provide the plan id it selects. Inspect plan rows with mstar status validate.");
   const session = typeof sessionOrPlanId === "string"
     ? (await readOwnExecutionSession(context)).data
     : sessionOrPlanId;
@@ -3218,7 +3223,7 @@ export async function readExecutionSession(
   session: ExecutionSessionRef,
 ): Promise<ExecutionRead<ExecutionSessionRef>> {
   if (!isPlainObject(session) || !isNonEmptyString(session.storeId) || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) {
-    throw invalidInput("an execution session reference needs a store id and positive safe epoch");
+    throw invalidInput("Invalid execution session reference: provide a store id and positive safe-integer epoch. Inspect workflow authority with mstar status validate.");
   }
   if (
     session.workflowId !== context.caller.workflowId ||
@@ -3227,7 +3232,7 @@ export async function readExecutionSession(
   ) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "the trusted caller does not independently match the supplied execution session reference",
+      "Trusted caller does not independently match the supplied execution session reference. Inspect workflow authority with mstar status validate.",
     );
   }
   return withExecutionReadTransaction(context, (tx) => {
@@ -3258,10 +3263,10 @@ export async function readExecutionSession(
  */
 function ownSessionAddress(caller: ExecutionCaller | undefined): SessionAddress {
   if (!isPlainObject(caller) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(caller.workflowId)) {
-    throw invalidInput("reconstructing the coordinator session needs workflowId and sessionId from the trusted caller");
+    throw invalidInput("Coordinator session reconstruction requires workflowId and sessionId from the trusted caller. Inspect workflow authority with mstar status validate.");
   }
   if (caller.role !== "coordinator") {
-    throw invalidInput("the only execution session role is coordinator");
+    throw invalidInput("Invalid execution session role: expected coordinator. Inspect workflow authority with mstar status validate.");
   }
   return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId };
 }
@@ -3307,14 +3312,14 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
     availableWork: [
       `read the state of workflow ${address.workflowId} and every plan row it holds`,
       ...(holder === undefined
-        ? [`bind coordinator session ${address.sessionId} and resume it`]
+        ? ["establish an authorized coordinator binding for the caller identity"]
         : [
-            `resume ${holder.ref.sessionId}'s own binding from that holder's identity`,
-            `run recoverExecutionCoordinator naming ${holder.ref.sessionId} once its stop is attested`,
+            "continue the active holder's own binding from that holder's identity",
+            "complete the registered coordinator-recovery flow after the holder stop is attested",
           ]),
     ],
   };
-  throw new CoordinationError(code, `${problem.needed}: ${currentFacts.join("; ")}`, {
+  throw new CoordinationError(code, "The caller has no usable coordinator session binding. Inspect workflow state with mstar status validate.", {
     component: problem.component,
     path: problem.path,
     workflow_id: address.workflowId,

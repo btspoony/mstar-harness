@@ -163,8 +163,8 @@ export function readArtifactBytes(filePath: string): ArtifactBytes | undefined {
   try {
     payload = JSON.parse(bytes.toString("utf8"));
   } catch (error) {
-    throw new CoordinationError("coordination.store", `Invalid JSON in ${filePath}: ${(error as Error).message}`, {
-      path: filePath,
+    throw new CoordinationError("coordination.store", "Coordination document contains invalid JSON. Inspect the reported path and parse cause with mstar status validate.", {
+      path: filePath, cause: (error as Error).message,
     });
   }
   return { payload, version };
@@ -248,7 +248,7 @@ export function assertProtectedWriteAuthorized(
   if (isWriteAuthorized(canonical, operation)) return;
   throw new CoordinationError(
     "coordination.direct-write-refused",
-    `${canonical} is a protected coordination document (${kind}); raw store.${operation} is refused. Use plan prepare/progress/issue-add/issue-close/complete or the documented workflow writer for this artifact`,
+    "Raw writes are refused for protected coordination documents. Use the operation that owns the artifact; inspect registered state with mstar status validate.",
     { path: canonical, operation, kind },
   );
 }
@@ -259,7 +259,7 @@ export function assertExactKeys(value: Record<string, unknown>, allowed: readonl
   if (extra.length > 0) {
     throw new CoordinationError(
       "coordination.forbidden-field",
-      `${what} accepts only ${allowed.join(", ")} \u2014 unexpected key(s): ${extra.join(", ")}`,
+      "Payload contains unexpected keys. See the allowed and unexpected key lists; inspect registered state with mstar status validate.",
       { what, unexpected: extra, allowed: [...allowed] },
     );
   }

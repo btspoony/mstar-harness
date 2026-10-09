@@ -49,7 +49,17 @@ export function failed(id: string, error: unknown): CommandEnvelope<never> {
     code,
     exitCode: error instanceof SddScriptError ? error.exitCode : 1,
     message,
-  });
+   recovery: id === "sdd.workspace"
+        ? "Supply the plan id whose SDD workspace is requested; when the control harness root cannot be resolved from the current directory, provide that control root."
+        : id === "sdd.task-brief"
+          ? "Correct the plan file and task number, then retry extraction to the intended output file."
+          : id === "sdd.review-package"
+            ? "Verify the base and head refs resolve in the feature worktree and choose a writable review-package path."
+            : id === "sdd.check-context"
+              ? "Correct the context document and requested action seam to match the resolved SDD execution context."
+              : id === "sdd.evidence.capture"
+                ? "Use the exact authorized argv and execution context, then correct the reported evidence destination or child-process failure."
+                : "Select the retained evidence bundle by its SDD directory, plan, task, and run identifiers, then correct the reported target or integrity issue."});
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
