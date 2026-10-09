@@ -185,16 +185,12 @@ describe("plan command family", () => {
       operationId: "create-plan-workflow",
     });
 
-    // The retired file-route bind (no `--execution`) refuses, and the refusal's
-    // recovery names the invocation that actually works.
+    // The retired file-route bind (no `--execution`) refuses.
     const result = await definition("plan.bind").execute(
       { coordinator: true, workflow: data.workflow, harness: data.harness } as never,
       context(data.root, "coordinator-a"),
     );
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    const recovery = String(result.recovery ?? "");
-    expect(recovery).toContain("mstar plan bind --execution --workflow");
-    expect(recovery).toContain("--coordinator");
   });
 
   test("stale active execution tokens are rejected by the engine", async () => {
@@ -239,5 +235,15 @@ describe("plan command family", () => {
 
     const stale = await definition("plan.bind").execute({ ...bind, operation: "bind-stale" } as never, ctx);
     expect(stale).toMatchObject({ status: "refused", code: "execution.stale-token", exitCode: 1 });
+    // The refusal reaches the plan.bind recovery producer, whose text names the
+    // invocation that actually works: `--execution` is required for a new bind.
+    const staleDetails = stale.details;
+    if (staleDetails === null || typeof staleDetails !== "object" || !("recovery" in staleDetails)) {
+      throw new Error("plan.bind refusal carries no details.recovery");
+    }
+    const recovery = String(staleDetails.recovery);
+    expect(recovery).toContain("mstar plan bind --execution --workflow");
+    expect(recovery).toContain("--coordinator");
+    expect(recovery).toContain("--resume-ref");
   });
 });

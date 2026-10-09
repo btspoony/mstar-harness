@@ -25,9 +25,34 @@ import {
   makeFixture,
   readJson,
   writeJson,
+  type Fixture,
 } from "./support/coordination-fixtures.js";
 
 afterEach(() => afterEachCleanup());
+
+/**
+ * Give the fixture workflow a coordinator binding and the engine-issued envelope
+ * that names it — the durable pair `replaceCoordinatedArtifact` authenticates a
+ * coordinated snapshot replacement against, created directly rather than through
+ * the retired bind verb.
+ */
+function withBoundCoordinator(fixture: Fixture): string {
+  const sessionPath = join(fixture.workflowDir, "sessions", "coordinator-fixture-coordinator.json");
+  writeJson(sessionPath, {
+    schema_version: 1,
+    role: "coordinator",
+    session_id: "fixture-coordinator",
+    workflow_id: WORKFLOW_ID,
+    harness_root: fixture.harness,
+  });
+  writeJson(fixture.snapshotPath, {
+    ...readJson(fixture.snapshotPath),
+    coordination: {
+      coordinator: { session_id: "fixture-coordinator", session_file: sessionPath, bound_at: "2026-09-15T00:00:00Z" },
+    },
+  });
+  return sessionPath;
+}
 
 describe("protected-writers", () => {
   const STATUS_REF = { kind: "status", key: "root" } as const;
@@ -117,6 +142,7 @@ describe("protected-writers", () => {
   test("uncoordinated kinds refuse explicitly and only the coordinator replaces a snapshot", async () => {
     const fixture = makeFixture();
     const harnessRoot = realpathSync(fixture.harness);
+    const coordinatorSession = withBoundCoordinator(fixture);
 
     // Kinds that keep their own writer are refused, never silently no-oped.
     for (const ref of [{ kind: "review", key: "plan-a" } as const, { kind: "json", key: join(harnessRoot, "loose.json") } as const]) {
@@ -146,6 +172,16 @@ describe("protected-writers", () => {
         ),
       ).not.toBe(undefined);
     }
+
+    // The workflow's own bound coordinator replaces it, and the stored bytes
+    // are the replaced payload.
+    const replaced = await replaceCoordinatedArtifact({
+      harnessRoot,
+      ref: snapshotRef,
+      payload: snapshot,
+      sessionPath: coordinatorSession,
+    });
+    expect(replaced.payload).toEqual(snapshot);
   });
 
   test("a json alias through a symlinked parent cannot create a not-yet-existing protected file (PR241-G4)", async () => {
