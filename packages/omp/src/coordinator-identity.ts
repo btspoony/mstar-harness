@@ -824,11 +824,32 @@ export async function bindCoordinatorIdentity(
  */
 export type CoordinatorRecoveryTarget = Readonly<{ priorSessionPath: string; priorSessionId: string }>;
 
+/**
+ * The refusal of one target read that carries the engine's OWN structured
+ * record when there is one. `error` is the thrown `StoreError` (or other
+ * engine error) the authority veto produced, kept whole so the boundary can
+ * project its complete details and the loaded-module provenance through the
+ * ONE shared engine-refusal path instead of rebuilding a code/message pair.
+ */
+export type CoordinatorRecoveryTargetRefusal = Readonly<{
+  code: string;
+  message: string;
+  /** The thrown engine record, when the refusal came from the engine itself. */
+  error?: unknown;
+  /**
+   * Adapter-owned redirect guidance the reader appends AFTER the engine's own
+   * message (the ACTIVE-veto redirect to the DB recovery verb). It is composed
+   * at the boundary behind whatever recovery advice the engine path adds, so
+   * neither text is lost.
+   */
+  guidance?: string;
+}>;
+
 /** How the adapter resolves the recorded prior holder; injectable for fixtures. */
 export type CoordinatorRecoveryTargetReader = (input: {
   harnessRoot: string;
   workflowId: string;
-}) => { ok: true; target: CoordinatorRecoveryTarget } | { ok: false; code: string; message: string };
+}) => { ok: true; target: CoordinatorRecoveryTarget } | ({ ok: false } & CoordinatorRecoveryTargetRefusal);
 
 /** The default target reader: the snapshot's own top-level coordinator binding. */
 export const readStoredCoordinatorTarget: CoordinatorRecoveryTargetReader = ({ harnessRoot, workflowId }) => {
@@ -868,23 +889,34 @@ export const readStoredCoordinatorTarget: CoordinatorRecoveryTargetReader = ({ h
  * (`execution.consumer-not-ready`) and adds the redirect this adapter owes the
  * caller: recovery then belongs to the existing DB recovery verb with its
  * execution token and stop attestation, never to this JSON path. A store that
- * exists and cannot be read keeps ITS own refusal code and message — masking it
+ * exists and cannot be read keeps ITS own refusal code, message AND engine
+ * record — the thrown `StoreError` travels with the refusal so the boundary can
+ * project its schema-version facts and the loaded-module provenance; masking it
  * as a Prepare refusal would hide a real store fault.
  */
 function authorityRefusal(
   harnessRoot: string,
-): { ok: false; code: string; message: string } | undefined {
+): ({ ok: false } & CoordinatorRecoveryTargetRefusal) | undefined {
   try {
     assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
   } catch (error) {
     const code = codeOf(error);
-    const message =
-      code === "execution.consumer-not-ready"
-        ? `${messageOf(error)} Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the ` +
-          `existing DB recovery verb (\`mstar session recover\`) with its execution token and stop attestation; ` +
-          `this JSON Prepare path never runs against an active store.`
-        : messageOf(error);
-    return { ok: false, code, message };
+    // The engine's own message stays FIRST and unmodified — its code, message
+    // and COMPLETE structured details are the caller's evidence. This adapter
+    // only APPENDS the redirect it owes for an ACTIVE authority, and it does so
+    // as separate guidance so the boundary can place it after whatever recovery
+    // advice the engine path adds for an incompatible loaded build.
+    if (code !== "execution.consumer-not-ready") return { ok: false, code, message: messageOf(error), error };
+    return {
+      ok: false,
+      code,
+      message: messageOf(error),
+      error,
+      guidance:
+        "Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the existing DB recovery " +
+        "verb (`mstar session recover`) with its execution token and stop attestation; this JSON Prepare path never " +
+        "runs against an active store.",
+    };
   }
   return undefined;
 }
@@ -1050,7 +1082,22 @@ export async function recoverCoordinatorIdentity(
   const stoppedSessionIds = request.stoppedSessionIds as readonly string[];
 
   const resolved = deps.target({ harnessRoot, workflowId });
-  if (!resolved.ok) return refuse(resolved.code, resolved.message, { workflowId });
+  if (!resolved.ok) {
+    // A refusal that carries the engine's own thrown record (the authority veto
+    // of an unreadable, drifted or incompatible store) is projected through the
+    // SHARED engine-refusal path, so its schema-version facts, `loadedEntry` and
+    // incompatible-loaded-build guidance reach the caller exactly as they do on
+    // the bind / show-recovery / ACTIVE-recovery branches. The adapter's own
+    // redirect guidance is composed at the boundary, behind whatever recovery
+    // advice that path adds, so neither text is lost. A refusal the adapter
+    // itself authored (an unreadable or unbound snapshot) has no engine record
+    // and keeps its own code and message.
+    if (resolved.error === undefined) return refuse(resolved.code, resolved.message, { workflowId });
+    const outcome = engineRefusal(resolved.error, { workflowId, harnessRoot });
+    return resolved.guidance === undefined
+      ? outcome
+      : { ...outcome, text: `${outcome.text} ${resolved.guidance}` };
+  }
   const { priorSessionPath, priorSessionId } = resolved.target;
   // The stop assertion is forwarded EXACTLY as the caller stated it: whether it
   // names the recorded holder is the engine's guard, checked against the

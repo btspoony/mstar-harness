@@ -294,7 +294,7 @@ Two comparisons this surface makes — the `phase-1-lock` readiness checkpoint a
 
 | Operation | ACTIVE form (the root's execution authority is active) | Pre-activation form (file route) |
 |---|---|---|
-| `bind` | `{operation:"bind", workflowId, expected, operationId}` — `expected` is the workflow's **full execution token**, `operationId` the replay key; the engine's `bindExecutionSession` runs directly under this session's independently derived identity | `{operation:"bind", workflowId}` — the Prepare bootstrap, unchanged |
+| `bind` | `{operation:"bind", workflowId, expected, operationId}` — `expected` is the workflow's **full execution token** and `operationId` the replay key; BOTH may be omitted, and an omitted token is resolved by the engine from the workflow's own header so an identical retry is the replayed receipt (a supplied token stays a strict CAS) | `{operation:"bind", workflowId}` — the Prepare bootstrap, unchanged |
 | `show-recovery` | reads the DB workflow/session state | reads the recorded owner session id, both byte versions and the Prepare verdict (`recovery-allowed` / `recovery-blocked`), writing nothing |
 | `recover` | `{operation:"recover", workflowId, priorSessionId, reason, attestation, expected, operationId}` under an independently acquired coordinator identity | `{operation:"recover", workflowId, operationId, reason, authorizationRef, stoppedSessionIds}` |
 

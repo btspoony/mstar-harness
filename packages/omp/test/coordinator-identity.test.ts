@@ -892,7 +892,43 @@ describe("prerequisite identity — coordinator recovery under an ACTIVE executi
       harnessRoot,
     });
     expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "execution.consumer-not-ready" });
+    expect(typeof result.details.loadedEntry).toBe("string");
     expect(result.text).toContain("mstar session recover");
     expect(result.text).not.toContain("recovery-not-prepare");
+  }, 60000);
+
+  test("an incompatible store keeps its schema facts and loaded entry through the FILE recovery veto (DEBT-104)", async () => {
+    // A REAL store whose highest applied schema version this build cannot read.
+    // The FILE recovery's target read hits the §4.3 authority veto, and that
+    // refusal must reach the caller through the SAME provenance-aware engine path
+    // the other branches use — schema-version facts and `loadedEntry`, not a
+    // bare code/message pair.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-omp-coordinator-schema-")));
+    activeRoots.push(root);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, stdio: "ignore" });
+    const harnessRoot = join(root, ".mstar");
+    mkdirSync(harnessRoot, { recursive: true });
+    const store = await initializeStore({ harnessDir: harnessRoot });
+    store.db.exec("insert into schema_version values(999, 'future', 'future', 'now')");
+    store.close();
+
+    const result = await recoverCoordinatorIdentity(recoverRequest({ workflowId: "wf-schema" }), {
+      ...FACTS,
+      cwd: root,
+      harnessRoot,
+    });
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "store.schema-unsupported" });
+    // The engine's three distinct version facts survive the veto: the store's
+    // highest applied version, this build's supported maximum and the first
+    // migration it cannot interpret.
+    expect(typeof result.details.storeSchemaVersion).toBe("number");
+    expect(typeof result.details.supportedSchemaMax).toBe("number");
+    expect(typeof result.details.firstUnsupportedMigration).toBe("number");
+    expect(result.details.storeSchemaVersion as number).toBeGreaterThan(result.details.supportedSchemaMax as number);
+    // The loaded-module provenance and the incompatible-build recovery guidance
+    // travel too: this branch is inside the SAME engine-error-fidelity contract.
+    expect(typeof result.details.loadedEntry).toBe("string");
+    expect(String(result.details.loadedEntry)).toMatch(/\.(ts|js)$/);
+    expect(result.text).toContain("loaded entry below is the build that answered");
   }, 60000);
 });
