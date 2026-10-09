@@ -52,7 +52,7 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   let recovery = "Run mstar schema --command <id> to read this command's contract, then correct the reported condition and retry this operation.";
   if (code === "workflow.register.title-constraint") {
-    recovery = "Inspect the plan with mstar plan show, then use the title in the selected plan document's H1 before registering.";
+    recovery = "Use the document's H1 title exactly as reported in this refusal, then rerun mstar workflow register with that title.";
   } else if (code === "execution.header-revision-conflict") {
     recovery = "Run mstar status validate, then retry mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>.";
   } else if (code === "execution.adoption-refused" && message.includes("no terminal header")) {

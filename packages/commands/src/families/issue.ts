@@ -67,17 +67,25 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  let recovery = "Run mstar issue show to verify the issue before retrying this issue operation.";
+  const reopen = id === "issue.reopen";
+  const payloadOnly = paths.length > 0 && paths.every((value) => value === "payload");
+  let recovery = "Correct the reported condition, then read the command contract with mstar schema --command <id>.";
   if (code === "issue.revision-conflict") {
     recovery = "Run mstar issue show to read the current revision, then rerun the original command with --expect <current-revision>; keep the operation id, actor and original payload unchanged.";
   } else if (code === "store.operation-conflict") {
     recovery = "Run mstar issue show to inspect the issue, then either replay the original request unchanged or retry with a fresh operation id.";
-  } else if (code === "issue.invalid-disposition") {
+  } else if (code === "issue.invalid-disposition" && reopen) {
     recovery = "Run mstar issue show; only resolved, waived, duplicate or superseded issues can reopen, and open issues stay open.";
   } else if (code === "issue.scope-refused") {
-    recovery = "Run mstar issue show, then retry this operation as an authorized actor with a fresh operation id.";
+    recovery = "As an authorized actor, run mstar schema --command <id> to read this command's contract, then retry this operation.";
+  } else if (code === "issue.invalid-payload" && reopen) {
+    recovery = "Run mstar issue show, then retry this reopen with a non-empty payload.reason.";
+  } else if (code === "issue.invalid-payload" && payloadOnly) {
+    recovery = "Correct the payload so it parses as a JSON object (or supply a readable --file), then rerun this operation.";
   } else if (code === "issue.invalid-payload") {
-    recovery = "Run mstar issue show, then retry this operation with a non-empty payload.reason.";
+    recovery = "Correct the payload field(s) named in this refusal, then rerun this operation.";
+  } else if (reopen) {
+    recovery = "Run mstar issue show to verify the issue before retrying reopen.";
   }
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
