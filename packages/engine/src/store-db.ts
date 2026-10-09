@@ -458,6 +458,7 @@ function openConnection(
     if (mode === "read") ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath);
   }
   const fail = (message: string): never => {
@@ -489,6 +490,7 @@ function openConnection(
     } catch {
       // already closed by fail()
     }
+    if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath);
   }
   return busyAware(db, dbPath);
@@ -1761,10 +1763,13 @@ function isOpenLevelFailure(error: unknown): boolean {
  * non-CANTOPEN failure (BUSY, an I/O error, a content verdict) is never
  * retried, so no genuine refusal is deferred or weakened.
  */
+function isRawCantOpen(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
+}
+
 function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
   if (error instanceof StoreError) return false;
-  const err = error as { errcode?: unknown };
-  if (err?.errcode !== 14) return false;
+  if (!isRawCantOpen(error)) return false;
   return existsSync(dbPath);
 }
 
@@ -2076,15 +2081,16 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
 }
 
 /** One open attempt: connect, then verify the schema and store identity on the
- * same connection. A connect/pragma failure is already mapped by
- * `openConnection`; the CONTENT stage rethrows the driver's own error so the
- * caller can tell a transient read-open CANTOPEN (raw `errcode` 14) from a real
- * content verdict, and owns both retrying the former and mapping either. */
+ * same connection. `openConnection` preserves eligible raw read CANTOPEN errors
+ * from setup so the caller can retry them; the CONTENT stage rethrows the
+ * driver's own error so a read-open CANTOPEN remains distinguishable from a
+ * real content verdict. This caller owns retrying the former and mapping either. */
 async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<StoreHandle> {
   let db: StoreDb;
   try {
     db = await connect(dbPath, mode);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath);
   }
   try {

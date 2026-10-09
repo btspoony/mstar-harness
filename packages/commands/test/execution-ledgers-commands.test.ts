@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -106,6 +106,32 @@ describe("workflow-note public routes", () => {
     const foreign = encodeExecutionSessionRef({ storeId: "00000000-0000-4000-8000-000000000000", epoch: 1, workflowId: "wf-other", role: "coordinator", sessionId: "other" });
     const refused = await executeCommand("workflow-note.append", { ...input, sessionRef: foreign }, ctx);
     expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+  });
+
+  test("append without ts replays through the public route after a delay without changing ledger bytes", async () => {
+    const fx = await activeFixture();
+    const ctx = context(fx.root, COORDINATOR);
+    const input = {
+      workflow: WORKFLOW,
+      sessionRef: fx.sessionRef,
+      id: "note-generated-ts",
+      text: "retry the default timestamp",
+      harness: fx.harnessDir,
+    };
+    vi.useFakeTimers();
+    try {
+      const first = await executeCommand("workflow-note.append", input, ctx);
+      expect(first).toMatchObject({ status: "ok", data: { id: input.id, replayed: false } });
+      const ledgerPath = path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl");
+      const acceptedBytes = readFileSync(ledgerPath);
+      vi.advanceTimersByTime(1_000);
+
+      const replay = await executeCommand("workflow-note.append", input, ctx);
+      expect(replay).toMatchObject({ status: "ok", data: { id: input.id, replayed: true } });
+      expect(readFileSync(ledgerPath)).toEqual(acceptedBytes);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("append without an acquired identity refuses with its owner and supply, not a generic block", async () => {
