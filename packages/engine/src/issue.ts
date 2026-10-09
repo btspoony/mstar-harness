@@ -8,9 +8,9 @@
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import { decodeExecutionSessionRef } from "./execution-session.js";
-import type { ExecutionSessionRef } from "./execution-store.js";
-import { withExecutionReadGuard, MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { decodeExecutionSessionRef, resumeExecutionSession } from "./execution-session.js";
+import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js";
+import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
 
 export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
@@ -1318,37 +1318,42 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Read and validate the ACTIVE coordinator session reference against the
- * current store authority and its live coordinator row.
+ * Resolve the acquired coordinator binding, using an optional wire reference
+ * only as a checked constraint on that independently acquired identity.
  */
-function readScopedSession(context: StoreContext, sessionRef: string | undefined): ExecutionSessionRef {
-  if (!sessionRef) {
-    throw new IssueError(
-      "issue.scope-refused",
-      "This mutation requires the ACTIVE coordinator session reference; obtain the current identity and pass it with --session-ref.",
-    );
+async function readScopedSession(context: ExecutionContext, sessionRefWire: string | undefined): Promise<ExecutionSessionRef> {
+  let sessionRef: ExecutionSessionRef | undefined;
+  if (sessionRefWire !== undefined) {
+    try {
+      sessionRef = decodeExecutionSessionRef(sessionRefWire);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new IssueError(
+        "issue.scope-refused",
+        `${message}. Obtain the current ACTIVE coordinator identity and retry; file-envelope inputs are not accepted. --session-ref is an optional checked constraint.`,
+      );
+    }
+    if (
+      sessionRef.workflowId !== context.caller.workflowId ||
+      sessionRef.role !== context.caller.role ||
+      sessionRef.sessionId !== context.caller.sessionId
+    ) {
+      throw refuseAuthority("The supplied --session-ref constraint does not match the acquired coordinator identity");
+    }
   }
-  let session: ExecutionSessionRef;
   try {
-    session = decodeExecutionSessionRef(sessionRef);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new IssueError(
-      "issue.scope-refused",
-      `${message}. Obtain the current ACTIVE coordinator identity and retry with --session-ref; file-envelope inputs are not accepted.`,
-    );
-  }
-  try {
-    withExecutionReadGuard(context, (db, authority) => assertSessionBinding(db, authority, session));
+    return (await resumeExecutionSession(context, sessionRef)).data;
   } catch (error) {
     if (error instanceof IssueError) throw error;
     const message = error instanceof Error ? error.message : String(error);
+    const recovery = sessionRef === undefined
+      ? "Reacquire or bind the current coordinator identity and retry"
+      : "The supplied --session-ref constraint is not current; reacquire the coordinator identity and retry";
     throw new IssueError(
       "issue.scope-refused",
-      `${message}. Obtain the current ACTIVE coordinator identity and retry with --session-ref; file-envelope inputs are not accepted.`,
+      `${message}. ${recovery}; --session-ref is an optional checked constraint, not a session file.`,
     );
   }
-  return session;
 }
 
 function assertSessionBinding(
@@ -1357,7 +1362,7 @@ function assertSessionBinding(
   session: ExecutionSessionRef,
 ): void {
   if (session.storeId !== authority.storeId || session.epoch !== authority.epoch) {
-    throw refuseAuthority("The coordinator session reference belongs to a stale or different ACTIVE store authority");
+    throw refuseAuthority("The acquired coordinator identity belongs to a stale or different ACTIVE store authority");
   }
   const row = db.prepare(
     "select epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ?",
@@ -1367,35 +1372,28 @@ function assertSessionBinding(
   }
 }
 
-/** A refusal for a stale or non-current ACTIVE execution session reference. */
+/** A refusal for an acquired identity or optional wire-reference mismatch. */
 function refuseAuthority(message: string): IssueError {
   return new IssueError(
     "issue.scope-refused",
-    `${message}. Obtain the current ACTIVE coordinator identity and retry with --session-ref; file-envelope inputs are not accepted.`,
+    `${message}. Reacquire the current ACTIVE coordinator identity; any --session-ref must match it. File-envelope inputs are not accepted.`,
   );
 }
 
-function authorizeMutation(
-  context: StoreContext,
+async function authorizeMutation(
+  context: ExecutionContext,
   mutation: Pick<MutationContext, "actor" | "sessionRef">,
-): ExecutionSessionRef {
-  const session = readScopedSession(context, mutation.sessionRef);
+): Promise<ExecutionSessionRef> {
+  const session = await readScopedSession(context, mutation.sessionRef);
   const seat = issueWriteSeat(session.role);
   if (mutation.actor.trim() !== seat) {
     throw new IssueError(
       "issue.scope-refused",
-      `Actor "${mutation.actor}" is not the "${seat}" coordinator seat authorized by the ACTIVE session; obtain the current identity and retry with --session-ref.`,
+      `Actor "${mutation.actor}" is not the "${seat}" coordinator seat authorized by the ACTIVE session.`,
     );
   }
   return session;
 }
-
-/** Re-check the ACTIVE coordinator session for addressed plan issue coordination. */
-export function assertPlanIssueSession(context: StoreContext, sessionRef: string): void {
-  authorizeMutation(context, { actor: COORDINATOR_SEAT, sessionRef });
-}
-
-
 function requireExpectedRevision(mutation: MutationContext, current: number): void {
   if (mutation.expectedRevision === undefined) {
     throw new IssueError("issue.revision-conflict", "expectedRevision is mandatory for triage, disposition and relation changes");
@@ -1710,7 +1708,7 @@ export async function reopenIssue(
 }
 
 export async function assignIssueMilestone(
-  context: StoreContext,
+  context: ExecutionContext,
   issueId: string,
   input: { projectId: string; milestoneId: string | null; reason: string },
   mutation: MutationContext & { expectedStoreRevision: number },
@@ -1723,7 +1721,7 @@ export async function assignIssueMilestone(
   }
   const projectId = input.projectId.trim();
   const reason = input.reason.trim();
-  const session = authorizeMutation(context, mutation);
+  const session = await authorizeMutation(context, mutation);
   if (!mutation.operationId?.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
     throw new IssueError("issue.scope-refused", "operationId and expectedStoreRevision are required");
   }
