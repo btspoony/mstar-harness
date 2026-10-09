@@ -36,7 +36,7 @@ Check what already exists and note its condition:
 | `{ITERATION_DIR}/README.md` | Exists? Any past iteration artifacts? | `absent` / `present` |
 | `{SPECS_DIR}/` or `designs/` | Any specs or ADRs? | `absent` / `present` |
 | `docs/` | Any architecture docs, design notes? | Count and note relevance |
-| Store-backed execution authority | Query `mstar status validate` / `mstar plan show` for workflow/plan history (status.json only pre-activation legacy probe). | `absent` / `present` |
+| Store-backed execution authority | Query `mstar status validate` / `mstar plan show` for workflow/plan history (retained `status.json` / snapshots are migration sources only, never an execution probe). | `absent` / `present` |
 
 Report findings to the user: what exists, what's missing, what's stale.
 
@@ -144,8 +144,8 @@ Apply `mstar-compound-refresh` logic:
 ## Phase 6: Initialize harness (if absent)
 
 If `{HARNESS_DIR}/` does not exist:
-1. Initialize per `mstar-conventions`（`.mstar/` + subdirectories）
-2. Create empty `status.json` from template (`mstar-artifacts/templates/status.empty.json`)
+1. Initialize per `mstar-conventions`（`.mstar/` + subdirectories via `mstar harness scaffold`）
+2. Activate the execution authority with `mstar store init`（scaffold writes no `status.json`; a harness without an ACTIVE store has no execution authority and uses conversation tracking）
 
 ## Phase 7: Commit
 
