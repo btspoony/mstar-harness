@@ -209,6 +209,15 @@ describe("generated CLI adapter", () => {
       { path: "argv[8]", argvIndex: 8, token: "BADPOS" },
     ]);
   });
+  test("excess attribution consumes a flag-looking first variadic value", () => {
+    const error = new CommanderError(2, "commander.excessArguments", "too many arguments");
+    const envelope = mapParserError(error, [
+      "node", "mstar", "worktree", "cleanup", "--worktree", "-relative", "--apply", "BADPOS",
+    ]);
+    expect(envelope?.details?.diagnostics).toMatchObject([
+      { path: "argv[7]", argvIndex: 7, token: "BADPOS" },
+    ]);
+  });
 
 
 

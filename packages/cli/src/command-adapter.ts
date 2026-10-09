@@ -210,6 +210,7 @@ function excessArgumentIndex(argv: readonly string[], definition: CommandDefinit
         if (token.includes("=")) continue;
         if (known.flags.includes("<")) {
           if (known.option.variadic) {
+            if (argv[index + 1] !== undefined) index++; // Consume the required first value even if it looks like a flag.
             while (argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) index++;
           } else {
             index++;
