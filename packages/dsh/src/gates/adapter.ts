@@ -40,7 +40,6 @@ import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import {
   dispatchGateCore,
-  executionAuthorityRefusal,
   leaseGateViolations,
   assignmentTextFromFields,
   isAssignmentShaped,
@@ -387,12 +386,6 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * — `hardBlocked` mirrors the `tools/pre-execute` deny decision under the
    * same enforcement resolution.
    *
-   * R-1 (§5/§4.3): the catalog-registration selection is the LEGACY file route,
-   * so the hook consults the execution authority before the root register is
-   * read — on an ACTIVE authority it refuses (`hardBlocked`,
-   * `execution.consumer-not-ready`) instead of asking the journal about a
-   * lifecycle only retired bytes name, and an authority that exists and cannot
-   * be read refuses fail-closed. No pre-activation path is affected.
    * @param assignment - raw Assignment text or parsed header fields.
    */
   async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
@@ -406,24 +399,6 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // decision — no duplicate compass read per dispatch.
     const hard = resolveDispatchHard(harnessDir, this.config, prompt)
     const gate = await this.dispatchGate(prompt, undefined, hard)
-    if (harnessDir !== null) {
-      // T21 veto seam: preserve the ACTIVE-authority guard until the terminal
-      // direct-write veto sweep removes this helper.
-      const authority = executionAuthorityRefusal(harnessDir)
-      if (authority !== null) {
-        return {
-          ok: false,
-          hardBlocked: true,
-          violations: [{
-            ok: false,
-            severity: 'high',
-            code: authority.code,
-            message: `${authority.message} — the ACTIVE execution authority cannot be verified for dispatch`,
-            fix: 'restore the ACTIVE execution authority, then retry dispatch',
-          }],
-        }
-      }
-    }
     return applyEnforcement(gate, { hard })
   }
 

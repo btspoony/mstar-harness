@@ -40,7 +40,6 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
-  assertExecutionFileReadAllowed,
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
@@ -72,7 +71,7 @@ import type {
 } from '../types.ts'
 import { CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
-import { readExecutionWorkflowSource, refusalOf, type SessionHint } from './workflow-selection.ts'
+import { readExecutionWorkflowSource, type SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
@@ -130,18 +129,8 @@ function engineStatusSource(): MstarEngineStatusSource {
   return { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }
 }
 
-/**
- * Synchronous catalog consumers cannot read ACTIVE execution state. Retain the
- * T21 direct-file veto seam, then report no synchronous selection: file-backed
- * coordination documents are not an execution authority.
- */
-function syncAuthoritySelection(harnessDir: string, _hint?: SessionHint): WorkflowSelectionView {
-  try {
-    assertExecutionFileReadAllowed({ harnessDir })
-  } catch (error) {
-    const refusal = refusalOf(error)
-    return { kind: 'error', code: refusal.code, message: refusal.message }
-  }
+/** Synchronous catalog consumers have no ACTIVE workflow selection. */
+function syncAuthoritySelection(_harnessDir: string, _hint?: SessionHint): WorkflowSelectionView {
   return {
     kind: 'error',
     code: 'status.missing',

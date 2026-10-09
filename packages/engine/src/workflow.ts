@@ -47,10 +47,6 @@ import { validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntr
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe (see status.ts).
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
-import {
-  assertExecutionFileReadAllowed,
-  assertExecutionFileWriteAllowed,
-} from "./store-db.js";
 
 /** Snapshot file name inside `workflows/<id>/` ( - writer contract). */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
@@ -723,13 +719,6 @@ export class WorkflowSnapshotValidationError extends Error {
 }
 
 export function readWorkflowSnapshot(dir: string): WorkflowSnapshotRead {
-  // Canonical authority discrimination precedes the existence/parse/validation
-  // work below (spec §4.3): with an ACTIVE execution authority the snapshot is
-  // retired as an authority source, so this reader refuses instead of handing
-  // leftover JSON to a consumer as validated state. `storeDbPath` normalizes
-  // the target to the CONTROL harness root, so a worktree-local file reader
-  // cannot dodge the veto.
-  assertExecutionFileReadAllowed({ harnessDir: dir });
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
   if (!existsSync(snapshotPath)) {
     throw new Error(`workflow snapshot not found: ${snapshotPath}`);
@@ -832,12 +821,6 @@ export async function writeWorkflowSnapshot(
   dir: string,
   opts: WriteWorkflowSnapshotOptions = {},
 ): Promise<void> {
-  // Canonical authority discrimination precedes payload validation and the
-  // lock (spec §4.3): with an ACTIVE execution authority the snapshot is
-  // retired as a persistence route, so this refuses whatever store the caller
-  // injected and before any payload validation. The context is the target
-  // dir; the FILE guard discovers its owning CONTROL harness root.
-  assertExecutionFileWriteAllowed({ harnessDir: dir });
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {
     const detail = gate.violations.map((v) => v.message).join("; ");

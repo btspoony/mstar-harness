@@ -40,7 +40,6 @@ import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
 import { CoordinationError, isNonEmptyString, isPlainObject, withProtectedWrite } from "./coordination-write.js";
 import { assertFsStorePath, getArtifactStore } from "./store.js";
-import { assertExecutionFileWriteAllowed } from "./store-db.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
@@ -763,7 +762,6 @@ export async function withWorkflowPurgeLocks<T>(
 ): Promise<T> {
   const statusPath = resolve(root);
   const harnessDir = dirname(statusPath);
-  assertExecutionFileWriteAllowed({ harnessDir });
   if (typeof id !== "string" || id.trim() === "") throw new Error("workflow id must be non-empty");
   if (!isAbsolute(expectedSnapshotPath)) throw new Error("expected snapshot path must be absolute");
   const store = getArtifactStore();

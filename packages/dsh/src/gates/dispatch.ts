@@ -20,7 +20,6 @@ import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assignmentHeaderRegion,
-  assertExecutionFileReadAllowed,
   collectActiveLifecycleBranches,
   readExecutionState,
   composeDispatchGate,
@@ -53,14 +52,6 @@ import type { SessionHint } from './workflow-selection.ts'
 // The dispatch gates are WRITE-path-adjacent (lease re-verify, worktree
 // L1, P-b attribution), so they use the ACTIVE-SET resolver only — the
 // terminal-mtime fallback stays catalog-read-only.
-// §5 (plan S4): while the harness's execution authority is ACTIVE the root
-// register is retired, so the selection consumers ask the ONE route first
-// (`readExecutionWorkflowSource`) and read the DB registry instead of the
-// retired `status.json`. The gate reads that are SYNCHRONOUS (the lease
-// re-verify and the worktree L1 read below) cannot await that route: they call
-// the engine's synchronous `assertExecutionFileReadAllowed` at the read seam
-// instead (R-1), so an ACTIVE — or unreadable — authority REFUSES rather than
-// letting a verdict derive from retired bytes.
 import {
   activeRowsOf,
   readExecutionWorkflowSource,
@@ -186,61 +177,6 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
   return { ok: false, severity: 'high', code, message, fix }
 }
 
-/**
- * The authority readiness of the plugin's SYNCHRONOUS reads of the LEGACY
- * execution files (finding R-1).
- *
- * The dispatch gate re-verifies a plan row's own recorded scope and the L1 topology
- * from the root register + the ACTIVE workflow snapshot through the LEGACY file
- * route, and the adapter's own admission hooks (`beforeDispatch`'s
- * catalog-registration selection, `beforeMerge`'s snapshot lease read) derive
- * their verdicts the same way. While the control harness's execution authority
- * is ACTIVE those documents are retired as a source, so a raw read here would
- * derive a verdict from bytes the authority no longer owns — and an authority
- * that cannot be read must never fall back to them (§5). The engine's own
- * synchronous guard (primary spec §4.3: "legacy root/snapshot authority readers
- * must call it") is the ONE implementation of that rule: it is called BEFORE
- * the read, never re-implemented here, and its stable refusal code travels into
- * each caller's own violation shape.
- *
- * A harness with no store file at all is not a refusal: absence is not an
- * authority verdict (§2.1), so the pre-activation file route is unchanged.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (never null: the callers
- *   return before this on a null dir).
- * @returns the engine's refusal (stable `code` + message), or `null` when the
- *   file route may be read.
- */
-export function executionAuthorityRefusal(harnessDir: string): ExecutionAuthorityRefusal | null {
-  try {
-    assertExecutionFileReadAllowed({ harnessDir })
-    return null
-  } catch (error) {
-    return refusalOf(error)
-  }
-}
-
-/** One execution-authority refusal: the engine's own stable code + message. */
-export interface ExecutionAuthorityRefusal {
-  readonly code: string
-  readonly message: string
-}
-
-/**
- * {@link executionAuthorityRefusal} as the lease gate's violation: the SAME
- * synchronous authority decision, worded for the lease re-verify / L1 seams
- * (`leaseGateViolations`, `activeSnapshotRows`).
- * @param harnessDir - the resolved `{HARNESS_DIR}`.
- * @returns the refusal violation, or `null` when the file route may be read.
- */
-function executionReadRefusal(harnessDir: string): ValidationResult | null {
-  const refusal = executionAuthorityRefusal(harnessDir)
-  if (refusal === null) return null
-  return leaseViolation(
-    refusal.code,
-    `${refusal.message} — the dispatch gate refuses instead of deriving a lease verdict from the retired files`,
-    "run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm the row's recorded scope",
-  )
-}
 
 /**
  * Parse one Assignment HEADER-REGION field value with the engine

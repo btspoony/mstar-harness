@@ -1,9 +1,3 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { readJson, type ValidationResult } from "./core.js";
-import { assertSafePathComponent, resolveWorkflowDir } from "./path.js";
-import { assertExecutionFileReadAllowed } from "./store-db.js";
-import { readWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 /** Shared pure collection of lifecycle branch ownership facts. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,70 +34,5 @@ export function collectActiveLifecycleBranches(snapshots: readonly Record<string
     }
   }
   return [...owned.values()];
-}
-
-export type ActiveLifecycleScan =
-  | { kind: "ok"; branches: ActiveLifecycleBranch[]; notes: ValidationResult[] }
-  | { kind: "refusal"; code: string; detail: string };
-
-/** Read registered active sibling snapshots; the caller supplies its own snapshot. */
-// T6: validation.ts and dsh dispatch consumers remove their file-route arms before this scan can be retired.
-export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflowId: string | null): ActiveLifecycleScan {
-  const registerPath = join(harnessDir, "status.json");
-  try {
-    assertExecutionFileReadAllowed({ harnessDir });
-  } catch (error) {
-    return {
-      kind: "refusal",
-      code: "worktree.l1.lifecycle-snapshot-unreadable",
-      detail: `${registerPath}: ${(error as Error).message}`,
-    };
-  }
-  if (!existsSync(registerPath)) return { kind: "ok", branches: [], notes: [] };
-  let register: Record<string, unknown>;
-  try {
-    register = readJson(registerPath);
-  } catch (error) {
-    return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
-  }
-  if (!isPlainObject(register) || register.version !== 2 || !Array.isArray(register.workflows)) {
-    return {
-      kind: "refusal",
-      code: "worktree.l1.lifecycle-register-unreadable",
-      detail: `${registerPath}: not a readable v2 root register (version 2 + workflows[]) — the active lifecycle set cannot be enumerated`,
-    };
-  }
-  let workflowsDir: string;
-  try {
-    workflowsDir = resolveWorkflowDir(harnessDir, { harnessDir });
-  } catch (error) {
-    return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
-  }
-  const branches: ActiveLifecycleBranch[] = [];
-  const notes: ValidationResult[] = [];
-  for (const entry of register.workflows) {
-    if (!isPlainObject(entry) || typeof entry.id !== "string") {
-      return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: malformed workflows[] entry` };
-    }
-    try {
-      assertSafePathComponent(entry.id, "workflow id");
-    } catch (error) {
-      return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
-    }
-    if (entry.id === governingWorkflowId) continue;
-    const snapshotPath = join(workflowsDir, entry.id, WORKFLOW_SNAPSHOT_FILE);
-    try {
-      const read = readWorkflowSnapshot(dirname(snapshotPath));
-      branches.push(...collectActiveLifecycleBranches([read.snapshot]));
-      notes.push(...read.diagnostics);
-    } catch (error) {
-      return {
-        kind: "refusal",
-        code: "worktree.l1.lifecycle-snapshot-unreadable",
-        detail: `${snapshotPath}: ${(error as Error).message}`,
-      };
-    }
-  }
-  return { kind: "ok", branches, notes };
 }
 

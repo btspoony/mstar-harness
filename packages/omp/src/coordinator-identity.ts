@@ -5,7 +5,6 @@
  * Engine refusals preserve their codes, messages and structured details.
  */
 import {
-  assertExecutionFileReadAllowed,
   assertSafeSessionId,
   bindExecutionSession,
   executionContextFor,
@@ -594,21 +593,6 @@ export async function bindCoordinatorIdentity(
   const host = coordinatorHostFacts(facts);
   if (!host.ok) return host.outcome;
   return bindActiveCoordinator(shape.request, facts, workflowId, host.harnessRoot, authority);
-}
-
-// T21 boundary marker: its ACTIVE read veto remains until T21 removes it.
-
-/**
- * T21-owned read-veto call site retained by the production cut. Removing this
- * orphaned helper belongs to T21; it must not be wired back into ACTIVE flow.
- */
-function authorityRefusal(harnessRoot: string): CoordinatorIdentityOutcome | undefined {
-  try {
-    assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
-  } catch (error) {
-    return { ok: false, isError: true, code: codeOf(error), text: messageOf(error), details: { error } };
-  }
-  return undefined;
 }
 
 
