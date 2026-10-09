@@ -30,8 +30,8 @@ This Phase owns the complete per-plan dispatch loop: entry checks, session todos
 1. ACTIVE `execution_plans` 至少一条 plan `status` ≠ `Done`，且 `execution_registry` 含该 iteration（经 `mstar status validate` / `mstar plan show` 读取）
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
-4. **Branch metadata gate:** current authoritative workflow `branch.base` / `branch.target` and at least one active plan's `metadata.spec_integration_branch` are registered; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master`.
-5. **Worktree and concurrent-write safety:** confirm the main checkout/control root and its recorded `Main worktree branch`; establish a separate integration checkout and distinct feature checkouts before writable dispatch. Record missing or corrected source branch/worktree through ordinary prepare. Execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `Worktree path`, `Working branch`, control `Plan Path` and `SDD dir`. Shared coordination writes use the control DB transaction/CAS authority; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
+4. **Branch metadata gate:** verify the `--entry` branch-metadata fact (workflow `branch.base` / `branch.target` / `branch.integration` registered) and require at least one active plan's `metadata.spec_integration_branch`; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master`.
+5. **Worktree and concurrent-write safety:** establish a separate integration checkout and distinct feature checkouts before writable dispatch; verify the `--entry` main-residency and recorded-integration-checkout facts. Record missing or corrected source branch/worktree through ordinary prepare. Execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `Worktree path`, `Working branch`, control `Plan Path` and `SDD dir`. Shared coordination writes use the control DB transaction/CAS authority; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
 
 > **Engine-check pointer:** `mstar worktree check --workflow <id> --entry` owns the workflow-entry facts (branch metadata, main residency, recorded integration checkout, merge-lease state — the engine-enforced subset only); per-plan L1 uses `mstar worktree check --workflow <id> --plan <plan-id>`. `mstar-branch-worktree` owns the L1/L2 isolation callout. These checks do not confer row authority.
 
@@ -90,8 +90,9 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
    `git worktree add <path> <spec_integration_branch>` (create the branch from
    the recorded base first if absent) — a linked checkout **distinct from the
    main worktree**; never reuse the primary checkout for integration.
-4. Verify `git -C <integration> branch --show-current` equals
-   `spec_integration_branch`; working tree clean before merge operations.
+4. Verify the integration checkout — exists, on `spec_integration_branch`, working tree clean
+   before merge operations — via the `--entry` integration-checkout fact (`mstar worktree check
+   --workflow <id> --entry`; step 5 records the path the check reads).
 5. 经 `mstar workflow integration-worktree` 记录 canonical absolute repository-root
    `integration_worktree_path` 到 ACTIVE workflow 执行行（形状以 help 为准）。主 worktree 由 Git 派生，不是该字段。
 6. 从 **control root** 解析协调面：
@@ -192,7 +193,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
-1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch and record missing or corrected facts with revisable `prepare`; QA defaults to mandatory, cleanup to allow-residual. No prepare record is required when defaults and recorded metadata suffice.
+1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch (the engine-verifiable form: per-plan L1 `mstar worktree check --workflow <id> --plan <plan-id>`) and record missing or corrected facts with revisable `prepare`; QA defaults to mandatory, cleanup to allow-residual. No prepare record is required when defaults and recorded metadata suffice.
 2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
 3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
