@@ -98,6 +98,26 @@ describe("ACTIVE prerequisite handoff and write gates", () => {
     expect(readiness.ready).toBe(false);
     if (!readiness.ready) expect(readiness.codes).toContain("binding-invalid");
   });
+  test("Phase 1 readiness types a missing ACTIVE proof as binding-invalid", async () => {
+    const { fixture, executionBinding } = await activeFixture("iteration");
+    const binding: HandoffBinding = {
+      sessionId: "active-coordinator",
+      workflowId: WORKFLOW_ID,
+      controlRoot: fixture.root,
+      harnessRoot: fixture.harness,
+      compassPath: join(fixture.harness, "iterations", WORKFLOW_ID, "delivery-compass.md"),
+      executionBinding,
+    };
+    const malformed = { ...binding, executionBinding: null } as unknown as HandoffBinding;
+    const input: Phase1CompletionInput = { workflowId: WORKFLOW_ID, mainWorktreeBranch: "main", reviews: [], plans: [] };
+    const result = await inspectPhase1Readiness(malformed, input);
+    expect(result.ready).toBe(false);
+    if (!result.ready) {
+      expect(result.codes).toContain("binding-invalid");
+      expect(result.diagnostics[0]).toMatchObject({ code: "binding-invalid", detail: "identity-mismatch" });
+    }
+  });
+
 
   test("ACTIVE coordination-document writes are refused while ordinary writes pass", async () => {
     const { fixture } = await activeFixture();

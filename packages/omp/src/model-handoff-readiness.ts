@@ -588,20 +588,28 @@ export async function inspectPhase1Readiness(
     fail("binding-invalid");
     return verdict();
   }
-  if (!isNonEmptyString(input?.workflowId) || input.workflowId !== binding.workflowId) fail("binding-invalid");
-  const adopted = binding.executionBinding;
   if (!isNonEmptyString(binding.sessionId)) {
+    fail("binding-invalid");
+    return verdict();
+  }
+  const adopted: unknown = binding.executionBinding;
+  if (
+    !isExecutionBindingValue(adopted) ||
+    adopted.session.sessionId !== binding.sessionId ||
+    adopted.session.workflowId !== binding.workflowId ||
+    adopted.session.role !== "coordinator"
+  ) {
     fail("binding-invalid");
     diagnose({
       code: "binding-invalid",
-      detail: "identity-missing",
+      detail: "identity-mismatch",
       workflowId: binding.workflowId,
-      source: "host-session",
-      expected: binding.workflowId,
+      source: "execution-authority",
+      expected: binding.sessionId,
       next: NEXT_BIND,
     });
+    return verdict();
   }
-  if (!isNonEmptyString(binding.controlRoot) || !isAbsolute(binding.controlRoot)) fail("binding-invalid");
   if (!isNonEmptyString(binding.harnessRoot) || !isNonEmptyString(binding.compassPath)) fail("binding-invalid");
   if (!isNonEmptyString(input?.mainWorktreeBranch)) fail("branch-mismatch");
   let controlRoot: string | null = null;
@@ -655,22 +663,6 @@ export async function inspectPhase1Readiness(
   let compassRef: string | null = null;
   // The bound paths were re-derived from the Git-derived control root above.
   const session = adopted.session;
-    if (
-      !isExecutionBindingValue(binding.executionBinding) ||
-      session.workflowId !== binding.workflowId ||
-      session.role !== "coordinator"
-    ) {
-      fail("binding-invalid");
-      diagnose({
-        code: "binding-invalid",
-        detail: "identity-mismatch",
-        workflowId: binding.workflowId,
-        source: "execution-authority",
-        expected: binding.sessionId,
-        next: NEXT_BIND,
-      });
-      return verdict();
-    }
     const identity: ExecutionIdentity = {
       source: "host",
       sessionId: binding.sessionId,

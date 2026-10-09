@@ -14,6 +14,7 @@
  * Navigation fencing is in-memory and synchronous at the event boundary;
  * notices disclose observed state without asserting a guessed status.
  */
+import { isAbsolute } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
   WORKFLOW_TERMINAL_STATUSES,
@@ -121,14 +122,45 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Structural guard for a record read back from the ledger (`data` is `unknown`). */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/** A ledger binding is current only when it carries the coordinator's ACTIVE DB proof. */
+function isActiveHandoffBinding(value: unknown, sessionId: string, workflowId: string, harnessRoot: string): boolean {
+  if (!isPlainObject(value) || value.version !== 1 || value.harnessRoot !== harnessRoot) return false;
+  if (!isPlainObject(value.session)) return false;
+  const session = value.session;
+  return (
+    isNonEmptyString(value.harnessRoot) &&
+    isNonEmptyString(session.storeId) &&
+    session.sessionId === sessionId &&
+    session.workflowId === workflowId &&
+    session.role === "coordinator" &&
+    typeof session.epoch === "number" &&
+    Number.isSafeInteger(session.epoch) &&
+    session.epoch > 0
+  );
+}
+
 function isHandoffRecord(value: unknown): value is HandoffRecord {
   if (!isPlainObject(value)) return false;
   const binding: unknown = value.binding;
   const state: unknown = value.state;
+  const boundSessionId = isPlainObject(binding) ? binding.sessionId : null;
+  const boundWorkflowId = isPlainObject(binding) ? binding.workflowId : null;
   return (
     value.version === RECORD_VERSION &&
     isPlainObject(binding) &&
+    isNonEmptyString(boundSessionId) &&
+    isNonEmptyString(boundWorkflowId) &&
+    isNonEmptyString(binding.controlRoot) &&
+    isAbsolute(binding.controlRoot) &&
+    isNonEmptyString(binding.harnessRoot) &&
+    isAbsolute(binding.harnessRoot) &&
+    isNonEmptyString(binding.compassPath) &&
+    isAbsolute(binding.compassPath) &&
+    isActiveHandoffBinding(binding.executionBinding, boundSessionId, boundWorkflowId, binding.harnessRoot) &&
     typeof binding.sessionId === "string" &&
     binding.sessionId !== "" &&
     typeof binding.workflowId === "string" &&
@@ -145,6 +177,7 @@ function isHandoffRecord(value: unknown): value is HandoffRecord {
     (value.reason === null || typeof value.reason === "string")
   );
 }
+
 
 /**
  * Every durable record written for **this** session, in recorded ledger order.

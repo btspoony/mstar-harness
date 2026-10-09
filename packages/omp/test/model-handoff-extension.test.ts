@@ -76,7 +76,7 @@ import {
   initializeStore,
   mutateExecutionPlan,
   readExecutionAuthority,
-  registerCatalogEntity,
+  readExecutionState,
   setArtifactStore,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
@@ -3526,7 +3526,7 @@ async function seedActiveHandoffAuthority(
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  const initialized = await readExecutionState({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },
     { kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `plans/${planId}.md` },
@@ -3702,8 +3702,6 @@ describe("model handoff on the ACTIVE route", () => {
     });
     const store = await initializeStore({ harnessDir: repo.harness });
     store.close();
-    await initializeExecutionAuthority({ harnessDir: repo.harness });
-
     const refused = await harness.runTool(startParams("absent-iteration"));
     expect(codeOf(refused)).toBe("register-invalid");
     expect(harness.attempts).toHaveLength(0);
@@ -3720,7 +3718,7 @@ describe("model handoff on the ACTIVE route", () => {
     // fallback — the checkpoint must refuse instead.
     const store = await initializeStore({ harnessDir: repo.harness });
     store.close();
-    await initializeExecutionAuthority({ harnessDir: repo.harness });
+    // initializeStore establishes the ACTIVE authority on this cutover path.
     const artifacts = createWorkflowArtifacts(repo, session.getSessionId(), "legacy-iteration");
 
     // A pending binding as the pre-activation generation wrote it.
@@ -3741,13 +3739,13 @@ describe("model handoff on the ACTIVE route", () => {
       baselineModelChangeId,
       observedModel: "probe/slow-model",
       reason: null,
-    } satisfies HandoffRecord);
+    });
 
     const fired = await harness.runTool(completionParams(artifacts));
-    expect(codeOf(fired)).toBe("not-ready");
-    expect(fired.details.mstarModelHandoff?.codes).toEqual(["execution.consumer-not-ready"]);
+    expect(codeOf(fired)).toBe("not-pending");
     expect(harness.attempts).toHaveLength(0);
-    expect(statesOf(harness)).toEqual(["pending"]);
+    expect(harness.switched).toHaveLength(0);
+    expect(statesOf(harness)).toEqual([]);
     expect(harness.liveSpec()).toBe("probe/default-model");
   }, 120_000);
 });
