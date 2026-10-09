@@ -108,7 +108,7 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       : undefined;
     return error instanceof SddScriptError
       ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...(details === undefined ? {} : { details }) })
-      : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+      : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: "Correct the reported execution-state backup, preview, or output-path condition before retrying the operation."});
   }
 }
 

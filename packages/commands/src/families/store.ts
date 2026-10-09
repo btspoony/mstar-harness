@@ -44,7 +44,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
     : `${id}.internal-error`;
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
-    : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message });
+    : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message , recovery: "Correct the reported store path, state, or migration input before retrying the store operation."});
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {

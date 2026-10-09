@@ -27,7 +27,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
     return { version: 1, command: id, status: "error", code: "command.child-failed", exitCode: error.exitCode, message, ...(details === undefined ? {} : { details }) };
   }
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: "Correct the reported process admission, worktree, or cleanup condition before retrying the requested operation."});
 }
 
 function definitions(): readonly CommandDefinition[] {

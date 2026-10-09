@@ -49,7 +49,7 @@ export function failed(id: string, error: unknown): CommandEnvelope<never> {
     code,
     exitCode: error instanceof SddScriptError ? error.exitCode : 1,
     message,
-  });
+   recovery: "Correct the reported SDD workspace, task, context, or evidence condition before retrying the requested SDD operation."});
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);

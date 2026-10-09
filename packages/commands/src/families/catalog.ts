@@ -92,7 +92,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: "Correct the reported catalog input, path, relation, or revision condition before retrying the catalog operation."});
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);

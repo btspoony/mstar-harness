@@ -29,7 +29,7 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.refused`;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) });
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) , recovery: "Inspect the workflow and session details, restore the recorded coordinator prerequisites, then retry the session operation."});
 }
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {

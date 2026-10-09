@@ -33,7 +33,7 @@ export function failure(code: string, error: unknown): CommandEnvelope<never> {
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
     details: { operation: id },
-  });
+   recovery: "Correct the reported harness-root or dashboard-startup condition before retrying the dashboard command."});
 }
 
 function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { slot: DashboardSlot; reused: boolean } {
