@@ -92,7 +92,9 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
   return [
     command({
       id: "status.validate",
-      cli: { path: ["status", "validate"], aliases: [], arguments: [], options: [] },
+      cli: { path: ["status", "validate"], aliases: [], arguments: [], options: [
+        { key: "path", flags: "--path <path>", required: false, help: "retired file-route input: naming a status.json/snapshot path is refused; the ACTIVE authority is read with no path" },
+      ] },
       input: z.object({ path: z.string().min(1).optional() }),
       output,
       effects: ["read", "validate"],
