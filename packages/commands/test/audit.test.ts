@@ -129,7 +129,14 @@ describe("audit command family", () => {
       harness: path.join(root, ".mstar"),
     }, context(root));
     expect(result).toMatchObject({ status: "usage", exitCode: 2 });
-    expect(result.message).toContain("--plans is a required decision");
+    // The delivered aggregated admission names the missing decision in its
+    // diagnostics (the engine shadow-script's decision message moved there).
+    expect(result.message).toContain("Invalid input.");
+    expect(result.details?.diagnostics).toContainEqual(expect.objectContaining({
+      path: "--plans",
+      code: "required",
+      message: expect.stringContaining("2 audit plans are available"),
+    }));
     expect(existsSync(path.join(root, ".mstar", "workflows"))).toBe(false);
   });
 });

@@ -433,11 +433,14 @@ describe("store-db read-open converges across the writer-close window", () => {
     bytes[22] = 32;
     bytes[23] = 32;
     writeFileSync(join(dir, "store.db"), bytes);
-    // The refusal keeps the driver's own CANTOPEN detail, not a generic block:
-    // the retry spent its budget on a shape that never converged.
+    // The refusal keeps the driver's own unreadability detail, not a generic
+    // block: the retry spent its budget on a shape that never converged. The
+    // driver classifies the same shape differently per platform (macOS
+    // SQLITE_CANTOPEN "unable to open database file"; Linux SQLITE_NOTADB
+    // "file is not a database"), so the test accepts either verbatim detail.
     await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({
       code: "store.corrupt",
-      message: expect.stringContaining("unable to open database file"),
+      message: expect.stringMatching(/unable to open database file|not a database/),
     });
     // The refused shape gains no sidecar, exactly as before this change.
     expect(existsSync(join(dir, "store.db-wal"))).toBe(false);
