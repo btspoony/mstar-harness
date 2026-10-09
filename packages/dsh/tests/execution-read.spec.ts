@@ -22,9 +22,9 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@mstar-harness/engine'
@@ -80,7 +80,7 @@ interface WorkflowSpec {
 async function seedExecutionAuthority(harnessDir: string, workflows: readonly WorkflowSpec[]): Promise<void> {
   const handle = await initializeStore({ harnessDir })
   handle.close()
-  let token = (await initializeExecutionAuthority({ harnessDir })).token
+  let token = (await readExecutionState({ harnessDir })).token
   for (const workflow of workflows) {
     await registerCatalogEntity(
       { harnessDir },
@@ -335,20 +335,12 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(JSON.stringify(state)).not.toContain('wf-file-stale')
   })
 
-  it('keeps the file route when no store exists at all', async () => {
-    const { harnessDir } = await appWithRoot('execution-files')
-    await seedRetiredRegister(harnessDir, 'wf-file', 'plan-file')
-
-    expect(await readExecutionWorkflowSource({ harnessDir })).toEqual({ kind: 'files' })
-
-    // …and the SYNC dispatch gate still reads those documents: with no store at
-    // all there is no authority verdict to make (§2.1), so the gate keeps its
-    // legacy file verdict — the `InProgress` row records no source scope of its
-    // own, so its recorded-scope re-verify cannot be confirmed. The authority
-    // guard is keyed on the authority, not on the gate.
-    const prompt = retiredPlanAssignment('plan-file', await tempDir('execution-files-worktree'))
-    const verdict = booted!.ctx.dshHostAdapter.dispatchGate(prompt, toolExec('subagent', { prompt }), true, { kind: 'ok' })
-    expect(verdict.violations.map((violation) => violation.code)).toContain('lease.dispatch.unverifiable')
+  it('refuses to read execution data before store initialization', async () => {
+    const { harnessDir } = await appWithRoot('execution-uninitialized')
+    expect(await readExecutionWorkflowSource({ harnessDir })).toMatchObject({
+      kind: 'unavailable',
+      code: 'store.not-initialized',
+    })
   })
 
   it('refuses a retired coordination-document write by its canonical and symlinked paths', async () => {
@@ -414,8 +406,7 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
       directKind: 'status',
       rawPath: join(sourceHarness, 'status.json'),
     })
-    expect(refused.map((violation) => violation.code)).toEqual([EXECUTION_DIRECT_WRITE_CODE])
-    expect(refused[0]?.message).toContain('ACTIVE')
+    expect(refused.map((violation) => violation.code)).toEqual(['store.authority-unavailable'])
 
     // The same alias on an UNREADABLE authority fails closed on the landed
     // root — never a silent pass because the source harness has no store.
@@ -427,7 +418,7 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     })
     expect(unreadable.map((violation) => violation.code)).toEqual(['store.authority-unavailable'])
     expect(unreadable[0]?.message).toContain('execution authority')
-    expect(unreadable[0]?.message).toContain('store.corrupt')
+    expect(unreadable[0]?.message).toContain('store.not-initialized')
   })
 
   it('keeps the issue-domain register route, and refuses fail-closed when the authority cannot be read', async () => {
@@ -451,7 +442,7 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(unreadable[0]?.message).toContain('execution authority')
   })
 
-  it('refuses a dispatch launch when the authority cannot be read, and allows it when the DB lifecycle is registered', async () => {
+  it('allows no-plan conversation dispatch and ignores retired register files', async () => {
     const { app, harnessDir } = await appWithRoot('execution-dispatch')
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])
     await seedHarness(harnessDir, {
@@ -472,18 +463,15 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(allowed.kind).toBe('allow')
     expect(reached).toBe(1)
 
-    // §5 fail-closed: with the authority unreadable the registration verdict
-    // cannot be established, so the launch is refused instead of proceeding
-    // against a half-known workspace. (The retired file route would have
-    // allowed it — this is the refusal the S4 route adds.)
+    // This dispatch has no plan id: conversation tracking remains available
+    // without execution authority, even if the store is unreadable.
     await corruptStore(harnessDir)
-    const refused = await app.ctx.waterfall('tools/pre-execute', dispatchExec(), async () => {
+    const noPlan = await app.ctx.waterfall('tools/pre-execute', dispatchExec(), async () => {
       reached += 1
       return { kind: 'allow' as const }
     })
-    expect(refused.kind).toBe('deny')
-    expect(refused.kind === 'deny' ? refused.reason : '').toContain('store.corrupt')
-    expect(reached).toBe(1)
+    expect(noPlan.kind).toBe('allow')
+    expect(reached).toBe(2)
   })
 
   it('refuses the DSh admission seams on an ACTIVE authority instead of answering from the retired execution files', async () => {
@@ -510,21 +498,20 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     // register / snapshot, so a lease is never verified against bytes the
     // authority does not own — the gate REFUSES with the engine's own
     // readiness code.
-    const verdict = app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
+    const verdict = await app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
     const codes = verdict.violations.map((violation) => violation.code)
     expect(verdict.ok).toBe(false)
-    expect(codes).toContain('execution.consumer-not-ready')
-    // No verdict derived from the retired bytes: the retired plan's VALID lease
-    // (a different worktree and branch) produced no lease verdict at all.
-    expect(codes.filter((code) => code.startsWith('lease.'))).toEqual([])
+    expect(codes).toContain('lease.dispatch.plan-not-found')
+    // The ACTIVE graph does not contain this stale plan id, so the gate's
+    // only lease result is its own plan-not-found refusal; retired snapshot
+    // lease content is never consulted.
+    expect(codes.filter((code) => code.startsWith('lease.'))).toEqual(['lease.dispatch.plan-not-found'])
 
-    // …and the refusal is the listener's real decision under hard enforcement —
-    // a dispatch that would have been judged by the retired snapshot's lease.
     const decision = await app.ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'allow' as const }))
     expect(decision.kind).toBe('deny')
     const reason = decision.kind === 'deny' ? decision.reason : ''
-    expect(reason).toContain('execution.consumer-not-ready')
-    expect(reason).not.toContain('lease.dispatch.')
+    expect(reason).toContain('lease.dispatch.plan-not-found')
+    expect(reason).not.toContain('lease.merge.snapshot-mismatch')
 
     // The other two SYNCHRONOUS legacy-file readers of this surface are the
     // exec-less host hooks (`HostAdapter.beforeDispatch`'s catalog-registration
@@ -540,31 +527,25 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     // selection is never asked about `wf-file-stale`.
     expect(JSON.stringify(dispatch)).not.toContain('wf-file-stale')
 
-    // The retired snapshot's top-level merge lease is not the active
-    // reservation either: the file route would report
-    // `lease.merge.snapshot-mismatch` — a no-steal veto from retired bytes.
-    const mismatch = await app.ctx.dshHostAdapter.beforeMerge(reserved)
-    expect(mismatch.ok).toBe(false)
-    expect(mismatch.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
-    expect(JSON.stringify(mismatch)).not.toContain('lease.merge.snapshot-mismatch')
+    // A stale snapshot lease is ignored; with no ACTIVE lease, the valid
+    // supplied lease shape is evaluated on its own.
+    const merge = await app.ctx.dshHostAdapter.beforeMerge(reserved)
+    expect(merge.ok).toBe(true)
 
-    // …and retired bytes cannot ADMIT a seam either: a retired register naming
-    // the authority's OWN lifecycle does not make the dispatch pass, and a
-    // retired snapshot lease MATCHING the reservation does not admit the merge
-    // (both previously produced a file-route verdict — the false pass R-1
-    // removes).
+    // A retired register/snapshot cannot supply an execution lifecycle or
+    // lease. The ACTIVE reader considers only the DB state.
     await seedHarness(harnessDir, { 'status.json': v2Root([v2WorkflowEntry('wf-db')]) })
     const sameId = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
     expect(sameId.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
     await seedRetiredLease(harnessDir, 'wf-file-stale', 'plan-file', retiredWorktree, reserved)
     const matching = await app.ctx.dshHostAdapter.beforeMerge(reserved)
-    expect(matching.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
+    expect(matching.ok).toBe(true)
 
     // §5 fail-closed: an authority that exists and cannot be read refuses too —
     // never a fallback to the retired bytes, on any of the three seams.
     await corruptStore(harnessDir)
-    const unreadable = app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
-    expect(unreadable.violations.map((violation) => violation.code)).toContain('store.corrupt')
+    const unreadable = await app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
+    expect(unreadable.violations.map((violation) => violation.code)).toContain('lease.dispatch.unverifiable')
     const unreadableDispatch = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
     expect(unreadableDispatch.ok).toBe(false)
     expect(unreadableDispatch.violations.map((violation) => violation.code)).toEqual(['store.corrupt'])
@@ -595,29 +576,14 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(text).not.toContain('plan-file')
   })
 
-  it('supports the pre-activation file route unchanged (no store, register write keeps its validator)', async () => {
-    const { harnessDir } = await appWithRoot('execution-pre-activation')
-    await seedRetiredRegister(harnessDir, 'wf-file', 'plan-file')
-
-    // No store: the register is still the live findings authority, so the
-    // authority route returns no refusal and the document validator decides.
-    expect(
-      await storeAuthorityRefusals({
-        resolvedHarnessDir: harnessDir,
-        directKind: 'register',
-        rawPath: join(harnessDir, 'projects', '_default', 'residuals.json'),
-      }),
-    ).toEqual([])
-    // …and the root register write is not captured either.
-    expect(
-      await storeAuthorityRefusals({
-        resolvedHarnessDir: harnessDir,
-        directKind: 'status',
-        rawPath: join(harnessDir, 'status.json'),
-      }),
-    ).toEqual([])
+  it('refuses status and snapshot writes when no ACTIVE execution authority exists', async () => {
+    const { harnessDir } = await appWithRoot('execution-uninitialized-write')
+    expect(await storeAuthorityRefusals({
+      resolvedHarnessDir: harnessDir,
+      directKind: 'status',
+      rawPath: join(harnessDir, 'status.json'),
+    })).toMatchObject([{ code: 'store.authority-unavailable' }])
   })
-
   it('materializes a HELD integration merge lease into the snapshot exactly as the file route stores it', async () => {
     const { harnessDir } = await appWithRoot('execution-merge-lease')
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])

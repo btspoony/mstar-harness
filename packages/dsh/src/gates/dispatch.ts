@@ -419,15 +419,15 @@ export async function leaseGateViolations(
   try {
     source = await readExecutionWorkflowSource({ harnessDir }, hint)
   } catch {
-    return sdd ? [leaseViolation('lease.dispatch.unverifiable', 'the ACTIVE execution workflow could not be read; STOP before writable dispatch', 'restore the ACTIVE store authority, then rerun the dispatch')] : []
+    return [leaseViolation('lease.dispatch.unverifiable', 'the ACTIVE execution workflow could not be read; STOP before writable dispatch', 'restore the ACTIVE store authority, then rerun the dispatch')]
   }
   if (source.kind !== 'active') {
     if (!sdd && source.kind === 'error' && source.selection.kind === 'error' && source.selection.code === 'workflow.selection.no-active') return []
-    return sdd ? [leaseViolation(
+    return [leaseViolation(
       'lease.dispatch.unverifiable',
       source.kind === 'unavailable' ? source.message : source.kind === 'error' ? source.selection.message : 'the ACTIVE execution store is not initialized',
       'initialize or upgrade the ACTIVE store, then register the workflow and prepare the plan before dispatch',
-    )] : []
+    )]
   }
   const row = activeRowsOf(source.snapshot).find((candidate) => candidate?.id === planId || candidate?.plan_id === planId)
   if (row === undefined) return sdd ? [leaseViolation('lease.dispatch.plan-not-found', `plan ${planId} is not registered in ACTIVE workflow ${source.workflowId}`, 'register the plan row in the workflow and run `mstar plan prepare` before writable dispatch')] : []
