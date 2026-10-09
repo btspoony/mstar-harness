@@ -55,7 +55,7 @@ CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本
 | omp | `/skill:pm` |
 | OpenCode | `Project Manager` agent，或 `/pm` |
 | Cursor | `/pm` |
-| Kimi | 会话自动加载，或 `/skill:pm` |
+| Kimi Code | 会话自动加载，或 `/skill:pm` |
 | ZCode | `/morning-star-harness:pm` |
 | Codex | `/pm` |
 

@@ -54,7 +54,7 @@ Enter the PM once per session, then describe the work in your own words; the PM 
 | omp | `/skill:pm` |
 | OpenCode | `Project Manager` agent, or `/pm` |
 | Cursor | `/pm` |
-| Kimi | auto-loads in a session, or `/skill:pm` |
+| Kimi Code | auto-loads in a session, or `/skill:pm` |
 | ZCode | `/morning-star-harness:pm` |
 | Codex | `/pm` |
 
