@@ -780,7 +780,7 @@ function refuseResolution(problem: RecoveryProblem, resolvedFrom: readonly Resol
     : "coordination.invalid-input";
   // The message names the unresolved fact AND the facts currently true, so a
   // consumer that renders only prose still sees the conflict it must decide.
-  throw new CoordinationError(code, "The requested workflow/plan facts conflict with current state. Inspect them with mstar status validate and mstar plan show --plan <plan-id>.", {
+  throw new CoordinationError(code, "The requested workflow/plan facts conflict with current state. Inspect them with mstar status validate and mstar plan show. Pass the plan id registered in the workflow row.", {
     component: problem.component,
     path: problem.path,
     sources_tried: problem.sourcesTried,
@@ -879,7 +879,7 @@ function findPlanRow(snapshot: WorkflowSnapshot, planId: string): { row: PlanRow
     .map((row, index) => ({ row, index }))
     .filter((entry) => rowPlanIds(entry.row).includes(planId));
   if (matches.length === 0) {
-    throw new CoordinationError("coordination.plan-not-found", "The selected plan is not registered in this workflow. Select a registered row with mstar plan show --plan <plan-id>.", {
+    throw new CoordinationError("coordination.plan-not-found", "The selected plan is not registered in this workflow. Select a registered row with mstar plan show. Pass the plan id registered in the workflow row.", {
       workflow_id: snapshot.id,
       plan_id: planId,
     });
@@ -901,7 +901,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   if (!isPlainObject(input)) throw invalidInput("Scope input must name a workflow and plan. Supply the expected API fields and inspect the target with mstar status validate.");
   assertExactKeys(input, ["workflowId", "planId", "harnessDir"], "scope input");
   if (!isNonEmptyString(input.workflowId) || !isNonEmptyString(input.planId)) {
-    throw invalidInput("workflowId and planId are required. The addressed row is shown by mstar plan show --plan <plan-id>.");
+    throw invalidInput("workflowId and planId are required. The addressed row is shown by mstar plan show. Pass the plan id registered in the workflow row.");
   }
   const workflowId = safePlanId(input.workflowId, "workflowId");
   const planId = safePlanId(input.planId, "planId");
@@ -1028,7 +1028,7 @@ function createSessionEnvelope(session: CoordinationSession): string {
     if (code === "EEXIST") {
       throw new CoordinationError(
         "coordination.identity-mismatch",
-        "Session envelope already exists. The recorded envelope is addressed by mstar plan bind --resume <session-file>.",
+        "Session envelope already exists. The recorded envelope is addressed by mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
         { path },
       );
     }
@@ -1460,14 +1460,14 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
   if (coordinator.session_id !== session.session_id) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "Session does not match the recorded coordinator. Inspect the binding with mstar status validate, then use mstar plan bind --resume <session-file> or recover only a stopped coordinator.",
+      "Session does not match the recorded coordinator. Inspect the binding with mstar status validate, then use mstar status validate. Use the recorded session envelope path when resuming an existing binding or recover only a stopped coordinator.",
       { expected: coordinator.session_id, actual: session.session_id },
     );
   }
   if (canonicalTarget(coordinator.session_file) !== canonicalTarget(sessionPath)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      "Session envelope is not the recorded coordinator file. Inspect the binding with mstar status validate, then use mstar plan bind --resume <session-file>.",
+      "Session envelope is not the recorded coordinator file. Inspect the binding with mstar status validate, then use mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
       { expected: coordinator.session_file, actual: canonicalTarget(sessionPath) },
     );
   }
@@ -1796,7 +1796,7 @@ function requireCwd(cwd: string): void {
 /** Resume is a read-only verification of the workflow coordinator binding. */
 function resumeBoundSession(resumePath: string): CoordinationResult {
   if (!isNonEmptyString(resumePath) || !isAbsolute(resumePath)) {
-    throw invalidInput("resumePath must be an absolute path. For an existing envelope use mstar plan bind --resume <absolute-session-file>; inspect the target with mstar status validate.");
+    throw invalidInput("resumePath must be an absolute path. For an existing envelope use mstar status validate. Use the absolute path of the recorded session envelope when resuming an existing binding; inspect the target with mstar status validate.");
   }
   const sessionPath = canonicalTarget(resumePath);
   const session = readSessionEnvelope(sessionPath);
@@ -2242,18 +2242,18 @@ export function planAreaRoots(harnessRoot: string, planId: string): string[] {
 export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: readonly string[]): void {
   for (const path of paths) {
     if (!isAbsolute(path)) {
-      throw invalidInput("Evidence path must be absolute and inside the plan area. Inspect the plan scope with mstar plan show --plan <plan-id>.", { path });
+      throw invalidInput("Evidence path must be absolute and inside the plan area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path });
     }
     const abs = canonicalizeNearestExisting(path);
     if (!roots.some((root) => isWithin(root, abs))) {
       throw new CoordinationError(
         "coordination.path-mismatch",
-        "Evidence path is outside the plan's plan/SDD area. Inspect the plan scope with mstar plan show --plan <plan-id>.",
+        "Evidence path is outside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.",
         { path: abs, allowed: roots },
       );
     }
     if (!existsSync(abs)) {
-      throw new CoordinationError("coordination.invalid-input", "Evidence path does not exist inside the plan's plan/SDD area. Inspect the plan scope with mstar plan show --plan <plan-id>.", { path: abs });
+      throw new CoordinationError("coordination.invalid-input", "Evidence path does not exist inside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: abs });
     }
   }
 }
@@ -2546,7 +2546,7 @@ async function mutateResidualAdd(
   request: ResidualAddCoordinationRequest,
 ): Promise<CoordinationResult> {
   if (!Array.isArray(request.entries) || request.entries.length === 0) {
-    throw invalidInput("residual-add requires at least one entry. Caller-supplied issue entries are required; inspect the addressed row with mstar plan show --plan <plan-id>.");
+    throw invalidInput("residual-add requires at least one entry. Caller-supplied issue entries are required; inspect the addressed row with mstar plan show. Pass the plan id registered in the workflow row.");
   }
   const entries = request.entries;
   const context = planStoreContext(scope);
@@ -2818,7 +2818,7 @@ function resolveRowRevision(anchor: EntryAnchor, planId: string | undefined): nu
   const addressed = planId;
   if (!isNonEmptyString(addressed)) {
     throw invalidInput(
-      "expectedRevision is required here because this request names no plan row whose revision could be derived. Address a row using its plan id from mstar plan show --plan <plan-id>.",
+      "expectedRevision is required here because this request names no plan row whose revision could be derived. Address a row using its plan id from mstar plan show. Pass the plan id registered in the workflow row.",
       { workflow_id: anchor.session.workflow_id },
     );
   }
@@ -2837,20 +2837,20 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
     "coordination request",
   );
   if (!isNonEmptyString(request.planId)) {
-    throw invalidInput("planId is required to address a coordinator plan operation. Inspect the addressed row with mstar plan show --plan <plan-id>.", { path: "planId" });
+    throw invalidInput("planId is required to address a coordinator plan operation. Inspect the addressed row with mstar plan show. Pass the plan id registered in the workflow row.", { path: "planId" });
   }
   if (request.expectedRevision !== undefined) assertExpectedRevision(request.expectedRevision);
   const expectedRevision = request.expectedRevision ?? resolveRowRevision(anchor, request.planId);
   const operation = request.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
-    throw invalidInput("A coordination request requires an operation with a kind. Inspect the addressed row with mstar plan show --plan <plan-id>.");
+    throw invalidInput("A coordination request requires an operation with a kind. Inspect the addressed row with mstar plan show. Pass the plan id registered in the workflow row.");
   }
   if ("expectedRevision" in operation) {
-    throw invalidInput("expectedRevision belongs to the request, not the operation. Inspect the addressed row with mstar plan show --plan <plan-id>.");
+    throw invalidInput("expectedRevision belongs to the request, not the operation. Inspect the addressed row with mstar plan show. Pass the plan id registered in the workflow row.");
   }
   const kind = operation.kind;
   if (typeof kind !== "string" || IMPLEMENTED_OPERATIONS[kind] !== true) {
-    throw new CoordinationError("coordination.unknown-operation", "Unknown coordination operation. Use mstar plan show --plan <plan-id> to inspect the row, then choose a supported operation through its owning plan command.", {
+    throw new CoordinationError("coordination.unknown-operation", "Unknown coordination operation. Use mstar plan show. Pass the plan id registered in the workflow row to inspect the row, then choose a supported operation through its owning plan command.", {
       operation: kind,
     });
   }
@@ -2875,13 +2875,13 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       assertExactKeys(operation, ["kind", "evidence", "integration"], "complete operation");
       return mutateComplete(scope, session, anchor.sessionPath, { evidence: operation.evidence, integration: operation.integration, expectedRevision });
     default:
-      throw new CoordinationError("coordination.unknown-operation", "Unknown coordinator row operation. Use mstar plan show --plan <plan-id> to inspect the row, then choose a supported operation through its owning plan command.", { operation: String(kind) });
+      throw new CoordinationError("coordination.unknown-operation", "Unknown coordinator row operation. Use mstar plan show. Pass the plan id registered in the workflow row to inspect the row, then choose a supported operation through its owning plan command.", { operation: String(kind) });
   }
 }
 
 function assertExpectedRevision(revision: number): void {
   if (!Number.isInteger(revision) || revision < 0) {
-    throw invalidInput("expectedRevision must be a nonnegative integer. Read the current row revision with mstar plan show --plan <plan-id>.", { revision });
+    throw invalidInput("expectedRevision must be a nonnegative integer. Read the current row revision with mstar plan show. Pass the plan id registered in the workflow row.", { revision });
   }
 }
 
@@ -3043,12 +3043,12 @@ export function captureGitProofWitness(
   const common = gitRead(repository, ["rev-parse", "--git-common-dir"]);
   const head = gitRead(repository, ["rev-parse", "HEAD"]);
   if (gitDir === undefined || common === undefined || head === undefined) {
-    throw new CoordinationError(refusal, "Cannot read the Git checkout. Inspect registered scope with mstar plan show --plan <plan-id>.", { repository });
+    throw new CoordinationError(refusal, "Cannot read the Git checkout. Inspect registered scope with mstar plan show. Pass the plan id registered in the workflow row.", { repository });
   }
   const commonDir = canonicalTarget(resolve(repository, common));
   const current = currentGitHead(gitDir, commonDir);
   if (current.head !== head) {
-    throw new CoordinationError(refusal, "Git HEAD changed between reads. Inspect registered scope with mstar plan show --plan <plan-id>.", { repository, expected: head, actual: current.head });
+    throw new CoordinationError(refusal, "Git HEAD changed between reads. Inspect registered scope with mstar plan show. Pass the plan id registered in the workflow row.", { repository, expected: head, actual: current.head });
   }
   return {
     repository, refusal, gitDir, commonDir,
@@ -3070,7 +3070,7 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
         canonicalTarget(routing[1]!) !== witness.commonDir) {
       throw new CoordinationError(
         witness.refusal,
-        "Git checkout routing changed. Inspect source registration with mstar plan show --plan <plan-id>.",
+        "Git checkout routing changed. Inspect source registration with mstar plan show. Pass the plan id registered in the workflow row.",
         { repository: witness.repository },
       );
     }
@@ -3087,11 +3087,11 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
     ) return;
   } catch (error) {
     if (error instanceof CoordinationError) throw error;
-    throw new CoordinationError(witness.refusal, "Cannot re-read Git identity. Inspect source registration with mstar plan show --plan <plan-id>.", { repository: witness.repository });
+    throw new CoordinationError(witness.refusal, "Cannot re-read Git identity. Inspect source registration with mstar plan show. Pass the plan id registered in the workflow row.", { repository: witness.repository });
   }
   throw new CoordinationError(
     witness.refusal,
-    "Git checkout identity, branch, HEAD, cleanliness, or operation state changed. Inspect source registration with mstar plan show --plan <plan-id>.",
+    "Git checkout identity, branch, HEAD, cleanliness, or operation state changed. Inspect source registration with mstar plan show. Pass the plan id registered in the workflow row.",
     { repository: witness.repository, expected: witness.head, actual: current.head },
   );
 }
@@ -3110,7 +3110,7 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string, w
   if (checkout === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      "The recorded plan worktree is not a readable Git worktree. Its registered scope is available with mstar plan show --plan <plan-id>.",
+      "The recorded plan worktree is not a readable Git worktree. Its registered scope is available with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: planId, worktree_path: worktreePath },
     );
   }
@@ -3178,7 +3178,7 @@ async function assertFindingsClosed(
     const message = error instanceof Error ? error.message : String(error);
     throw new CoordinationError(
       "coordination.store",
-      "The issue store is unavailable, so findings authority cannot be read. Inspect the registered row with mstar plan show --plan <plan-id>.",
+      "The issue store is unavailable, so findings authority cannot be read. Inspect the registered row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup, cause: message },
     );
   }
@@ -3370,7 +3370,7 @@ async function mutateComplete(
           && (existing.integration === undefined
             ? request.integration === undefined
             : existing.integration.base_sha === request.integration?.base_sha && existing.integration.result_sha === request.integration?.result_sha);
-        if (!same) throw new CoordinationError("coordination.completion-frozen", "Plan already records different completion evidence. Inspect with mstar plan show --plan <plan-id> and retry the originally recorded completion; do not replace its evidence.", { plan_id: scope.planId });
+        if (!same) throw new CoordinationError("coordination.completion-frozen", "Plan already records different completion evidence. Inspect with mstar plan show. Pass the plan id registered in the workflow row and retry the originally recorded completion; do not replace its evidence.", { plan_id: scope.planId });
         return { field: "coordination.completion", source: "stored plan row" };
       }
       assertMutableRow(context, session, sessionPath, "complete");
@@ -3420,21 +3420,21 @@ async function mutateComplete(
         witnesses = [captureGitProofWitness(sourcePath)];
         proveGit = sourceProof;
         if (route === "integration") {
-          if (!isPlainObject(request.integration)) throw invalidInput("iteration complete requires integration { base_sha, result_sha } for the already-performed serial merge. Inspect anchors with mstar plan show --plan <plan-id>, perform the merge externally, then retry mstar plan complete with its actual base/result SHAs");
+          if (!isPlainObject(request.integration)) throw invalidInput("iteration complete requires integration { base_sha, result_sha } for the already-performed serial merge. Inspect anchors with mstar plan show. Pass the plan id registered in the workflow row, perform the merge externally, then retry mstar plan complete with its actual base/result SHAs");
           assertExactKeys(request.integration, ["base_sha", "result_sha"], "completion integration");
           const baseSha = assertGitObjectId(request.integration.base_sha, "integration.base_sha");
           const resultSha = assertGitObjectId(request.integration.result_sha, "integration.result_sha");
           const anchors = integrationAnchors(context.snapshot, scope.planId);
           const lease = context.snapshot.integration_merge_lease;
           if (lease !== undefined && (lease.holder !== session.session_id || lease.plan_id !== scope.planId || lease.source_branch !== sourceBranch || lease.target_branch !== anchors.targetBranch)) {
-            throw new CoordinationError("coordination.merge-lease-foreign", "Integration mutex belongs to another plan. Inspect the lease and anchors with mstar plan show --plan <plan-id>, complete that plan's serial merge under its workflow coordinator, then retry mstar plan complete.", { plan_id: scope.planId, holder: lease.holder, owner_plan: lease.plan_id });
+            throw new CoordinationError("coordination.merge-lease-foreign", "Integration mutex belongs to another plan. Inspect the lease and anchors with mstar plan show. Pass the plan id registered in the workflow row, complete that plan's serial merge under its workflow coordinator, then retry mstar plan complete.", { plan_id: scope.planId, holder: lease.holder, owner_plan: lease.plan_id });
           }
           const integrationProofCheck = () => {
             sourceProof();
             const checkout = assertIntegrationCheckout(anchors, scope.planId);
             const parents = commitParents(anchors.worktreePath, resultSha);
             if (parents?.length !== 2 || parents[0] !== baseSha || parents[1] !== source.source_sha || !gitIsAncestor(anchors.worktreePath, resultSha, checkout.head)) {
-              throw integrationDiverged("Integration result is not the required two-parent merge or is not reachable from the target. Inspect anchors with mstar plan show --plan <plan-id>, perform or correct the serial merge externally, then retry mstar plan complete with its actual base/result SHAs.", { plan_id: scope.planId, base_sha: baseSha, source_sha: source.source_sha, result_sha: resultSha, target_branch: anchors.targetBranch, parents: parents ?? null, head: checkout.head });
+              throw integrationDiverged("Integration result is not the required two-parent merge or is not reachable from the target. Inspect anchors with mstar plan show. Pass the plan id registered in the workflow row, perform or correct the serial merge externally, then retry mstar plan complete with its actual base/result SHAs.", { plan_id: scope.planId, base_sha: baseSha, source_sha: source.source_sha, result_sha: resultSha, target_branch: anchors.targetBranch, parents: parents ?? null, head: checkout.head });
             }
           };
           integrationProofCheck();
@@ -3645,14 +3645,14 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   const session = readSessionEnvelope(input.sessionPath);
   if (session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Existing bindings are resumed with mstar plan bind --resume <session-file> after checking the recorded workflow.", {
+    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Existing bindings are resumed with mstar status validate. Use the recorded session envelope path when resuming an existing binding after checking the recorded workflow.", {
       role: session.role,
     });
   }
   if (session.workflow_id !== input.ref.key) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; for an existing binding use mstar plan bind --resume <session-file>.",
+      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; for an existing binding use mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
       { expected: session.workflow_id, actual: input.ref.key },
     );
   }
@@ -4077,7 +4077,7 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
   if (session.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.session-role",
-      "Workflow Prepare operations require a coordinator session. Inspect authority with mstar status validate; for an existing coordinator envelope use mstar plan bind --resume <session-file>.",
+      "Workflow Prepare operations require a coordinator session. Inspect authority with mstar status validate; for an existing coordinator envelope use mstar status validate. Use the recorded session envelope path when resuming an existing binding.",
       { actual: session.role },
     );
   }
@@ -4105,7 +4105,7 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
 function readPrepareSnapshot(snapshotPath: string): { snapshot: WorkflowSnapshot; version: string; phaseDerived: boolean } {
   const bytes = readArtifactBytes(snapshotPath);
   if (bytes === undefined) {
-    throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect authority with mstar status validate; for an existing coordinator envelope use mstar plan bind --resume <session-file>.", {
+    throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect authority with mstar status validate; for an existing coordinator envelope use mstar status validate. Use the recorded session envelope path when resuming an existing binding.", {
       path: snapshotPath,
     });
   }
@@ -4400,7 +4400,7 @@ function prepareReferencePath(harnessRoot: string, value: unknown, field: string
   if (!isNonEmptyString(value) || !isAbsolute(value)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata field must be an absolute path. Correct the plan metadata, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata field must be an absolute path. Correct the plan metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: planId, field, actual: value ?? null },
     );
   }
@@ -4408,12 +4408,12 @@ function prepareReferencePath(harnessRoot: string, value: unknown, field: string
   if (!isWithin(canonicalizeNearestExisting(harnessRoot), canonical)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata path escapes the harness root. Correct the plan metadata, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata path escapes the harness root. Correct the plan metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: planId, field, path: canonical, expected: harnessRoot },
     );
   }
   if (!existsSync(canonical) || !statSync(canonical).isFile()) {
-    throw prepareAmendmentRefusal("invalid-plan", "Plan metadata field must name an existing in-root path. Correct the plan metadata, then inspect the row with mstar plan show --plan <plan-id>.", {
+    throw prepareAmendmentRefusal("invalid-plan", "Plan metadata field must name an existing in-root path. Correct the plan metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", {
       plan_id: planId,
       field,
       path: canonical,
@@ -4427,7 +4427,7 @@ function prepareReferenceList(harnessRoot: string, value: unknown, field: string
   if (!Array.isArray(value)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata field must be an array of absolute paths. Correct the plan metadata, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata field must be an array of absolute paths. Correct the plan metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: planId, field, actual: value ?? null },
     );
   }
@@ -4440,7 +4440,7 @@ function prepareMetadataString(metadata: Record<string, unknown>, key: string, p
   if (!isNonEmptyString(value)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata field must be a non-empty string. Correct the plan metadata, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata field must be a non-empty string. Correct the plan metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: planId, field: `metadata.${key}`, actual: value ?? null },
     );
   }
@@ -4464,7 +4464,7 @@ function prepareDerivableMetadataString(
   if (derived === undefined) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata field is required; the patch supplies no value and this lifecycle declares none to derive it from. Correct the plan metadata, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata field is required; the patch supplies no value and this lifecycle declares none to derive it from. Correct the plan metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: planId, field: `metadata.${key}` },
     );
   }
@@ -4568,32 +4568,32 @@ function readPlanAppend(
   },
 ): PlanRow {
   if (!isPlainObject(value)) {
-    throw prepareAmendmentRefusal("invalid-plan", "Every appendPlans entry must be an object. Correct it to match the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.", { actual: value ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", "Every appendPlans entry must be an object. Correct it to match the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", { actual: value ?? null });
   }
   const unexpected = Object.keys(value).filter((key) => !PREPARE_APPEND_KEYS.includes(key));
   if (unexpected.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "A plan append contains unsupported fields. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "A plan append contains unsupported fields. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { allowed: [...PREPARE_APPEND_KEYS], unexpected },
     );
   }
   const id = value.id;
   if (!isNonEmptyString(id)) {
-    throw prepareAmendmentRefusal("invalid-plan", "A plan append requires a non-empty id. Correct the plan document/metadata, then inspect the row with mstar plan show --plan <plan-id>.", {
+    throw prepareAmendmentRefusal("invalid-plan", "A plan append requires a non-empty id. Correct the plan document/metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", {
       actual: id ?? null,
     });
   }
   try {
     assertSafePathComponent(id, "plan id");
   } catch (error) {
-    throw prepareAmendmentRefusal("invalid-plan", "Plan id is not a safe path component. Correct the plan document/metadata, then inspect the row with mstar plan show --plan <plan-id>.", {
+    throw prepareAmendmentRefusal("invalid-plan", "Plan id is not a safe path component. Correct the plan document/metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", {
       plan_id: id,
     });
   }
   const title = value.title;
   if (!isNonEmptyString(title)) {
-    throw prepareAmendmentRefusal("invalid-plan", "Plan requires a non-empty title. Correct the plan document/metadata, then inspect the row with mstar plan show --plan <plan-id>.", { plan_id: id, actual: title ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", "Plan requires a non-empty title. Correct the plan document/metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", { plan_id: id, actual: title ?? null });
   }
   const declaredFile = value.file;
   // The PlanRow `file` convention belongs to the ONE registered-plan path
@@ -4612,7 +4612,7 @@ function readPlanAppend(
   // (including empty or whitespace-only) still reach the resolver, whose typed
   // path detail is attached below.
   if (typeof declaredFile !== "string") {
-    throw prepareAmendmentRefusal("invalid-plan", "Plan requires a file path as a string. Correct the plan document/metadata, then inspect the row with mstar plan show --plan <plan-id>.", {
+    throw prepareAmendmentRefusal("invalid-plan", "Plan requires a file path as a string. Correct the plan document/metadata, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", {
       plan_id: id,
       actual: declaredFile ?? null,
     });
@@ -4635,7 +4635,7 @@ function readPlanAppend(
 
   const metadata = value.metadata;
   if (!isPlainObject(metadata)) {
-    throw prepareAmendmentRefusal("invalid-plan", "Plan metadata must be an object. Correct it to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.", { plan_id: id, actual: metadata ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", "Plan metadata must be an object. Correct it to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", { plan_id: id, actual: metadata ?? null });
   }
   // §5 metadata disposition. A key the engine READS AS AUTHORITY may not be
   // written through this verb: the catalog pin belongs to `prepare`, and
@@ -4646,7 +4646,7 @@ function readPlanAppend(
   if (reservedMetadata.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata contains recorded authority, not custom metadata. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata contains recorded authority, not custom metadata. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, reserved: reservedMetadata },
     );
   }
@@ -4682,7 +4682,7 @@ function readPlanAppend(
   if (iterationCompass !== context.compass.path) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      "Plan metadata.iteration_compass does not match this workflow's reviewed compass. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata.iteration_compass does not match this workflow's reviewed compass. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, expected: context.compass.path, actual: iterationCompass },
     );
   }
@@ -4695,7 +4695,7 @@ function readPlanAppend(
   if (intent.branch === undefined) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan markdown does not declare a verifiable working branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan markdown does not declare a verifiable working branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, field: "metadata.working_branch", path: planPath, declared: intent.source },
     );
   }
@@ -4704,7 +4704,7 @@ function readPlanAppend(
   if (workingBranch !== intent.branch) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata.working_branch does not match the branch declared in its plan markdown. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata.working_branch does not match the branch declared in its plan markdown. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, expected: intent.branch, actual: workingBranch, path: planPath },
     );
   }
@@ -4731,7 +4731,7 @@ function readPlanAppend(
     if (isNonEmptyString(branch) && branch === workingBranch) {
       throw prepareAmendmentRefusal(
         "invalid-plan",
-        "Plan working_branch is the workflow's protected base/integration/target branch; each plan row owns its feature branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+        "Plan working_branch is the workflow's protected base/integration/target branch; each plan row owns its feature branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
         { plan_id: id, field: "metadata.working_branch", actual: workingBranch },
       );
     }
@@ -4744,14 +4744,14 @@ function readPlanAppend(
   if (declaredMain === undefined) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan markdown declares no Main worktree branch; the amendment cannot verify the branch it was reviewed against. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan markdown declares no Main worktree branch; the amendment cannot verify the branch it was reviewed against. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, field: "mainWorktreeBranch", path: planPath },
     );
   }
   if (declaredMain !== context.mainWorktreeBranch) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "Plan metadata main worktree branch does not match the branch declared in its markdown. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata main worktree branch does not match the branch declared in its markdown. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, expected: declaredMain, actual: context.mainWorktreeBranch, path: planPath },
     );
   }
@@ -4763,7 +4763,7 @@ function readPlanAppend(
       if (recorded !== anchors.integration) {
         throw prepareAmendmentRefusal(
           "invalid-plan",
-          "Plan metadata integration branch does not match the workflow's integration anchor. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+          "Plan metadata integration branch does not match the workflow's integration anchor. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
           { plan_id: id, expected: anchors.integration, actual: recorded },
         );
       }
@@ -4772,7 +4772,7 @@ function readPlanAppend(
   if (context.compass.specIntegrationBranch !== undefined && specIntegrationBranch !== context.compass.specIntegrationBranch) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      "Plan metadata spec_integration_branch does not match the reviewed compass integration branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.",
+      "Plan metadata spec_integration_branch does not match the reviewed compass integration branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, expected: context.compass.specIntegrationBranch, actual: specIntegrationBranch },
     );
   }
@@ -4801,7 +4801,7 @@ function readPlanAppend(
   };
   const gate = validatePlanRow(row);
   if (!gate.ok) {
-    throw prepareAmendmentRefusal("invalid-plan", "Constructed plan row fails validation. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.", {
+    throw prepareAmendmentRefusal("invalid-plan", "Constructed plan row fails validation. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show. Pass the plan id registered in the workflow row.", {
       plan_id: id,
       violations: gate.violations.map((entry) => entry.code),
     });
@@ -4824,13 +4824,13 @@ function readIntegrationWorktreePath(
     throw prepareAmendmentRefusal("invalid-worktree", message, details);
   };
   if (!isNonEmptyString(value) || !isAbsolute(value)) {
-    return refuse("integrationWorktreePath must be an absolute path — got <value>. Correct the recorded source checkout with mstar workflow amend-prepare.", {
+    return refuse("integrationWorktreePath must be an absolute path. Correct the recorded integration worktree path with mstar workflow amend-prepare.", {
       actual: value ?? null,
     });
   }
   const path = canonicalTarget(value);
   if (!existsSync(path) || !statSync(path).isDirectory()) {
-    return refuse("integration checkout <value> does not exist. Correct the recorded source checkout with mstar workflow amend-prepare.", { path, expected: value });
+    return refuse("The integration checkout path does not exist. Correct the recorded source checkout with mstar workflow amend-prepare.", { path, expected: value });
   }
   const mainRoot = canonicalTarget(context.main.root);
   const control = canonicalizeNearestExisting(context.harnessRoot);
@@ -4844,19 +4844,19 @@ function readIntegrationWorktreePath(
   const controlRepo = readMainWorktree(control);
   if (controlRepo === null) {
     return refuse(
-      "the control harness root <value> has no readable Git main worktree — the integration checkout cannot be proven to be a checkout of this repository. Correct the recorded source checkout with mstar workflow amend-prepare.",
+      "The control harness root has no readable Git main worktree, so the integration checkout cannot be proven to belong to this repository. Correct the recorded source checkout with mstar workflow amend-prepare.",
       { path, harness_root: control },
     );
   }
   const controlMainRoot = canonicalTarget(controlRepo.root);
   if (controlMainRoot !== mainRoot) {
     return refuse(
-      "this call runs from the main worktree of <value>, not the repository owning the control harness root <value> (<value>) — the recorded checkout must belong to that repository. Correct the recorded source checkout with mstar workflow amend-prepare.",
+      "This call runs from a main worktree that does not own the control harness root. The recorded integration checkout must belong to the same repository; correct the source checkout with mstar workflow amend-prepare.",
       { path, harness_root: control, expected: controlMainRoot, actual: mainRoot },
     );
   }
   if (path === mainRoot || path === control) {
-    return refuse("integration checkout <value> is the main/control checkout — a dedicated integration worktree is required. Correct the recorded source checkout with mstar workflow amend-prepare.", {
+    return refuse("The integration checkout is the main/control checkout; a dedicated integration worktree is required. Correct the recorded source checkout with mstar workflow amend-prepare.", {
       path,
       expected: `a checkout distinct from ${mainRoot}`,
     });
@@ -4864,7 +4864,7 @@ function readIntegrationWorktreePath(
   const repo = readMainWorktree(path);
   if (repo === null || canonicalTarget(repo.root) !== controlMainRoot) {
     return refuse(
-      "integration checkout <value> is not a checkout of the repository owning the control harness root <value> (<value>). Correct the recorded source checkout with mstar workflow amend-prepare.",
+      "The integration checkout does not belong to the repository owning the control harness root. Correct the recorded source checkout with mstar workflow amend-prepare.",
       {
         path,
         harness_root: control,
@@ -4874,7 +4874,7 @@ function readIntegrationWorktreePath(
     );
   }
   if (!isDistinctCheckout(context.main.root, path)) {
-    return refuse("integration checkout <value> is not a distinct checkout (same Git checkout as <value>). Correct the recorded source checkout with mstar workflow amend-prepare.", {
+    return refuse("The integration checkout is not distinct from the main worktree. Correct the recorded source checkout with mstar workflow amend-prepare.", {
       path,
       expected: `a checkout distinct from ${mainRoot}`,
     });
@@ -4882,14 +4882,14 @@ function readIntegrationWorktreePath(
   const integrationBranch = context.snapshot.branch?.integration;
   if (!isNonEmptyString(integrationBranch)) {
     return refuse(
-      "workflow <value> records no branch.integration — the integration checkout cannot be verified. Correct the recorded source checkout with mstar workflow amend-prepare.",
+      "The workflow records no integration branch, so its integration checkout cannot be verified. Correct the recorded source checkout with mstar workflow amend-prepare.",
       { workflow_id: context.snapshot.id, path },
     );
   }
   const branch = gitRead(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== integrationBranch) {
     return refuse(
-      "integration checkout <value> is on <value>, not the recorded <value>. Correct the recorded source checkout with mstar workflow amend-prepare.",
+      "The integration checkout is not on the recorded integration branch. Correct the recorded source checkout and branch with mstar workflow amend-prepare.",
       { path, expected: integrationBranch, actual: branch ?? null },
     );
   }
@@ -4948,21 +4948,21 @@ function assertUnstartedAddressedRow(row: PlanRow, workflowId: string): void {
   if (status !== "Todo") {
     throw prepareAmendmentRefusal(
       "execution-started",
-      "plan <value> is <value> — a plan-file correction repairs a registration pointer, never a row that has begun executing. Inspect current row facts with mstar plan show --plan <value>, then retry mstar workflow amend-prepare with the observed revision.",
+      "The plan row has begun executing, so a plan-file correction cannot rewrite it. Inspect current row facts with mstar plan show. Pass the plan id registered in the workflow row, then use mstar workflow amend-prepare with the observed revision.",
       { workflow_id: workflowId, plan_id: planId, actual: status },
     );
   }
   if (row.progress !== undefined && row.progress !== 0) {
     throw prepareAmendmentRefusal(
       "execution-started",
-      "plan <value> reports progress <value> — a plan-file correction must not rewrite executed work. Inspect current row facts with mstar plan show --plan <value>, then retry mstar workflow amend-prepare with the observed revision.",
+      "The plan row already records progress, so a plan-file correction cannot rewrite executed work. Inspect current row facts with mstar plan show. Pass the plan id registered in the workflow row, then use mstar workflow amend-prepare with the observed revision.",
       { workflow_id: workflowId, plan_id: planId, actual: row.progress },
     );
   }
   if (row.coordination !== undefined) {
     throw prepareAmendmentRefusal(
       "execution-started",
-      "plan <value> carries a coordination block — preparation or execution evidence already exists for this row. Inspect current row facts with mstar plan show --plan <value>, then retry mstar workflow amend-prepare with the observed revision.",
+      "The plan row carries a coordination block, so preparation or execution evidence already exists. Inspect current row facts with mstar plan show. Pass the plan id registered in the workflow row, then use mstar workflow amend-prepare with the observed revision.",
       { workflow_id: workflowId, plan_id: planId, revision: rowCoordinationOf(row)?.revision ?? null },
     );
   }
@@ -4998,22 +4998,22 @@ function readPlanFileCorrection(
   if (unexpected.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "a plan-file correction accepts only <value> — unexpected key(s): <value>. Correct the malformed caller input, then run mstar workflow amend-prepare.",
+      "A plan-file correction accepts only the documented input fields; the caller supplied unexpected keys. Correct the input and run mstar workflow amend-prepare.",
       { allowed: [...PREPARE_CORRECTION_KEYS], unexpected },
     );
   }
   const id = value.id;
   if (!isNonEmptyString(id)) {
-    throw prepareAmendmentRefusal("invalid-plan", "a plan-file correction requires a non-empty id — got <value>. Correct the malformed caller input, then run mstar workflow amend-prepare.", {
+    throw prepareAmendmentRefusal("invalid-plan", "A plan-file correction requires a non-empty plan id. Correct the caller input and run mstar workflow amend-prepare.", {
       actual: id ?? null,
     });
   }
   try {
     assertSafePathComponent(id, "plan id");
   } catch (error) {
-    throw prepareAmendmentRefusal("invalid-plan", "plan id <value> is not a safe path component: <value>. Correct the malformed caller input, then run mstar workflow amend-prepare.", {
+    throw prepareAmendmentRefusal("invalid-plan", "The plan id is not a safe path component. Correct the caller input and run mstar workflow amend-prepare.", {
       plan_id: id,
-    });
+     cause: errorMessage(error)});
   }
   // Exactly one row may address the id: a correction addresses the row the
   // caller observed, never "whichever row matched first".
@@ -5021,14 +5021,14 @@ function readPlanFileCorrection(
   if (addressed.length === 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "plan <value> is not a row of workflow <value> — a correction repairs an existing row's pointer and never creates one. Inspect the addressed row with mstar plan show --plan <value>.",
+      "The selected plan is not a row of the current workflow; pointer correction repairs an existing row and never creates one. Inspect the addressed row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, workflow_id: context.snapshot.id },
     );
   }
   if (addressed.length > 1) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "plan <value> is addressed by <value> rows of workflow <value> — the corrected row would be ambiguous. Inspect the workflow with mstar status validate.",
+      "The selected plan is addressed by multiple rows in the current workflow, so the correction would be ambiguous. Inspect the workflow with mstar status validate.",
       { plan_id: id, workflow_id: context.snapshot.id, rows: addressed.length },
     );
   }
@@ -5040,7 +5040,7 @@ function readPlanFileCorrection(
   if (!isNonEmptyString(previous)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "plan <value> records no readable file pointer — a correction cannot prove which pointer it replaces. Inspect the addressed row with mstar plan show --plan <value>.",
+      "The plan row has no readable file pointer, so this correction cannot prove which pointer it replaces. Inspect the addressed row with mstar plan show. Pass the registered plan id.",
       { plan_id: id, actual: previous ?? null },
     );
   }
@@ -5048,7 +5048,7 @@ function readPlanFileCorrection(
   if (typeof expectedFile !== "string") {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "A plan-file correction requires expectedFile as a string — got <value>. Correct the malformed caller input, then run mstar workflow amend-prepare.",
+      "A plan-file correction requires expectedFile to be a string. Correct the caller input and run mstar workflow amend-prepare.",
       { plan_id: id, actual: expectedFile ?? null },
     );
   }
@@ -5097,7 +5097,7 @@ function readPlanFileCorrection(
   if (!expectedIdentifiesPlan) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "plan <value> expectedFile <value> does not identify this plan's own file <value> — a correction repairs a malformed pointer of the same plan, it never rebinds a row, and a replay must still name this plan's document. Inspect the row with mstar plan show --plan <value>.",
+      "The supplied expected file does not identify the addressed plan's own file. A correction repairs a malformed pointer for that plan and never rebinds a row. Inspect the row with mstar plan show. Pass the plan id registered in the workflow row.",
       { plan_id: id, actual: expectedFile, expected: planPath },
     );
   }
@@ -5108,7 +5108,7 @@ function readPlanFileCorrection(
   if (previous !== expectedFile) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      "plan <value> row holds file <value>, not the expectedFile <value> this correction was reviewed against — re-read the snapshot with mstar plan show --plan <value> and review the pointer again",
+      "The plan row's current file pointer differs from the expectedFile reviewed for this correction. Re-read the snapshot with mstar plan show, using the plan id registered in the workflow row, and review the pointer again.",
       { plan_id: id, expected: expectedFile, actual: previous },
     );
   }
@@ -5716,7 +5716,7 @@ function readPrepareAmendment(
   if (appends.length === 0 && correctionsIn.length === 0 && requestedPath === undefined && !policyRequested) {
     throw prepareAmendmentRefusal(
       "invalid-patch",
-      "the patch changes nothing on workflow <value> — it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism. Inspect workflow and plan rows with mstar status validate and mstar plan show --plan <plan-id>.",
+      "The patch changes nothing in the workflow: it appends no plan, corrects no plan file, and records no different integration checkout or parallelism. Inspect workflow and plan rows with mstar status validate and mstar plan show.",
       { workflow_id: context.snapshot.id },
     );
   }
@@ -6191,7 +6191,7 @@ export async function amendPrepareWorkflow(
       if (written === undefined) {
         throw new CoordinationError(
           "coordination.store",
-          "snapshot <value> is unreadable after this call committed it. Inspect the workflow with mstar status validate.",
+          "The workflow snapshot is unreadable after this call committed it. Inspect the workflow with mstar status validate.",
           { path: scope.snapshotPath },
         );
       }
@@ -6209,7 +6209,7 @@ export async function amendPrepareWorkflow(
       if (current === undefined) {
         throw new CoordinationError(
           "coordination.store",
-          "snapshot <value> is unreadable after this call inspected it. Inspect the workflow with mstar status validate.",
+          "The workflow snapshot is unreadable after this call inspected it. Inspect the workflow with mstar status validate.",
           { path: scope.snapshotPath },
         );
       }
@@ -6430,7 +6430,7 @@ function createRecoveryEnvelope(session: CoordinationSession): { path: string; c
     ) {
       throw recoveryRefusal(
         "invalid-request",
-        "a coordinator envelope for session <value> already exists with a different session identity at <value>; inspect the workflow with mstar status validate and restore access to the recorded harness path before retrying mstar workflow recover-coordinator",
+        "A coordinator envelope already exists with a different session identity at the recorded harness path. Inspect the workflow with mstar status validate and restore access to that path before coordinator recovery.",
         { workflow_id: session.workflow_id, session_id: session.session_id },
       );
     }
@@ -6493,7 +6493,7 @@ export async function showPrepareCoordinatorRecovery(
   if (coordinator === undefined) {
     throw new CoordinationError(
       "coordination.identity-missing",
-      "workflow <value> has no recorded coordinator; recover-coordinator replaces a binding, so inspect with mstar status validate; do not create a new binding for recovery",
+      "The workflow has no recorded coordinator; recovery replaces a binding and cannot create one. Inspect the workflow with mstar status validate and establish a binding through the normal route.",
       { workflow_id: workflowId },
     );
   }
@@ -6612,7 +6612,7 @@ export async function recoverPrepareCoordinator(
     if (recorded === undefined) {
       throw recoveryRefusal(
         "not-prepare",
-        "workflow <value> has no recorded coordinator binding — recovery replaces a recorded binding and never creates one. Inspect the active binding with mstar status validate; recovery requires the recorded prior envelope and explicit stop evidence.",
+        "The workflow has no recorded coordinator binding; recovery replaces a recorded binding and never creates one. Inspect the active binding with mstar status validate and provide the recorded prior envelope and explicit stop evidence.",
         { workflow_id: workflowId },
       );
     }
@@ -6624,7 +6624,7 @@ export async function recoverPrepareCoordinator(
       if (replayedOperation.request_hash !== requestHash) {
         throw recoveryRefusal(
           "operation-conflict",
-          "operation <value> was already recorded for workflow <value> with a different request — an operation id names exactly one reviewed recovery. Inspect the workflow with mstar status validate; use a new operation ID only after confirming the prior operation's state.",
+          "This operation id was already recorded for the workflow with a different request; each operation id names exactly one reviewed recovery. Inspect the workflow with mstar status validate and select a new operation id only after confirming the prior operation's state.",
           { workflow_id: workflowId, operation_id: operationId, recorded: replayedOperation.request_hash, actual: requestHash },
         );
       }
@@ -6667,7 +6667,7 @@ export async function recoverPrepareCoordinator(
     if (sessionId === recorded.session_id) {
       throw recoveryRefusal(
         "invalid-request",
-        "the replacement identity is the recorded coordinator session <value> — a recovery replaces a coordinator that can no longer authenticate and never re-binds the same one. Correct the recovery request and retry mstar workflow recover-coordinator",
+        "The replacement identity is already the recorded coordinator session; recovery replaces only a different coordinator that can no longer authenticate. Correct the request and use mstar workflow recover-coordinator.",
         { prior_session_id: recorded.session_id },
       );
     }
@@ -6728,7 +6728,7 @@ export async function recoverPrepareCoordinator(
       || Date.parse(lease.claimed_at) > Date.parse(attestedAt))) {
       throw recoveryRefusal(
         "unauthorized",
-        "interrupted integration recovery requires the operator's validated stop attestation naming this exact prior holder as stopped or reloaded after its claim; supply workflow recover-coordinator --attestation <absolute-json> and retry. A live, foreign or newer claim is not released. Supply the actual operator-authorized stop attestation and retry mstar workflow recover-coordinator",
+        "Interrupted integration recovery requires the operator's validated stop attestation naming this exact prior holder as stopped or reloaded after its claim. Supply the operator-validated stop-attestation file and retry with mstar workflow recover-coordinator. A live, foreign or newer claim is not released.",
         { holder: recorded.session_id, claimed_at: lease?.claimed_at, attested_at: attestedAt ?? null },
       );
     }
@@ -6777,7 +6777,7 @@ export async function recoverPrepareCoordinator(
     if (written === undefined) {
       throw new CoordinationError(
         "coordination.store",
-        "snapshot <value> is unreadable after this call committed it. Inspect the workflow with mstar status validate; restore access to the recorded harness path before retrying mstar workflow recover-coordinator.",
+        "The workflow snapshot is unreadable after this call committed it. Inspect the workflow with mstar status validate and restore access to the recorded harness path before coordinator recovery.",
         { path: snapshotPath },
       );
     }
@@ -6858,7 +6858,7 @@ function readRecoveryCompass(harnessRoot: string, snapshot: WorkflowSnapshot): P
 /** One required non-empty recovery request field (a request-shape refusal). */
 function recoveryText(value: unknown, field: string): string {
   if (!isNonEmptyString(value)) {
-    throw recoveryRefusal("invalid-request", "coordinator recovery <value> is required. Correct the recovery request and retry mstar workflow recover-coordinator.", { field });
+    throw recoveryRefusal("invalid-request", "Coordinator recovery is required for this workflow. Correct the recovery request and use mstar workflow recover-coordinator.", { field });
   }
   return value;
 }
