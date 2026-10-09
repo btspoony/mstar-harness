@@ -96,7 +96,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
    recovery: id === "plan.bind"
-        ? "The registered workflow and current coordinator identity must match; an existing binding is resumed through its active session reference. Run mstar plan bind --workflow <workflow-id> --coordinator, or mstar plan bind --resume-ref <session-ref>."
+        ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution --workflow <workflow-id> --coordinator, or mstar plan bind --resume-ref <session-ref>."
         : id === "plan.show"
           ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
           : id === "plan.prepare"
