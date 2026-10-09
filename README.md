@@ -71,8 +71,8 @@ Give the PM a concrete request — for example, *"Add rate limiting to the publi
 
 ### Iteration
 
-| Command | What it does |
-|---------|--------------|
+| Command | When |
+|---------|------|
 | `/iteration-start [direction] [pause]` | Phase 1: an interactive direction lock (grill-me) that produces the iteration's compass and plans, then continues automatically through execution, close, pull request, and merge-ready. `pause` stops after Phase 1; continue with `/iteration-drive`. |
 | `/iteration-drive` | Resume or advance an already locked iteration. Takes no arguments. |
 | `/iteration-loop [direction] [scale]` | The same lifecycle end to end without the interactive phase. `scale` (`S` / `M` / `L` / `XL`) caps how many plans the iteration takes on. |
@@ -81,8 +81,8 @@ An iteration ends only after its post-merge close: a closed phase, an open pull 
 
 ### Audit, review & verification
 
-| Command | What it does |
-|---------|--------------|
+| Command | When |
+|---------|------|
 | `/codebase-audit [keywords]` | Read-only survey that produces prioritized, ready-to-execute improvement plans; narrow it with a category focus (`bug`, `security`, `perf`, `tech-debt`, …). |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | Pre-merge review of a PR or branch at three strengths, ending in one verdict — `ship it`, `needs fixes`, or `blocked`. |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | Read-only audit of the test surface → plans to delete, repair, consolidate, or relocate tests. |
@@ -151,7 +151,21 @@ Further detail: [`docs/runtime-reference.md`](docs/runtime-reference.md#mcp).
 
 ## Roles and skills
 
-A **project-manager** runs your session and dispatches the work: requirements and architecture, backend and frontend implementation, QC review, acceptance, codebase and PR audits, operations, and writing each go to a dedicated role. Every role follows the `mstar-*` skills — plain Markdown files you can read and adapt to your team's conventions.
+| Agent ID | Responsibility |
+|----------|----------------|
+| `project-manager` | Routing, assignment, phase progression |
+| `product-manager` | Requirements, product planning, research |
+| `architect` | Architecture and technical contracts |
+| `fullstack-dev` / `fullstack-dev-2` | Backend-led implement / second parallel track |
+| `frontend-dev` | UI, interaction, frontend performance |
+| `qa-engineer` | Acceptance when `QA gate: mandatory` |
+| `code-reviewer` | SDD per-task review; codebase audit (`audit` category) |
+| `qc-specialist` / `-2` / `-3` | QC trio |
+| `ops-engineer` | Deploy, monitoring, infrastructure |
+| `writing-specialist` | Docs, fiction, copy, scripts |
+| `prompt-engineer` | Prompt / skill / rule work |
+
+A **project-manager** runs your session and dispatches the work: requirements and architecture, backend and frontend implementation, QC review, acceptance, codebase and PR audits, operations, and writing each go to a dedicated role. Every role follows the `mstar-*` skills.
 
 ## Command line
 

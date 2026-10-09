@@ -72,7 +72,7 @@ CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本
 
 ### 迭代
 
-| 命令 | 作用 |
+| 命令 | 何时 |
 |------|------|
 | `/iteration-start [direction] [pause]` | Phase 1：通过交互式方向锁定（grill-me）产出本次迭代的 compass 与计划，随后自动推进执行、收尾、开 PR 到 merge-ready。`pause` 停在 Phase 1，稍后用 `/iteration-drive` 继续。 |
 | `/iteration-drive` | 恢复或继续推进已锁定的迭代，不接受参数。 |
@@ -82,7 +82,7 @@ CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本
 
 ### 审计、Review 与验证
 
-| 命令 | 作用 |
+| 命令 | 何时 |
 |------|------|
 | `/codebase-audit [keywords]` | 只读盘点，产出按优先级排序、可直接执行的改进计划；按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）可缩小范围。 |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：`ship it`、`needs fixes` 或 `blocked`。 |
@@ -152,7 +152,21 @@ mstar-harness dashboard
 
 ## 角色与技能
 
-**project-manager** 在你的会话中运行并派发工作：需求与架构、后端与前端实现、QC 审查、验收、代码库与 PR 审计、运维、写作各自有专属角色。每个角色遵循 `mstar-*` skills 中的规则 —— 都是可以直接阅读、并按自己团队习惯调整的 Markdown。
+| Agent ID | 职责 |
+|----------|------|
+| `project-manager` | 路由、分派、阶段推进 |
+| `product-manager` | 需求、产品规划、研究 |
+| `architect` | 架构与技术契约 |
+| `fullstack-dev` / `fullstack-dev-2` | 后端主导实现 / 第二并行轨 |
+| `frontend-dev` | UI、交互、前端性能 |
+| `qa-engineer` | `QA gate: mandatory` 时验收 |
+| `code-reviewer` | SDD per-task 快速验证；codebase audit（`audit` 类） |
+| `qc-specialist` / `-2` / `-3` | QC 三审 |
+| `ops-engineer` | 部署、监控、基础设施 |
+| `writing-specialist` | 文档、小说、文案、脚本 |
+| `prompt-engineer` | prompt / skill / rule |
+
+**project-manager** 在你的会话中运行并派发工作：需求与架构、后端与前端实现、QC 审查、验收、代码库与 PR 审计、运维、写作各自有专属角色。每个角色遵循 `mstar-*` skills 中的规则。
 
 ## 命令行
 
