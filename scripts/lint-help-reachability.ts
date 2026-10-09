@@ -43,20 +43,34 @@ export function applyManualMarkers(source: ts.SourceFile, sourceText: string, fi
     ts.forEachChild(node, collectCommentRanges);
   };
   collectCommentRanges(source);
-  const lineOf = (offset: number): number => source.getLineAndCharacterOfPosition(offset).line + 1;
   const markers = [...commentRanges.values()]
     .filter((range) => range.kind === ts.SyntaxKind.SingleLineCommentTrivia && sourceText.slice(range.pos, range.end).trimStart().startsWith(MANUAL_MARKER_PREFIX))
     .sort((a, b) => a.pos - b.pos)
-    .map((range) => ({ line: lineOf(range.pos), reason: sourceText.slice(range.pos, range.end).trim().slice(MANUAL_MARKER_PREFIX.length).trim() }));
-  const bySite = new Map<number, { reason: string }>();
+    .map((range) => {
+      const point = source.getLineAndCharacterOfPosition(range.pos);
+      return {
+        line: point.line + 1,
+        column: point.character + 1,
+        reason: sourceText.slice(range.pos, range.end).trim().slice(MANUAL_MARKER_PREFIX.length).trim(),
+      };
+    });
+  // Site identity is the finding's own position (line + the node's start column),
+  // never the line alone: two refusals sharing a line are two distinct sites.
+  const identity = (finding: HelpReachabilityFinding): string => `${finding.line}:${finding.column}`;
+  const unmarked = findings.filter((finding) => finding.classification === "capability-unreachable");
+  const bound = new Map<string, { reason: string }>();
+  const nearest = (candidates: HelpReachabilityFinding[], column: number): HelpReachabilityFinding | undefined =>
+    candidates.filter((finding) => !bound.has(identity(finding)))
+      .sort((a, b) => Math.abs(a.column - column) - Math.abs(b.column - column) || a.column - b.column)[0];
   for (const marker of markers) {
-    const ownLine = findings.find((finding) => finding.classification === "capability-unreachable" && finding.line === marker.line);
-    const nextLine = ownLine === undefined ? findings.find((finding) => finding.classification === "capability-unreachable" && finding.line === marker.line + 1) : undefined;
-    const site = ownLine ?? nextLine;
-    if (site && !bySite.has(site.line)) bySite.set(site.line, marker);
+    // A site on the marker's own line wins; only then the following line. Each
+    // marker binds at most ONE site, so one comment never suppresses two findings.
+    const site = nearest(unmarked.filter((finding) => finding.line === marker.line), marker.column)
+      ?? nearest(unmarked.filter((finding) => finding.line === marker.line + 1), marker.column);
+    if (site) bound.set(identity(site), marker);
   }
   return findings.map((finding) => {
-    const marker = finding.classification === "capability-unreachable" ? bySite.get(finding.line) : undefined;
+    const marker = finding.classification === "capability-unreachable" ? bound.get(identity(finding)) : undefined;
     if (marker === undefined) return finding;
     return marker.reason.length > 0
       ? { ...finding, classification: "manual-recovery", reason: marker.reason }

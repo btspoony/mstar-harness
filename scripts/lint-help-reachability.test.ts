@@ -285,6 +285,17 @@ describe("manual-recovery marker", () => {
     expect(classifications.filter((value) => value === "capability-unreachable")).toHaveLength(1);
   });
 
+  test("two refusals on one line are distinct sites; one marker authorizes one of them", () => {
+    // RED-first: binding keyed by line made both same-line calls manual-recovery.
+    const call = (command: string) => `refusalEnvelope({ command: "${command}", status: "refused", code: "NO_STATE", exitCode: 1, message: "Cannot continue", recovery: "Correct the reported file path and retry." })`;
+    const source = `${call("x")}; ${call("y")}; // reachability: manual — legacy layout migration has no CLI retry verb`;
+    const classifications = marked(source).map(({ classification }) => classification);
+    expect(classifications.filter((value) => value === "manual-recovery")).toHaveLength(1);
+    expect(classifications.filter((value) => value === "capability-unreachable")).toHaveLength(1);
+    // The nearer call wins, so the trailing comment authorizes its own command.
+    expect(marked(source)[1]?.classification).toBe("manual-recovery");
+  });
+
   test("two adjacent markers authorize two sites independently", () => {
     const source = `${site("// reachability: manual — first site")}\n${site("// reachability: manual — second site")}`;
     const findings = marked(source);
