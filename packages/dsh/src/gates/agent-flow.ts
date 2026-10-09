@@ -2183,7 +2183,9 @@ export function recordDispatch(input: {
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
-  /** The carrying session's selection hint — decides WHICH active lifecycle the row lands in. */
+  /** ACTIVE execution graph target resolved by the asynchronous host gate. */
+  resolvedWorkflowDir?: string
+  /** The carrying-session hint is used by standalone legacy test callers. */
   hint?: SessionHint
 }): void {
   try {
@@ -2192,7 +2194,7 @@ export function recordDispatch(input: {
     // one-time warn — never a root v1 write, never a terminal snapshot
     // write, never a sibling session's lifecycle (compass v3.0.0 § Catalog
     // selection rule).
-    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir, input.hint)
+    const workflowDir = input.resolvedWorkflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
     if (workflowDir === null) return
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)

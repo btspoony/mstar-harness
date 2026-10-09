@@ -16,6 +16,7 @@
  * verbatim by the entry.
  */
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
@@ -291,20 +292,24 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
     if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
-      try {
-        recordDispatch({
-          harnessDir,
-          exec,
-          prompt,
-          violations,
-          hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
-          pairing: this.pairing,
-          ...(hint !== undefined ? { hint } : {}),
-        })
-      } catch (error) {
-        this.ctx.logger(AGENT_FLOW_LOGGER).error(
-          `agent-flow dispatch record failed (contained — dispatch proceeds): ${(error as Error).message}`,
-        )
+      const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+      if (source.kind === 'active') {
+        try {
+          recordDispatch({
+            harnessDir,
+            exec,
+            prompt,
+            violations,
+            hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
+            pairing: this.pairing,
+            resolvedWorkflowDir: join(harnessDir, source.dir),
+            ...(hint !== undefined ? { hint } : {}),
+          })
+        } catch (error) {
+          this.ctx.logger(AGENT_FLOW_LOGGER).error(
+            `agent-flow dispatch record failed (contained — dispatch proceeds): ${(error as Error).message}`,
+          )
+        }
       }
     }
     return { ok: violations.length === 0, violations }
