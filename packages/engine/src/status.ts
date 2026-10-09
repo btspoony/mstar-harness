@@ -767,7 +767,9 @@ export async function withWorkflowPurgeLocks<T>(
   const store = getArtifactStore();
   assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
   return withStatusWriteLock(statusPath, async () => {
-    const doc = readJson(statusPath) as StatusV2Doc;
+    const doc = existsSync(statusPath)
+      ? (readJson(statusPath) as StatusV2Doc)
+      : { version: 2 as const, updated_at: todayString(), workflows: [] };
     if (!Array.isArray(doc.workflows)) throw new Error("status.json workflows must be an array");
     const entry = doc.workflows.find((workflow) => workflow.id === id);
     if (entry !== undefined && resolve(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE) !== resolve(expectedSnapshotPath)) {

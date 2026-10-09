@@ -119,9 +119,7 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
-  // T21 owns the purge-entry veto: assertExecutionFileWriteAllowed in status.ts:890,
-  // reached via withWorkflowPurgeLocks. Keep the refusal until that veto retires.
-  test("ACTIVE purge refuses through the file-write veto without deleting the recorded snapshot", async () => {
+  test("ACTIVE purge succeeds through the legacy registration snapshot and removes it", async () => {
     const { harnessDir, context } = await fixture("purge");
     const workflowId = "wf-purge";
     const snapshotPath = join(harnessDir, "workflows", workflowId, "snapshot.json");
@@ -152,14 +150,13 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
       handle.close();
     }
 
-    await expect(
-      purgeCatalogRegistration(context, {
-        workflowId,
-        operationId: "legacy-failed-snapshot",
-        expectedCatalogRevision: 0,
-        actor: "project-manager",
-      }),
-    ).rejects.toMatchObject({ code: "execution.direct-write-refused" });
-    expect(existsSync(snapshotPath)).toBe(true);
+    const receipt = await purgeCatalogRegistration(context, {
+      workflowId,
+      operationId: "legacy-failed-snapshot",
+      expectedCatalogRevision: 0,
+      actor: "project-manager",
+    });
+    expect(receipt).toMatchObject({ workflowId });
+    expect(existsSync(snapshotPath)).toBe(false);
   });
 });

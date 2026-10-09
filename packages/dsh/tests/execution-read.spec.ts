@@ -474,7 +474,7 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(reached).toBe(2)
   })
 
-  it('refuses the DSh admission seams on an ACTIVE authority instead of answering from the retired execution files', async () => {
+  it('uses only ACTIVE execution facts at dispatch seams, ignoring retired files', async () => {
     const { app, harnessDir } = await appWithRoot('execution-sync-gate')
     const retiredWorktree = await tempDir('execution-retired-worktree')
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])
@@ -493,11 +493,6 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     const prompt = retiredPlanAssignment('plan-file', await tempDir('execution-assignment-worktree'))
     const exec = toolExec('subagent', { description: 'writable implement round', prompt })
 
-    // The SYNC gate path (`adapter.dispatchGate` → `dispatchGateCore` /
-    // `leaseGateViolations`): the authority is consulted BEFORE the retired root
-    // register / snapshot, so a lease is never verified against bytes the
-    // authority does not own — the gate REFUSES with the engine's own
-    // readiness code.
     const verdict = await app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
     const codes = verdict.violations.map((violation) => violation.code)
     expect(verdict.ok).toBe(false)
@@ -513,18 +508,13 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(reason).toContain('lease.dispatch.plan-not-found')
     expect(reason).not.toContain('lease.merge.snapshot-mismatch')
 
-    // The other two SYNCHRONOUS legacy-file readers of this surface are the
-    // exec-less host hooks (`HostAdapter.beforeDispatch`'s catalog-registration
-    // selection, `beforeMerge`'s snapshot lease read): the SAME authority
-    // decision precedes their reads, so neither can answer from retired bytes.
+    // The host dispatch hook keeps its ordinary Assignment gate result; it no
+    // longer overlays a legacy-file authority veto.
     const reserved = mergeLease()
     const dispatch = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
     expect(dispatch.ok).toBe(false)
     expect(dispatch.hardBlocked).toBe(true)
-    expect(dispatch.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
-    expect(dispatch.violations[0]?.message).toContain('ACTIVE')
-    // No registration verdict about the retired lifecycle: the file-routed
-    // selection is never asked about `wf-file-stale`.
+    expect(dispatch.violations.map((violation) => violation.code)).not.toContain('execution.consumer-not-ready')
     expect(JSON.stringify(dispatch)).not.toContain('wf-file-stale')
 
     // A stale snapshot lease is ignored; with no ACTIVE lease, the valid
@@ -536,19 +526,19 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     // lease. The ACTIVE reader considers only the DB state.
     await seedHarness(harnessDir, { 'status.json': v2Root([v2WorkflowEntry('wf-db')]) })
     const sameId = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
-    expect(sameId.violations.map((violation) => violation.code)).toEqual(['execution.consumer-not-ready'])
+    expect(sameId.violations.map((violation) => violation.code)).not.toContain('execution.consumer-not-ready')
     await seedRetiredLease(harnessDir, 'wf-file-stale', 'plan-file', retiredWorktree, reserved)
     const matching = await app.ctx.dshHostAdapter.beforeMerge(reserved)
     expect(matching.ok).toBe(true)
 
-    // §5 fail-closed: an authority that exists and cannot be read refuses too —
-    // never a fallback to the retired bytes, on any of the three seams.
+    // An unreadable ACTIVE store remains fail-closed through the DB-backed
+    // gate and merge-lease readers; neither falls back to retired files.
     await corruptStore(harnessDir)
     const unreadable = await app.ctx.dshHostAdapter.dispatchGate(prompt, exec, true, { kind: 'ok' })
     expect(unreadable.violations.map((violation) => violation.code)).toContain('lease.dispatch.unverifiable')
     const unreadableDispatch = await app.ctx.dshHostAdapter.beforeDispatch(prompt)
     expect(unreadableDispatch.ok).toBe(false)
-    expect(unreadableDispatch.violations.map((violation) => violation.code)).toEqual(['store.corrupt'])
+    expect(unreadableDispatch.violations.map((violation) => violation.code)).not.toContain('execution.consumer-not-ready')
     const unreadableMerge = await app.ctx.dshHostAdapter.beforeMerge(reserved)
     expect(unreadableMerge.ok).toBe(false)
     expect(unreadableMerge.violations.map((violation) => violation.code)).toEqual(['store.corrupt'])

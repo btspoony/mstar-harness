@@ -22,8 +22,6 @@ import {
   migrationChecksum,
   MIN_NODE_VERSION,
   StoreError,
-  assertExecutionFileReadAllowed,
-  assertExecutionFileWriteAllowed,
   assertStoreRuntimeSupported,
   compareVersions,
   initializeStore,
@@ -165,18 +163,8 @@ describe("store-db read-open repair", () => {
       JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }),
     );
 
-    const refusalCodeOf = (run: () => void): string => {
-      try {
-        run();
-        return "";
-      } catch (error) {
-        return error && typeof error === "object" && "code" in error ? String(error.code) : "";
-      }
-    };
     await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
     await expect(openStore({ harnessDir: dir }, "write")).rejects.toMatchObject({ code: "store.corrupt" });
-    expect(refusalCodeOf(() => assertExecutionFileWriteAllowed({ harnessDir: dir }))).toBe("store.corrupt");
-    expect(refusalCodeOf(() => assertExecutionFileReadAllowed({ harnessDir: dir }))).toBe("store.corrupt");
     // Nothing was created for the refused link, and the leftover bytes stayed.
     expect(existsSync(`${join(dir, "store.db")}-wal`)).toBe(false);
     expect(existsSync(join(dir, "status.json"))).toBe(true);

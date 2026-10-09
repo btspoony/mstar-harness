@@ -57,7 +57,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, seedV2Tree, FakeSessionsRegistry, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
@@ -1013,7 +1013,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const root = await mkdtemp(join(tmpdir(), 'dsh-ws-t4-contain-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    await seedV2Tree(harnessDir)
+    await seedActiveWorkflow(harnessDir)
     const ctx = new Context()
     const sessions = new FakeSessionsRegistry(ctx)
     const parent = parentSession('parent-throw-e2e', root)

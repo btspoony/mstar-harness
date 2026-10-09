@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { assertExecutionFileWriteAllowed, initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
@@ -1342,13 +1342,6 @@ test("no-store upgrade initializes execution schema and imports every populated 
   } finally {
     afterReplay.close();
   }
-});
-test("FILE authority discovery preserves fail-closed refusal for an unresolved linked worktree", () => {
-  const harnessDir = join(ROOT, "unresolved-linked-checkout");
-  mkdirSync(join(harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(harnessDir, ".git"), "gitdir: /missing/worktree/metadata\n");
-
-  expect(() => assertExecutionFileWriteAllowed({ harnessDir })).toThrow("linked checkout");
 });
 
 
