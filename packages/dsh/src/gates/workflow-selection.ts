@@ -40,7 +40,6 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import {
-  assertCatalogExecutionCommitted,
   readExecutionAuthority,
   readJson,
   resolveExecutionReadRoute,
@@ -860,20 +859,3 @@ export interface CatalogRegistrationRefusal {
  * @returns the refusal, or `null` when the registration is committed (or the
  *   store makes no catalog claim yet).
  */
-export async function catalogRegistrationRefusal(
-  harnessDir: string,
-  workflowId: string,
-): Promise<CatalogRegistrationRefusal | null> {
-  const context: StoreContext = { harnessDir }
-  try {
-    await assertCatalogExecutionCommitted(context, workflowId)
-    return null
-  } catch (error) {
-    const code = (error as { code?: unknown } | null | undefined)?.code
-    if (code === 'store.not-initialized' || code === 'store.not-active') return null
-    return {
-      code: typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable',
-      message: error instanceof Error ? error.message : String(error),
-    }
-  }
-}
