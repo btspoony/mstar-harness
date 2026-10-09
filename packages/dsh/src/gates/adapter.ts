@@ -392,6 +392,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
    */
   async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
     const prompt = typeof assignment === 'string' ? assignment : assignmentTextFromFields(assignment)
+    const harnessDir = this.resolver.forWorkspace(undefined)
     // The hook contract carries no exec/session context, so the harness dir
     // resolves to the explicit config or null (never a process-cwd probe) —
     // the exec-bound `tools/pre-execute` listener is the per-workspace path.
