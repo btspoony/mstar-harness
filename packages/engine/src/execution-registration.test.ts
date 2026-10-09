@@ -37,7 +37,7 @@
  *   the commit boundary converges on exactly one registration.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promotedAuditPlanRows } from "./audit.js";
@@ -498,6 +498,7 @@ describe("execution-registration", () => {
     // seam, so one intent cannot persist two spellings (E07 fold).
     const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
     writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+    writeFileSync(join(fixture.context.harnessDir, "delivery-compass.md"), "# Iteration compass\n");
     const receipt = await commitExecutionRegistration(
       { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
       {
@@ -523,6 +524,15 @@ describe("execution-registration", () => {
       },
     );
 
+    const header = await one<{ state_json: string }>(
+      fixture.context,
+      "select state_json from execution_workflows where workflow_id = ?",
+      iterationId,
+    );
+    expect(JSON.parse(String(header?.state_json))).toMatchObject({
+      phase: PREPARE_PHASE,
+      compass_ref: "delivery-compass.md",
+    });
     expect(receipt).toEqual({ operationId: "op-iteration", workflowId: iterationId, catalogRevision: 1, recovered: false });
     expect((await getCatalog(fixture.context, { kind: "iteration", id: iterationId })).entity).toMatchObject({
       rootKind: "iterations",
@@ -544,6 +554,108 @@ describe("execution-registration", () => {
       file: join(realpathSync(join(fixture.context.harnessDir, "plans")), `${row.id}.md`),
       iteration_refs: ["delivery-compass.md"],
     });
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
+  test("execution-registration-canonicalizes an in-root compass symlink for ACTIVE iteration registration", async () => {
+    const fixture = await activeFixture("iteration-compass-alias");
+    const iterationId = "iter-20260921-compass-alias";
+    const compassRef = `iterations/${iterationId}/delivery-compass.md`;
+    const compassPath = join(fixture.context.harnessDir, compassRef);
+    mkdirSync(dirname(compassPath), { recursive: true });
+    writeFileSync(compassPath, "# Iteration compass\n");
+    const aliasPath = join(fixture.workspace, "compass-alias.md");
+    symlinkSync(compassPath, aliasPath);
+    const row = { id: `${iterationId}-plan`, title: "Iteration row", file: `plans/${iterationId}-plan.md` };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+
+    await commitExecutionRegistration(
+      { ...fixture.context, caller: { ...fixture.caller, workflowId: iterationId } },
+      {
+        operationId: "op-iteration-compass-alias",
+        actor: "project-manager",
+        expectedCatalogRevision: 0,
+        workflow: {
+          kind: "iteration",
+          workflowId: iterationId,
+          options: {
+            harnessDir: fixture.context.harnessDir,
+            compassRef: aliasPath,
+            branch: { base: "main", integration: `iteration/${iterationId}`, target: "main" },
+            rows: [row],
+            project: "_default",
+          },
+        },
+        delta: {
+          entities: [{ kind: "iteration", id: iterationId, title: iterationId, rootKind: "iterations", relativePath: iterationId }],
+          binding: { catalogKind: "iteration", catalogId: iterationId },
+        },
+        expected: fixture.rootToken,
+      },
+    );
+
+    const header = await one<{ state_json: string }>(
+      fixture.context,
+      "select state_json from execution_workflows where workflow_id = ?",
+      iterationId,
+    );
+    expect(JSON.parse(String(header?.state_json))).toMatchObject({
+      phase: PREPARE_PHASE,
+      compass_ref: compassRef,
+    });
+    const sealed = await sealedInput(fixture.context, row.id, iterationId);
+    expect(JSON.parse(String(sealed?.input_json))).toMatchObject({
+      file: join(realpathSync(join(fixture.context.harnessDir, "plans")), `${row.id}.md`),
+      iteration_refs: [compassRef],
+    });
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+
+  test("execution-registration-refuses compass paths outside the ACTIVE iteration harness", async () => {
+    const fixture = await activeFixture("iteration-compass-boundary");
+    const outsideCompass = join(fixture.workspace, "outside-compass.md");
+    writeFileSync(outsideCompass, "# External compass\n");
+    symlinkSync(outsideCompass, join(fixture.context.harnessDir, "external-compass.md"));
+    const row = { id: "iter-boundary-plan", title: "Iteration row", file: "plans/iter-boundary-plan.md" };
+    writePlanDocument(fixture.context.harnessDir, row.id, row.title);
+    const before = await footprint(fixture.context);
+    const attempts = [
+      { id: "iter-boundary-absolute", compassRef: outsideCompass, detail: "resolves outside the harness root" },
+      { id: "iter-boundary-symlink", compassRef: "external-compass.md", detail: "escapes the harness root" },
+    ];
+
+    for (const [index, attempt] of attempts.entries()) {
+      const refusal = await refusalOf(() =>
+        commitExecutionRegistration(
+          { ...fixture.context, caller: { ...fixture.caller, workflowId: attempt.id } },
+          {
+            operationId: `op-iteration-compass-boundary-${index}`,
+            actor: "project-manager",
+            expectedCatalogRevision: 0,
+            workflow: {
+              kind: "iteration",
+              workflowId: attempt.id,
+              options: {
+                harnessDir: fixture.context.harnessDir,
+                compassRef: attempt.compassRef,
+                branch: { base: "main", integration: `iteration/${attempt.id}`, target: "main" },
+                rows: [row],
+                project: "_default",
+              },
+            },
+            delta: {
+              entities: [{ kind: "iteration", id: attempt.id, title: attempt.id, rootKind: "iterations", relativePath: attempt.id }],
+              binding: { catalogKind: "iteration", catalogId: attempt.id },
+            },
+            expected: fixture.rootToken,
+          },
+        ),
+      );
+      expect(refusal.code).toBe("catalog.registration-invalid");
+      expect(refusal.message).toContain(attempt.detail);
+    }
+
+    expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
 

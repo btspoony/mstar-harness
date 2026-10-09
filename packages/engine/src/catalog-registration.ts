@@ -33,6 +33,7 @@ import {
   assertDeliveryRegistrationCoherence,
   derivePlanRegistration,
   iterationWorkflowSnapshot,
+  normalizeIterationCompassRef,
   planWorkflowSnapshot,
   stableJson,
   type RegisterIterationWorkflowOptions,
@@ -418,8 +419,8 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
 }
 
 /**
- * Canonicalize selected iteration plan pointers before deriving the snapshot or
- * deterministic operation id. Plan and audit workflow inputs are unchanged.
+ * Canonicalize selected iteration plan and compass pointers before deriving
+ * the snapshot or deterministic operation id. Plan and audit inputs are unchanged.
  */
 function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
@@ -427,8 +428,20 @@ function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): Catalog
   if (!isPlainObject(options)) return workflow;
   const rows = options.rows;
   const harnessDir = options.harnessDir;
-  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute(harnessDir)) return workflow;
-  let changed = false;
+  const compassRef = options.compassRef;
+  if (
+    !Array.isArray(rows) ||
+    typeof harnessDir !== "string" ||
+    !isAbsolute(harnessDir) ||
+    typeof compassRef !== "string" ||
+    compassRef.trim() === ""
+  ) return workflow;
+  const normalizedCompassRef = normalizeIterationCompassRef(
+    compassRef,
+    harnessDir,
+    (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail),
+  );
+  let changed = normalizedCompassRef !== compassRef;
   const resolvedRows = rows.map((row) => {
     if (!isPlainObject(row)) return row;
     const id = row.id;
@@ -440,7 +453,10 @@ function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): Catalog
     return { ...row, file: planPath };
   });
   if (!changed) return workflow;
-  return { ...workflow, options: { ...options, rows: resolvedRows } } as unknown as CatalogExecutionWorkflow;
+  return {
+    ...workflow,
+    options: { ...options, compassRef: normalizedCompassRef, rows: resolvedRows },
+  } as unknown as CatalogExecutionWorkflow;
 }
 
 function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogExecutionRequest {
