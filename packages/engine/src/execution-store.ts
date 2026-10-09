@@ -2219,23 +2219,43 @@ function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBi
 }
 
 /**
+ * §3.1 the OMITTED-freshness intent of a session bind.
+ *
+ * A symbol cannot carry this intent: the canonical value form
+ * (`serializeExecutionValue`) accepts plain JSON only, so a symbol in the hashed
+ * intent refuses `execution.canonical-value`. The intent is therefore a
+ * DISCRIMINATED ENVELOPE whose two branches have disjoint shapes — an omitted
+ * freshness is `{freshness: "omitted"}` and a supplied one is
+ * `{freshness: "supplied", token: <the token string>}`. A caller's value is
+ * only ever placed in the `token` slot of the supplied branch, so no value a
+ * caller can write — not the ordinary string `"current"`, and not an untyped
+ * object shaped like the marker — can reproduce the omitted branch. That is
+ * what the previous sentinel lacked: it was the ordinary string `"current"`,
+ * which an explicit `expected: "current"` reproduced exactly, letting a changed
+ * request be served as a replay instead of refusing `execution.operation-conflict`.
+ */
+function bindFreshnessIntent(expected: ExecutionToken | undefined): unknown {
+  return expected === undefined ? { freshness: "omitted" } : { freshness: "supplied", token: expected };
+}
+
+/**
  * §3.1 the request fingerprint of one session bind: the operation kind, the
  * addressed workflow, the bind itself and the trusted caller — never the
- * freshness the caller happened to present. An OMITTED `expected` is the stable
- * `"current"` marker the verb resolves from the workflow's own header inside
- * its write transaction (the same rule the terminal-adoption intent uses), so a
- * retry that omits it carries the SAME fingerprint as the commit and is served
- * as the recorded replay instead of a conflict against a token the first bind
- * itself advanced. A SUPPLIED token stays part of the fingerprint and a strict
- * CAS, so a retry presenting a different explicit token is an operation
- * conflict and is never silently converted into a replay.
+ * freshness the caller happened to present. An OMITTED `expected` carries the
+ * omitted marker and is resolved by the verb from the workflow's own header
+ * inside its write transaction, so a retry that omits it carries the SAME
+ * fingerprint as the commit and is served as the recorded replay instead of a
+ * conflict against a token the first bind itself advanced. A SUPPLIED token is
+ * hashed as the token string itself and stays a strict CAS, so a retry
+ * presenting a different explicit value is an operation conflict and is never
+ * silently converted into a replay.
  */
 function bindSessionRequestHash(caller: ExecutionCaller, bind: ResolvedBind, expected: ExecutionToken | undefined): string {
   return createHash("sha256").update(serializeExecutionValue({
     operation: BIND_SESSION_OPERATION,
     workflow_id: bind.workflowId,
     role: bind.role,
-    expected: expected ?? "current",
+    expected: bindFreshnessIntent(expected),
     caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId },
   }), "utf8").digest("hex");
 }

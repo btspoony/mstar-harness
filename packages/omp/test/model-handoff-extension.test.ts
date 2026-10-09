@@ -3400,6 +3400,51 @@ describe("native coordinator tool on the ACTIVE route", () => {
     expect((await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).token).toBe(headerAfterFirst.token);
     expect(executionOperationCount(repo)).toBe(operationsAfterFirst);
   }, 120_000);
+
+  test("the registered handler refuses a caller-supplied sentinel as a changed request (BUG-201)", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-bind-sentinel-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+
+    // The omitted bind commits under the caller's own operation id.
+    const operationId = "native-bind-sentinel-op-1";
+    const first = await harness.runCoordinatorTool({ operation: "bind", workflowId, operationId });
+    expect(first.isError).toBe(false);
+    const ownerAfterFirst = await activeCoordinatorOf(repo, workflowId);
+    const headerAfterFirst = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    const operationsAfterFirst = executionOperationCount(repo);
+
+    // The same operation id retried with the sentinel string `"current"` — the
+    // value the old fingerprint used for an OMITTED freshness — is a CHANGED
+    // request now: the omp shape gate forwards the non-empty string verbatim and
+    // the engine refuses `execution.operation-conflict` instead of replaying.
+    const sentinel = await harness.runCoordinatorTool({ operation: "bind", workflowId, expected: "current", operationId });
+    expect(sentinel.isError).toBe(true);
+    expect(coordinatorCodeOf(sentinel)).toBe("execution.operation-conflict");
+
+    // A sentinel under a FRESH operation id carries no replay context, so the
+    // malformed token reaches `parseExecutionToken` and refuses on the grammar.
+    const malformed = await harness.runCoordinatorTool({
+      operation: "bind",
+      workflowId,
+      expected: "current",
+      operationId: "native-bind-sentinel-op-2",
+    });
+    expect(malformed.isError).toBe(true);
+    expect(coordinatorCodeOf(malformed)).toBe("execution.token-invalid");
+
+    // The omitted form still replays, and no refusal above moved the owner,
+    // header or accepted-operation log.
+    const replayed = await harness.runCoordinatorTool({ operation: "bind", workflowId, operationId });
+    expect(replayed.isError).toBe(false);
+    expect((replayed.details.mstarCoordinator as Record<string, unknown>).replayed).toBe(true);
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerAfterFirst);
+    expect((await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).token).toBe(headerAfterFirst.token);
+    expect(executionOperationCount(repo)).toBe(operationsAfterFirst);
+  }, 120_000);
 });
 
 /* ------------------------------------------------------------------------ *
