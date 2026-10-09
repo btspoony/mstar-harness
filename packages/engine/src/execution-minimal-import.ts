@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { createHash } from "node:crypto";
-import { readSessionEnvelope, type CoordinationSession } from "./coordination.js";
+import { readSessionEnvelope, type CoordinationSession } from "./coordination-envelope.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { withStatusWriteLock } from "./lease.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
