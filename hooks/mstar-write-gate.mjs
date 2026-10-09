@@ -14153,6 +14153,8 @@ function openConnection(dbPath, mode, DatabaseSync) {
       ensureJournalForRead(dbPath);
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error))
+      throw error;
     refuseOpenFailure(error, dbPath);
   }
   const fail = (message) => {
@@ -14183,6 +14185,8 @@ function openConnection(dbPath, mode, DatabaseSync) {
     try {
       db.close();
     } catch {}
+    if (mode === "read" && isRawCantOpen(error))
+      throw error;
     refuseOpenFailure(error, dbPath);
   }
   return busyAware(db, dbPath);
@@ -14446,11 +14450,13 @@ function readExecutionMeta(db, schemaVersion) {
     activatedAt: row.activated_at ?? null
   };
 }
+function isRawCantOpen(error) {
+  return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
+}
 function isTransientReadOpenFailure(error, dbPath) {
   if (error instanceof StoreError)
     return false;
-  const err = error;
-  if (err?.errcode !== 14)
+  if (!isRawCantOpen(error))
     return false;
   return existsSync15(dbPath);
 }
@@ -14478,6 +14484,8 @@ async function openStoreOnce(dbPath, mode) {
   try {
     db = await connect(dbPath, mode);
   } catch (error) {
+    if (mode === "read" && isRawCantOpen(error))
+      throw error;
     refuseOpenFailure(error, dbPath);
   }
   try {
