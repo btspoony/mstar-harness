@@ -32,10 +32,8 @@ import {
   parseAssignmentFields,
   parseEnforcementFlag,
   probeCheckoutRoot,
-  readJson,
   readMainWorktree,
   resolveRepoEnforcement,
-  WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type {
   AssignmentFields,
@@ -65,10 +63,8 @@ import type { SessionHint } from './workflow-selection.ts'
 // letting a verdict derive from retired bytes.
 import {
   activeRowsOf,
-  catalogRegistrationRefusal,
   readExecutionWorkflowSource,
   refusalOf,
-  resolveActiveWorkflow,
 } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 // The P-a/P-c policy + cache + the SHARED name normalization (plan
@@ -543,26 +539,12 @@ function worktreeL2Violations(header: string): ValidationResult[] {
 }
 
 /**
- * One active-workflow snapshot read (the v3 status.json consumer — plan
- *   Task 3 re-points every dispatch-side read
- * from the root `plans[]` to the ACTIVE workflow snapshot rows): the plan
- * rows + the snapshot's first-class integration topology, read through the
- * canonical `readWorkflowSnapshot` (the v1 `control_worktree_path` key is
- * accepted as a read-alias with its medium migration diagnostic — read
- * acceptance is not write permission; any other validation violation
- * refuses the read). The active-set resolver (`resolveActiveWorkflow`) is
- * the ONLY selection this module imports — dispatch gates are
- * write-path-adjacent, the terminal-mtime fallback stays catalog-read-only.
- *
- * Degrade semantics per consumer are kept by the flags: `unreadable` true
- * means the lifecycle cannot be attributed (selection failure — a
- * v1/migration-required root, an invalid workflow entry, an UNBOUND
- * multi-active session — or an unreadable/refused snapshot) and the
- * caller decides its loudness (lease gate: sdd violation; P-b: ONE warn
- * fail-open). `unreadable` false with `rows` null means there is simply
- * nothing to attribute (missing status.json, no active lifecycle) — silent.
- * @param hint - the carrying session's selection hint (which lifecycle's
- *   rows/integration topology this read is about).
+ * The selected ACTIVE workflow graph for synchronous dispatch consumers.
+ * `readExecutionWorkflowSource` materializes its plan rows and integration
+ * topology from the execution store; coordination files are never read here.
+ * `unreadable` distinguishes an unavailable/ambiguous authority from an
+ * ordinary workspace with no active workflow so each gate preserves its
+ * established refusal or no-op behavior.
  */
 interface ActiveSnapshotRead {
   /** The snapshot's plan rows ([] when the doc has no plans array); null when the read did not reach the rows. */
@@ -1081,97 +1063,6 @@ async function gateDispatch(
   return undefined
 }
 
-/**
- * True for one `tools/pre-execute` call that launches work UNDER the selected
- * lifecycle — the calls the catalog-registration veto must cover:
- *
- * - a configured dispatch tool carrying an Assignment-shaped prompt
- *   (`subagent` / `subagent_fork` by default), and
- * - the `workflow` / `ralph` fan-out tools, which carry no Assignment prompt at
- *   all (`meta.name` / `objective`) yet start child agents IN the same
- *   workspace that write through the same fs/skill/dispatch gates.
- *
- * A malformed workflow/ralph call keeps the workflow branch's documented
- * fail-open: it names no workflow/objective, so it launches nothing to gate and
- * the veto has no call to refuse.
- */
-function launchesWorkUnderSelection(config: Config, exec: ToolExecution): boolean {
-  if ((DEFAULT_WORKFLOW_TOOLS as readonly string[]).includes(exec.name)) return workflowGateInputOf(exec) !== undefined
-  if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(exec.name)) return false
-  const args = asRecord(exec.arguments)
-  const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
-  return prompt !== undefined && isAssignmentShaped(assignmentHeaderRegion(prompt))
-}
-
-/**
- * The catalog-registration veto (state-projection contract §3 step 3): the
- * SELECTED active workflow a writable dispatch addresses must have a committed
- * catalog registration. §5 (plan S4): the selection is asked of ONE route —
- * while the control harness's execution authority is ACTIVE the active set is
- * the DB registry (`readExecutionWorkflowSource`, explicit ids only, never the
- * newest/only guess), otherwise the unchanged JSON resolver. This async
- * addition then asks the store's registration journal whether that workflow is
- * half-registered — a question JSON cannot answer. A refusal is UNCONDITIONAL
- * (both enforcement modes): a workflow whose catalog delta was never published
- * is not a soft-gate judgment call, and dispatching into it would write under a
- * workspace the catalog does not yet describe.
- *
- * Fires only on a real work-launching call ({@link launchesWorkUnderSelection}:
- * a configured dispatch tool carrying an Assignment-shaped prompt, or a
- * shape-valid `workflow`/`ralph` fan-out — those carry no Assignment prompt but
- * launch writing children all the same), so the `tools/pre-execute` hot path
- * pays nothing for unrelated tool calls; a session with no active selection, and
- * a pre-activation workspace (no store, or a staged one), never reach the
- * journal read at all.
- */
-async function catalogRegistrationVeto(
-  ctx: Context,
-  harnessDir: string | null,
-  config: Config,
-  exec: ToolExecution,
-  readHint: () => SessionHintRead,
-): Promise<PreToolDecision | undefined> {
-  if (harnessDir === null) return undefined
-  if (!launchesWorkUnderSelection(config, exec)) return undefined
-  const hint = readHint().hint
-  const source = await readExecutionWorkflowSource({ harnessDir }, hint)
-  if (source.kind === 'unavailable') {
-    // §5: the authority exists and cannot be read — the registration verdict
-    // cannot be established, so the launch is refused rather than allowed
-    // against a half-known workspace (never a file fallback).
-    ctx.logger(DISPATCH_LOGGER).error(
-      `${exec.name} call refused — the execution authority of ${harnessDir} could not be read:\n` +
-        `${source.code}: ${source.message}`,
-    )
-    return {
-      kind: 'deny',
-      reason: [
-        `${exec.name} call blocked — the execution authority could not be read, so the selected workflow's catalog registration is unverifiable`,
-        `${source.code}: ${source.message}`,
-        'this refusal is unconditional (it is not the soft/hard enforcement axis): restore the authority, then dispatch',
-      ].join('\n'),
-    }
-  }
-  const selection = source.kind === 'active'
-    ? ({ kind: 'active', workflowId: source.workflowId, dir: source.dir } as const)
-    : source.kind === 'error'
-      ? source.selection
-      : resolveActiveWorkflow(harnessDir, hint)
-  if (selection.kind !== 'active') return undefined
-  const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
-  if (refusal === null) return undefined
-  ctx.logger(DISPATCH_LOGGER).error(
-    `${exec.name} call refused — workflow ${selection.workflowId} is not fully registered:\n${refusal.code}: ${refusal.message}`,
-  )
-  return {
-    kind: 'deny',
-    reason: [
-      `${exec.name} call blocked — workflow ${selection.workflowId} has no committed catalog registration`,
-      `${refusal.code}: ${refusal.message}`,
-      'this refusal is unconditional (it is not the soft/hard enforcement axis): reconcile the registration, then dispatch',
-    ].join('\n'),
-  }
-}
 
 /**
  * `tools/pre-execute` listener. The waterfall refusal channel is the returned
@@ -1197,13 +1088,10 @@ export async function preExecuteListener(
   let veto: PreToolDecision | undefined
   try {
     const harnessDir = resolver.forAgent(exec.agent)
-    // ONE session-hint derivation for the whole call, shared by the gate and
-    // the catalog-registration veto (D4: the durable binding store is read
-    // only where the gate actually reads it).
+    // One session-hint derivation for the gate reads in this call.
     let hintRead: SessionHintRead | undefined
     const readHint = (): SessionHintRead => (hintRead ??= adapter.sessionHintFor(exec.agent))
     veto = await gateDispatch(ctx, harnessDir, config, adapter, exec, readHint)
-    veto ??= await catalogRegistrationVeto(ctx, harnessDir, config, exec, readHint)
   } catch (error) {
     ctx.logger(DISPATCH_LOGGER).error(`dispatch gate aborted (degraded, dispatch allowed): ${(error as Error).message}`)
     try {
