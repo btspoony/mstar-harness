@@ -6,6 +6,10 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- Retired the coordinated artifact replacement/read chain and its public exports; protected filesystem writes continue to guard legacy status/snapshot paths, which remain migration-scoped.
+
 ## [3.11.2] - 2026-09-19
 
 ### Changed

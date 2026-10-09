@@ -6,6 +6,10 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+### Changed
+
+- Restrict `mstar persist` to `review` and `json`; keep `status` and `snapshot` available only on engine migration paths.
+
 ## [3.11.2] - 2026-09-19
 
 ### Changed
