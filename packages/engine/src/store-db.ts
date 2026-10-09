@@ -1928,7 +1928,7 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
  * never a fall back to the retired file route. Only a path with no store file
  * at all keeps the legacy route (there is no authority to establish).
  */
-// T17: coordination.ts remains the sole file-writer caller until replacement-path retirement.
+// T17: coordination.ts and status.ts purge entry still require the file-write veto.
 export function assertExecutionFileWriteAllowed(context: StoreContext): void {
   const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
@@ -1970,7 +1970,7 @@ export function assertExecutionFileWriteAllowed(context: StoreContext): void {
  * schema, unsupported runtime) throws out of the probe and refuses through
  * this guard as well.
  */
-// T17: coordination.ts remains the sole read-veto caller until replacement-path retirement.
+// T17: coordination.ts reads and lifecycle-branches.ts scanning still require the file-read veto.
 export function assertExecutionFileReadAllowed(context: StoreContext): void {
   const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
