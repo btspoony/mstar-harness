@@ -243,7 +243,7 @@ test("inactive-authority refusal names the supported status and store-upgrade re
   expectAdoptionRefusal(
     refused,
     "terminal adoption requires an active execution authority",
-    "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
+    "Run mstar status validate to inspect the harness, then mstar store upgrade --operator <name> to import legacy execution state and activate the execution authority before retrying adoption.",
   );
 });
 test("a valid explicit revision reaches the engine while an explicit stale CAS is engine-rejected without mutation", async () => {
@@ -273,6 +273,11 @@ test("a valid explicit revision reaches the engine while an explicit stale CAS i
     workflow: "wf-command", harness, expect: "1", operation: "command-adopt-stale", reason: "stale header",
   }, invocation(root));
   expect(stale).toMatchObject({ status: "refused", code: "execution.header-revision-conflict", exitCode: 1 });
+  expectAdoptionRefusal(
+    stale,
+    "[execution.header-revision-conflict] workflow wf-command header revision is 2, not expected revision 1; re-read status validate and retry with its listed revision",
+    "Run `mstar status validate` and retry with its current header revision, or omit --expect to derive the current revision inside the guarded transaction.",
+  );
   const afterStale = await executeCommand("status.validate", {}, invocation(root));
   expect(afterStale).toEqual(afterAdoption);
   await withWriter(harness, (db) => {
@@ -574,7 +579,7 @@ test("nonterminal-header refusal routes through execution bind and normal close"
     "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
   );
   expectDeadEndMarkers(
-    "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    "No supported exit exists for this non-terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.",
     true,
   );
 });

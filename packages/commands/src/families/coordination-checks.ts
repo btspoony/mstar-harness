@@ -37,7 +37,7 @@ function engineFailure(command: string, error: unknown, fallback: string): Comma
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
     : undefined;
-  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+  return refusalEnvelope({ command, status: "refused", code: "coordination.check-refused", exitCode: 1, message, details: { ...(details ?? {}), underlyingCode: code }, recovery: "Correct the reported authority, snapshot, or compass facts, then run mstar status validate." });
 }
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function errorCode(error: unknown, fallback: string): string {
@@ -121,12 +121,12 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           if (served.route === "execution") lease = (served.read.data as { workflows?: Array<{ integrationLease?: unknown }> }).workflows?.[0]?.integrationLease ?? undefined;
           else {
             const file = snapshotPath(context, input.workflow, input.harness);
-            if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}` });
+            if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}`, recovery: "The workflow snapshot must be restored at the reported path before mstar lease verify-integration --workflow <workflow-id>." });
             lease = readJson(file).integration_merge_lease;
           }
           if (lease === undefined) return ok(id, { workflow: input.workflow, claimed: false });
           const result = validateIntegrationMergeLease(lease);
-          return result.ok ? ok(id, { workflow: input.workflow, claimed: true, lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.merge-lease.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations } });
+          return result.ok ? ok(id, { workflow: input.workflow, claimed: true, lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.merge-lease.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations }, recovery: "Resolve each reported merge-lease violation, then run mstar lease verify-integration --workflow <workflow-id>." });
         } catch (error) { return engineFailure(id, error, "lease.verify-integration.refused"); }
       },
     }),
@@ -150,15 +150,15 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
               const gate = await evaluatePostMergeCloseFromExecutionAuthority({ harnessDir: root }, input.workflow);
               return gate.ok
                 ? ok(id, { phase: 6, gate })
-                : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate } });
+                : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate }, recovery: "Resolve the reported post-merge blockers, then run mstar iteration gate --workflow <workflow-id> --phase 6." });
             }
 
             const compassPath = path.resolve(context.cwd, input.compass!);
-            if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}` });
+            if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}`, recovery: "The compass must exist at the reported path before mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
             const { readRegisteredWorkflowFromExecutionAuthority } = await import("@mstar-harness/engine");
             const snapshot = await readRegisteredWorkflowFromExecutionAuthority({ harnessDir: root }, input.workflow);
             if (snapshot === null) {
-              return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.workflow-not-found", exitCode: 1, message: `workflow '${input.workflow}' not found in the registered execution authority` });
+              return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.workflow-not-found", exitCode: 1, message: `workflow '${input.workflow}' not found in the registered execution authority`, recovery: "Run mstar status validate to inspect registered workflow IDs, select the intended workflow, then run mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
             }
             const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
               currentBranch: input.branch,
@@ -167,22 +167,22 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             });
             return gate.ok
               ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit })
-              : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate } });
+              : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           }
           const file = snapshotPath(context, input.workflow, input.harness);
-          if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}` });
+          if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}`, recovery: "The workflow snapshot must be restored at the reported path. For phase-6 post-merge close, run mstar iteration gate --workflow <workflow-id> --phase 6; for phase transition checks, run mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           const snapshot = readJson(file);
           if (phase6) {
             const root = harnessDir(context, input.harness);
             let rootDoc: unknown;
             try { const rootFile = path.join(root, "status.json"); if (existsSync(rootFile)) rootDoc = readJson(rootFile); } catch { rootDoc = undefined; }
             const gate = evaluatePostMergeClose(snapshot, rootDoc);
-            return gate.ok ? ok(id, { phase: 6, gate }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate } });
+            return gate.ok ? ok(id, { phase: 6, gate }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate }, recovery: "Resolve the reported post-merge blockers, then run mstar iteration gate --workflow <workflow-id> --phase 6." });
           }
           const compassPath = path.resolve(context.cwd, input.compass!);
-          if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}` });
+          if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}`, recovery: "The compass must exist at the reported path before mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), { currentBranch: input.branch, specIntegrationBranch: input.integration, prBaseBranch: input.target });
-          return gate.ok ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate } });
+          return gate.ok ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
         } catch (error) { return engineFailure(id, error, "iteration.gate.refused"); }
       },
     }),
@@ -193,7 +193,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
       async execute(input) {
         const id = "iteration.push-cadence";
         const gate = pushCadenceProbe(input.ciRunning === true, input.reviewWave === true);
-        return gate.ok ? ok(id, { allowed: true, violations: [] }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.push-cadence.blocked", exitCode: 1, message: "push blocked by active CI or review wave", details: { violations: gate.violations } });
+        return gate.ok ? ok(id, { allowed: true, violations: [] }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.push-cadence.blocked", exitCode: 1, message: "push blocked by active CI or review wave", details: { violations: gate.violations }, recovery: "Wait for the reported CI/review wave to settle, then run mstar iteration push-cadence." });
       },
     }),
   ];

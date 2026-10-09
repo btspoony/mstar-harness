@@ -846,7 +846,7 @@ test("degraded Git refuses a linked checkout marker before local harness discove
     // The refusal text is engine-owned (`resolveProcessHarnessDir` in
     // engine/coordination.ts): the CLI no longer rewords the linked-checkout
     // marker, so the assertion tracks the engine's own reason string.
-    expect(proc.stderr.toString()).toContain("whose main worktree is unreadable");
+    expect(proc.stderr.toString()).toContain("The linked checkout's main worktree cannot be read.");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

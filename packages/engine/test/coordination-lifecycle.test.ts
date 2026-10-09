@@ -408,8 +408,7 @@ describe("standalone-development-completion", () => {
       completeCall(fixture, PLAN_ID, malformed({ ...good, qc: { ...good.qc, decision: ["Approve"] } })),
     );
     expect(failureCode(decisionRefusal)).toBe("coordination.invalid-input");
-    expect(decisionRefusal.message).toContain("qc.decision");
-    expect(decisionRefusal.message).toContain("plan complete");
+    expect(decisionRefusal.message).toContain("Invalid QC decision: provide Approve or Approve with residuals. Inspect workflow state with mstar status validate.");
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     // An array QA gate is refused the same way.
     const gateRefusal = await refusalError(() =>
@@ -788,7 +787,7 @@ describe("seam-regressions", () => {
     expect(failureCode(branchRefusal)).toBe("coordination.invalid-input");
     // The actual branch cause and the ordinary correction are both named.
     expect(branchRefusal.details).toMatchObject({ working_branch: "feature/plan-a-v2", actual: "feature/plan-a" });
-    expect(branchRefusal.message).toContain("revise it with plan prepare");
+    expect(branchRefusal.message).toContain("The source checkout branch does not match the recorded workingBranch. Correct checkout/branch facts with mstar plan prepare.");
     expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
     expect(metadataOf(planRowOf(fixture, PLAN_ID)).working_branch).toBe("feature/plan-a");
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
@@ -1018,7 +1017,7 @@ describe("gitRead subprocess failure classification", () => {
   const CHILD_DEADLINE_MS = 60_000;
 
   /** What the child prints: the public operation's outcome or error shape. */
-  type ChildCompletionReport = { outcome?: string; name?: string; code?: string; message?: string; cause?: string };
+  type ChildCompletionReport = { outcome?: string; name?: string; code?: string; message?: string; cause?: string; details?: { path?: string; worktree_path?: string } };
 
   function writeExecutable(path: string, lines: string[]): void {
     writeText(path, `${lines.join("\n")}\n`);
@@ -1078,12 +1077,14 @@ describe("gitRead subprocess failure classification", () => {
       `  console.log(JSON.stringify({ outcome: completed.outcome }));`,
       `} catch (error) {`,
       `  const code = (error as { code?: unknown } | null)?.code;`,
-      `  const cause = ((error as { details?: unknown } | null)?.details as { cause?: unknown } | undefined)?.cause;`,
+      `  const details = (error as { details?: unknown } | null)?.details as { cause?: unknown; path?: unknown; worktree_path?: unknown } | undefined;`,
+      `  const cause = details?.cause;`,
       `  console.log(JSON.stringify({`,
       `    name: error instanceof Error ? error.name : typeof error,`,
       `    code: typeof code === "string" ? code : undefined,`,
       `    message: error instanceof Error ? error.message : String(error),`,
       `    cause: typeof cause === "string" ? cause : undefined,`,
+      `    details: details ? { path: typeof details.path === "string" ? details.path : undefined, worktree_path: typeof details.worktree_path === "string" ? details.worktree_path : undefined } : undefined,`,
       `  }));`,
       `}`,
       ``,
@@ -1126,7 +1127,8 @@ describe("gitRead subprocess failure classification", () => {
     // than the environment code.
     expect(report.code).toBe("coordination.not-in-git");
     expect(report.code).not.toBe("coordination.git-unavailable");
-    expect(report.message).toContain(fixture.worktreePath);
+    expect(report.message).toContain("The recorded plan worktree is not a readable Git worktree.");
+    expect(report.details?.worktree_path).toBe(fixture.worktreePath);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
   }, 90_000);
 
@@ -1165,7 +1167,8 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.code).toBe("coordination.git-unavailable");
     expect(report.code).not.toBe("coordination.git-proof");
     expect(report.cause).toContain("ENOENT");
-    expect(report.message).toContain(fixture.worktreePath);
+    expect(report.message).toContain("Git state cannot be read. Inspect workflow registration with mstar status validate.");
+    expect(report.details?.path).toBe(fixture.worktreePath);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
   }, 90_000);
 });

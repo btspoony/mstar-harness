@@ -158,7 +158,8 @@ export type ExecutionPlanIntent<Operation extends CoordinationOperation = Coordi
 
 function resolvePlanAddress(stated: string | undefined, kind: string): string {
   if (isNonEmptyString(stated)) return stated;
-  throw new CoordinationError("coordination.invalid-input", `${kind} requires the explicit planId it addresses`, {
+  throw new CoordinationError("coordination.invalid-input", "Invalid coordination operation: provide the explicit planId it addresses; inspect plan rows with mstar plan show.", {
+    operation_kind: kind,
     path: "planId",
   });
 }
@@ -228,7 +229,7 @@ async function resolvePlanIntent<Operation extends CoordinationOperation>(
  */
 function assertPlanOperationAdmissible(kind: string): void {
   if (IMPLEMENTED_OPERATIONS[kind] !== true) {
-    throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
+    throw new CoordinationError("coordination.unknown-operation", "Unknown coordination operation kind; inspect the operation contract with mstar schema.", {
       operation: kind,
     });
   }
@@ -266,7 +267,7 @@ export async function withExecutionPlanAuthority<T>(
 ): Promise<T> {
   const operation = call.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
-    throw new CoordinationError("coordination.invalid-input", "a plan operation needs an operation with a kind");
+    throw new CoordinationError("coordination.invalid-input", "Invalid plan operation: provide an operation with a kind; inspect the operation contract with mstar schema.");
   }
   const planId = resolvePlanAddress(call.planId, operation.kind);
   assertPlanOperationAdmissible(operation.kind);
@@ -339,13 +340,13 @@ function resolvePlanOperationRequest<Operation extends CoordinationOperation>(
   request: ExecutionPlanRequest<Operation>,
   kind: string,
 ): ResolvedPlanOperation<Operation> {
-  if (!isPlainObject(request)) throw invalidPlanInput("a plan operation needs a request object");
+  if (!isPlainObject(request)) throw invalidPlanInput("Invalid plan operation: provide a request object; inspect the operation contract with mstar schema.");
   if (!isNonEmptyString(caller?.sessionId)) {
-    throw invalidPlanInput("the execution caller needs a non-empty session identity");
+    throw invalidPlanInput("Invalid execution caller: provide a non-empty session identity; inspect the workflow with mstar status validate.");
   }
   const operationId = assertOperationId(request.operationId);
   const planId = request.planId;
-  if (!isNonEmptyString(planId)) throw invalidPlanInput("a plan operation needs the non-empty plan id it addresses");
+  if (!isNonEmptyString(planId)) throw invalidPlanInput("Invalid plan operation: provide the non-empty plan id; inspect plan rows with mstar plan show.");
   assertPlanOperationAdmissible(kind);
   const read = resolvePlanRead(caller, request.session, planId);
   return { call: { ...request, operationId, planId }, read };
@@ -367,7 +368,7 @@ function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
   if (status !== "running") {
     throw new CoordinationError(
       "coordination.workflow-not-running",
-      `workflow ${witness.workflowId} is ${String(status)} \u2014 a plan operation requires a running lifecycle`,
+      "The workflow is not running; plan operations require a running lifecycle. Inspect it with mstar status validate.",
       { workflow_id: witness.workflowId, plan_id: witness.planId, status },
     );
   }
@@ -401,7 +402,7 @@ function planOperationRequestHash(
 /**
  * §4.1 the sidecar of one plan-frame result: what this call did with the intent,
  * the record it addressed and the commit boundary the caller can rely on — the
- * same object shape a refusal carries under `error.details.recovery`, so a
+ * same object shape a refusal carries under `error.details.recoveryFacts`, so a
  * consumer reads one contract on both paths.
  */
 function planRecovery(input: {
@@ -475,7 +476,7 @@ function stalePlanRowRefusal(
       sources_tried: problem.sourcesTried,
       current_facts: problem.currentFacts,
       available_work: problem.availableWork,
-      recovery: unresolvedRecovery({
+      recoveryFacts: unresolvedRecovery({
         target: { workflowId: witness.workflowId, planId: witness.planId },
         unresolved: [problem],
         resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
@@ -662,16 +663,16 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
   const config = call.operation.config ?? {};
   assertExactKeys(config as Record<string, unknown>, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
   if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute(config.worktreePath))) {
-    throw invalidPlanInput("prepare worktreePath must be an absolute path");
+    throw invalidPlanInput("Invalid prepare worktreePath: provide an absolute path; retry through mstar plan prepare.");
   }
   if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
-    throw invalidPlanInput("prepare workingBranch must be a non-empty branch name");
+    throw invalidPlanInput("Invalid prepare workingBranch: provide a non-empty branch name; retry through mstar plan prepare.");
   }
   if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) {
-    throw invalidPlanInput("prepare qaGate must be mandatory or pm-acceptance");
+    throw invalidPlanInput("Invalid prepare qaGate: choose mandatory or pm-acceptance; retry through mstar plan prepare.");
   }
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
-    throw invalidPlanInput("prepare findingsCleanup must be zero-residual or allow-residual");
+    throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
   }
   return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
 }
@@ -691,14 +692,14 @@ function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: 
   if (repositoryRoot === undefined || controlBranch === undefined || controlBranch === "" || controlBranch === "HEAD") {
     throw new CoordinationError(
       "plan.prepare.control-branch-unresolved",
-      "cannot resolve the control checkout branch; run prepare where the control checkout is a valid git repo",
+      "Cannot resolve the control checkout branch; provide a valid Git control checkout, then retry through mstar plan prepare.",
       { harness_root: controlRoot },
     );
   }
   if (workingBranch === controlBranch) {
     throw new CoordinationError(
       "plan.prepare.working-branch-control",
-      `workingBranch "${workingBranch}" is the control checkout branch; record a feature branch \u2014 the primary worktree is the control checkout and is never a plan's working lane`,
+      "The working branch is the control checkout branch; record a feature branch, then retry through mstar plan prepare.",
       { working_branch: workingBranch, control_branch: controlBranch },
     );
   }
@@ -861,7 +862,7 @@ function validateSuppliedCheckout(worktreePath: string, workingBranch: string | 
   if (head === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `prepare requires the supplied worktreePath ${worktreePath} to be a readable Git worktree`,
+      "Prepare requires the supplied worktreePath to be a readable Git worktree; inspect it with mstar worktree check.",
       { plan_id: planId, worktree_path: worktreePath },
     );
   }
@@ -869,7 +870,7 @@ function validateSuppliedCheckout(worktreePath: string, workingBranch: string | 
   if (dirty === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `prepare cannot read the Git state of the supplied worktreePath ${worktreePath}`,
+      "Prepare cannot read the Git state of the supplied worktreePath; inspect it with mstar worktree check.",
       { plan_id: planId, worktree_path: worktreePath },
     );
   }
@@ -1050,7 +1051,7 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
   if (problems.length > 0) {
     throw new CoordinationError(
       "coordination.invalid-input",
-      `residual-add entries are invalid: ${problems.map(({ path, message }) => `${path}: ${message}`).join("; ")}`,
+      "Invalid residual-add entries; correct each reported problem, then retry through mstar plan issue-add.",
       { problems },
     );
   }
@@ -1078,7 +1079,7 @@ export async function residualAddExecutionPlan(
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "entries"], "residual-add operation");
   const entries = operation.entries;
   if (!Array.isArray(entries) || entries.length === 0) {
-    throw invalidPlanInput("residual-add requires at least one entry");
+    throw invalidPlanInput("Invalid residual-add request: provide at least one entry; retry through mstar plan issue-add.");
   }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
@@ -1166,11 +1167,12 @@ export async function residualCloseExecutionPlan(
     "residual-close operation",
   );
   if (!isNonEmptyString(operation.issueId)) {
-    throw invalidPlanInput("residual-close requires a non-empty issueId");
+    throw invalidPlanInput("Invalid residual-close request: provide a non-empty issueId; retry through mstar plan issue-close.");
   }
   if (!Number.isInteger(operation.expectedIssueRevision) || operation.expectedIssueRevision < 0) {
     throw invalidPlanInput(
-      `expectedIssueRevision must be a nonnegative integer \u2014 the issue revision guards the DB mutation; got ${JSON.stringify(operation.expectedIssueRevision)}`,
+      "Invalid expectedIssueRevision: it must match the observed issue revision. Read current revision with mstar issue show --id issue-id.",
+      { expected_issue_revision: operation.expectedIssueRevision },
     );
   }
   assertTerminalDisposition(operation.disposition);
@@ -1291,7 +1293,7 @@ async function readWorkflowSnapshot(context: ExecutionContext, workflowId: strin
   const state = await readExecutionState(context);
   const workflow = state.data.workflows.find((candidate) => candidate.state.id === workflowId);
   if (workflow === undefined) {
-    throw new CoordinationError("coordination.plan-not-found", `no workflow ${workflowId} is registered`, {
+    throw new CoordinationError("coordination.plan-not-found", "The workflow is not registered; inspect registered workflows with mstar status validate.", {
       workflow_id: workflowId,
     });
   }
@@ -1307,13 +1309,17 @@ async function readWorkflowSnapshot(context: ExecutionContext, workflowId: strin
  * fulfilment of its registered completion policy. `consultDeliveryEvidence`
  * owns the completeness rule, so this route cannot invent a second one.
  */
-function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string, what: string): void {
+function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string): void {
   const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
   if (failure !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires matching report-only completion evidence for ${planId}: ${failure.message}`,
-      { plan_id: planId, code: failure.code },
+      "The transition requires matching report-only completion evidence; inspect the workflow with mstar status validate.",
+      {
+        message: failure.message,
+        plan_id: planId,
+        code: failure.code,
+      },
     );
   }
 }
@@ -1337,7 +1343,7 @@ function requirePinnedDeliveryRoute(
   if (route !== pinned.route) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires plan ${planId} to keep the ${pinned.route} delivery route proven before the transaction \u2014 the workflow now declares ${route}`,
+      "The transition requires the pinned delivery route to be proven before the transaction; inspect the workflow with mstar status validate.",
       { plan_id: planId, expected: pinned.route, actual: route },
     );
   }
@@ -1440,7 +1446,7 @@ function assertSourceReviewProof(
   const reviewBase = shas.review_base;
   const reviewHead = shas.review_head;
   if (sourceSha === null || reviewBase === null || reviewHead === null) {
-    throw invalidPlanInput("complete requires evidence.source_sha, review_base and review_head on this route");
+    throw invalidPlanInput("Complete on this route requires evidence.source_sha, review_base, and review_head; retry through mstar workflow evidence.");
   }
   assertFeatureCheckout(worktreePath, sourceSha, "complete", planId);
   if (reviewHead !== sourceSha) {
@@ -1565,22 +1571,19 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
  * decision table is reused; the read is this handle's, and it fails closed on a
  * staged or unreadable store.
  */
-function assertFindingsClosedOn(
-  tx: ExecutionTransaction,
-  planId: string,
-  prepared: PreparedCoordination,
-  what: string,
-): void {
+function assertFindingsClosedOn(tx: ExecutionTransaction, planId: string, prepared: PreparedCoordination): void {
   const meta = tx.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
     | { authorityState?: unknown }
     | undefined;
   if (meta?.authorityState !== "active") {
     throw new CoordinationError(
       "coordination.store",
-      `plan ${planId} cannot ${what}: the issue store is ${
-        typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable"
-      }, so findings authority cannot be read`,
-      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
+      "The plan cannot proceed: the issue store authority is unreadable; inspect the store with mstar status validate.",
+      {
+        authority_state: typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable",
+        plan_id: planId,
+        findings_cleanup: prepared.findings_cleanup,
+      },
     );
   }
   const rows = tx.db
@@ -1595,8 +1598,13 @@ function assertFindingsClosedOn(
   if (blocking.length === 0) return;
   throw new CoordinationError(
     "coordination.findings-open",
-    `plan ${planId} cannot ${what} while findings are open (${mode}): ${blocking.map((row) => `${row.id} (${row.severity})`).join("; ")}`,
-    { plan_id: planId, findings_cleanup: mode, findings: blocking.map((row) => row.id) },
+    "The plan cannot proceed while findings are open; close them with mstar plan issue-close.",
+    {
+      blocking: blocking.map((row) => `${row.id} (${row.severity})`),
+      plan_id: planId,
+      findings_cleanup: mode,
+      findings: blocking.map((row) => row.id),
+    },
   );
 }
 
@@ -1713,7 +1721,7 @@ async function captureCompletionWitnesses(
   const route = deliveryRouteOf(snapshot);
   if (route === "integration" && operation.integration === undefined) {
     throw invalidPlanInput(
-      "complete on the integration route requires integration: { base_sha, result_sha } naming the serial merge that was performed",
+      "Complete on the integration route requires integration.base_sha and integration.result_sha for the performed serial merge; inspect the workflow with mstar status validate.",
       { plan_id: read.planId, missing: "integration" },
     );
   }
@@ -1726,7 +1734,7 @@ async function captureCompletionWitnesses(
   assertEvidenceInsidePlanArea(planAreas, evidence.evidence_paths);
   const evidenceRefs = completionEvidenceRefs(evidence);
   if (route === "report-only") {
-    assertReportOnlyCompletionEvidence(snapshot, read.planId, "complete");
+    assertReportOnlyCompletionEvidence(snapshot, read.planId);
     return { git: [], planAreas, evidenceRefs };
   }
   const scope = planScopeOf(before.data, read.planId);
@@ -1735,7 +1743,7 @@ async function captureCompletionWitnesses(
     if (scope.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        `complete requires the recorded working branch ${scope.workingBranch} to equal the registered delivery source ${anchors.sourceBranch}`,
+        "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.",
         { plan_id: read.planId, expected: anchors.sourceBranch, actual: scope.workingBranch },
       );
     }
@@ -1776,7 +1784,7 @@ function completeInTransaction(
   const route = deliveryRouteOf(snapshot);
   if (route === "integration" && operation.integration === undefined) {
     throw invalidPlanInput(
-      "complete on the integration route requires integration: { base_sha, result_sha } naming the serial merge that was performed",
+      "Complete on the integration route requires integration.base_sha and integration.result_sha for the performed serial merge; inspect the workflow with mstar status validate.",
       { plan_id: planId, missing: "integration" },
     );
   }
@@ -1804,13 +1812,13 @@ function completeInTransaction(
   if (route === "report-only") {
     // §E no Git and no integration proof is invented here: the workflow must
     // already RECORD the fulfilment of its registered completion policy.
-    assertReportOnlyCompletionEvidence(snapshot, planId, "complete");
+    assertReportOnlyCompletionEvidence(snapshot, planId);
   } else if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, planId);
     if (scope!.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        `complete requires the recorded working branch ${scope!.workingBranch} to equal the registered delivery source ${anchors.sourceBranch}`,
+        "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.",
         { plan_id: planId, expected: anchors.sourceBranch, actual: scope!.workingBranch },
       );
     }
@@ -1850,7 +1858,7 @@ function completeInTransaction(
   // captured after the preflight refuses the completion instead of being judged
   // against a stale list. (The Git witnesses were already re-validated by the
   // frame's commit-boundary preflight, which runs after the race seam.)
-  assertFindingsClosedOn(tx, planId, prepared, "complete");
+  assertFindingsClosedOn(tx, planId, prepared);
   applyCompletion({ tx, witness, planId, record, scope, at, what: `plan ${planId} coordination` });
   const settled = readExecutionPlanWitness(tx, read);
   return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
@@ -1873,16 +1881,7 @@ function requireOwnMergeClaim(
   if (lease.plan_id !== planId || lease.source_branch !== sourceBranch || lease.target_branch !== targetBranch) {
     throw new CoordinationError(
       "coordination.merge-lease-foreign",
-      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
-        `not this attempt (${planId} source ${sourceBranch} target ${targetBranch}); holder ${JSON.stringify(lease.holder)} ` +
-        `must complete its claimed plan through mstar plan complete --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
-        `with that holder's own current binding, actual recorded checkout, QC/QA evidence and verified integration result. ` +
-        `If the recorded source facts for that claimed plan are wrong, correct them through mstar plan prepare --workflow ` +
-        `${witness.workflowId} --plan ${lease.plan_id} --worktree-path <actual-source-checkout> --working-branch <actual-source-branch> before its holder completes it. ` +
-        `If the holder actually stopped, use mstar session recover --workflow ${witness.workflowId} --prior-session ` +
-        `${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> --expect <current-workflow-token> ` +
-        `--operation <fresh-id> under the independently acquired replacement; an already-current replacement needs its ` +
-        `recorded predecessor relationship and renewed applicable stop evidence. This caller cannot release a foreign attempt.`,
+      "The merge lease is held by another plan's attempt; this operation cannot release a foreign claim. Its holder finishes it and inspects the plan with mstar plan show, then corrects recorded scope with mstar plan prepare.",
       {
         plan_id: planId,
         workflow_id: witness.workflowId,
@@ -1904,15 +1903,15 @@ function requireOwnMergeClaim(
     // by completing a different row.
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `plan ${planId} merge lease is held by the LIVE coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
-        `${JSON.stringify(witness.session.sessionId)} \u2014 a live foreign claim is never released. The claim belongs to the attempt ` +
-        `its holder is executing: that holder completes plan ${JSON.stringify(lease.plan_id)} from its own recorded scope ` +
-        `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or \u2014 when this row's recorded ` +
-        `scope is mistaken \u2014 correct it through mstar plan prepare --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
-        `--worktree-path <actual-source-checkout> --working-branch <actual-source-branch>. Only after that holder actually stopped, use mstar session recover --workflow ` +
-        `${witness.workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> ` +
-        `--expect <current-workflow-token> --operation <fresh-id> under the independently acquired replacement.`,
-      { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
+      "The merge lease is held by a live foreign coordinator; a live claim is never released. Its holder finishes that attempt and inspects the plan with mstar plan show.",
+      {
+        holder_plan_id: lease.plan_id,
+        holder_source_branch: lease.source_branch,
+        holder_target_branch: lease.target_branch,
+        plan_id: planId,
+        holder: lease.holder,
+        session_id: witness.session.sessionId,
+      },
     );
   }
   // §4.2 the claim matches this attempt but names a session this epoch does NOT
@@ -1927,19 +1926,9 @@ function requireOwnMergeClaim(
   // the recovery then settles the claim row it left behind.
   throw new CoordinationError(
     "coordination.merge-lease-stopped-owner",
-    `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
-      `held by ${JSON.stringify(lease.holder)} since ${String(lease.claimed_at ?? "an unknown instant")}; that holder's ` +
-      `coordinator session is not active at epoch ${tx.epoch}, and this completing coordinator ` +
-      `${JSON.stringify(witness.session.sessionId)} does not hold it. This completion does not take over or release another ` +
-      `holder's claim. The supported route is the coordinator recovery RENEWAL for this recorded relationship: ` +
-      `\`mstar session recover --workflow ${witness.workflowId} --prior-session ${lease.holder} --reason <reason> ` +
-      `--attestation <absolute-full-stop-document> --expect <current-workflow-token> --operation <fresh-id>\`, ` +
-      `with renewed evidence naming ${lease.holder} stopped after its claim and NOT naming the current binding, run under ` +
-      `the independently acquired replacement binding this caller already holds. ` +
-      `That recovery re-recognises the recorded prior\u2192replacement relationship (previous recovery receipt, revoked ` +
-      `prior session row, this exact held claim row), keeps the current binding, settles this claim row, and then this completion ` +
-      `retries as the same recovered coordinator.`,
+    "The merge lease belongs to a stopped coordinator; this completion does not take over another holder's claim. The supported renewal covers the recorded predecessor relationship, then inspect the workflow with mstar status validate.",
     {
+      authority_epoch: tx.epoch,
       plan_id: planId,
       session_id: witness.session.sessionId,
       claim_plan_id: lease.plan_id,
@@ -2139,7 +2128,7 @@ export async function mutateExecutionPlan(
 ): Promise<ExecutionReceipt<ExecutionPlanView>> {
   const operation = request?.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
-    throw invalidPlanInput("a plan operation needs an operation with a kind");
+    throw invalidPlanInput("Invalid plan operation: provide an operation with a kind; inspect the operation contract with mstar schema.");
   }
   const resolved = await resolvePlanIntent(context, request, operation);
   const strict = resolved.operation;
@@ -2157,7 +2146,7 @@ export async function mutateExecutionPlan(
     default:
       throw new CoordinationError(
         "coordination.unknown-operation",
-        `${String(operation.kind)} is not a coordination operation`,
+        "Unknown coordination operation kind; inspect the operation contract with mstar schema.",
         { operation: String(operation.kind) },
       );
   }

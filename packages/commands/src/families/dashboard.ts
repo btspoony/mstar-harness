@@ -29,14 +29,15 @@ const dashboards = new WeakMap<CommandEffects, Map<string, DashboardSlot>>();
 
 export function failure(code: string, error: unknown): CommandEnvelope<never> {
   const { details, recovery } = engineErrorFacts(error);
+  const message = error instanceof Error ? error.message : String(error);
   return refusalEnvelope({
     command: id,
     status: "refused",
     code,
     exitCode: 1,
-    message: error instanceof Error ? error.message : String(error),
+    message,
     details: { operation: id, ...details },
-    ...(recovery === undefined ? {} : { recovery }),
+    recovery: recovery ?? "Resolve the reported dashboard startup issue, then rerun mstar dashboard.",
   });
 }
 

@@ -175,7 +175,7 @@ async function refusalOf(
 ): Promise<{ code: string; details: Record<string, unknown>; recovery: RecoveryDetails }> {
   const failure = await run().catch((error: unknown) => error);
   if (!(failure instanceof CoordinationError)) throw new Error(`expected a typed refusal, got ${String(failure)}`);
-  const recovery = failure.details.recovery;
+  const recovery = failure.details.recoveryFacts;
   if (recovery === null || typeof recovery !== "object" || !("unresolved" in recovery) || !Array.isArray(recovery.unresolved)) {
     throw new Error("the refusal carries no recovery sidecar");
   }

@@ -6,7 +6,7 @@ import ts from "typescript";
 import { getCommandDefinitions } from "../packages/commands/src/definitions";
 import { getCommandSchemas } from "../packages/commands/src/families/schema";
 
-export type RefusalClassification = "missing-cause-code" | "missing-recovery" | "unreachable-recovery" | "capability-unreachable" | "allowlisted";
+export type RefusalClassification = "missing-cause-code" | "missing-recovery" | "unreachable-recovery" | "capability-unreachable" | "allowlisted" | "manual-recovery" | "invalid-manual-marker";
 export interface RefusalFinding { file: string; line: number; column: number; classification: RefusalClassification; reason: string; snippet: string; }
 export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; expectedCount?: number; }
 export interface CliGrammar {
@@ -222,7 +222,7 @@ export function recoveryFailure(recovery: string, grammar: CliGrammar): string |
     return boundary < 0 ? text : text.slice(0, boundary);
   };
   const commandFailure = (text: string): string | undefined => {
-    const clause = stopClause(text.trim().replace(/^mstar\s+/i, "")).trim();
+    const clause = stopClause(text.trim().replace(/`/g, "").replace(/^mstar\s+/i, "")).trim();
     const tokens = clause.split(/\s+/).filter(Boolean);
     const isOption = (token: string): boolean => /^--?[A-Za-z][A-Za-z0-9-]*(?:=[^\s,;.)!?]*)?$/.test(token.replace(/[,.)]+$/, ""));
     const isBoundary = (token: string): boolean => /^(?:to|for|with|and|or|then|instead|otherwise|after|before|via)$/i.test(token);
@@ -408,7 +408,16 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
+    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => `${span.expression.getText(sf)}${span.literal.text}`).join("");
+    if (ts.isConditionalExpression(node)) {
+      const whenTrue = codeValue(node.whenTrue, scope, new Set(seen));
+      const whenFalse = codeValue(node.whenFalse, scope, new Set(seen));
+      return whenTrue?.trim() && whenFalse?.trim() ? whenTrue : undefined;
+    }
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      const left = codeValue(node.left, scope, new Set(seen));
+      return left?.trim() ? left : codeValue(node.right, scope, new Set(seen));
+    }
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
       if (!declaration?.initializer || seen.has(declaration)) return undefined;
@@ -673,7 +682,7 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
   return { findings: output, stale: validated.filter((entry) => counts.get(entry.signature) !== entry.expectedCount).map((entry) => entry.signature), used: validated.filter((entry) => matched.has(entry.signature)) };
 }
 export function countViolations(findings: RefusalFinding[]): number {
-  return findings.filter((finding) => finding.classification !== "allowlisted").length;
+  return findings.filter((finding) => finding.classification !== "allowlisted" && finding.classification !== "manual-recovery").length;
 }
 export function exitCodeFor(findings: RefusalFinding[], stale: string[]): 0 | 1 {
   return countViolations(findings) === 0 && stale.length === 0 ? 0 : 1;

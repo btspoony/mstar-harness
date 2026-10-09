@@ -28,6 +28,7 @@ import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { engineErrorFacts } from "./family-refusal.js";
 
 const inputSchema = z.object({
   id: z.string().optional(),
@@ -65,24 +66,35 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
+  const { details: engineDetails, recovery: engineRecovery } = engineErrorFacts(error);
   const issueId = input?.id?.trim() || "<id>";
-  const recovery = code === "issue.revision-conflict"
-    ? `Run \`mstar issue show --id ${issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
-    : id !== "issue.reopen"
-      ? undefined
-      : code === "store.operation-conflict"
-        ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
-        : code === "issue.invalid-disposition"
-        ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
-        : code === "issue.scope-refused"
-          ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\`; \`--operation-id\` is optional and a fresh replay id is generated when omitted.`
-          : code === "issue.invalid-payload"
-            ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
-            : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
+  const hasPaths = paths.length > 0;
+  const recovery = engineRecovery ?? (
+    code === "issue.revision-conflict"
+      ? `Run \`mstar issue show --id ${issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
+      : id !== "issue.reopen"
+        ? code === "issue.scope-refused"
+          ? "As an authorized actor, retry the same command after acquiring the required scope. Read its contract with mstar schema --command issue.add."
+          : code === "issue.invalid-payload" && message.startsWith("invalid payload:")
+            ? "Correct the payload field(s) named in this refusal, then retry the same command. Read its schema with mstar schema --command issue.add."
+            : code === "issue.invalid-payload" && message.includes("not valid JSON")
+              ? "Ensure the payload parses as a JSON object, then retry the same command. Read its schema with mstar schema --command issue.add."
+              : "Correct the issue input, then read the command contract with mstar schema --command issue.add."
+        : code === "store.operation-conflict"
+          ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
+          : code === "issue.invalid-disposition"
+            ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
+            : code === "issue.scope-refused"
+              ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\`; \`--operation-id\` is optional and a fresh replay id is generated when omitted.`
+              : code === "issue.invalid-payload"
+                ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
+                : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`
+  );
+  const details = engineDetails ?? (hasPaths ? { paths } : undefined);
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
-    ...(paths.length > 0 ? { details: { paths } } : {}),
-    ...(recovery === undefined ? {} : { recovery }),
+    details: details ?? {},
+    recovery: recovery ?? "mstar issue show --id issue-id.",
   });
 }
 function storeContext(input: IssueInput, invocation: InvocationContext): StoreContext {

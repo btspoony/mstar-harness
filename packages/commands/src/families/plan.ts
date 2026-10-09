@@ -104,7 +104,19 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
-  });
+   recovery: id === "plan.bind"
+        ? "The registered workflow and current coordinator identity must match; an existing binding uses its recorded session. Run mstar plan bind --workflow <workflow-id> --session <current-session>."
+        : id === "plan.show"
+          ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
+          : id === "plan.prepare"
+            ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
+            : id === "plan.progress"
+              ? "The progress payload and plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <status>."
+              : id === "plan.issue-add"
+                ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
+                : id === "plan.issue-close"
+                  ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition>."
+                  : "Delivery-route evidence and QC/QA proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --evidence <evidence-file>."});
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;

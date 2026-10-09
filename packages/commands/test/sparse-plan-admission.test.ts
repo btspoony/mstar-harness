@@ -195,7 +195,7 @@ type GroupedFacts = {
   current_facts?: unknown[];
   sources_tried?: unknown[];
   available_work?: unknown[];
-  recovery?: { outcome?: unknown; commitState?: unknown; unresolved?: Array<{ code?: unknown }> };
+  recoveryFacts?: { outcome?: unknown; commitState?: unknown; unresolved?: Array<{ code?: unknown }> };
 };
 
 /** Raw row counts proving a refused call changed nothing (no receipt, no binding, no plan write). */
@@ -418,8 +418,8 @@ describe("sparse plan intent admission", () => {
     expect(JSON.stringify(details.current_facts)).toContain(GHOST_ID);
     expect(details.sources_tried?.length).toBeGreaterThan(0);
     expect(details.available_work?.length).toBeGreaterThan(0);
-    expect(details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
-    expect(details.recovery?.unresolved?.[0]).toMatchObject({ code: "execution.session-unavailable" });
+    expect(details.recoveryFacts).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    expect(details.recoveryFacts?.unresolved?.[0]).toMatchObject({ code: "execution.session-unavailable" });
   });
 
   test("the legacy file route still requires its own session instead of reaching the engine", async () => {

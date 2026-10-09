@@ -100,10 +100,12 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                         (code === "workflow.adopt-terminal.attestation-unreadable" ||
                           code === "workflow.adopt-terminal.attestation-malformed" || posixReadFailure)
                         ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
-                        : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
-                          (code === `${id}.file-malformed` || posixReadFailure)
-                          ? `Correct the absolute JSON path supplied with --file (the file must be readable and contain valid JSON), then retry \`mstar ${id.replaceAll(".", " ")} --workflow <id> --file <absolute-json>\`.`
-                          : code === "store.attestation-invalid" || code === "store.activation-blocked"
+                      : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
+                        (code === `${id}.file-malformed` || posixReadFailure)
+                        ? (id === "workflow.evidence"
+                          ? "Correct the absolute JSON path supplied with --file, then retry mstar workflow evidence --workflow <id> --file <absolute-json>."
+                          : "Correct the absolute JSON path supplied with --file, then retry mstar workflow execution-policy --workflow <id> --file <absolute-json>.")
+                        : code === "store.attestation-invalid" || code === "store.activation-blocked"
                           ? "The engine refused this operator attestation. Use `mstar schema --command workflow.adopt-terminal` for the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
                           : code.startsWith("execution.adoption")
                             ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
@@ -119,11 +121,12 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
           },
         } : {}),
       };
+  const supportedRecovery = recovery ?? "mstar status validate.";
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
-    message: error instanceof Error ? error.message : String(error),
-    ...(refusalDetails === undefined ? {} : { details: refusalDetails }),
-    ...(recovery === undefined ? {} : { recovery }),
+    message,
+    details: refusalDetails ?? {},
+    recovery: supportedRecovery,
   });
 }
 function object(value: unknown, field: string): Record<string, unknown> {
@@ -672,7 +675,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
               code: "execution.adoption-refused",
               exitCode: 1,
               message: "terminal adoption requires an active execution authority",
-              recovery: "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
+              recovery: "Run mstar status validate to inspect the harness, then mstar store upgrade --operator <name> to import legacy execution state and activate the execution authority before retrying adoption.",
             });
           }
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };

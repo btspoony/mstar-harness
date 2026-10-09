@@ -188,7 +188,7 @@ describe("file-route frames — semantic replay, unrelated revision, commit boun
     expect(String(refusal.details.current_value)).toContain("start");
     expect(String(refusal.details.requested_value)).toContain("slice A implemented");
 
-    const recovery = refusal.details.recovery as RecoveryDetails | undefined;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails | undefined;
     expect(recovery?.outcome).toBe("unresolved");
     expect(recovery?.commitState).toBe("none");
     const problem = recovery?.unresolved?.[0];
@@ -218,7 +218,7 @@ describe("file-route frames — semantic replay, unrelated revision, commit boun
       }),
     )) as CoordinationError;
     expect(refusal.code).toBe("store.not-initialized");
-    const recovery = refusal.details.recovery as RecoveryDetails | undefined;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails | undefined;
     expect(recovery?.outcome).toBe("unresolved");
     expect(recovery?.commitState).toBe("none");
     const problem = recovery?.unresolved?.[0];
@@ -261,7 +261,7 @@ describe("file-route frames — semantic replay, unrelated revision, commit boun
     )) as CoordinationError;
     expect(failureCode(refusal)).toBe("issue.scope-refused");
 
-    const recovery = refusal.details.recovery as RecoveryDetails | undefined;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails | undefined;
     expect(recovery?.outcome).toBe("partial");
     expect(recovery?.commitState).toBe("partial");
     expect(recovery?.applied?.length).toBeGreaterThan(0);
@@ -636,7 +636,7 @@ describe("intent resolution — trusted root, explicit target, authority change 
 
     const refusal = (await failureOf(() => readPlanCoordination(sessionPath, PLAN_ID, other.root))) as CoordinationError;
     expect(refusal.code).toBe("coordination.scope-mismatch");
-    const recovery = refusal.details.recovery as RecoveryDetails | undefined;
+    const recovery = refusal.details.recoveryFacts as RecoveryDetails | undefined;
     expect(recovery?.outcome).toBe("unresolved");
     expect(recovery?.unresolved?.[0]?.component).toBe("root");
     expect(readJson(fixture.snapshotPath)).toEqual(before);

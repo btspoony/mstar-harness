@@ -47,15 +47,15 @@ export function assertSafeSessionId(value: unknown, what = "session id"): string
   if (!isNonEmptyString(value)) {
     throw new CoordinationError(
       "coordination.invalid-session-id",
-      `${what} is required \u2014 a public session id: a single safe path component ([A-Za-z0-9._-]+), at most ${SESSION_ID_MAX_LENGTH} characters`,
-      { form: typeof value },
+      "Invalid public session id: provide one safe path component using [A-Za-z0-9._-], at most 128 characters. Inspect coordinator identity with mstar status validate.",
+      { form: typeof value, field: what },
     );
   }
   if (value.length > SESSION_ID_MAX_LENGTH) {
     throw new CoordinationError(
       "coordination.invalid-session-id",
-      `${what} is longer than ${SESSION_ID_MAX_LENGTH} characters \u2014 the rejected value is not echoed in this diagnostic`,
-      { length: value.length, max_length: SESSION_ID_MAX_LENGTH },
+      "Invalid public session id: the value exceeds 128 characters and is not echoed. Inspect coordinator identity with mstar status validate.",
+      { length: value.length, max_length: SESSION_ID_MAX_LENGTH, field: what },
     );
   }
   try {
@@ -125,7 +125,7 @@ export function validateExecutionIdentity(
   options: ExecutionIdentityOptions = {},
 ): void {
   if (!isPlainObject(identity)) {
-    throw new CoordinationError("coordination.identity-missing", "an execution identity tuple is required");
+    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
   }
   const value = identity as unknown as Record<string, unknown>;
   assertExactKeys(value, ["source", "sessionId", "workflowId", "role"], "execution identity");
@@ -145,7 +145,7 @@ export function validateExecutionIdentity(
   if (!isNonEmptyString(value.workflowId)) {
     throw new CoordinationError(
       "coordination.identity-missing",
-      "the execution identity carries no workflow id",
+      "Invalid execution identity: provide a workflow id. Inspect registered workflows with mstar status validate.",
       { workflow_id: value.workflowId },
     );
   }
@@ -163,7 +163,7 @@ export function validateExecutionIdentity(
   if (!isRole(value.role)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `the execution identity role ${JSON.stringify(value.role)} is not a coordination role`,
+      "Invalid execution identity role; expected coordinator. Inspect the recorded identity with mstar status validate.",
       { expected: "coordinator", actual: value.role },
     );
   }
@@ -171,14 +171,14 @@ export function validateExecutionIdentity(
   if (value.workflowId !== scope.workflowId) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `the identity addresses workflow ${value.workflowId}, not ${scope.workflowId}`,
+      "Execution identity does not address the expected workflow. Inspect the recorded identity with mstar status validate.",
       { expected: scope.workflowId, actual: value.workflowId },
     );
   }
   if (role !== scope.role) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `the identity role ${role} does not address the ${scope.role} seat`,
+      "Execution identity role does not match the expected seat. Inspect the recorded identity with mstar status validate.",
       { expected: scope.role, actual: role },
     );
   }

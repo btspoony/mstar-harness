@@ -18,9 +18,15 @@ function envelope(id: string, data: unknown): CommandEnvelope { return { version
 export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const { code, details, recovery } = engineErrorFacts(error);
-  const facts = { details: { operation: id, ...details }, ...(recovery === undefined ? {} : { recovery }) };
-  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...facts });
-  return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, ...facts });
+  const fallbackRecovery = id === "milestone.add"
+    ? "Set a unique milestone name and project ordinal. Run mstar milestone add --project project-id --name milestone-name --ordinal 1 --expect-store 0 --operation retry-id."
+    : id === "milestone.update"
+      ? "Read the current milestone and store revision, then retain only the intended patch. Run mstar milestone update --project project-id --id milestone-id --expect-store 0 --operation retry-id."
+      : id === "milestone.assign"
+        ? "Verify the issue and milestone ids and revisions. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --session session-path --actor project-manager."
+        : "Select the existing milestone project and retry the requested read.";
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery: fallbackRecovery });
+  return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: recovery ?? fallbackRecovery });
 }
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {

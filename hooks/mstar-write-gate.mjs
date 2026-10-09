@@ -13855,7 +13855,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join19(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join19(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join19(dir, ".git") });
     }
     const parent = dirname9(dir);
     if (parent === dir)

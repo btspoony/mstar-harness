@@ -49,7 +49,17 @@ export function failed(id: string, error: unknown): CommandEnvelope<never> {
     code,
     exitCode: error instanceof SddScriptError ? error.exitCode : 1,
     message,
-  });
+   recovery: id === "sdd.workspace"
+        ? "Set the plan id whose SDD workspace is requested and the control root only when it cannot be resolved from the current directory. Run mstar sdd workspace <plan-id>."
+        : id === "sdd.task-brief"
+          ? "Correct the plan file, task number, and output file. Run mstar sdd task-brief <plan-file> <task-number> <output-file>."
+          : id === "sdd.review-package"
+            ? "Verify both refs resolve in the feature worktree and choose a writable package path. Run mstar sdd review-package <base> <head> <output-file>."
+            : id === "sdd.check-context"
+              ? "Align the context document and requested action seam with the resolved SDD execution context. Run mstar sdd check-context."
+              : id === "sdd.evidence.capture"
+                ? "The exact authorized argv and execution context are required; the evidence destination or child-process failure must be corrected. Run mstar sdd evidence capture <literal-argv...>."
+                : "Select the retained evidence bundle by SDD directory, plan, task, and execution identifiers and correct its target or integrity issue. Run mstar sdd evidence verify."});
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);

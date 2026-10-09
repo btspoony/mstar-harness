@@ -31,11 +31,14 @@ function ok<T>(id: string, data: T): CommandEnvelope<T> {
 }
 function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const { code, details, recovery } = engineErrorFacts(error);
+  const message = error instanceof Error ? error.message : String(error);
+  const fallbackRecovery = id === "session.run"
+    ? "Correct the reported executable or working directory, then rerun mstar session run."
+    : "Correct the workflow or attestation inputs, then rerun mstar session recover.";
   return refusalEnvelope({
-    command: id, status: "refused", code: code ?? `${id}.refused`, exitCode: 1,
-    message: error instanceof Error ? error.message : String(error),
-    ...(details === undefined ? {} : { details }),
-    ...(recovery === undefined ? {} : { recovery }),
+    command: id, status: "refused", code: code ?? `${id}.refused`, exitCode: 1, message,
+    details: details ?? {},
+    recovery: recovery ?? fallbackRecovery,
   });
 }
 
@@ -322,7 +325,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
             // malformed document stays the refused form (exit 1).
             return error.status === "usage"
               ? refusalEnvelope({ command: "session.recover", status: "usage", code: error.code, exitCode: 2, message: error.message })
-              : refusalEnvelope({ command: "session.recover", status: "refused", code: error.code, exitCode: 1, message: error.message });
+              : refusalEnvelope({ command: "session.recover", status: "refused", code: error.code, exitCode: 1, message: error.message, recovery: "Run mstar status validate, then correct the rejected workflow or attestation input before retrying." });
           }
           return engineRefusal("session.recover", error);
         }

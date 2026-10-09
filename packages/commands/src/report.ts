@@ -73,7 +73,7 @@ function failure(issues: { field: string; limit: number }[]): ReportInputTooLarg
     exitCode: 1,
     message: `input fields ${issues.map(({ field, limit }) => `${field} (${limit} bytes)`).join(", ")} exceed their UTF-8 byte limits`,
     details: { field, fields, limits: issues, limit },
-  }) as ReportInputTooLarge;
+   recovery: "Shorten each listed UTF-8 field below its byte limit. Run mstar report."}) as ReportInputTooLarge;
 }
  
 
