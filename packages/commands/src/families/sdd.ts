@@ -65,7 +65,7 @@ function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
   return value;
 }
-function readContext(value: string | undefined): SddExecutionContext | undefined {
+async function readContext(value: string | undefined): Promise<SddExecutionContext | undefined> {
   if (value === undefined) return undefined;
   if (!path.isAbsolute(value)) throw new SddScriptError("--context must be an absolute path", 2);
   const doc: unknown = JSON.parse(readFileSync(value, "utf8"));
@@ -81,18 +81,18 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
     if (verb === "task-brief") {
       const planFile = required(input.planFile, "PLAN_FILE");
       const taskNumber = required(input.taskNumber, "TASK_NUMBER");
-      const bound = readContext(input.context);
+      const bound = await readContext(input.context);
       const outfile = taskBrief(planFile, Number(taskNumber), input.outfile, { cwd: invocation.cwd, ...(bound ? { context: bound } : {}) });
       return ok(id, { outfile });
     }
     if (verb === "review-package") {
       const base = required(input.base, "BASE");
       const head = required(input.head, "HEAD");
-      const bound = readContext(input.context);
+      const bound = await readContext(input.context);
       return ok(id, { outfile: reviewPackage(base, head, input.outfile, { cwd: invocation.cwd, ...(bound ? { context: bound } : {}) }) });
     }
     if (verb === "check-context") {
-      const context = readContext(required(input.context, "--context"));
+      const context = await readContext(required(input.context, "--context"));
       const kind = required(input.kind, "--kind") as "source" | "artifact" | "launch";
       const gate = checkSddAction(context!, { kind, cwd: invocation.cwd, target: input.target });
       if (!gate.ok) throw new SddScriptError(gate.violations.map(({ code, message }) => `${code}: ${message}`).join("; "), 1);

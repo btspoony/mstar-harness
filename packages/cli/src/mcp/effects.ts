@@ -259,7 +259,7 @@ async function captureEvidence(requestPath: string, argv: readonly string[], inv
   const requestGate = validateSddEvidenceRecord(provisional);
   if (!requestGate.ok) throw new SddScriptError(`invalid evidence request: ${requestGate.violations.map(({ code, message }) => `${code}: ${message}`).join("; ")}`, 2);
 
-  const context = resolveSddExecutionContext(rawContext);
+  const context = await resolveSddExecutionContext(rawContext);
   const request: EvidenceCaptureRequest = { ...rawRequest, context };
   const runId = provisional.runId;
   const startedAt = provisional.startedAt;

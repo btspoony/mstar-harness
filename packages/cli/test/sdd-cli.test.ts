@@ -21,6 +21,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createExecutionWorkflow, initializeStore, readExecutionState, registerCatalogEntity } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
@@ -150,7 +151,7 @@ function linkedWorktreeFixture(root: string): string {
 }
 
 describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
-  test("plain non-Git dir with only a harness override fails closed (exit 1, nothing created)", () => {
+  test("plain non-Git dir with only a harness override fails closed (exit 1, nothing created)", async () => {
     const root = tmpRoot("mstar-sdd-ws-");
     try {
       const harnessDir = join(root, ".custom-root");
@@ -171,7 +172,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     }
   });
 
-  test("linked worktree discovers the main worktree — SDD tree created at main, none under the linked checkout", () => {
+  test("linked worktree discovers the main worktree — SDD tree created at main, none under the linked checkout", async () => {
     const root = tmpRoot("mstar-sdd-ws-main-");
     try {
       const linked = linkedWorktreeFixture(root);
@@ -189,7 +190,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     }
   });
 
-  test("linked worktree + CONTROL_ROOT + MSTAR_HARNESS_DIR → exit 0, SDD dir under control root", () => {
+  test("linked worktree + CONTROL_ROOT + MSTAR_HARNESS_DIR → exit 0, SDD dir under control root", async () => {
     const root = tmpRoot("mstar-sdd-ws-ctrl-");
     try {
       const linked = linkedWorktreeFixture(root);
@@ -209,7 +210,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     }
   });
 
-  test("CONTROL_ROOT that is not a directory → exit 1 with engine message", () => {
+  test("CONTROL_ROOT that is not a directory → exit 1 with engine message", async () => {
     const root = tmpRoot("mstar-sdd-ws-bad-");
     try {
       const result = runCli(["sdd", "workspace", "plan-1", join(root, "nope")], { cwd: root });
@@ -221,7 +222,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     }
   });
 
-  test("missing <plan-id> → exit 2 usage error(commander must not bypass the ported exit-2 usage contract)", () => {
+  test("missing <plan-id> → exit 2 usage error(commander must not bypass the ported exit-2 usage contract)", async () => {
     const root = tmpRoot("mstar-sdd-ws-usage-");
     try {
       const result = runCli(["sdd", "workspace"], { cwd: root });
@@ -234,7 +235,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
 });
 
 describe("mstar sdd task-brief — extract `## Task N` sections", () => {
-  test("existing task → exit 0, outfile holds the section (fenced fake headings ignored)", () => {
+  test("existing task → exit 0, outfile holds the section (fenced fake headings ignored)", async () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -254,7 +255,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("missing task N → exit 3, outfile not created (zero-write; default-dir case covered by engine suite)", () => {
+  test("missing task N → exit 3, outfile not created (zero-write; default-dir case covered by engine suite)", async () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -269,7 +270,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("non-integer task number → exit 2 usage error", () => {
+  test("non-integer task number → exit 2 usage error", async () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -282,7 +283,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("missing plan file → exit 2 usage error", () => {
+  test("missing plan file → exit 2 usage error", async () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const result = runCli(["sdd", "task-brief", join(root, "nope.md"), "1", join(root, "out.md")]);
@@ -293,7 +294,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("no outfile + no SDD_DIR → exit 2 with guidance", () => {
+  test("no outfile + no SDD_DIR → exit 2 with guidance", async () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -306,7 +307,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("no outfile + SDD_DIR env → writes {SDD_DIR}/task-N-brief.md", () => {
+  test("no outfile + SDD_DIR env → writes {SDD_DIR}/task-N-brief.md", async () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -324,7 +325,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("missing required args → exit 2 usage error", () => {
+  test("missing required args → exit 2 usage error", async () => {
     const root = tmpRoot("mstar-sdd-brief-usage-");
     try {
       const result = runCli(["sdd", "task-brief"], { cwd: root });
@@ -337,7 +338,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
 });
 
 describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD", () => {
-  test("valid SHAs → exit 0, package file has header/commits/stat/diff", () => {
+  test("valid SHAs → exit 0, package file has header/commits/stat/diff", async () => {
     const root = tmpRoot("mstar-sdd-rp-");
     try {
       const { base, head } = gitFixture(root);
@@ -357,7 +358,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
     }
   });
 
-  test("bad BASE SHA → exit 2 with engine validation message", () => {
+  test("bad BASE SHA → exit 2 with engine validation message", async () => {
     const root = tmpRoot("mstar-sdd-rp-");
     try {
       const { head } = gitFixture(root);
@@ -371,7 +372,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
     }
   });
 
-  test("no outfile + no SDD_DIR → exit 2 with guidance", () => {
+  test("no outfile + no SDD_DIR → exit 2 with guidance", async () => {
     const root = tmpRoot("mstar-sdd-rp-");
     try {
       const { base, head } = gitFixture(root);
@@ -383,7 +384,7 @@ describe("mstar sdd review-package — commits + stat + diff -U10 for BASE..HEAD
     }
   });
 
-  test("missing BASE/HEAD → exit 2 usage error", () => {
+  test("missing BASE/HEAD → exit 2 usage error", async () => {
     const root = tmpRoot("mstar-sdd-rp-usage-");
     try {
       const result = runCli(["sdd", "review-package"], { cwd: root });
@@ -416,7 +417,7 @@ interface ExecFixture {
   workingBranch: string;
 }
 
-function executionFixture(root: string, opts: { nested?: boolean } = {}): ExecFixture {
+async function executionFixture(root: string, opts: { nested?: boolean } = {}): Promise<ExecFixture> {
   const primary = join(root, "primary");
   mkdirSync(primary);
   git(["init", "-q"], primary);
@@ -451,6 +452,35 @@ function executionFixture(root: string, opts: { nested?: boolean } = {}): ExecFi
     ctxFile,
     JSON.stringify({ planId: PLAN_ID, controlHarnessRoot: harnessDir, featureCwd: feature, workingBranch, planFile, sddDir }, null, 2),
   );
+  // The SDD context resolver reads workflow facts from the ACTIVE execution
+  // authority (issue #428): seed the store with one registered workflow whose
+  // plan row is Todo/no-scope, so resolution runs through the same
+  // branch-alignment arm production uses.
+  const storeContext = { harnessDir };
+  (await initializeStore(storeContext)).close();
+  await registerCatalogEntity(
+    storeContext,
+    { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` },
+    { operationId: "catalog-plan", actor: "sdd-cli.test" },
+  );
+  await createExecutionWorkflow(
+    { harnessDir, caller: { sessionId: "creator-plan", role: "coordinator", workflowId: "wf-plan" } },
+    {
+      entry: { id: "wf-plan", type: "plan", started_at: "2026-01-01T00:00:00.000Z", dir: "workflows/wf-plan" },
+      snapshot: {
+        schema_version: 1,
+        id: "wf-plan",
+        type: "plan",
+        status: "running",
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+        delivery_kind: "development",
+        plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+      },
+      expected: (await readExecutionState(storeContext)).token,
+      operationId: "seed-wf-plan",
+    },
+  );
   return { root, primary, control, feature, harnessDir, planFile, sddDir, ctxFile, workingBranch };
 }
 
@@ -475,10 +505,10 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
     expect(result.stdout).toContain("--target");
   });
 
-  test("launch kind passes from the control checkout (destination is gated, not the parent cwd)", () => {
+  test("launch kind passes from the control checkout (destination is gated, not the parent cwd)", async () => {
     const root = tmpRoot("mstar-sdd-cc-ok-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const result = runCli(["sdd", "check-context", "--context", f.ctxFile, "--kind", "launch"], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       expect(envelopeOf(result)).toMatchObject({
@@ -491,10 +521,10 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
     }
   });
 
-  test("source kind from the control checkout fails the gate (exit 1, no write)", () => {
+  test("source kind from the control checkout fails the gate (exit 1, no write)", async () => {
     const root = tmpRoot("mstar-sdd-cc-src-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const result = runCli(
         ["sdd", "check-context", "--context", f.ctxFile, "--kind", "source", "--target", "src/probe.txt"],
         { cwd: f.control },
@@ -506,10 +536,10 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
     }
   });
 
-  test("artifact escape is blocked before write (exit 1)", () => {
+  test("artifact escape is blocked before write (exit 1)", async () => {
     const root = tmpRoot("mstar-sdd-cc-esc-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       symlinkSync(f.primary, join(realpathSync(f.sddDir), "escape"));
       const result = runCli(
         ["sdd", "check-context", "--context", f.ctxFile, "--kind", "artifact", "--target", join(realpathSync(f.sddDir), "escape", "x.md")],
@@ -523,10 +553,10 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
     }
   });
 
-  test("usage errors exit 2: missing --context, missing --kind, bad kind, relative/missing/unparseable context file", () => {
+  test("usage errors exit 2: missing --context, missing --kind, bad kind, relative/missing/unparseable context file", async () => {
     const root = tmpRoot("mstar-sdd-cc-usage-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const missingContext = runCli(["sdd", "check-context", "--kind", "launch"], { cwd: root });
       expect(missingContext.exitCode).toBe(2);
       expectEnvelopeMessage(missingContext, "--context is required");
@@ -566,10 +596,10 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
     expect(result.stdout).toContain("--");
   });
 
-  test("child runs in the feature worktree; argv literal with spaces/$()/backticks arrives unchanged (no shell)", () => {
+  test("child runs in the feature worktree; argv literal with spaces/$()/backticks arrives unchanged (no shell)", async () => {
     const root = tmpRoot("mstar-sdd-exec-literal-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const writer = childWriterFixture(root);
       const record = join(root, "record.json");
       const result = runCli(
@@ -587,10 +617,10 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
     }
   });
 
-  test("context failure exits 1 and launches no child", () => {
+  test("context failure exits 1 and launches no child", async () => {
     const root = tmpRoot("mstar-sdd-exec-gate-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const writer = childWriterFixture(root);
       // Branch swap after the context file was written: the child itself is
       // the probe (it would write the probe file as its first action).
@@ -605,10 +635,10 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
     }
   });
 
-  test("child exit 7 returns 7; spawn-not-found returns 127", () => {
+  test("child exit 7 returns 7; spawn-not-found returns 127", async () => {
     const root = tmpRoot("mstar-sdd-exec-exit-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const exit7 = runCli(["sdd", "exec", "--context", f.ctxFile, "--", process.execPath, "-e", "process.exit(7)"], { cwd: f.control });
       expect(exit7.exitCode).toBe(7);
       const notFound = runCli(["sdd", "exec", "--context", f.ctxFile, "--", "definitely-not-a-real-binary-xyz"], { cwd: f.control });
@@ -621,7 +651,7 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
   test("SIGTERM is forwarded and the launcher settles at 128+15 (fixture child cleaned)", async () => {
     const root = tmpRoot("mstar-sdd-exec-term-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       // The child announces startup (handlers are installed before the child
       // can possibly run), so the kill below can only take the forwarding
       // path — never a vacuous default-disposition death.
@@ -647,10 +677,10 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
     }
   });
 
-  test("usage errors exit 2: no --context, no argv after --, relative --context", () => {
+  test("usage errors exit 2: no --context, no argv after --, relative --context", async () => {
     const root = tmpRoot("mstar-sdd-exec-usage-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const noContext = runCli(["sdd", "exec"], { cwd: root });
       expect(noContext.exitCode).toBe(2);
       expectUsageDiagnostic(noContext, "argv");
@@ -690,10 +720,10 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
     expect(rpHelp.stdout).toContain("[outfile]");
   });
 
-  test("bound task-brief writes into the control sddDir without SDD_DIR and prints an absolute path", () => {
+  test("bound task-brief writes into the control sddDir without SDD_DIR and prints an absolute path", async () => {
     const root = tmpRoot("mstar-sdd-brief-ctx-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const result = runCli(["sdd", "task-brief", f.planFile, "1", "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(f.sddDir, "task-1-brief.md"));
@@ -704,10 +734,10 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
     }
   });
 
-  test("bound review-package probes the feature worktree and lands in the control sddDir", () => {
+  test("bound review-package probes the feature worktree and lands in the control sddDir", async () => {
     const root = tmpRoot("mstar-sdd-rp-ctx-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       writeFileSync(join(f.feature, "feature-file.txt"), "feature change\n");
       git(["add", "-A"], f.feature);
       git(["commit", "-q", "-m", "feature commit"], f.feature);
@@ -723,10 +753,10 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
     }
   });
 
-  test("bound review-package refuses an artifact outside the plan (exit 1, nothing written)", () => {
+  test("bound review-package refuses an artifact outside the plan (exit 1, nothing written)", async () => {
     const root = tmpRoot("mstar-sdd-rp-ctx-esc-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       writeFileSync(join(f.feature, "feature-file.txt"), "feature change\n");
       git(["add", "-A"], f.feature);
       git(["commit", "-q", "-m", "feature commit"], f.feature);
@@ -754,10 +784,10 @@ describe("mstar sdd task-brief/review-package --context — bound artifact produ
 // ---------------------------------------------------------------------------
 
 describe("mstar sdd bound surface with a nested feature worktree", () => {
-  test("check-context launch passes for the nested feature (exit 0)", () => {
+  test("check-context launch passes for the nested feature (exit 0)", async () => {
     const root = tmpRoot("mstar-sdd-nested-launch-");
     try {
-      const f = executionFixture(root, { nested: true });
+      const f = await executionFixture(root, { nested: true });
       const result = runCli(["sdd", "check-context", "--context", f.ctxFile, "--kind", "launch"], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       expect(envelopeOf(result)).toMatchObject({
@@ -770,10 +800,10 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
     }
   });
 
-  test("source action from the control cwd is still refused for the nested feature (exit 1)", () => {
+  test("source action from the control cwd is still refused for the nested feature (exit 1)", async () => {
     const root = tmpRoot("mstar-sdd-nested-source-");
     try {
-      const f = executionFixture(root, { nested: true });
+      const f = await executionFixture(root, { nested: true });
       const result = runCli(
         ["sdd", "check-context", "--context", f.ctxFile, "--kind", "source", "--target", "src/probe.txt"],
         { cwd: f.control },
@@ -786,10 +816,10 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
     }
   });
 
-  test("bound task-brief --context lands in the control sddDir for the nested feature (exit 0)", () => {
+  test("bound task-brief --context lands in the control sddDir for the nested feature (exit 0)", async () => {
     const root = tmpRoot("mstar-sdd-nested-brief-");
     try {
-      const f = executionFixture(root, { nested: true });
+      const f = await executionFixture(root, { nested: true });
       const result = runCli(["sdd", "task-brief", f.planFile, "1", "--context", f.ctxFile], { cwd: f.control });
       expect(result.exitCode).toBe(0);
       const expected = realpathSync(join(f.sddDir, "task-1-brief.md"));
@@ -800,10 +830,10 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
     }
   });
 
-  test("bound review-package probes the nested feature and lands in the control sddDir (exit 0)", () => {
+  test("bound review-package probes the nested feature and lands in the control sddDir (exit 0)", async () => {
     const root = tmpRoot("mstar-sdd-nested-rp-");
     try {
-      const f = executionFixture(root, { nested: true });
+      const f = await executionFixture(root, { nested: true });
       writeFileSync(join(f.feature, "feature-file.txt"), "feature change\n");
       git(["add", "-A"], f.feature);
       git(["commit", "-q", "-m", "feature commit"], f.feature);
@@ -819,10 +849,10 @@ describe("mstar sdd bound surface with a nested feature worktree", () => {
     }
   });
 
-  test("bound exec child runs in the nested feature; the sentinel lands there and nowhere else", () => {
+  test("bound exec child runs in the nested feature; the sentinel lands there and nowhere else", async () => {
     const root = tmpRoot("mstar-sdd-nested-exec-");
     try {
-      const f = executionFixture(root, { nested: true });
+      const f = await executionFixture(root, { nested: true });
       const writer = childWriterFixture(root);
       const record = join(f.sddDir, "child-record.json");
       const result = runCli(["sdd", "exec", "--context", f.ctxFile, "--", process.execPath, writer, record], { cwd: f.control });
@@ -877,10 +907,10 @@ function expectSourcesUntouched(f: ExecFixture): void {
 }
 
 describe("sdd exec causal replay — same relative source writer, raw vs bound (spec A3, AC4)", () => {
-  test("relative source writer launched raw from a disposable primary reproduces the wrong-primary write", () => {
+  test("relative source writer launched raw from a disposable primary reproduces the wrong-primary write", async () => {
     const root = tmpRoot("mstar-sdd-replay-raw-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const writer = relativeSourceWriterFixture(root);
       const raw = runRaw([process.execPath, writer], f.primary);
       expect(raw.exitCode).toBe(0);
@@ -893,10 +923,10 @@ describe("sdd exec causal replay — same relative source writer, raw vs bound (
     }
   });
 
-  test("relative source writer via bound sdd exec lands in the feature only; primary/control sentinels unchanged", () => {
+  test("relative source writer via bound sdd exec lands in the feature only; primary/control sentinels unchanged", async () => {
     const root = tmpRoot("mstar-sdd-replay-bound-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const writer = relativeSourceWriterFixture(root);
       // A declared-correct context plus explicit source check with the actual
       // primary cwd fails BEFORE any writer invocation (rejection precedes
@@ -923,10 +953,10 @@ describe("sdd exec causal replay — same relative source writer, raw vs bound (
     }
   });
 
-  test("relative source writer resume repeat: a second bound launch (fresh then resume) still changes the feature only", () => {
+  test("relative source writer resume repeat: a second bound launch (fresh then resume) still changes the feature only", async () => {
     const root = tmpRoot("mstar-sdd-replay-resume-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const writer = relativeSourceWriterFixture(root);
       const fresh = runCli(["sdd", "exec", "--context", f.ctxFile, "--", process.execPath, writer], { cwd: f.primary });
       expect(fresh.exitCode).toBe(0);
@@ -945,10 +975,10 @@ describe("sdd exec causal replay — same relative source writer, raw vs bound (
     }
   });
 
-  test("relative source writer bound arm plus ignored control-artifact writes: artifacts stay control-local, sources stay clean", () => {
+  test("relative source writer bound arm plus ignored control-artifact writes: artifacts stay control-local, sources stay clean", async () => {
     const root = tmpRoot("mstar-sdd-replay-artifact-");
     try {
-      const f = executionFixture(root);
+      const f = await executionFixture(root);
       const writer = relativeSourceWriterFixture(root);
       const bound = runCli(["sdd", "exec", "--context", f.ctxFile, "--", process.execPath, writer], { cwd: f.primary });
       expect(bound.exitCode).toBe(0);

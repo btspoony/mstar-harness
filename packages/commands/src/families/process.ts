@@ -56,7 +56,7 @@ function definitions(): readonly CommandDefinition[] {
         if (!input.argv?.length) throw new SddScriptError("argv after -- must include the child executable", 2);
         const decoded: unknown = JSON.parse(fs.readFileSync(input.context, "utf8"));
         if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) throw new SddScriptError("context file must contain a JSON object", 2);
-        const context = resolveSddExecutionContext(decoded as SddExecutionContext);
+        const context = await resolveSddExecutionContext(decoded as SddExecutionContext);
         const gate = checkSddAction(context, { kind: "launch", cwd: invocation.cwd });
         if (!gate.ok) throw new SddScriptError(gate.violations.map(({ code, message }) => `${code}: ${message}`).join("; "), 1);
         if (invocation.signal.aborted) throw Object.assign(new Error("process admission cancelled"), { code: "command.cancelled" });
