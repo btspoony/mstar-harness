@@ -13,6 +13,47 @@ import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCl
 
 export type HelpReachabilityFinding = RefusalFinding;
 
+/** The manual-recovery marker prefix (em-dash U+2014), mirroring the hash-gates authorized-gate marker. */
+const MANUAL_MARKER_PREFIX = "// reachability: manual \u2014";
+
+/**
+ * Apply manual-recovery markers to a source file's reachability findings.
+ *
+ * A marker authorizes ONE site. It is recognized ONLY through full-source
+ * lexical context — the TypeScript scanner's comment trivia — never by
+ * per-line substring matching. A single-line comment trivia whose line is the
+ * finding's own line or the immediately preceding line authorizes it; a
+ * multiline block-comment continuation or a template-literal line cannot,
+ * because neither is SingleLineCommentTrivia at that position (the hash-gates
+ * lesson). A non-empty reason is required; an empty/whitespace reason turns the
+ * finding into the `invalid-manual-marker` violation.
+ */
+export function applyManualMarkers(source: ts.SourceFile, sourceText: string, findings: HelpReachabilityFinding[]): HelpReachabilityFinding[] {
+  const commentRanges = new Map<number, ts.CommentRange>();
+  const collectCommentRanges = (node: ts.Node): void => {
+    for (const range of [
+      ...(ts.getLeadingCommentRanges(sourceText, node.getFullStart()) ?? []),
+      ...(ts.getTrailingCommentRanges(sourceText, node.end) ?? []),
+    ]) commentRanges.set(range.pos, range);
+    ts.forEachChild(node, collectCommentRanges);
+  };
+  collectCommentRanges(source);
+  return findings.map((finding) => {
+    if (finding.classification !== "capability-unreachable") return finding;
+    const marker = [...commentRanges.values()].find((range) => {
+      if (range.kind !== ts.SyntaxKind.SingleLineCommentTrivia) return false;
+      const markerLine = source.getLineAndCharacterOfPosition(range.pos).line + 1;
+      return (markerLine === finding.line || markerLine === finding.line - 1) &&
+        sourceText.slice(range.pos, range.end).trimStart().startsWith(MANUAL_MARKER_PREFIX);
+    });
+    if (marker === undefined) return finding;
+    const reason = sourceText.slice(marker.pos, marker.end).trim().slice(MANUAL_MARKER_PREFIX.length).trim();
+    return reason.length > 0
+      ? { ...finding, classification: "manual-recovery", reason }
+      : { ...finding, classification: "invalid-manual-marker", reason: "manual marker requires a non-empty reason" };
+  });
+}
+
 function literalText(node: ts.Expression): string | null {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null;
 }
@@ -272,30 +313,36 @@ function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
 }
 
-function run(): number {
-  const root = resolve(import.meta.dir, "..");
-  const args = process.argv.slice(2);
+export function run(argv: string[] = process.argv.slice(2), options: { root?: string; dirs?: readonly string[] } = {}): number {
+  const root = options.root ?? resolve(import.meta.dir, "..");
+  const dirs = options.dirs ?? ["packages/engine/src", "packages/commands/src"];
+  const args = argv;
   if (args.some((arg) => arg !== "--json")) { console.error("Usage: bun scripts/lint-help-reachability.ts [--json]"); return 2; }
   try {
     const grammar = extractCliGrammar();
     const findings: HelpReachabilityFinding[] = [];
-    for (const dir of ["packages/engine/src", "packages/commands/src"]) for (const path of walkFiles(resolve(root, dir))) {
+    for (const dir of dirs) for (const path of walkFiles(resolve(root, dir))) {
       const rel = relative(root, path).split("\\").join("/");
       const source = readFileSync(path, "utf8");
-      findings.push(...scanRecoveryText(source, rel, grammar), ...scanDeclaredCapabilities(source, rel, grammar));
+      const scanned = [...scanRecoveryText(source, rel, grammar), ...scanDeclaredCapabilities(source, rel, grammar)];
+      findings.push(...applyManualMarkers(ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS), source, scanned));
     }
     let allowlist: AllowlistEntry[];
     try { allowlist = parseAllowlist(readFileSync(resolve(root, "scripts/lint-help-reachability.allowlist.json"), "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") allowlist = []; else throw error; }
     const applied = applyAllowlist(findings, allowlist, root);
-    if (args.includes("--json")) console.log(JSON.stringify({ findings: applied.findings, staleAllowlist: applied.stale, allowlist: applied.used }, null, 2));
+    const manualRecoveries = applied.findings.filter((row) => row.classification === "manual-recovery");
+    const violations = applied.findings.filter((row) => row.classification !== "manual-recovery" && row.classification !== "allowlisted");
+    if (args.includes("--json")) console.log(JSON.stringify({ findings: violations, manualRecoveries, staleAllowlist: applied.stale, allowlist: applied.used }, null, 2));
     else {
-      for (const row of applied.findings) console.log(`${row.file}:${row.line}:${row.column} ${row.classification} ${row.reason}\n  ${row.snippet}`);
+      for (const row of violations) console.log(`${row.file}:${row.line}:${row.column} ${row.classification} ${row.reason}\n  ${row.snippet}`);
+      for (const row of manualRecoveries) console.log(`manual recovery (authorized): ${row.file}:${row.line} — ${row.reason}`);
+      if (manualRecoveries.length) console.log(`Manual recoveries (${manualRecoveries.length}):\n${JSON.stringify(manualRecoveries, null, 2)}`);
       if (applied.used.length) console.log(`Allowlist (${applied.used.length}):\n${JSON.stringify(applied.used, null, 2)}`);
       if (applied.stale.length) console.error(`Stale allowlist entries: ${applied.stale.join(", ")}`);
-      console.log(`Help-reachability: ${countViolations(applied.findings)} violations; ${applied.used.length} allowlisted`);
+      console.log(`Help-reachability: ${countViolations(violations)} violations; ${manualRecoveries.length} manual recoveries; ${applied.used.length} allowlisted`);
     }
-    return exitCodeFor(applied.findings, applied.stale);
+    return exitCodeFor(violations, applied.stale);
   } catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
 }
 

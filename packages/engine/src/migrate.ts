@@ -1004,6 +1004,7 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
  * Wrap a raw fs failure on a migration target in the coordination vocabulary.
  */
 function rawTargetStoreError(filePath: string, error: unknown): CoordinationError {
+  // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
   return new CoordinationError(
     "coordination.store",
     `cannot write migration target ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
@@ -1015,17 +1016,21 @@ function writeRawMigrateTarget(filePath: string, content: Buffer): void {
   try {
     mkdirSync(dirname(filePath), { recursive: true });
   } catch (error) {
+    // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
     throw rawTargetStoreError(filePath, error);
   }
   try {
     writeFileSync(filePath, content, { flag: "wx" });
     return;
   } catch (error) {
+    // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw rawTargetStoreError(filePath, error);
     try {
+      // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
       if (!statSync(filePath).isFile()) throw rawTargetStoreError(filePath, new Error("existing target is not a regular file"));
     } catch (statError) {
       if (statError instanceof CoordinationError) throw statError;
+      // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
       throw rawTargetStoreError(filePath, statError);
     }
 }
