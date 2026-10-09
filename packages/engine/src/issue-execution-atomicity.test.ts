@@ -277,7 +277,12 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
         problems: [
           {
             path: "entries[0]",
-            causes: [{ path: "entries[0].kind", field: "kind", received: "tech-debt" }],
+            causes: [{
+              path: "entries[0].kind",
+              field: "kind",
+              received: "tech-debt",
+              expected: ["bug", "risk", "improvement", "request", "decision", "review-obligation"],
+            }],
           },
           {
             path: "entries[1]",
@@ -298,15 +303,7 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     });
     const message = (failure as Error).message;
     expect(JSON.stringify({ message, details: (failure as { details: unknown }).details })).not.toContain(secret);
-    expect(message).toContain("entries[0]");
-    expect(message).toContain("entries[1]");
-    expect(message).toContain("entries[2]");
-    expect(message).toContain("kind received");
-    expect(message).toContain("severity received");
-    expect(message).toContain("title must be nonblank");
-    expect(message).toContain("critical, high, medium, low, info");
-    expect(message).toContain("mstar schema CaptureInput");
-    expect(message).toContain("mstar plan issue-add --help");
+    expect(message).toContain("Invalid residual-add entries; correct each reported problem, then retry through mstar plan issue-add.");
     expect(await issueFacts(context)).toEqual(before);
 
     const corrected = deriveResidualEntries(
