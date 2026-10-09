@@ -90,11 +90,11 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
    `git worktree add <path> <spec_integration_branch>` (create the branch from
    the recorded base first if absent) — a linked checkout **distinct from the
    main worktree**; never reuse the primary checkout for integration.
-4. Verify the integration checkout — exists, on `spec_integration_branch`, working tree clean
-   before merge operations — via the `--entry` integration-checkout fact (`mstar worktree check
-   --workflow <id> --entry`; step 5 records the path the check reads).
-5. 经 `mstar workflow integration-worktree` 记录 canonical absolute repository-root
+4. 经 `mstar workflow integration-worktree` 记录 canonical absolute repository-root
    `integration_worktree_path` 到 ACTIVE workflow 执行行（形状以 help 为准）。主 worktree 由 Git 派生，不是该字段。
+5. Verify the recorded integration checkout — exists, on `spec_integration_branch`, working tree clean
+   before merge operations — via the `--entry` integration-checkout fact (`mstar worktree check
+   --workflow <id> --entry`).
 6. 从 **control root** 解析协调面：
    - ACTIVE authority: `<main-repo-root>/{HARNESS_DIR}/store.db` (root register, workflow/plan rows, coordinator sessions, registered inputs and workflow-wide merge exclusion)
    - authored plans: `<main-repo-root>/{PLAN_DIR}/`
