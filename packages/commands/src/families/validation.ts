@@ -11,13 +11,16 @@ import {
   activeLifecyclePlanId,
   completenessLevel,
   executionModeToN,
-  findEphemeralCitations,
-  findProvenanceCitations,
+  validateIntegrationMergeLease,
+  workflowEntryPreDispatchCheck,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findEphemeralCitations,
+  findProvenanceCitations,
   isReadOnlyAssignmentRole,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  readMainWorktree,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
@@ -65,7 +68,7 @@ const tracksSchema = z.array(
 
 type Input = {
   assignmentFile?: string; branch?: string; planId?: string; plan?: string; workflow?: string; harness?: string; integration?: string;
-  mainBranch?: string; control?: string; l2?: boolean; tracks?: { worktreePath: string; workingBranch: string }[]; files?: string[]; mode?: string; reviewers?: string[];
+  mainBranch?: string; control?: string; entry?: boolean; l2?: boolean; tracks?: { worktreePath: string; workingBranch: string }[]; files?: string[]; mode?: string; reviewers?: string[];
   target?: string; type?: string; prVariant?: boolean; dir?: string; docPath?: string; knowledgeDir?: string;
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
@@ -80,7 +83,7 @@ function assignmentExecutionMode(text: string): string {
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "dispatch.validate": z.object({ assignmentFile: z.string().optional(), branch: z.string().optional() }),
-  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), l2: z.boolean().optional(), tracks: tracksSchema.optional() }),
+  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), entry: z.boolean().optional(), l2: z.boolean().optional(), tracks: tracksSchema.optional() }),
   "worktree.qc-alignment": z.object({ files: z.array(z.string()).optional() }),
   "review.seats": z.object({ assignmentFile: z.string().optional(), mode: z.string().optional(), reviewers: z.array(z.string()).optional() }),
   lint: z.object({ target: z.string().optional(), type: z.string().optional(), prVariant: z.boolean().optional() }),
@@ -227,7 +230,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "worktree.l2.invalid");
         }
         const plan = input.plan ?? input.planId;
-        if (!plan) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)", 2);
+        if (!input.entry && !plan) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)", 2);
         const workflow = required(input.workflow, "usage: worktree check <plan-id> --workflow <id> [--harness <path>] [--integration <path>] [--main-branch <branch>] (or --plan <plan-id>)");
         if (input.control !== undefined && input.integration !== undefined) throw new SddScriptError("usage: worktree check <plan-id> --workflow <id> — pass --integration or the deprecated --control alias, not both", 2);
         const warnings: string[] = [];
@@ -246,6 +249,17 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const graph = (await readExecutionState({ harnessDir: harness })).data;
         const registered = graph.workflows.find(({ state }) => state.id === workflow);
         if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness }, "Rerun mstar worktree check --workflow <id> --plan <plan-id> with a workflow id registered in the execution authority.");
+        if (input.entry) {
+          const gate = workflowEntryPreDispatchCheck({
+            workflowId: workflow,
+            branch: registered.state.branch ?? {},
+            integrationWorktreePath: typeof registered.state.integration_worktree_path === "string" ? registered.state.integration_worktree_path : undefined,
+            mainWorktree: readMainWorktree(context.cwd),
+            lifecycleBranches: activeGraphLifecycleBranches(graph),
+            integrationLease: registered.integrationLease ?? undefined,
+          });
+          return gate.ok ? ok(id, gate) : refusal(id, gate.violations[0]?.code ?? "worktree.entry.invalid", gate.violations[0]?.message ?? "workflow-entry checks failed", { ...gate, workflowId: workflow }, "Correct every engine-enforced workflow-entry violation listed in details, then rerun mstar worktree check --workflow <id> --entry. This does not replace the full pre-dispatch checklist.");
+        }
         const planView = input.planId === undefined
           ? registered.plans.length === 1 ? registered.plans[0] : undefined
           : registered.plans.find((candidate) => candidate.plan.id === plan);
@@ -275,9 +289,15 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           rowWorkingBranch: typeof metadata.working_branch === "string" ? metadata.working_branch : "",
           planId: selectedPlanId,
         });
-        const gateResult = gateData(gate);
+        const lease = registered.integrationLease === null ? { claimed: false as const } : { claimed: true as const, lease: registered.integrationLease };
+        if (lease.claimed) {
+          const leaseGate = validateIntegrationMergeLease(lease.lease);
+          gate.violations.push(...leaseGate.violations);
+          gate.ok = gate.violations.length === 0;
+        }
+        const gateResult = { ...gateData(gate), lease };
         const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
-        return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");
+        return gate.ok ? ok(id, resultData) : refusal(id, gate.violations[0]?.code ?? "worktree.l1.invalid", gate.violations[0]?.message ?? "L1 worktree check failed", { ...gateResult, ...(warnings.length ? { warnings } : {}) }, "Correct each violation listed in the details as its fix directs, then rerun mstar worktree check.");
       }
       case "worktree.qc-alignment": {
         const files = input.files ?? [];
@@ -407,7 +427,7 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
   "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection." },
-  "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Run the existing L1/L2 worktree pre-dispatch gate." },
+  "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts or the L1/L2 worktree pre-dispatch gate." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
   lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }], effects: ["read", "validate"], description: "Lint harness artifacts by content type." },

@@ -8,12 +8,10 @@ import {
   migrateHarnessTree,
   parseCompassFrontmatter,
   pushCadenceProbe,
-  readExecutionAuthority,
   readRegisteredWorkflowFromExecutionAuthority,
   resolveProcessHarnessDir,
   setArtifactStore,
   validateProjectRegister,
-  validateIntegrationMergeLease,
   validateWorkflowSnapshot,
   WORKFLOW_DELIVERY_KINDS,
   type MigratePlan,
@@ -98,34 +96,6 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             return { version: 1, command: id, status: "error", code: "migrate.apply-failure", exitCode: 2, message: messageOf(error) };
           }
         } catch (error) { return engineFailure(id, error, "migrate.refused"); }
-      },
-    }),
-    command({
-      id: "lease.verify-integration",
-      cli: { path: ["lease", "verify-integration"], aliases: [], arguments: [], options: [{ key: "workflow", flags: "--workflow <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false }] },
-      input: z.object({ workflow: z.string().min(1), harness: z.string().optional() }), output, effects: ["read", "validate"], description: "Verify the workflow integration merge lease without mutation.",
-      async execute(input, context) {
-        const id = "lease.verify-integration";
-        let lease: unknown;
-        try {
-          const root = harnessDir(context, input.harness);
-          assertWorkflowId(input.workflow);
-          // The pre-activation snapshot arm is retired (issue #428): the ACTIVE
-          // execution authority is the only source, so a control root without
-          // one refuses out of `readExecutionAuthority` instead of reading
-          // leftover JSON.
-          const read = await readExecutionAuthority({ harnessDir: root }, { workflowId: input.workflow });
-          // The scoped addressed read answers an `ExecutionState` shape whose
-          // lease fact lives on the addressed workflow ENTRY
-          // (`ExecutionState.workflows[0].integrationLease`), never at the DTO
-          // root — reading the root would always answer `claimed:false` and
-          // skip lease validation entirely.
-          const addressed = read.data as { workflows?: Array<{ integrationLease?: unknown }> };
-          lease = addressed.workflows?.[0]?.integrationLease ?? undefined;
-          if (lease === undefined) return ok(id, { workflow: input.workflow, claimed: false });
-          const result = validateIntegrationMergeLease(lease);
-          return result.ok ? ok(id, { workflow: input.workflow, claimed: true, lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.merge-lease.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations }, recovery: "Resolve each reported merge-lease violation, then run mstar lease verify-integration --workflow <workflow-id>." });
-        } catch (error) { return engineFailure(id, error, "lease.verify-integration.refused"); }
       },
     }),
     command({
