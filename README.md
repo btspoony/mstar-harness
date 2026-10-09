@@ -4,7 +4,7 @@
 
 # [Morning Star](https://github.com/btspoony/mstar-harness)
 
-Plan, implement, review, verify, merge — a delivery process for agent coding hosts.
+Plan, implement, review, verify, merge — a delivery process for AI-assisted development.
 
 English / [中文](README_CN.md)
 
@@ -16,11 +16,11 @@ English / [中文](README_CN.md)
 
 </div>
 
-Morning Star is a plugin for agent coding hosts: dsh, omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex. It turns a request into a delivery process instead of a chat — a `project-manager` agent clarifies the work and keeps a plan, specialist agents implement it, and independent review and acceptance passes run before anything is called done. The mechanically checkable parts of that process (workflow state, branches, gates) are implemented by the shipped TypeScript engine; judgment (direction, role choice, review verdicts) stays with the `mstar-*` skills — plain Markdown you can read and change.
+Morning Star brings a delivery process to the AI coding tools you already use — dsh, omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex. You describe what you want; a `project-manager` agent clarifies the request, keeps a plan, and carries the work from requirements through implementation, review, and acceptance to a pull request. Requirements, architecture, implementation, review, acceptance, and audits each go to a role that owns that part.
 
 **Why use it**
 
-- **The same loop for every request** — plan, implement, review, verify: a small fix and a multi-plan iteration go through the same stages, and work can be paused and resumed without losing its trail.
+- **From request to pull request** — describe the work once; the PM keeps the plan, brings in the right specialists, and drives everything to a pull request. If work stops partway, the plan records where it left off so the work can resume later.
 - **Specialists instead of one long prompt** — a PM orchestrates; separate roles own requirements, architecture, implementation, QC, acceptance, audits, and ops, each with a narrow brief.
 - **A trail you can audit** — plans, findings, review reports, and decisions are recorded under the harness directory in your repo, not just in the chat.
 - **Boundaries are explicit** — the workflow opens pull requests and stops at merge-ready; merging stays your call. Audits read and report, and anything that touches a real environment needs your explicit authorization.
@@ -32,15 +32,14 @@ Prerequisites: the CLI launches through **Bun >=1.4.0** — `npx` / `bunx` fetch
 | Host | Install |
 |------|---------|
 | dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh` — needs the `dsh` CLI on `PATH`; installs the plugin plus LLM fallbacks (`--no-fallbacks` skips the second) |
-| omp | `npx @mstar-harness/cli init --target omp` — uses the `omp` CLI when present, otherwise falls back to `omp plugin install @mstar-harness/omp` |
+| omp | `npx @mstar-harness/cli init --target omp` — needs the `omp` CLI installed |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` — creates a real plugin checkout, so `git` is required |
 | Kimi Code | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`, then install **morning-star-harness** from Settings → Plugin Management |
 | Codex | `npx @mstar-harness/cli init --target codex` — needs the `codex` CLI; registers the repo marketplace and adds `morning-star-harness@mstar-repo` |
-| Any Agent Plugins v1.0.0 client | point it at this repo root — `plugin.json` plus `skills/` is the portable package |
 
-`init` writes project-scoped config by default (`--scope global` installs host-wide; Codex's global scope skips the seven slash-command skills), and after a successful run it installs the matching `@mstar-harness/cli` version globally — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
+`init` defaults to `--scope project` (`--scope global` installs host-wide, and Codex's global scope skips the seven slash-command skills; for dsh the flag has no effect — its profile is machine-global), and after a successful run it installs the matching `@mstar-harness/cli` version globally — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
 
 The published binary is `mstar-harness`. The short alias `mstar` exists only where this package is installed, and an unrelated npm package claims the same name — use the long form when in doubt. Manual installs, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
 
@@ -87,7 +86,7 @@ The audit commands read and report; they do not edit your code. Two boundaries t
 
 1. **Clarify and plan.** The PM turns the request into a written plan — scope, tasks, acceptance — and, for an iteration, locks the direction with you first.
 2. **Implement on a branch.** Work happens on feature branches, and each task goes to the role that fits it.
-3. **Review and verify independently.** Per-task review, then a plan-level QC review, then acceptance by QA or the PM: separate passes with their own evidence, not a re-read of the implementer's summary.
+3. **Review and verify independently.** Multi-task plans get a per-task review, then a plan-level QC review; a hotfix or a single small task runs a lighter route. Acceptance — by QA or the PM — is a separate pass with its own evidence, not a re-read of the implementer's summary.
 4. **Close out with evidence.** Confirmed findings become tracked issues or fixes; a plan is completed only with its verification evidence, and the workflow's pull request reaches merge-ready.
 5. **Merge.** Merging is a separate authorization — request it explicitly, or merge yourself. After the merge, the workflow verifies the result and closes.
 
@@ -95,14 +94,13 @@ The engine checks the mechanically checkable parts of this process — workflow 
 
 ## Roles and skills
 
-A **project-manager** runs your session and dispatches the specialists: requirements and architecture, backend and frontend implementation, QC review, acceptance, codebase and PR audits, operations, and writing. Their instructions are the `mstar-*` skills — readable Markdown that is also the single source of truth for the process — and `@mstar-harness/engine` implements the checkable half of what they declare. Nothing needs to be loaded or read by hand to use the harness: enter the PM and describe the task.
+A **project-manager** runs your session and dispatches the work: requirements and architecture, backend and frontend implementation, QC review, acceptance, codebase and PR audits, operations, and writing each go to a dedicated role. Every role follows the `mstar-*` skills — plain Markdown files you can read and adapt to your team's conventions.
 
 ## Command line
 
 The `mstar-harness` CLI covers what you do outside a session: issues, roadmap, workflow state, checks, the dashboard, and MCP.
 
 - **Ask the command itself.** `--help` shows the input a command expects; for issue write verbs it lists each payload field with its type and whether it is required or only required for a particular disposition. A usage refusal tells you what it found wrong, the help route to read, and how to recover.
-- **Output is JSON**, so scripts and agents can parse it; exit codes are `0` success, `1` refused, `2` usage, and `3` for a missing SDD task.
 
 ```text
 mstar-harness --help                        # command families

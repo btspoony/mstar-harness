@@ -4,7 +4,7 @@
 
 # [Morning Star](https://github.com/btspoony/mstar-harness)
 
-规划、实现、审查、验证、合并 —— 给 agent 编码宿主的一套交付流程。
+规划、实现、审查、验证、合并 —— 面向 AI 辅助开发的交付流程。
 
 [English](README.md) / 中文
 
@@ -16,11 +16,11 @@
 
 </div>
 
-Morning Star 是面向 agent 编码宿主的插件，支持 dsh、omp、OpenCode、Cursor、Kimi Code、ZCode 与 Codex。它把一次请求变成可执行的交付流程，而不是一段聊天：`project-manager` 先澄清需求并维护计划，专职角色负责实现，独立的审查与验收在交付前把关。流程中可机械校验的部分（工作流状态、分支、门禁）由随包发布的 TypeScript 引擎实现；判断类内容（方向、角色选择、审查结论）留在 `mstar-*` skills 中 —— 都是可以直接阅读和修改的 Markdown。
+Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支持 dsh、omp、OpenCode、Cursor、Kimi Code、ZCode 与 Codex。你描述需求，`project-manager` 负责澄清、维护计划，并把工作从需求推进到实现、审查、验收，直到 PR。需求、架构、实现、审查、验收、审计各自有专属角色负责。
 
 **为什么用它**
 
-- **每个请求都走同一条流程** —— 规划、实现、审查、验证：一次小修复和多 plan 迭代使用相同的阶段，而且随时可以暂停、恢复，过程记录不会丢。
+- **从请求到 PR** —— 描述一次需求即可：PM 维护计划、召集合适的专职角色，并推进到 PR；工作中断时，计划里记录了进度，方便之后继续。
 - **由专职角色分工，而不是一段超长 prompt** —— PM 负责编排；需求、架构、实现、QC、验收、审计、运维各有专属角色与明确边界。
 - **留下可审计的轨迹** —— 计划、发现、审查报告与决策都记录在仓库的 harness 目录里，而不只是留在对话中。
 - **边界都是明确的** —— 流程负责开 PR 并停在 merge-ready；是否合并由你决定。审计只读并给出报告；任何触及真实环境的操作都需要你的明确授权。
@@ -33,15 +33,14 @@ Morning Star 是面向 agent 编码宿主的插件，支持 dsh、omp、OpenCode
 | 宿主 | 安装 |
 |------|------|
 | dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh` —— 需要 PATH 上有 `dsh` CLI；会安装插件与 LLM fallbacks（`--no-fallbacks` 跳过后者） |
-| omp | `npx @mstar-harness/cli init --target omp` —— 有 `omp` CLI 时直接使用，否则回退到 `omp plugin install @mstar-harness/omp` |
+| omp | `npx @mstar-harness/cli init --target omp` —— 需要已安装 `omp` CLI |
 | OpenCode | `npx @mstar-harness/cli init --target opencode` |
 | Cursor | `npx @mstar-harness/cli init --target cursor` —— 会创建真实的插件 checkout，需要 `git` |
 | Kimi Code | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，再在 设置 → 插件管理 中安装 **morning-star-harness** |
 | Codex | `npx @mstar-harness/cli init --target codex` —— 需要 `codex` CLI；会注册仓库 marketplace 并添加 `morning-star-harness@mstar-repo` |
-| 任意 Agent Plugins v1.0.0 客户端 | 将客户端指向本仓库根 —— `plugin.json` 加 `skills/` 即便携包 |
 
-`init` 默认写入 project scope 的配置（`--scope global` 安装到宿主全局；Codex 的 global scope 不会安装七条斜杠命令 skill），成功后还会全局安装同版本的 `@mstar-harness/cli` —— 加 `--no-global-cli` 可跳过。用 `npx @mstar-harness/cli doctor --target <host>` 检查结果，它会同时报告 MCP 配置为 `aligned`、`mismatch` 或 `unavailable`。
+`init` 默认使用 `--scope project`（`--scope global` 装到宿主全局；Codex 的 global scope 不安装七条斜杠命令 skill；对 dsh 该参数不生效 —— 它的 profile 是机器全局的），成功后还会全局安装同版本的 `@mstar-harness/cli` —— 加 `--no-global-cli` 可跳过。用 `npx @mstar-harness/cli doctor --target <host>` 检查结果，它会同时报告 MCP 配置为 `aligned`、`mismatch` 或 `unavailable`。
 
 CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本包的环境中存在，而且有一个同名 npm 包声明了同样的名字 —— 有疑问时用长名。手动安装、路径布局与各宿主说明见 [`INSTALL.md`](INSTALL.md)。
 
@@ -88,7 +87,7 @@ CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本
 
 1. **澄清并规划。** PM 把请求落成书面计划 —— 范围、任务、验收 —— 迭代场景下先与你锁定方向。
 2. **在分支上实现。** 工作发生在功能分支上，每个任务交给合适的角色。
-3. **独立审查与验证。** 先 per-task review，再 plan 级 QC 审查，然后由 QA 或 PM 验收：各环节独立取证，而不是复述实现者的总结。
+3. **独立审查与验证。** 多任务 plan 先做 per-task review，再做 plan 级 QC 审查；hotfix 或单个小任务走更轻的通道。随后由 QA 或 PM 验收：这是独立取证的一环，而不是复述实现者的总结。
 4. **带证据收尾。** 已确认的发现转成跟踪中的 issue 或修复；plan 只有在验证证据齐全时才标记完成，workflow 的 PR 推进到 merge-ready。
 5. **合并。** 合并是单独的一次授权 —— 你可以显式授权，也可以自己合并。合并之后，workflow 会验证结果并关闭。
 
@@ -96,14 +95,13 @@ CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本
 
 ## 角色与技能
 
-**project-manager** 在你的会话中运行并派发专职角色：需求与架构、后端与前端实现、QC 审查、验收、代码库与 PR 审计、运维、写作。这些角色的规则就是 `mstar-*` skills —— 可阅读的 Markdown，同时也是流程的唯一事实来源；`@mstar-harness/engine` 实现其中可校验的那一半。使用 harness 不需要手动加载或阅读任何内容：进入 PM，描述任务即可。
+**project-manager** 在你的会话中运行并派发工作：需求与架构、后端与前端实现、QC 审查、验收、代码库与 PR 审计、运维、写作各自有专属角色。每个角色遵循 `mstar-*` skills 中的规则 —— 都是可以直接阅读、并按自己团队习惯调整的 Markdown。
 
 ## 命令行
 
 `mstar-harness` CLI 覆盖会话之外的事务：issue、roadmap、工作流状态、各类校验、看板与 MCP。
 
 - **直接问命令本身。** `--help` 会列出命令期望的输入；对 issue 的写操作，它还会逐条列出 payload 字段的类型，以及必填还是仅在特定处置方式下必填。用法被拒绝时，它会说明发现的问题、该看哪条 help，以及如何恢复。
-- **输出是 JSON**，便于脚本和 agent 解析；退出码为 `0` 成功、`1` 拒绝、`2` 用法错误，缺失 SDD task 时为 `3`。
 
 ```text
 mstar-harness --help                        # 命令族
