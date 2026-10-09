@@ -43,7 +43,7 @@ import type { AgentFlowView } from '../src/index.ts'
 import type { SubagentStartRequest, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedV2Tree, startViaNativeChannel, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedActiveWorkflow, startViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -126,16 +126,13 @@ function flowOf(app: BootResult): AgentFlowView {
 }
 
 /**
- * Create a temp harness dir seeded with a minimal v2 tree (root status.json
- * + one active workflow `wf-1` + its snapshot) — the v3 write-path
- * precondition: the agent-flow writer / ledger append only to an ACTIVE
- * workflow .
+ * Create a temp harness dir seeded with one ACTIVE execution workflow; the
+ * writer target is selected from the ACTIVE graph.
  */
 async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string; workflowDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   const harnessDir = join(root, 'harness')
-  await mkdir(harnessDir, { recursive: true })
-  await seedV2Tree(harnessDir)
+  await seedActiveWorkflow(harnessDir)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows/wf-1') }
 }
 
@@ -299,6 +296,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
         prompt: VALID_FORK,
         violations: [],
         hard: false,
+        resolvedWorkflowDir: workflowDir,
         pairing,
       })
       expect(pairing.dispatchByCallId.get('sess-1\u0000fork-c1')).toBeDefined()
