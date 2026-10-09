@@ -599,39 +599,14 @@ export async function bindCoordinatorIdentity(
 // T21 boundary marker: its ACTIVE read veto remains until T21 removes it.
 
 /**
- * The §4.3 authority veto of a JSON recovery, or `undefined` when the file
- * route still answers. An ACTIVE authority keeps the store's own code
- * (`execution.consumer-not-ready`) and adds the redirect this adapter owes the
- * caller: recovery then belongs to the existing DB recovery verb with its
- * execution token and stop attestation, never to this JSON path. A store that
- * exists and cannot be read keeps ITS own refusal code, message AND engine
- * record — the thrown `StoreError` travels with the refusal so the boundary can
- * project its schema-version facts and the loaded-module provenance; masking it
- * as a Prepare refusal would hide a real store fault.
+ * T21-owned read-veto call site retained by the production cut. Removing this
+ * orphaned helper belongs to T21; it must not be wired back into ACTIVE flow.
  */
-function authorityRefusal(
-  harnessRoot: string,
-): ({ ok: false; code: string; message: string; error?: unknown; guidance?: string }) | undefined {
+function authorityRefusal(harnessRoot: string): CoordinatorIdentityOutcome | undefined {
   try {
     assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
   } catch (error) {
-    const code = codeOf(error);
-    // The engine's own message stays FIRST and unmodified — its code, message
-    // and COMPLETE structured details are the caller's evidence. This adapter
-    // only APPENDS the redirect it owes for an ACTIVE authority, and it does so
-    // as separate guidance so the boundary can place it after whatever recovery
-    // advice the engine path adds for an incompatible loaded build.
-    if (code !== "execution.consumer-not-ready") return { ok: false, code, message: messageOf(error), error };
-    return {
-      ok: false,
-      code,
-      message: messageOf(error),
-      error,
-      guidance:
-        "Coordinator recovery of a workflow under an ACTIVE execution authority belongs to the existing DB recovery " +
-        "verb (`mstar session recover`) with its execution token and stop attestation; this JSON Prepare path never " +
-        "runs against an active store.",
-    };
+    return { ok: false, isError: true, code: codeOf(error), text: messageOf(error), details: { error } };
   }
   return undefined;
 }
@@ -717,8 +692,8 @@ export async function recoverCoordinatorIdentity(
  * revocation and the immutable receipt — and the operator's attestation is
  * forwarded untouched to `validateActivationAttestation`. This adapter adds only
  * the caller-shape refusals (already aggregated by the shared classifier, which
- * validates the holder under the same public-session-id rule the JSON stop
- * assertion uses and keeps the missing attestation an `unauthorized` verdict)
+ * validates the holder against the shared public-session-id rule and keeps the
+ * missing attestation an `unauthorized` verdict)
  * and the host-derived identity. It reads the workflow token from the addressed
  * authority when the operator omits `expected` (the recovery verb REQUIRES an
  * explicit token) and mints the operation id when omitted, and it never echoes
