@@ -352,7 +352,21 @@ export function renderCommandContract(
   const payloadFields = payloadKeys.filter((key) => inputProperties.has(key));
   const payloadContracts = payloadKeys.filter((key) => !inputProperties.has(key));
   if (payloadFields.length > 0) {
-    lines.push(`Payload fields: ${payloadFields.join(", ")}`);
+    const registryFields = descriptor.payloadFields.payload;
+    if (registryFields !== undefined) {
+      const fields = registryFields.map((field) => {
+        const requiredWhen = field.requiredWhen;
+        const requiredness = field.required
+          ? "required"
+          : requiredWhen?.length
+            ? `requiredWhen: ${requiredWhen.join(" or ")}`
+            : undefined;
+        return `${field.name}${requiredness === undefined ? "" : ` (${requiredness})`} (${field.type})`;
+      });
+      lines.push(`Payload fields: ${fields.join(", ")}`);
+    } else {
+      lines.push(`Payload fields: ${payloadFields.join(", ")}`);
+    }
     if (route === "cli") lines.push("Payload field values arrive as JSON strings and are decoded against the declared schema.");
   }
   if (payloadContracts.length > 0) {

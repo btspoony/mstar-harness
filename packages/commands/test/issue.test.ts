@@ -5,6 +5,7 @@ import path from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
+import { z } from "zod";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -178,6 +179,86 @@ describe("issue command family", () => {
     }, context);
     expect(conflict).toMatchObject({ status: "refused", code: "store.operation-conflict" });
     expect(await issueState(context)).toEqual(beforeReplay);
+  });
+
+  test("closure payload requiredness follows effective disposition", async () => {
+    const context = await testContext();
+    const added = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/closure-target", rootCauseKey: "closure-target", acceptanceKey: "closure-target", occurrenceKey: "closure-target" }),
+      operationId: "closure-target-seed",
+      actor: "project-manager",
+    }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const target = added.data as { issueId: string };
+    const duplicateDefinition = definition("issue.duplicate");
+    const duplicateContract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.duplicate");
+    const duplicatePayload = duplicateDefinition.payloads?.payload;
+    if (!(duplicateDefinition.input instanceof z.ZodObject) || duplicateContract === undefined || duplicatePayload === undefined) {
+      throw new Error("missing issue.duplicate composed payload contract");
+    }
+    const composedSchema = duplicateDefinition.input.safeExtend({ payload: duplicatePayload.schema.optional() });
+    const resolvedAdmission = admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "resolved",
+      payload: { reason: "acceptance verified", references: ["qa/evidence.md"], alignmentRef: "QA gate" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema);
+    expect(resolvedAdmission.success).toBe(true);
+    const waivedAdmission = admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "waived",
+      payload: { reason: "outside accepted scope", scope: "legacy behavior", alignmentRef: "user approval" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema);
+    expect(waivedAdmission.success).toBe(true);
+
+
+    const duplicateSource = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/closure-duplicate", rootCauseKey: "closure-duplicate", acceptanceKey: "closure-duplicate", occurrenceKey: "closure-duplicate" }),
+      operationId: "closure-duplicate-seed",
+      actor: "project-manager",
+    }, context);
+    expect(duplicateSource.status).toBe("ok");
+    if (duplicateSource.status !== "ok") return;
+    const duplicate = duplicateSource.data as { issueId: string; revision: number };
+    const duplicateClosure = await executeCommand("issue.close", {
+      id: duplicate.issueId,
+      expect: duplicate.revision,
+      disposition: "duplicate",
+      payload: { reason: "same issue", canonicalIssueId: target.issueId },
+      operationId: "closure-duplicate",
+      actor: "project-manager",
+    }, context);
+    expect(duplicateClosure).toMatchObject({ status: "ok" });
+
+    const unresolvedSource = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/closure-default", rootCauseKey: "closure-default", acceptanceKey: "closure-default", occurrenceKey: "closure-default" }),
+      operationId: "closure-default-seed",
+      actor: "project-manager",
+    }, context);
+    expect(unresolvedSource.status).toBe("ok");
+    if (unresolvedSource.status !== "ok") return;
+    const unresolved = unresolvedSource.data as { issueId: string; revision: number };
+    const missingReferences = await executeCommand("issue.close", {
+      id: unresolved.issueId,
+      expect: unresolved.revision,
+      payload: { reason: "acceptance verified", alignmentRef: "QA gate" },
+      operationId: "closure-default",
+      actor: "project-manager",
+    }, context);
+    expect(missingReferences).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    const invalidOpen = await executeCommand("issue.duplicate", {
+      id: unresolved.issueId,
+      expect: unresolved.revision,
+      disposition: "open",
+      payload: { reason: "not terminal" },
+      operationId: "closure-open",
+      actor: "project-manager",
+    }, context);
+    expect(invalidOpen).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
   });
 
   test("malformed capture is rejected without creating an issue", async () => {

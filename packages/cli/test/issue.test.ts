@@ -131,15 +131,19 @@ describe("mstar issue CLI bundle", () => {
     const closureFields = closurePayload.fields;
     expect(closureFields.find((field) => field.name === "references")).toMatchObject({
       required: false,
-      requiredWhen: ["close"],
+      requiredWhen: ["resolved"],
     });
     expect(closureFields.find((field) => field.name === "canonicalIssueId")).toMatchObject({
       required: false,
-      requiredWhen: ["duplicate", "supersede"],
+      requiredWhen: ["duplicate", "superseded"],
     });
     expect(closureFields.find((field) => field.name === "scope")).toMatchObject({
       required: false,
-      requiredWhen: ["waive"],
+      requiredWhen: ["waived"],
+    });
+    expect(closureFields.find((field) => field.name === "alignmentRef")).toMatchObject({
+      required: false,
+      requiredWhen: ["resolved", "waived"],
     });
     const reopenSchema = runBundle("bun-shebang", ["schema", "IssueReopen"], process.cwd());
     expect(reopenSchema.exitCode).toBe(0);

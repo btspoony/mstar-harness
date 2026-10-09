@@ -200,8 +200,17 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         write,
       ));
     }
-    const disposition = terminalDisposition[id.slice("issue.".length)];
-    if (disposition !== undefined) return await runMutation((write) => closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, write));
+    const defaultDisposition = terminalDisposition[id.slice("issue.".length)];
+    if (defaultDisposition !== undefined) {
+      const disposition = (input.disposition as TerminalDisposition | undefined) ?? defaultDisposition;
+      return await runMutation((write) => closeIssue(
+        context,
+        requiredId(input),
+        disposition,
+        validatePayload(input, "ClosureEvidence", disposition) as ClosureEvidence,
+        write,
+      ));
+    }
     if (id === "issue.link") return await runMutation((write) => linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, write));
     throw new Error(`unsupported issue command ${id}`);
   } catch (error) {
@@ -229,10 +238,10 @@ const expectedRevisionVerbs: Record<string, true> = {
   supersede: true,
   link: true,
 };
-function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
+function fieldSchema(field: PayloadFieldSchema, condition?: string): z.ZodType {
   let schema: z.ZodType;
   if (field.type === "object") {
-    schema = z.object(Object.fromEntries(Object.entries(field.properties ?? {}).map(([name, child]) => [name, fieldSchema(child, verb)])));
+    schema = z.object(Object.fromEntries(Object.entries(field.properties ?? {}).map(([name, child]) => [name, fieldSchema(child, condition)])));
   } else if (field.type === "string[]") {
     let array = z.array(z.string());
     if (field.minItems !== undefined) array = array.min(field.minItems);
@@ -259,12 +268,12 @@ function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
     schema = z.unknown();
   }
   if (field.nullable) schema = schema.nullable();
-  return field.required || field.requiredWhen?.includes(verb) ? schema : schema.optional();
+  return field.required || (condition !== undefined && field.requiredWhen?.includes(condition) === true) ? schema : schema.optional();
 }
 
-function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, verb: string): z.ZodType {
+function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition?: string): z.ZodType {
   const fields = ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>;
-  return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, verb)])));
+  return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, condition)])));
 }
 
 /**
@@ -281,9 +290,9 @@ function payloadDiagnostics(error: z.ZodError, value: unknown): RefusalDiagnosti
   }));
 }
 
-function validatePayload(input: IssueInput, typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, verb: string): unknown {
+function validatePayload(input: IssueInput, typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition: string): unknown {
   const value = payload(input);
-  const result = payloadSchema(typeName, verb).safeParse(value);
+  const result = payloadSchema(typeName, condition).safeParse(value);
   if (!result.success) {
     const diagnostics = payloadDiagnostics(result.error, value);
     const paths = diagnostics.map((diagnostic) => diagnostic.path ?? "payload");
@@ -354,7 +363,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     ...(payloadType[verb] !== undefined
-      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], verb), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb]), registryName: payloadType[verb], help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };
