@@ -1,9 +1,10 @@
 {
   "mcp": {
-    "morning-star": {
-      "type": "local",
-      "command": ["npx", "@mstar-harness/cli", "mcp"],
-      "enabled": true
+    "servers": {
+      "morning-star": {
+        "type": "local",
+        "command": ["npx", "@mstar-harness/cli", "mcp"]
+      }
     }
   }
 }
