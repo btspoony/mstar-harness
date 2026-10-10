@@ -35,7 +35,7 @@ type WriteGateServices = {
   logger?: StatusLogger;
 };
 
-type GatedDocument = { harnessDir: string; kind: Engine.HarnessDocKind };
+type AuthorityRefusal = { code: string; message: string };
 
 const STORE_NAMES: Record<string, true> = {
   "store.db": true,
