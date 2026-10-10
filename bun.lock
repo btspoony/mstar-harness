@@ -223,6 +223,7 @@
       "version": "3.11.2",
       "dependencies": {
         "@opencode/plugin": "2.0.26",
+        "@opencode/schema": "2.0.26",
         "effect": "4.0.0-rc.112",
       },
       "devDependencies": {

@@ -1,5 +1,5 @@
 /** Lazy, cached access to engine APIs so optional/newer exports cannot make the
- * native plugin fail module linking. These seams intentionally expose only the
+ * native plugin fail module linking. Coordination/store seams expose only the
  * ACTIVE execution-authority route; there is no pre-activation snapshot/file
  * fallback or retired register API in this package. */
 
@@ -17,10 +17,20 @@ type ActiveStoreApi = Pick<
   | "readExecutionSource"
   | "resolveExecutionReadRoute"
 >;
+export type DispatchGateApi = Pick<
+  EngineModule,
+  | "applyEnforcement"
+  | "composeDispatchGate"
+  | "isReadOnlyAssignmentRole"
+  | "parseAssignmentFields"
+  | "resolveHarnessDir"
+  | "resolveRepoEnforcement"
+>;
 
 let validatorsPromise: Promise<CoordinationValidators | null> | undefined;
 let directoryResolversPromise: Promise<DirectoryResolvers | null> | undefined;
 let activeStoreApiPromise: Promise<ActiveStoreApi | null> | undefined;
+let dispatchGateApiPromise: Promise<DispatchGateApi | null> | undefined;
 
 export function loadCoordinationValidators(): Promise<CoordinationValidators | null> {
   validatorsPromise ??= import("@mstar-harness/engine").then((engine) => {
@@ -69,4 +79,25 @@ export function loadActiveStoreApi(): Promise<ActiveStoreApi | null> {
     };
   }).catch(() => null);
   return activeStoreApiPromise;
+}
+export function loadDispatchGateApi(): Promise<DispatchGateApi | null> {
+  dispatchGateApiPromise ??= import("@mstar-harness/engine").then((engine) => {
+    if (
+      typeof engine.applyEnforcement !== "function" ||
+      typeof engine.composeDispatchGate !== "function" ||
+      typeof engine.isReadOnlyAssignmentRole !== "function" ||
+      typeof engine.parseAssignmentFields !== "function" ||
+      typeof engine.resolveHarnessDir !== "function" ||
+      typeof engine.resolveRepoEnforcement !== "function"
+    ) return null;
+    return {
+      applyEnforcement: engine.applyEnforcement,
+      composeDispatchGate: engine.composeDispatchGate,
+      isReadOnlyAssignmentRole: engine.isReadOnlyAssignmentRole,
+      parseAssignmentFields: engine.parseAssignmentFields,
+      resolveHarnessDir: engine.resolveHarnessDir,
+      resolveRepoEnforcement: engine.resolveRepoEnforcement,
+    };
+  }).catch(() => null);
+  return dispatchGateApiPromise;
 }
