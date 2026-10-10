@@ -59,7 +59,7 @@ describe("shared host-presence probe (injectable runner)", () => {
       ["omp", "omp", "Install Oh My Pi"],
       ["codex", "codex", "Install the Codex CLI"],
       ["dsh", "dsh", "Install the DeepSeek Harness CLI"],
-      ["cursor", "cursor-agent", "Install Cursor (https://cursor.com) — the Cursor IDE / cursor-agent CLI — then re-run init"],
+      ["cursor", "cursor-agent", "https://cursor.com"],
       ["kimi", "kimi", "https://www.kimi.com/code/docs/kimi-code-cli/"],
     ] as const;
     const runner: ProbeCommandRunner = async () => {
@@ -75,6 +75,11 @@ describe("shared host-presence probe (injectable runner)", () => {
       expect(refusal).toBeInstanceOf(HostPresenceRefusal);
       expect(refusal).toMatchObject({ target, binary });
       expect((refusal as Error).message).toContain(hint);
+      if (target === "cursor") {
+        expect((refusal as Error).message).toContain("Install Cursor");
+        expect((refusal as Error).message).toContain("cursor-agent CLI");
+        expect((refusal as Error).message).toContain("re-run init");
+      }
     }
   });
 
@@ -222,7 +227,7 @@ describe("repo-built CLI host-presence smoke", () => {
       omp: "omp plugin install @mstar-harness/omp",
       codex: "npm install -g @openai/codex",
       dsh: "pnpm add -g @deepseek-ai/dsh",
-      cursor: "Install Cursor (https://cursor.com) — the Cursor IDE / cursor-agent CLI — then re-run init",
+      cursor: "https://cursor.com",
       kimi: "https://www.kimi.com/code/docs/kimi-code-cli/",
     };
     const previewLine = {
@@ -236,6 +241,11 @@ describe("repo-built CLI host-presence smoke", () => {
       const refused = smokeCli(target, "missing");
       expect(refused.result.exitCode).not.toBe(0);
       expect(refused.output).toContain(installLine[target]);
+      if (target === "cursor") {
+        expect(refused.output).toContain("Install Cursor");
+        expect(refused.output).toContain("cursor-agent CLI");
+        expect(refused.output).toContain("re-run init");
+      }
       expect(existsSync(path.join(refused.root, ".gitignore"))).toBe(false);
       expect(readFileSync(path.join(refused.home, ".mstar", "harness", ".omp-plugin", "plugin.json"), "utf8")).toBe("{}");
       console.log(`[smoke ${target} real/missing] ${refused.output.split("\n").find((line) => line.includes(installLine[target]))}`);
