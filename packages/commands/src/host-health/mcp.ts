@@ -343,10 +343,20 @@ export function diagnoseMcpTarget(
     if (!parseFailed && parsed === null) errors.push(`MCP config ${relativeConfig} is not a JSON object.`);
     if (parsed !== null) {
       const mcpConfig = format === "mcp" ? record(parsed.mcp) : null;
+      const nestedServers = mcpConfig === null ? null : record(mcpConfig.servers);
+      const serversValueIsLaunchEntry = nestedServers !== null && (
+        typeof nestedServers.command === "string"
+        || Array.isArray(nestedServers.command)
+        || Array.isArray(nestedServers.args)
+      );
+      const hasNestedV2Shape = target === "opencode"
+        && mcpConfig !== null
+        && Object.hasOwn(mcpConfig, "servers")
+        && !serversValueIsLaunchEntry;
       const servers = format === "mcpServers"
         ? parsed.mcpServers
-        : target === "opencode" && mcpConfig !== null && Object.hasOwn(mcpConfig, "servers")
-          ? mcpConfig.servers
+        : hasNestedV2Shape
+          ? mcpConfig!.servers
           : mcpConfig;
       const serverRecord = record(servers);
       if (serverRecord === null) {
