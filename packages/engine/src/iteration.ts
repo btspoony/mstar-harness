@@ -729,7 +729,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
                 "high",
                 "PHASE6_DANGLING_LEASE",
                 "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.",
-                "Recovery is authority-specific: pre-activation FILE uses `mstar workflow recover-coordinator --session <prior-envelope> --operation-id <id> --reason <reason> --authorization-ref <reference> --stopped <prior-id> --attestation <absolute-json>`; ACTIVE uses `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. Only recover/close while the lifecycle is running; if already terminal, preserve it and escalate an explicit workflow residual.",
+                "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Inspect the workflow and token with `mstar status validate --workflow <id>`, then use the supported ACTIVE recovery `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. A terminal workflow cannot be recovered; preserve it and record an explicit workflow residual.",
               ),
             );
           }

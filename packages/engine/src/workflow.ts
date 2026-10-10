@@ -957,7 +957,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   const storedCoordination = isPlainObject(stored.coordination) ? stored.coordination : {};
   if (incomingCoordination.coordinator !== undefined &&
       !isDeepStrictEqual(incomingCoordination.coordinator, storedCoordination.coordinator)) {
-    throw new CoordinationError("coordination.direct-write-refused", "snapshot replacement cannot change the coordinator; use workflow recover-coordinator", { field: "coordination.coordinator" });
+    throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change the coordinator because the execution store is authoritative; run `mstar status validate` to read the workflow token, then recover a stopped coordinator with `mstar session recover` using that token.", { field: "coordination.coordinator" });
   }
   const rows = Array.isArray(stored.plans) ? stored.plans : [];
   const incomingRows = Array.isArray(candidate.plans) ? candidate.plans : [];
@@ -1123,13 +1123,7 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
         "high",
         "PHASE6_DELIVERY_KIND_UNREGISTERED",
         `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a71), so this snapshot's delivery evidence cannot be consulted`,
-        // The still-active population (audit promotion / the v1 lift minted
-        // active snapshots before their producers declared a kind) is repaired
-        // by the one-time declaration seam; a TERMINAL snapshot cannot be
-        // (declare refuses a closed lifecycle, and the create-only register
-        // can never match a terminal registration identity), so its repair
-        // stays the explicit owner amendment.
-        "Delivery evidence is declared at registration, before execution. A still-ACTIVE kind-less workflow is repaired by the authorized one-time declaration 'mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <envelope>]' (declared once, never re-declared); a TERMINAL legacy snapshot cannot be backfilled \u2014 'mstar workflow register' is create-only and its registration identity can never match a terminal snapshot \u2014 so repair requires an explicit owner snapshot amendment recording the declared kind (the known affected population \u2014 audit-promotion's grandfathered type: plan snapshots \u2014 is disclosed as a residual by plan QC), then re-run the close / 'mstar iteration gate --phase 6 --workflow <id>'",
+        "Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. Delivery kind is fixed at registration and the retired `--declare-kind` flag cannot repair it. For a still-active workflow, inspect the authoritative workflow, plan token, and plan row with `mstar status validate` (workflow tokens are reported under `data.workflows[]`; plan tokens under `data.authority.workflows[].planTokens`). Correct any ordinary plan execution configuration with `mstar plan prepare --workflow <id> --plan <plan-id> --expect <plan-token>`; this does not change delivery_kind. A terminal legacy snapshot cannot be backfilled through create-only registration; preserve it and record the missing kind as an explicit workflow residual rather than editing the snapshot.",
       ),
     ];
   }
