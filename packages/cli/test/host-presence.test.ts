@@ -244,7 +244,7 @@ describe("repo-built CLI host-presence smoke", () => {
       omp: "omp plugin install @mstar-harness/omp",
       codex: "npm install -g @openai/codex",
       dsh: "pnpm add -g @deepseek-ai/dsh",
-      cursor: "https://cursor.com",
+      cursor: "curl https://cursor.com/install -fsS | bash",
       kimi: "https://www.kimi.com/code/docs/kimi-code-cli/",
     };
     const previewLine = {

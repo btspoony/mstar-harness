@@ -5,10 +5,13 @@ import type { Context } from "@opencode/plugin/effect/plugin";
 
 import plugin from "../src/entry";
 
-const makeContext = () => {
+const makeContext = (userPreseed: Record<string, Record<string, unknown>> = {}) => {
   const agents = new Map<string, Record<string, unknown>>([
-    ["project-manager", { name: "project-manager", model: "user/provider-model" }],
+    ["project-manager", { name: "project-manager", model: "user/provider-model", ...userPreseed["project-manager"] }],
   ]);
+  for (const [id, def] of Object.entries(userPreseed)) {
+    if (id !== "project-manager") agents.set(id, { name: id, ...def });
+  }
   const commands = new Map<string, unknown>();
   const skills = new Map<string, unknown>();
   let agentUpdates = 0;
@@ -77,6 +80,30 @@ describe("OpenCode V2 native entry registration", () => {
     expect(plugin.id).toBe("morning-star-harness");
     expect(typeof plugin.effect).toBe("function");
     expect("server" in plugin).toBe(false);
+  });
+
+  test("a preconfigured stricter user permission rule survives registration as the last (winning) rule", async () => {
+    const userDeny = { action: "shell", resource: "*", effect: "deny" };
+    const fixture = makeContext({
+      "project-manager": {
+        name: "project-manager",
+        permissions: [userDeny],
+      },
+    });
+    await runSetup(fixture.context);
+
+    const registered = fixture.agents.get("project-manager") as {
+      permissions?: Array<{ action: string; resource: string; effect: string }>;
+    };
+    expect(Array.isArray(registered.permissions)).toBe(true);
+    const rules = registered.permissions!;
+    expect(rules[rules.length - 1]).toEqual(userDeny);
+    expect(rules.filter((rule) => rule.effect === "deny" && rule.resource === "*").length).toBeGreaterThanOrEqual(1);
+    // Bundled defaults may precede the user rule but must never follow it.
+    const userDenyIndex = rules.indexOf(userDeny);
+    for (const rule of rules.slice(userDenyIndex + 1)) {
+      expect(rule).toEqual(userDeny);
+    }
   });
 
   test("registers bundled assets through editor operations and preserves user agent keys", async () => {

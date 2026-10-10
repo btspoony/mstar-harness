@@ -97,13 +97,13 @@ export function dispatchBefore(event: DispatchBeforeEvent, services: DispatchGat
       try: () => (services.loadEngine ?? loadDispatchGateApi)(),
       catch: (error) => toolError(
         "dispatch.engine-unavailable",
-        `The engine dispatch-gate exports could not be loaded (${error instanceof Error ? error.message : String(error)}). Upgrade @mstar-harness/engine and retry; no subagent was spawned.`,
+        `The engine dispatch-gate exports could not be loaded (${error instanceof Error ? error.message : String(error)}). Upgrade @mstar-harness/opencode-v2 (or the host runtime) and retry; no subagent was spawned.`,
       ),
     }),
     (api) => api === null
       ? Effect.fail(toolError(
         "dispatch.engine-unavailable",
-        "The ACTIVE dispatch-gate exports are unavailable. Upgrade @mstar-harness/engine and retry; no subagent was spawned.",
+        "The ACTIVE dispatch-gate exports are unavailable. Upgrade @mstar-harness/opencode-v2 (or the host runtime) and retry; no subagent was spawned.",
       ))
       : dispatchEffect(event, api, services.logger ?? defaultStatusLogger),
   );

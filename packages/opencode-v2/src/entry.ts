@@ -47,7 +47,20 @@ export function registerAssets(context: Context, assets: BundledAssets): Effect.
       for (const [roleId, raw] of Object.entries(assets.agents)) {
         const bundled = projectAgentDefinition(raw);
         editor.update(roleId, (current) => {
-          Object.assign(current, bundled);
+          const merged: Record<string, unknown> = { ...current, ...bundled };
+          // V2 permission rules are ordered last-match-wins: append the
+          // host's existing (user) rules after the bundled defaults so a
+          // stricter user rule (e.g. `shell:* = deny`) always wins over a
+          // bundled allow. Host permissions are the documented security
+          // boundary — bundling must never weaken them.
+          const userRules = current.permissions;
+          if (Array.isArray(userRules) && userRules.length > 0) {
+            merged.permissions = [
+              ...(Array.isArray(bundled.permissions) ? bundled.permissions : []),
+              ...userRules,
+            ];
+          }
+          Object.assign(current, merged);
         });
       }
     });
