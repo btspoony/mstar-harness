@@ -306,9 +306,11 @@ export function diagnoseMcpTarget(
     configFilePath?: string;
     requireNestedV2Shape?: boolean;
     requireFlatV1Shape?: boolean;
-    /** Exact, executable recovery command for the other scope's config file. */
-    otherScopeDoctorCommand?: string;
-    otherScopeInitCommand?: string;
+    /** Exact, executable recovery command for the other scope's config file.
+     * Direct callers that don't know the current scope get both concrete
+     * scope commands spelled out. */
+    otherScopeDoctorCommand = "mstar doctor --target opencode --scope global --opencode-generation v2 (global file) or --scope project (project file)";
+    otherScopeInitCommand = "mstar init --target opencode --opencode-generation v2 --scope global (global file) or --scope project (project file)";
   } = {},
 ): McpTargetHealth {
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
