@@ -58,6 +58,7 @@ export async function inspectInstalledPackage(packageRoot: string): Promise<Smok
       cwd: packageRoot,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
     });
     return JSON.parse(output) as SmokeResult;
   } catch (error) {
