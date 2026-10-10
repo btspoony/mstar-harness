@@ -5,6 +5,7 @@ import type { Context } from "@opencode/plugin/effect/plugin";
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
 
 import { registerDispatchGate } from "../src/hooks/mod";
+import { dispatchBefore } from "../src/gates/dispatch";
 import { loadDispatchGateApi } from "../src/engine-seams";
 
 type ExecuteBeforeEvent = ToolHooks["execute.before"];
@@ -62,7 +63,7 @@ function withEnforcement(text: string, enforcement: "hard" | "soft"): string {
 }
 
 describe("OpenCode V2 subagent dispatch gate", () => {
-  test("registers execute.before and allows valid Assignment to reach its distinct target", async () => {
+  test("allows a target whose input.agent matches the Assignment Execute as", async () => {
     const harness = await fixture();
     await harness.invoke(makeEvent("project-manager", "fullstack-dev", validAssignment()));
     expect(harness.kinds).toEqual(["execute.before"]);
@@ -129,6 +130,27 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     expect(harness.bodyCalls()).toBe(1);
   });
 
+  test("refuses target/Execute as mismatch before a self-dispatch bypass", async () => {
+    const harness = await fixture();
+    const prompt = withEnforcement(validAssignment("project-manager"), "hard");
+    await expect(harness.invoke(makeEvent("fullstack-dev", "fullstack-dev", prompt))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringMatching(/input\.agent.*fullstack-dev[\s\S]*Execute as.*project-manager[\s\S]*align.*correct.*no subagent was spawned/i),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
+  test("refuses a missing input.agent target before dispatch admission", async () => {
+    const harness = await fixture();
+    const event = makeEvent("project-manager", "fullstack-dev", validAssignment());
+    event.input = { description: "dispatch", prompt: validAssignment() };
+    await expect(harness.invoke(event)).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("dispatch.target-role-missing"),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
   test("hard mode refuses caller/target recursion with engine code and recovery", async () => {
     const harness = await fixture();
     const prompt = withEnforcement(validAssignment(), "hard");
@@ -155,6 +177,16 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     expect(hard.bodyCalls()).toBe(0);
   });
 
+
+  test("null engine seam fails closed with typed engine-unavailable refusal", async () => {
+    await expect(Effect.runPromise(dispatchBefore(
+      makeEvent("project-manager", "fullstack-dev", validAssignment()),
+      { loadEngine: async () => null },
+    ))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[dispatch.engine-unavailable]"),
+    });
+  });
   test("missing prompt refuses as typed schema drift instead of skipping validation", async () => {
     const harness = await fixture();
     const event = makeEvent("project-manager", "fullstack-dev", undefined);
