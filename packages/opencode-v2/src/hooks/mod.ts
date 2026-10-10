@@ -3,6 +3,9 @@ import type { Scope } from "effect/Scope";
 import type { Context } from "@opencode/plugin/effect/plugin";
 
 import { addBootstrapToContext, loadBootstrapContent } from "./bootstrap";
+import { dispatchBefore } from "../gates/dispatch";
+import type { DispatchGateServices } from "../gates/dispatch";
+
 
 /** Central hook registration seam; task-specific hook registrations extend here. */
 export function registerHooks(context: Context): Effect.Effect<void, never, Scope.Scope> {
@@ -10,4 +13,12 @@ export function registerHooks(context: Context): Effect.Effect<void, never, Scop
   return Effect.asVoid(context.session.hook("context", (event) =>
     Effect.sync(() => addBootstrapToContext(event, bootstrap)),
   ));
+}
+
+/** Register the native execute-before refusal hook for named subagent calls. */
+export function registerDispatchGate(
+  context: Context,
+  services: DispatchGateServices = {},
+): Effect.Effect<void, never, Scope.Scope> {
+  return Effect.asVoid(context.tool.hook("execute.before", (event) => dispatchBefore(event, services)));
 }
