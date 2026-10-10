@@ -44,6 +44,7 @@ const STORE_NAMES: Record<string, true> = {
   "store.db-shm": true,
 };
 const PRE_ACTIVATION_CODES = new Set(["store.not-initialized", "store.not-active"]);
+const AUTHORITY_RECOVERY = "Use supported mstar issue or mstar catalog commands for record changes, or mstar store upgrade/migrate for supported imports; raw database-byte edits have no supported direct-write verb, so escalate repairs to the project maintainer.";
 
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -134,7 +135,7 @@ function classifyDocument(api: WriteGateEngineApi, inputPath: string, landedPath
 function authorityError(code: string, message: string): AuthorityRefusal {
   return {
     code,
-    message: `${message} — the write is refused unconditionally; inspect the harness with mstar status validate and use the supported store operation.`,
+    message: `${message} — the write is refused unconditionally. ${AUTHORITY_RECOVERY}`,
   };
 }
 
@@ -233,7 +234,7 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
   if (isStoreAuthorityTarget(api, requested) || isStoreAuthorityTarget(api, landed)) {
     throw refusal(
       "store.direct-write-refused",
-      "store.db and its WAL/SHM files are store authority and cannot be written by a tool. Use supported mstar issue or mstar catalog commands for record changes, or mstar store upgrade/migrate for supported imports; raw database-byte edits have no supported direct-write verb, so escalate repairs to the project maintainer.",
+      `store.db and its WAL/SHM files are store authority and cannot be written by a tool. ${AUTHORITY_RECOVERY}`,
     );
   }
 
