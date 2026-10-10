@@ -285,7 +285,7 @@ export function renderCommandContract(
 ): string {
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
-    lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY (the active-route caller identity, validated against the addressed workflow/role/plan), then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset; for active token-authorized writes it is attribution, not authorization. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and rejects the environment value. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity.");
+    lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
   }
   if (route === "mcp") {
     // The CLI route prints this same syntax as commander's Usage line, built
@@ -568,11 +568,9 @@ function parseMintedExecutionIdentity(serialized: string): ExecutionIdentity {
  * `MSTAR_EXECUTION_IDENTITY` is the channel `session.run` (and the managed host
  * gates) write, so a launched child actually carries its identity instead of
  * only the ambient host one. It is an **environment** channel, exactly like
- * `MSTAR_HOST_SESSION_ID`, so it resolves to `sessionIdSource: "env"` — the
- * legacy pre-activation forms keep their existing source semantics (resume
- * ignores an environment identity, a coordinator bootstrap rejects one) rather
- * than gaining a new declared-identity spelling. The parsed tuple rides along as
- * `executionIdentity` so the ACTIVE route can check its declared scope.
+ * `MSTAR_HOST_SESSION_ID`, so it resolves to `sessionIdSource: "env"`. The parsed
+ * tuple rides along as `executionIdentity` so the active route can check its
+ * declared scope.
  *
  * The minted value is validated through the engine's own identity rules; a
  * malformed one refuses (throws) rather than silently falling back to another
