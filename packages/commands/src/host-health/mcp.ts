@@ -293,12 +293,16 @@ function diagnoseDshMcp(profileDir: string, runtimeFloor: string, runtimeError: 
   };
 }
 
+/** Flat V1 MCP rows: top-level `mcp.<server>` keys (the V1 dialect). */
+const flatV1Rows = (mcp: Record<string, unknown>): string[] =>
+  Object.keys(mcp).filter((key) => key !== "timeout" && key !== "servers");
+
 /** Inspect one target's MCP configuration without starting a process. */
 export function diagnoseMcpTarget(
   target: HostTarget,
   configRoot: string,
   runtime: McpRuntime = actualRuntime(),
-  options: { configFilePath?: string; requireNestedV2Shape?: boolean } = {},
+  options: { configFilePath?: string; requireNestedV2Shape?: boolean; requireFlatV1Shape?: boolean } = {},
 ): McpTargetHealth {
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
@@ -379,6 +383,16 @@ export function diagnoseMcpTarget(
           : hasNestedV2Shape
             ? mcpConfig!.servers
             : mcpConfig;
+      // A resolved V1 generation must see the flat dialect: the V1 host
+      // decodes servers only from flat `mcp.<server>` rows, so a nested-only
+      // config can never be healthy under v1.
+      const nestedOnlyBlocked = options.requireFlatV1Shape === true
+        && target === "opencode"
+        && hasNestedV2Shape
+        && !flatV1Rows(mcpConfig!);
+      if (nestedOnlyBlocked) {
+        errors.push(`MCP config ${relativeConfig} carries only the nested \`mcp.servers\` shape; the OpenCode V1 host reads the server only from flat \`mcp.<server>\` rows. Supported recovery (CLI): run the V1 checks against the other scope's config file, or author the flat row in this file by hand (\`init --opencode-generation v1\` refuses to touch V2-nested configs).`);
+      }
       if (legacyFlatBlocked) {
         errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI): run the V2 checks against the other scope's config file (\`mstar doctor --target opencode --scope global|project\` resolves to a different file), or run \`mstar init --target opencode --opencode-generation v2 --scope <other>\` there (init refuses to write mixed configs in this file by design).`);
       } else {
