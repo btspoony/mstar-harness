@@ -20,10 +20,11 @@
  *     the generation source (probe vs explicit flag vs both-keys).
  * All fixtures live in temp dirs — no real host binary is involved.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   detectOpencodeGeneration,
   diagnoseOpencodeV2Host,
@@ -35,6 +36,16 @@ import {
   parseOpencodeVersionOutput,
   validateOpencodeConfigV2,
 } from "../src/host-health/opencode-v2.js";
+import { diagnoseMcpTarget, type McpRuntime } from "../src/host-health/mcp.js";
+import { getLocalCommandDefinitions } from "../src/index.js";
+
+const MCP_RUNTIME: McpRuntime = { kind: "node", version: "24.18.0" };
+
+function writeMcpConfig(root: string, config: unknown): void {
+  const configDir = join(root, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify(config));
+}
 
 const ALL_ROLES = ["project-manager", "fullstack-dev"] as const;
 
@@ -209,5 +220,70 @@ describe("parseOpencodeVersionOutput", () => {
     expect(parseOpencodeVersionOutput("opencode v0.1.0")).toBeNull();
     expect(parseOpencodeVersionOutput("garbage")).toBeNull();
     expect(parseOpencodeVersionOutput("")).toBeNull();
+  });
+});
+describe("OpenCode MCP doctor health", () => {
+  test("healthy nested V2 and flat V1 configurations are aligned", () => {
+    const v2Root = mkdtempSync(join(tmpdir(), "opencode-v2-mcp-"));
+    roots.push(v2Root);
+    writeMcpConfig(v2Root, {
+      mcp: {
+        servers: {
+          "morning-star": { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] },
+        },
+      },
+    });
+    const v2Health = diagnoseMcpTarget("opencode", v2Root, MCP_RUNTIME);
+    expect(v2Health.status).toBe("aligned");
+    expect(v2Health.errors).toEqual([]);
+
+    const v1Root = mkdtempSync(join(tmpdir(), "opencode-v1-mcp-"));
+    roots.push(v1Root);
+    writeMcpConfig(v1Root, {
+      mcp: {
+        "morning-star": { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] },
+      },
+    });
+    const v1Health = diagnoseMcpTarget("opencode", v1Root, MCP_RUNTIME);
+    expect(v1Health.status).toBe("aligned");
+    expect(v1Health.errors).toEqual([]);
+  });
+
+  test("broken entries in either config shape are mismatches", () => {
+    for (const mcp of [
+      { servers: { "morning-star": { type: "local", command: ["node", "wrong"] } } },
+      { "morning-star": { type: "local", command: ["node", "wrong"] } },
+    ]) {
+      const root = mkdtempSync(join(tmpdir(), "opencode-broken-mcp-"));
+      roots.push(root);
+      writeMcpConfig(root, { mcp });
+      expect(diagnoseMcpTarget("opencode", root, MCP_RUNTIME).status).toBe("mismatch");
+    }
+  });
+  test("healthy V2 MCP config keeps the doctor envelope on its exit-0 path", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "opencode-v2-doctor-project-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "opencode-v2-doctor-home-"));
+    roots.push(projectRoot, homeRoot);
+    writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify(V2_CONFIG));
+    writeMcpConfig(homeRoot, V2_CONFIG);
+
+    const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
+    process.env.MSTAR_CLI_PROJECT_ROOT = projectRoot;
+    const home = spyOn(os, "homedir").mockReturnValue(homeRoot);
+    try {
+      const doctor = getLocalCommandDefinitions().find(({ id }) => id === "doctor");
+      expect(doctor).toBeDefined();
+      if (!doctor) return;
+      const result = await doctor.execute(
+        { target: "opencode", scope: "project", generation: "v2" },
+        { versions: { cli: "test" }, effects: {} },
+      );
+      expect(result).toMatchObject({ status: "ok" });
+      expect(result.data.mcpHealth.status).toBe("aligned");
+    } finally {
+      home.mockRestore();
+      if (previousProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
+      else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
+    }
   });
 });
