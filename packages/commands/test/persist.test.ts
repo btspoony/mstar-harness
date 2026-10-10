@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createFsStore, initializeExecutionAuthority, initializeStore, setArtifactStore } from "@mstar-harness/engine";
+import { createFsStore, initializeStore, setArtifactStore } from "@mstar-harness/engine";
 import { getPersistCommandDefinitions } from "../src/families/persist.js";
 import type { CommandDefinition, InvocationContext } from "../src/types.js";
 
@@ -121,7 +121,6 @@ describe("persist command family", () => {
     mkdirSync(harness, { recursive: true });
     const handle = await initializeStore({ harnessDir: harness });
     handle.close();
-    await initializeExecutionAuthority({ harnessDir: harness });
     const previousCwd = process.cwd();
     process.chdir(activeRoot);
     try {
