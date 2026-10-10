@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "opencode:bundle-assets": "bun run --cwd packages/opencode bundle-assets",
+    "opencode-v2:bundle-assets": "bun run --cwd packages/opencode-v2 bundle-assets",
     "dsh:bundle-assets": "bun run --cwd packages/dsh bundle-assets",
     "omp:bundle-assets": "bun run --cwd packages/omp bundle-assets",
     "typecheck": "bunx tsc --pretty false && bun run --cwd packages/cli typecheck:src && bun run --cwd packages/dsh typecheck:src",

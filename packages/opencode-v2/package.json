@@ -1,0 +1,42 @@
+{
+  "name": "@mstar-harness/opencode-v2",
+  "version": "3.11.2",
+  "description": "Morning Star harness OpenCode V2 native plugin (@opencode/plugin 2.0.26) — skills bootstrap + engine-backed runtime gates.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/btspoony/mstar-harness.git",
+    "directory": "packages/opencode-v2"
+  },
+  "type": "module",
+  "main": "./dist/mstar.js",
+  "files": [
+    "dist",
+    "harness-skills",
+    "harness-agents",
+    "harness-commands",
+    "AGENTS.md",
+    "INSTALL.md",
+    "README.md",
+    "CHANGELOG.md",
+    "mcp.json"
+  ],
+  "scripts": {
+    "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
+    "test": "bun test"
+  },
+  "engines": {
+    "bun": ">=1.4.0",
+    "node": ">=24.18.0"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.26"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@mstar-harness/engine": "workspace:*",
+    "@mstar-harness/commands": "workspace:*"
+  }
+}
