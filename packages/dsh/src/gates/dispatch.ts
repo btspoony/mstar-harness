@@ -607,7 +607,7 @@ async function worktreeL1Violations(harnessDir: string | null, header: string, h
 async function writableFanOutUncovered(
   harnessDir: string | null,
   hint?: SessionHint,
-): Promise<{ uncoveredPlanId?: string; unreadable: boolean }> {
+): Promise<{ uncoveredPlanId?: string; unreadable: boolean; workflowDir?: string }> {
   if (harnessDir === null) return { unreadable: false }
   // §5 the ONE route decision precedes every read (plan S4): while the
   // execution authority is ACTIVE the root register and the workflow
@@ -621,7 +621,7 @@ async function writableFanOutUncovered(
   } catch {
     return { unreadable: true }
   }
-  if (source.kind === 'unavailable') return { unreadable: true }
+  if (source.kind === 'unavailable') return { unreadable: source.code !== 'store.not-initialized' }
   if (source.kind === 'error') {
     return {
       unreadable: source.selection.kind === 'error' && source.selection.code !== 'workflow.selection.no-active',
@@ -638,9 +638,9 @@ async function writableFanOutUncovered(
     const scopeRecorded =
       typeof metadata?.worktree_path === 'string' && metadata.worktree_path !== '' &&
       typeof metadata?.working_branch === 'string' && metadata.working_branch !== ''
-    if (!scopeRecorded) return { uncoveredPlanId: planId, unreadable: false }
+    if (!scopeRecorded) return { uncoveredPlanId: planId, unreadable: false, workflowDir: join(harnessDir, source.dir) }
   }
-  return { unreadable: false }
+  return { unreadable: false, workflowDir: join(harnessDir, source.dir) }
 }
 
 /**
@@ -879,6 +879,7 @@ async function gateWorkflow(
       verdict: v,
       ...(code !== undefined ? { code } : {}),
       ...(hintRead.hint !== undefined ? { hint: hintRead.hint } : {}),
+      ...(pb.workflowDir !== undefined ? { resolvedWorkflowDir: pb.workflowDir } : {}),
     })
   }
   switch (verdict.decision) {
