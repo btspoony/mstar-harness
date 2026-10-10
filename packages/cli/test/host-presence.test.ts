@@ -134,7 +134,10 @@ describe("omp host presence at init", () => {
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
 
     const result = await adapter.ompAdapter.runInstallInit?.("project", true);
-    expect(result?.notes.some((note) => note.includes("Would run: omp plugin link"))).toBe(true);
+    const dryRunNotes = result?.notes.join("\n") ?? "";
+    expect(dryRunNotes).toContain("presence is unchecked under --dry-run (would-run preview)");
+    expect(dryRunNotes).not.toContain("omp CLI not found on PATH");
+    expect(dryRunNotes).toContain("Would run: omp plugin link");
     expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
   });
