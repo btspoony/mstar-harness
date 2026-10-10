@@ -29,7 +29,7 @@ import {
   type MstarEngineStatusResult,
   type MstarSelectWorkflowResult,
 } from '../src/engine-status-endpoint.ts'
-import { bootApp, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -461,8 +461,11 @@ describe('engineStatus endpoint — optional-unit boot', () => {
 
 describe('selectWorkflow endpoint — D4 picker commit', () => {
   async function seedTwoActives(app: BootResult): Promise<void> {
+    await seedActiveWorkflow(app.harnessDir, 'wf-a', [{ id: 'plan-a', status: 'Todo' }])
+    await seedActiveWorkflow(app.harnessDir, 'wf-b', [{ id: 'plan-b', status: 'Done' }])
+    // Retired file bytes deliberately disagree with the ACTIVE graph.
     await seedHarness(app.harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
+      'status.json': v2Root([v2WorkflowEntry('wf-old')]),
       'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [{ id: 'plan-a', status: 'Todo' }] }),
       'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [{ id: 'plan-b', status: 'Done' }] }),
       'workflows/wf-old/snapshot.json': v2Snapshot('wf-old', { status: 'completed', ended_at: '2026-08-19' }),

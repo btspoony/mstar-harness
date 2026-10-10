@@ -279,6 +279,23 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
     expect(advisories).toHaveLength(1)
     expect(violationCodes(advisories[0])).toContain('lease.dispatch.branch-mismatch')
   })
+  it('alternate create-form and direct-on branch spellings are compared with the row branch', async () => {
+    const app = booted = await bootApp()
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    const createForm = SDD_ASSIGNMENT.replace(`**Working branch**: ${BRANCH}`, `**Working branch**: create ${BRANCH} from main`)
+    const directOn = SDD_ASSIGNMENT.replace(
+      `**Working branch**: ${BRANCH}`,
+      `**Branch policy**: direct on ${BRANCH} — approved`,
+    )
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(createForm), defaultAllow)
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(directOn), defaultAllow)
+
+    expect(advisories).toHaveLength(2)
+    expect(advisories.every((advisory) => !violationCodes(advisory).includes('lease.dispatch.branch-mismatch'))).toBe(true)
+  })
+
 
   it('plan id resolves from the SDD dir fallback (no Plan Path) → the check runs against it', async () => {
     const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
