@@ -118,13 +118,10 @@ describe("built OpenCode V2 package integration", () => {
     const skill = fixture.skills.pm;
     expect(skill).toBeDefined();
     if (!skill) return;
-    const source = readFileSync(skill.path, "utf8");
-    const description = source.match(/^description:\s*"?(.+?)"?$/m)?.[1];
-    expect(description).toBeDefined();
-    const route = description?.match(/\bproject-manager\b/i)?.[0];
-    expect(route).toBeDefined();
-    if (!route) return;
-    expect(fixture.agents[route]).toMatchObject({ mode: "primary" });
+    const routedRoles = [...skill.content.matchAll(/→\s*\*\*`?([A-Za-z][\w-]*)`?\*\*/g)]
+      .map((match) => match[1]!)
+      .filter((roleId) => fixture.agents[roleId]?.mode === "primary");
+    expect(routedRoles).toContain("project-manager");
   });
 
   test("registers a bundled command with its template through the built entry", async () => {
