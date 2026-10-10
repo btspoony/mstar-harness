@@ -22,7 +22,7 @@ import {
   completenessLevel,
   evaluatePhaseGate,
   parseCompassFrontmatter,
-  readJson,
+  readExecutionState,
   referenceExists,
   scopeGuard,
   sddWorkspace,
@@ -80,7 +80,7 @@ export function registerSddIterationTools(ctx: Context, resolver: HarnessResolve
           type: 'string',
           description:
             'Control worktree repo root (CLI 2nd arg / MSTAR_CONTROL_ROOT). Required when the ' +
-            'app runs from a linked feature worktree without {HARNESS_DIR}/status.json.',
+            'app runs from a linked feature worktree without a resolvable control harness root.',
         },
       },
       output: {
@@ -166,15 +166,15 @@ export function registerSddIterationTools(ctx: Context, resolver: HarnessResolve
     toolsCtx.tools.register(defineTool({
       name: 'mstar_iteration_gate',
       description:
-        'Evaluate the iteration phase-transition gate against a workflow snapshot and a delivery-compass.md ' +
+        'Evaluate the iteration phase-transition gate from an ACTIVE workflow and a delivery-compass.md ' +
         '(engine evaluatePhaseGate, mirror of `mstar iteration gate --workflow <id>`): returns the transition ' +
         '(phase-2-execute / phase-3-close / phase-4-pr-delivery), the pass/fail verdict, and the ' +
         '§3.1 entry / §3.5 exit checklists with violation codes.',
       parameters: {
-        snapshot_path: {
+        workflow_id: {
           type: 'string',
           required: true,
-          description: 'Path to {HARNESS_DIR}/workflows/<id>/snapshot.json (the selected workflow snapshot — v3 input, mirrors the CLI `iteration gate --workflow <id>`).',
+          description: 'Id of the workflow registered in the ACTIVE execution store.',
         },
         compass_path: {
           type: 'string',
@@ -239,10 +239,18 @@ export function registerSddIterationTools(ctx: Context, resolver: HarnessResolve
       presentResult: (_args, _result) => ({ card: 'generic', title: 'Iteration gate evaluation' }),
       // Read-only evaluation — exclusive anyway (the engine result is a pure function of the docs).
       isConcurrencySafe: () => false,
-      async execute(args) {
-        if (!existsSync(args.snapshot_path)) throw new Error(`workflow snapshot not found: ${args.snapshot_path}`)
+      async execute(args, exec) {
         if (!existsSync(args.compass_path)) throw new Error(`compass file not found: ${args.compass_path}`)
-        const snapshotDoc = readJson(args.snapshot_path)
+        const harnessDir = resolver.forAgent(exec.agent)
+        if (harnessDir === null) throw new Error('ACTIVE harness execution authority is unavailable for this session')
+        const graph = (await readExecutionState({ harnessDir })).data
+        const workflow = graph.workflows.find(({ state }) => state.id === args.workflow_id)
+        if (workflow === undefined) throw new Error(`workflow "${args.workflow_id}" is not registered in the ACTIVE execution authority`)
+        const snapshotDoc = {
+          ...workflow.state,
+          ...(workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease }),
+          plans: workflow.plans.map(({ plan }) => plan),
+        }
         const compassDoc = parseCompassFrontmatter(args.compass_path)
         const result = evaluatePhaseGate(snapshotDoc, compassDoc, {
           currentBranch: args.branch,

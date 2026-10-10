@@ -4,44 +4,63 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bindPlanSession } from "./coordination.js";
 import { withStoreRead, queryDashboard } from "./store-read.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
-import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, upgradeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import { bindExecutionSession, createExecutionWorkflow, readExecutionState, type ExecutionContext } from "./execution-store.js";
+import { encodeExecutionSessionRef } from "./execution-session.js";
+import type { WorkflowSnapshot } from "./workflow.js";
+import type { WorkflowEntry } from "./status.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-milestone-"));
 const harness = join(root, ".mstar");
-const context: StoreContext = { harnessDir: harness };
+const context: ExecutionContext = { harnessDir: harness, caller: { sessionId: "milestone-coordinator", workflowId: "milestone-live-workflow", role: "coordinator" } };
 const projectId = "milestone-assignment-project";
-const workflowId = "milestone-live-workflow";
-const sessionRoot = join(root, "session-root");
 let db: StoreDb;
-let sessionFile: string;
+let matchingSessionRef: string;
+let mismatchedSessionRef: string;
 let issueNumber = 0;
 function makeIssue(id: string, project = projectId): void {
   db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?)").run(id, project, id);
 }
 function revision(): number { return (db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision; }
 function issueRevision(id: string): number { return (db.prepare("select revision from issues where id=?").get(id) as { revision: number }).revision; }
-function mutation(id: string, expectedRevision: number, expectedStoreRevision = revision(), actor = "project-manager", file = sessionFile) {
-  return { operationId: id, actor, sessionFile: file, expectedRevision, expectedStoreRevision };
+function mutation(id: string, expectedRevision: number, expectedStoreRevision = revision(), actor = "project-manager", ref?: string) {
+  return { operationId: id, actor, ...(ref === undefined ? {} : { sessionRef: ref }), expectedRevision, expectedStoreRevision };
 }
 let milestoneId = "";
 let otherMilestoneId = "";
 beforeAll(async () => {
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
-  mkdirSync(join(harness, "workflows", workflowId), { recursive: true });
-  mkdirSync(join(harness, "sessions"), { recursive: true });
-  writeFileSync(join(harness, "status.json"), JSON.stringify({ version: 2, workflows: [{ id: workflowId, type: "iteration", status: "running", started_at: "2026-09-29T00:00:00Z", dir: `workflows/${workflowId}` }] }));
-  writeFileSync(join(harness, "workflows", workflowId, "snapshot.json"), JSON.stringify({ schema_version: 1, id: workflowId, type: "iteration", status: "running", started_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z", branch: { base: "main" }, plans: [] }));
-  setArtifactStore(createFsStore(harness));
-  try { sessionFile = (await bindPlanSession({ coordinator: true, workflowId, harnessDir: harness, cwd: root, sessionId: "milestone-coordinator" })).session_file; }
-  finally { setArtifactStore(undefined); }
+  mkdirSync(harness, { recursive: true });
   const handle = await initializeStore(context); db = handle.db;
+  const initialized = await readExecutionState(context);
+  const workflowId = "milestone-live-workflow";
+  const caller = { sessionId: "milestone-coordinator", workflowId, role: "coordinator" as const };
+  const snapshot = {
+    schema_version: 1, id: workflowId, type: "plan", status: "running",
+    started_at: "2026-09-29T00:00:00Z", updated_at: "2026-09-29T00:00:00Z",
+    branch: { base: "main", source: "feature/milestone", target: "main", integration: "integration/milestone" },
+    plans: [],
+  } as unknown as WorkflowSnapshot;
+  const created = await createExecutionWorkflow({ harnessDir: harness, caller }, {
+    entry: { id: workflowId, type: "plan", started_at: "2026-09-29T00:00:00Z", dir: `workflows/${workflowId}` } as WorkflowEntry,
+    snapshot,
+    expected: initialized.token,
+    operationId: "milestone-workflow-register",
+  });
+  const workflow = created.data.workflows[0];
+  if (!workflow) throw new Error("milestone fixture workflow registration failed");
+  const bound = await bindExecutionSession({ harnessDir: harness, caller }, {
+    workflowId, expected: workflow.workflowToken, operationId: "milestone-session-bind",
+  });
+  matchingSessionRef = encodeExecutionSessionRef(bound.data);
+  mismatchedSessionRef = encodeExecutionSessionRef({ ...bound.data, sessionId: "different-coordinator" });
+  writeFileSync(join(root, "old-session-envelope.json"), JSON.stringify({ version: 1, role: "coordinator", workflow_id: workflowId, session_id: "milestone-coordinator" }));
   for (const id of [projectId, "other-project"]) db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(id, id, `${id}/roadmap.md`);
+  makeIssue("milestone-reference-constraint-issue");
   makeIssue("milestone-assignment-issue");
   makeIssue("milestone-membership-issue");
 });
@@ -52,7 +71,7 @@ describe("issue milestone association", () => {
     expect((await listIssues(context, { projectId })).items[0]?.milestoneId).toBeNull();
     expect((await getIssue(context, "milestone-assignment-issue")).milestoneId).toBeNull();
   });
-  test("successful assignment uses an engine-issued live session and advances both revisions once", async () => {
+  test("successful assignment uses the acquired ACTIVE coordinator session and advances both revisions once", async () => {
     const made = await addMilestone(context, { projectId, name: `Milestone ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     milestoneId = made.milestoneId;
     const before = revision();
@@ -64,9 +83,21 @@ describe("issue milestone association", () => {
   test("wrong actor or session refuses without mutation", async () => {
     const before = revision();
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-wrong-actor", 2, before, "qa-engineer"))).rejects.toMatchObject({ code: "issue.scope-refused" });
-    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-wrong-session", 2, before, "project-manager", join(root, "missing.json")))).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-stale-envelope", 2, before, "project-manager", join(root, "old-session-envelope.json")))).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-stale-envelope-recovery", 2, before, "project-manager", join(root, "old-session-envelope.json")))).rejects.toThrow("--session-ref");
     expect(revision()).toBe(before);
     expect(issueRevision("milestone-assignment-issue")).toBe(2);
+  });
+  test("an explicit session ref only constrains the acquired identity", async () => {
+    const before = revision();
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "mismatch" }, mutation("milestone-mismatched-ref", 2, before, "project-manager", mismatchedSessionRef))).rejects.toThrow("--session-ref");
+    expect(revision()).toBe(before);
+  });
+  test("a matching explicit session ref constrains the acquired coordinator identity", async () => {
+    const made = await addMilestone(context, { projectId, name: "Reference constraint milestone", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const receipt = await assignIssueMilestone(context, "milestone-reference-constraint-issue", { projectId, milestoneId: made.milestoneId, reason: "checked constraint" }, mutation("milestone-matching-ref", 1, revision(), "project-manager", matchingSessionRef));
+    expect(receipt).toMatchObject({ issueId: "milestone-reference-constraint-issue", revision: 2 });
+    expect((await getIssue(context, receipt.issueId)).milestoneId).toBe(made.milestoneId);
   });
   test("issue and store CAS refuse stale writes; exact replay preserves the original receipt", async () => {
     const before = revision();
@@ -104,7 +135,7 @@ describe("issue milestone association", () => {
     const delivered = await addMilestone(context, { projectId, name: "Terminal delivered", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     makeIssue("milestone-terminal-closed");
     const seated = await assignIssueMilestone(context, "milestone-terminal-closed", { projectId, milestoneId: delivered.milestoneId, reason: "prepare delivery" }, mutation("milestone-terminal-prepare", 1));
-    await closeIssue(context, seated.issueId, "resolved", { reason: "done", references: ["test"], alignmentRef: "PM acceptance" }, { actor: "project-manager", sessionFile, operationId: "milestone-terminal-close", expectedRevision: seated.revision });
+    await closeIssue(context, seated.issueId, "resolved", { reason: "done", references: ["test"], alignmentRef: "PM acceptance" }, { actor: "project-manager", operationId: "milestone-terminal-close", expectedRevision: seated.revision });
     await updateMilestone(context, projectId, delivered.milestoneId, { status: "active" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await updateMilestone(context, projectId, delivered.milestoneId, { status: "delivered" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: delivered.milestoneId, reason: "delivered" }, mutation("milestone-terminal-delivered", issueRevision("milestone-assignment-issue")))).rejects.toMatchObject({ code: "milestone.terminal" });
@@ -127,9 +158,9 @@ describe("issue milestone association", () => {
   test("capture and close paths preserve existing milestone membership", async () => {
     const made = await addMilestone(context, { projectId, name: `Membership ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     const assigned = await assignIssueMilestone(context, "milestone-membership-issue", { projectId, milestoneId: made.milestoneId, reason: "associate" }, mutation("milestone-membership-assign", 1));
-    const capture = await captureIssue(context, { projectId, title: "Captured", kind: "bug", severity: "low", impact: "impact", acceptance: "acceptance", sourceIdentity: "milestone", rootCauseKey: "capture", acceptanceKey: "capture", occurrenceKey: "milestone-capture", sourceKind: "test", location: "test", observedBehavior: "observed", evidence: [], discoveredAt: "2026-09-29T00:00:00Z" }, { actor: "project-manager", sessionFile, operationId: "milestone-capture-op" });
+    const capture = await captureIssue(context, { projectId, title: "Captured", kind: "bug", severity: "low", impact: "impact", acceptance: "acceptance", sourceIdentity: "milestone", rootCauseKey: "capture", acceptanceKey: "capture", occurrenceKey: "milestone-capture", sourceKind: "test", location: "test", observedBehavior: "observed", evidence: [], discoveredAt: "2026-09-29T00:00:00Z" }, { actor: "project-manager", operationId: "milestone-capture-op" });
     expect((await getIssue(context, assigned.issueId)).milestoneId).toBe(made.milestoneId);
-    const closed = await closeIssue(context, assigned.issueId, "resolved", { reason: "done", references: ["test"], alignmentRef: "PM acceptance" }, { actor: "project-manager", sessionFile, operationId: "milestone-close", expectedRevision: assigned.revision });
+    const closed = await closeIssue(context, assigned.issueId, "resolved", { reason: "done", references: ["test"], alignmentRef: "PM acceptance" }, { actor: "project-manager", operationId: "milestone-close", expectedRevision: assigned.revision });
     expect(capture.created).toBe(true);
     expect(closed.revision).toBe(assigned.revision + 1);
     expect((await getIssue(context, assigned.issueId)).milestoneId).toBe(made.milestoneId);

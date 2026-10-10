@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { assertExecutionFileWriteAllowed, initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
@@ -13,7 +13,7 @@ import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSessi
 import { mutateExecutionPlan } from "./execution-coordination.js";
 import { executionInputHash, executionInputSelection, resolveProcessHarnessDir } from "./coordination.js";
 import { previewExecutionRestore, restoreExecutionBackup } from "./execution-recovery.js";
-import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
+import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
@@ -1343,13 +1343,6 @@ test("no-store upgrade initializes execution schema and imports every populated 
     afterReplay.close();
   }
 });
-test("FILE authority discovery preserves fail-closed refusal for an unresolved linked worktree", () => {
-  const harnessDir = join(ROOT, "unresolved-linked-checkout");
-  mkdirSync(join(harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(harnessDir, ".git"), "gitdir: /missing/worktree/metadata\n");
-
-  expect(() => assertExecutionFileWriteAllowed({ harnessDir })).toThrow("linked checkout");
-});
 
 
 
@@ -1479,59 +1472,30 @@ test("same operation replays and a reused operation id with a different operator
   await expect(upgradeStoreMinimal({ ...input, operator: "another" })).rejects.toMatchObject({ code: "execution.operation-conflict" });
 });
 
-test("pending execution-written catalog registration remains publicly reconcilable after minimal activation", async () => {
-  const context: StoreContext = { harnessDir: join(ROOT, "pending-catalog", ".mstar") };
+test("minimal activation retains a manually constructed legacy registration recovery journal", async () => {
+  const { context } = legacyWorkspace("pending-catalog");
   const workflowId = "wf-pending-catalog";
-  const planId = "pending-catalog-plan";
-  const title = "Pending catalog plan";
-  mkdirSync(join(context.harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(context.harnessDir, "plans", `${planId}.md`), `# ${title}\n\n**plan_id:** ${planId}\n`);
+  const operationId = "op-pending-catalog";
   const store = await initializeStore(context);
   try {
-    store.db.exec(`CREATE TRIGGER fail_catalog_publish BEFORE INSERT ON catalog_entities
-      BEGIN SELECT RAISE(ABORT, 'injected publish failure'); END;`);
+    store.db.prepare(
+      "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+        "values (?, ?, 'execution-written', ?, '{}', '{}', null, ?, ?)",
+    ).run(
+      operationId,
+      "legacy-pending-hash",
+      JSON.stringify({ version: 1, workflow: { kind: "plan", workflowId } }),
+      "2026-10-04T00:00:00.000Z",
+      "2026-10-04T00:00:00.000Z",
+    );
   } finally {
     store.close();
   }
-  setArtifactStore(createFsStore(context.harnessDir));
-  await expect(registerCatalogExecution(context, {
-    operationId: "op-pending-catalog",
-    actor: "project-manager",
-    expectedCatalogRevision: 0,
-    workflow: {
-      kind: "plan",
-      workflowId,
-      options: {
-        harnessDir: context.harnessDir,
-        plan: { id: planId, title, file: `plans/${planId}.md` },
-        deliveryKind: "development",
-        branchSource: "feature/pending-catalog",
-        branchTarget: "main",
-        project: "harness",
-        startedAt: "2026-10-04T00:00:00.000Z",
-      },
-    },
-    delta: {
-      entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: `${planId}.md` }],
-      binding: { catalogKind: "plan", catalogId: planId },
-    },
-  })).rejects.toThrow();
 
-  const before = await listPendingCatalogRegistrations(context);
-  expect(before).toContainEqual(expect.objectContaining({ operationId: "op-pending-catalog", workflowId, phase: "execution-written" }));
-  const storeAfterFailure = await openStore(context, "write");
-  try {
-    storeAfterFailure.db.exec("DROP TRIGGER fail_catalog_publish");
-  } finally {
-    storeAfterFailure.close();
-  }
+  setArtifactStore(createFsStore(context.harnessDir));
   const imported = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-import-pending-catalog" });
   expect(imported).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
   expect(await listPendingCatalogRegistrations(context)).toContainEqual(
-    expect.objectContaining({ operationId: "op-pending-catalog", workflowId, phase: "execution-written" }),
+    expect.objectContaining({ operationId, workflowId, phase: "execution-written", rootVisible: true }),
   );
-
-  const receipt = await reconcileCatalogExecution(context, "op-pending-catalog");
-  expect(receipt).toMatchObject({ operationId: "op-pending-catalog", workflowId });
-  expect(await listPendingCatalogRegistrations(context)).not.toContainEqual(expect.objectContaining({ operationId: "op-pending-catalog" }));
 });

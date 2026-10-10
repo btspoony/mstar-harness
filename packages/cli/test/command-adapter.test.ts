@@ -9,7 +9,7 @@ import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import {
   bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, executionContextFor,
-  initializeExecutionAuthority, initializeStore, openStore, serializeExecutionValue,
+  initializeStore, openStore, readExecutionAuthority, serializeExecutionValue,
   type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
 } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
@@ -100,7 +100,7 @@ describe("generated CLI adapter", () => {
     mkdirSync(harnessDir, { recursive: true });
     const storeContext = { harnessDir };
     (await initializeStore(storeContext)).close();
-    const initialized = await initializeExecutionAuthority(storeContext);
+    const initialized = await readExecutionAuthority(storeContext);
     const workflow = "wf-cli-note-identity";
     const coordinator = "cli-note-coordinator";
     const identity: ExecutionIdentity = { source: "local", sessionId: coordinator, workflowId: workflow, role: "coordinator" };
@@ -400,14 +400,18 @@ describe("generated CLI adapter", () => {
     }
   });
 
-  test("forwards workflow recovery selectors and multi-value stopped assertions", async () => {
+  test("forwards session recovery selectors and refuses the operator-identity gap as usage", async () => {
+    // ACTIVE disposition: `workflow recover-coordinator` is retired; the
+    // recovery selectors travel on `session recover` (single --prior-session,
+    // --attestation, --expect, --operation).
     const args = [
-      "workflow", "recover-coordinator",
-      "--session", "/tmp/missing-prior-coordinator.json",
-      "--operation-id", "recover-op",
+      "session", "recover",
+      "--workflow", "wf-recover-selector",
+      "--operation", "recover-op",
       "--reason", "prior coordinator stopped",
-      "--authorization-ref", "approval-1",
-      "--stopped", "prior-coordinator", "another-stopped-session",
+      "--attestation", "/tmp/missing-recovery-attestation.json",
+      "--expect", "exec-v1:workflow:00000000-0000-4000-8000-000000000000:1:WyJ3Zi1yZWNvdmVyLXNlbGVjdG9yIiwiY29vcmRpbmF0b3IiXQ:1",
+      "--prior-session", "prior-coordinator",
     ];
     const recovered = await run([...args, "--session-id", "cli-main-session"]);
     const recoveredEnvelope = JSON.parse(recovered.stdout);
@@ -423,7 +427,6 @@ describe("generated CLI adapter", () => {
       const usageEnvelope = JSON.parse(withoutRuntimeIdentity.stdout);
       expect(usageEnvelope).toMatchObject({ status: "usage" });
       expect(String(usageEnvelope.message)).toContain("--session-id");
-      expect(String(usageEnvelope.message)).toContain("sessionId");
     } finally {
       if (priorIdentity !== undefined) process.env.MSTAR_HOST_SESSION_ID = priorIdentity;
       if (priorMinted !== undefined) process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
@@ -452,7 +455,7 @@ describe("generated CLI adapter", () => {
     if (persist === undefined || worktree === undefined) throw new Error("canonical definitions missing");
 
     const persistCli = renderCommandContract(persist, "cli");
-    expect(persistCli).toContain("Payload contracts: status, snapshot, review, json");
+    expect(persistCli).toContain("Payload contracts: review, json (keyed separately from input fields; resolve their shapes through the schema command)");
     expect(persistCli).not.toContain("Payload fields:");
     expect(persistCli).not.toContain("decoded against the declared schema");
 

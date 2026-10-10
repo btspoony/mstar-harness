@@ -2,7 +2,7 @@
 
 > Loaded by `mstar-iteration` SKILL.md when entering Phase 3. **Read `mstar-harness-core` first.** Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入本 Phase。
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree（路径取 ACTIVE workflow 执行行的 `integration_worktree_path`；pre-activation：snapshot 字段）中运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 workflow `branch.target`。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
+PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree（路径取 ACTIVE workflow 执行行的 `integration_worktree_path`）中运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 workflow `branch.target`。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
 
 **Close Done 定义**：§3.1→§3.5 完成；compass frontmatter `status: completed` + `end_date`；新增 knowledge doc 完成 store catalog 登记。README 仅散文，无登记行义务。final plan 的 compound / roadmap / PR 说明不替代 iteration-close。
 
@@ -31,7 +31,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 
 **STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Compound。
 
-- [ ] compass 登记的全部 plan 在 ACTIVE `execution_plans` 均为 `Done`（经 `mstar status validate` / `mstar plan show`；pre-activation：snapshot 行）
+- [ ] compass 登记的全部 plan 在 ACTIVE `execution_plans` 均为 `Done`（经 `mstar status validate` / `mstar plan show`）
 - [ ] 各 plan 经 `mstar status findings-cleanup <plan-id>` 对 store linked open issues 按 Assignment mode 收口；`allow-residual` 下已捕获且披露的非阻断 issue 可保持 open，`zero-residual` 仅允许 blocker-defer + roadmap；关闭经 `mstar issue close|waive|duplicate|supersede`，不改退役 project register；unresolved `critical` 阻断（规则 → `mstar-artifacts` Findings cleanup modes）
 - [ ] compass `## Plans` 表状态与当前权威执行行同步
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
@@ -79,11 +79,11 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；项目 roadmap 的 store 替换已以观察到的版本完成；STRATEGY 已按需更新
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
-- [ ] PR base = 当前权威 workflow `branch.target`（ACTIVE：执行行；pre-activation：snapshot；与 compass 一致），不是未记录的 `main`
+- [ ] PR base = 当前权威 workflow `branch.target`（ACTIVE：执行行；与 compass 一致），不是未记录的 `main`
 
 **Commit 前提（HARD — branch-anchored，防递交到主 checkout 驻留分支）**：§3.5 的 close commit **在 integration worktree（`integration_worktree_path`）中执行，**绝不**在主 checkout（control root）或任一 feature worktree 上执行**——`git commit` 落在**当前检出分支**，`<spec_integration_branch>` 只出现在 push 参数里。当执行 commit 的检出不在 integration 分支时，未经下述核对直接执行本配方，compound 会把 tracked 的 `{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md` 递交到主 checkout 驻留分支（如 `main`），integration 分支的 PR 永远带不上这些 shared 产物。因此 **任何 `git add` 之前**必须先验分支；mismatch → **STOP**（不得 commit、不得 push、不得「先提交后挪」），改在正确检出上重做（见下）。
 
-1. 解析 `<spec_integration_branch>`：ACTIVE workflow 执行行 `branch.integration`（pre-activation：snapshot 字段）→ 缺失时 compass frontmatter；仍缺 → STOP 按受守卫入口补齐，不默认 `main`。
+1. 解析 `<spec_integration_branch>`：ACTIVE workflow 执行行 `branch.integration` → 缺失时 compass frontmatter；仍缺 → STOP 按受守卫入口补齐，不默认 `main`。
 2. **先验后提交**（在执行 commit 的检出处）：`git branch --show-current` === `<spec_integration_branch>`。§3.2–§3.4 产生的 tracked close 产物本就应处于未提交状态等待本 commit，**不要求**此处工作树干净。engine 可用 → 在 add/commit **前**运行 `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch <current> --integration <spec_integration_branch> --target <target_branch>` 并确认 exit 无 `EXIT_BRANCH_MISMATCH` / `EXIT_PR_BASE_MISMATCH`（Phase-3 窗口预期的其它 exit-1 除外，见 Phase transition gates 注）。
 3. **mismatch 时**：不产生任何提交。tracked 子树（`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md`、迭代 package 中 tracked 部分）的写入本就落在 **integration worktree**（检出 `<spec_integration_branch>` 的专用检出，§3.2 直写）；mismatch 时在正确检出的 integration worktree 重做这些写入，然后重跑本 checklist（进程产物 plans/iterations/status/sdd 为 gitignored 本地工件，经 control root 绝对路径读写，不受影响）。
 

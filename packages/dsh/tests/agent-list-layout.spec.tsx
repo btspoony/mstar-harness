@@ -131,7 +131,6 @@ function phase2Source(events: readonly unknown[]): MstarEngineStatusPayload {
     ...flowSource(events),
     iteration: {
       iterationId: 'iter-x',
-      statusPath: '/proj/.mstar/status.json',
       compassPath: '/proj/.mstar/iterations/iter-x/delivery-compass.md',
       gate: {
         transition: 'phase-2-execute',

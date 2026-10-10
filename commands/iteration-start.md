@@ -60,13 +60,13 @@ Execute **`mstar-host`** → active host **plan-mode bridge**, especially the sh
 Command-only supplements:
 
 - **Carrier fields**: Direction / prototype path and current revision / Feedback log / design approval disposition / recommended Delivery Branch Policy / pending preparation todos. Formal Scope / Decisions / Acceptance Criteria / Plans derive from the approved design, not before it.
-- **Preparation todos**: `harness-init` → `direction-lock-arm` → `prototype-design` → `prototype-confirmation` → `finalize-compass-plans` → selected review-edit seats → mandatory `review-edit-writing-specialist` → `pm-lock` → `integration-branch`. Complete a todo only when its semantic gate **and** actual host permissions allow it. If Plan mode cannot persist/show the package prototype or invoke a needed role, use the bridge's documented permission-resume path; never bypass restrictions with another tool or silently create a second plan.
+- **Preparation todos**: `harness-init` → `prototype-design` → `prototype-confirmation` → `finalize-compass-plans` → `workflow-register` → `coordinator-bind` → `direction-lock-arm` → selected review-edit seats → mandatory `review-edit-writing-specialist` → `pm-lock` → `integration-branch`. Complete a todo only when its semantic gate **and** actual host permissions allow it. If Plan mode cannot persist/show the package prototype or invoke a needed role, use the bridge's documented permission-resume path; never bypass restrictions with another tool or silently create a second plan.
 
 ## 非 Plan 路径从这里继续 ↓
 
 ## 1. Research
 
-Survey harness execution / catalog via `mstar status validate` / `mstar catalog list`（ACTIVE：store.db；pre-activation 才读 legacy status 文件），以及 `{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`；glob planning artifacts（roadmap/deferred/features/backlog/TODO/plan Markdown）作历史线索，不替代 store 权威。读 `STRATEGY.md` 与可选 knowledge README 散文；Research candidates 从 catalog 发现，不从 README Active 登记行推导。优先 prior iteration 未完成事项。
+Survey harness execution / catalog via `mstar status validate` / `mstar catalog list`（ACTIVE：store.db），以及 `{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`；glob planning artifacts（roadmap/deferred/features/backlog/TODO/plan Markdown）作历史线索，不替代 store 权威。读 `STRATEGY.md` 与可选 knowledge README 散文；Research candidates 从 catalog 发现，不从 README Active 登记行推导。优先 prior iteration 未完成事项。
 
 ## 2. Explore Directions
 
@@ -80,9 +80,9 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 **Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。**If `direction` arg given** — seed grill-me with it (still interactive; the hint does **not** skip grill-me)。Confirm delivery branch policy（`iteration_base_branch` / `target_branch`）per **`mstar-iteration/references/phase-1-prepare.md` §1.2** — **Do not default to `main`/`master` just because those names exist.**
 
-## 3.5 Arm the coordinator model handoff — `direction-lock`
+## 3.5 Direction-lock hook — after registration, before review
 
-The `direction-lock` anchor (`mstar-iteration/references/phase-1-prepare.md` §1.2 tail) fires **here**: the direction is locked and the compass/plans draft has **not** been written yet. Execute the active host reference's `## Host hooks` declaration for that anchor; this command declares no host action. Do **not** defer it into §4 — the draft is the context carrier the dispatched review roles read, so the anchor must precede it.
+The ACTIVE `direction-lock` action is not a pre-draft reservation. Complete §4 (including workflow registration) and acquire this session's coordinator seat first; then execute the active host reference's `## Host hooks` declaration before §5's Review & Edit chain.
 
 ## 3.6 Prototype Design & Confirmation
 
@@ -109,17 +109,17 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6** (SSOT): PM rec
 PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + deferred grill log；非 Plan：grill-me）
-- [ ] `direction-lock` anchor executed **before** the draft was written（§3.5；未登记/无 compass 属预期）
 - [ ] Current HTML prototype persisted in the iteration package, presented, and explicitly approved; feedback revisions and approval disposition retained
-- [ ] Draft compass + authored plans 经 `mstar iteration register` 注册（ACTIVE: store.db）
+- [ ] Running ACTIVE workflow registered from the ready compass + authored plans, with branch anchors present (no draft is created after this registration)
+- [ ] This session acquired the workflow's coordinator seat, then executed the `direction-lock` host action
 - [ ] product-manager / architect include/skip reasons recorded; every selected invoke returned; mandatory writing-specialist returned last; no skipped-role markers / blocking questions or fake receipts; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
-- [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass + workflow execution authority（ACTIVE: store.db；pre-activation: snapshot）
+- [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass + workflow execution authority（ACTIVE: store.db）
 - [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入；never the primary checkout
 
 ## 6. Integration Branch
 
-**Call site — do not restate the sequence.** Execute **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3** checklist **steps 1–7**（唯一 home）。本命令另记两件事实：branch anchors 在 compass frontmatter 与当前 workflow 执行权威登记（ACTIVE：store.db；pre-activation：snapshot）；主 plan 头记录实际 **`Main worktree branch`**，主 checkout 不切换。
+**Call site — do not restate the sequence.** Execute **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3** checklist **steps 1–7**（唯一 home）。本命令另记两件事实：branch anchors 在 compass frontmatter 与当前 workflow 执行权威登记（ACTIVE：store.db）；主 plan 头记录实际 **`Main worktree branch`**，主 checkout 不切换。
 
 **Phase 1 完成 anchor（pointer only — 本命令不承载 marker）**：checklist **step 7** 走完后必须执行 `phase-1-lock` 的 host 动作 —— 其 marker 与触发条件由 **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载。
 

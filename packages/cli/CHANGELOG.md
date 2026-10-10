@@ -6,6 +6,8 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+- Updated the committed ZCode hook regression to assert that a `status.json` write without an execution store is refused; retired workflow verbs are covered as absent from CLI help.
+
 ## [3.11.2] - 2026-09-19
 
 ### Changed

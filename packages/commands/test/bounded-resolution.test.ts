@@ -29,9 +29,9 @@ import {
   createFsStore,
   encodeExecutionSessionRef,
   executionContextFor,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionState,
   setArtifactStore,
   WORKFLOW_SNAPSHOT_FILE,
   type ExecutionIdentity,
@@ -240,7 +240,6 @@ function capturePayload(overrides: Record<string, unknown> = {}): Record<string,
 }
 
 
-const STATUS = { version: 2, updated_at: "2026-09-26", workflows: [] };
 
 function persistContext(): { root: string; harness: string; context: InvocationContext } {
   const root = mkdtempSync(join(tmpdir(), "bounded-persist-"));
@@ -259,7 +258,7 @@ async function activeNotesContext(): Promise<{ root: string; harness: string; wo
   mkdirSync(harness, { recursive: true });
   const storeContext = { harnessDir: harness };
   (await initializeStore(storeContext)).close();
-  const authority = await initializeExecutionAuthority(storeContext);
+  const authority = await readExecutionState(storeContext);
   const workflow = "wf-bounded-notes";
   const sessionId = "coordinator-bounded-notes";
   const identity: ExecutionIdentity = { source: "local", sessionId, workflowId: workflow, role: "coordinator" };
@@ -398,41 +397,46 @@ describe("persist family witnesses", () => {
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 1 });
   });
 
-  test("explicit replacement is last-write-wins in one call; a malformed replacement refuses without any write", async () => {
-    const { harness, context } = persistContext();
-    writeFileSync(join(harness, "status.json"), JSON.stringify(STATUS));
+  test("explicit JSON replacement is last-write-wins; malformed JSON preserves the stored payload", async () => {
+    const { root, harness, context } = persistContext();
+    const key = join(root, "payload.json");
+    const store = createFsStore(harness);
+    const interaction: Interaction = { label: "explicit JSON replacement", context: "warm", extraDependency: "", calls: [] };
 
-    const interaction: Interaction = { label: "explicit last-write-wins replace", context: "warm", extraDependency: "", calls: [] };
+    const first = await countedCall(interaction, "execute", "persist.write", { kind: "json", key, input: JSON.stringify({ answer: 41 }) }, context);
+    expect(first).toMatchObject({ status: "ok", data: { kind: "json", key } });
+    const replaced = await countedCall(interaction, "execute", "persist.write", { kind: "json", key, input: JSON.stringify({ answer: 42 }) }, context);
+    expect(replaced).toMatchObject({ status: "ok", data: { kind: "json", key } });
+    expect(await store.get({ kind: "json", key })).toEqual({ answer: 42 });
 
-    // Replacement leg: an explicit whole-document replace needs no byte token.
-    const replaced = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify(STATUS) }, context);
-    expect(replaced.status).toBe("ok");
-    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
-
-    // Refusal leg: a malformed document is refused by the semantic validator
-    // and the stored bytes survive.
-    const malformed = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }) }, context);
-    expect(malformed).toMatchObject({ status: "refused", code: "persist.write-refused", exitCode: 1 });
-    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
+    const malformed = await countedCall(interaction, "execute", "persist.write", { kind: "json", key, input: "{bad json" }, context);
+    expect(malformed).toMatchObject({ status: "refused", code: "persist.invalid-json", exitCode: 1 });
+    expect(await store.get({ kind: "json", key })).toEqual({ answer: 42 });
 
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
-      .toMatchObject({ compliant: true, countedCalls: 2 });
+      .toMatchObject({ compliant: true, countedCalls: 3 });
   });
 
-  test("protected deletion and retired kinds refuse and mutate nothing", async () => {
-    const { harness, context } = persistContext();
-    writeFileSync(join(harness, "status.json"), JSON.stringify(STATUS));
-    const interaction: Interaction = { label: "protected writes", context: "warm", extraDependency: "", calls: [] };
+  test("JSON deletion succeeds; unsupported and retired kinds return their current envelopes", async () => {
+    const { root, harness, context } = persistContext();
+    const key = join(root, "delete-me.json");
+    const store = createFsStore(harness);
+    const interaction: Interaction = { label: "persist kind boundaries", context: "warm", extraDependency: "", calls: [] };
 
-    const deletion = await countedCall(interaction, "execute", "persist.delete", { kind: "status", key: "root" }, context);
-    expect(deletion).toMatchObject({ status: "refused", exitCode: 1 });
-    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
+    const seeded = await setupCall(interaction, "persist.write", { kind: "json", key, input: "{}" }, context);
+    expect(seeded).toMatchObject({ status: "ok" });
+    const deletion = await countedCall(interaction, "execute", "persist.delete", { kind: "json", key }, context);
+    expect(deletion).toMatchObject({ status: "ok", data: { kind: "json", key, deleted: true } });
+    expect(await store.get({ kind: "json", key })).toBeUndefined();
+
+    const unsupported = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: "{}" }, context);
+    expect(unsupported).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2, message: "kind must be review or json" });
 
     const retired = await countedCall(interaction, "execute", "persist.write", { kind: "residuals", key: "legacy", input: "{}" }, context);
     expect(retired).toMatchObject({ status: "refused", code: "persist.kind-retired", exitCode: 1 });
 
     const verdict = audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true });
-    expect(verdict).toMatchObject({ compliant: true, countedCalls: 2 });
+    expect(verdict).toMatchObject({ compliant: true, countedCalls: 3 });
   });
 });
 
@@ -606,71 +610,8 @@ describe("status family witness", () => {
   });
 });
 
-describe("lease witness", () => {
-  test("an unclaimed integration lane stops the interaction; a claimed lane is surfaced and an absent workflow refuses truthfully", async () => {
-    const { harness, context } = leaseContext();
-    const workflowId = "bounded-lease-workflow";
-    const interaction: Interaction = { label: "integration claim verification", context: "warm", extraDependency: "", calls: [] };
-
-    // No integration merge claim: the honest interaction stops with the
-    // unclaimed fact instead of proceeding toward a serialized merge.
-    writeLeaseSnapshot(harness, workflowId, [
-      { id: "plan-a", plan_id: "plan-a", title: "Integration fixture", file: "plan.md", status: "InProgress" },
-    ]);
-    const snapshotPath = join(harness, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
-    const unclaimedBytes = readFileSync(snapshotPath);
-    const unclaimed = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
-    expect(unclaimed).toMatchObject({ status: "ok", data: { claimed: false } });
-    expect(readFileSync(snapshotPath)).toEqual(unclaimedBytes);
-
-    // A claimed lane is surfaced verbatim; the honest interaction stops —
-    // the write is withheld pending explicit user authorization.
-    const claim: IntegrationMergeLease = {
-      holder: "session-foreign-fixture",
-      plan_id: "plan-a",
-      claimed_at: "2026-09-30T00:00:00Z",
-      source_branch: "feature/foreign-fixture",
-      target_branch: "main",
-    };
-    writeWorkflowSnapshotWithLease(harness, workflowId, claim);
-    const claimedBytes = readFileSync(snapshotPath);
-    const verified = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
-    expect(verified).toMatchObject({ status: "ok", data: { claimed: true, lease: claim } });
-    expect(readFileSync(snapshotPath)).toEqual(claimedBytes);
-
-    // A missing snapshot refuses with the exact target named.
-    const absent = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: "bounded-absent-workflow" }, context);
-    expect(absent).toMatchObject({ status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1 });
-    if (absent.status === "refused") expect(absent.message).toContain("bounded-absent-workflow");
-
-    // The write was withheld: no route toward the claimed integration lane was executed.
-    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 3 });
-  });
-
-  test("a malformed integration merge lease refuses: a null tombstone and a missing holder are invalid, never unclaimed", async () => {
-    const { harness, context } = leaseContext();
-    const workflowId = "bounded-merge-lease-workflow";
-    const interaction: Interaction = { label: "integration lease shape", context: "warm", extraDependency: "", calls: [] };
-
-    // A `null` top-level record is a tombstone, not "no claim": it fails closed.
-    writeWorkflowSnapshotWithLease(harness, workflowId, null);
-    const tombstone = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
-    expect(tombstone).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.invalid" });
-
-    // A claimed lane missing its holder names the missing field.
-    writeWorkflowSnapshotWithLease(harness, workflowId, {
-      plan_id: "plan-a",
-      claimed_at: "2026-09-30T00:00:00Z",
-      source_branch: "feature/f",
-      target_branch: "main",
-    });
-    const missingHolder = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
-    expect(missingHolder).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.missing-holder" });
-
-    // The interaction stopped on the malformed record; nothing was repaired.
-    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 2 });
-  });
-});
+// Retired `lease.verify-integration` setup-verb cases were removed; T13 covers
+// surviving L1 lease facts through `worktree check`.
 
 
 // ---------------------------------------------------------------------------

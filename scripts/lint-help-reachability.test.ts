@@ -143,12 +143,12 @@ describe("help reachability lint", () => {
 
   test("rejects missing required options and values but accepts the complete option", () => {
     const surface = extractCliGrammar();
-    for (const recovery of ["Run mstar lease verify-integration", "Run mstar lease verify-integration --workflow"]) {
+    for (const recovery of ["Run mstar persist get review", "Run mstar persist get review --key"]) {
       const finding = scanRecoveryText(envelope(recovery), "packages/engine/src/fixture.ts", surface);
       expect(finding.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
       expect(finding[0]?.reason).toMatch(/missing required option/i);
     }
-    expect(scanRecoveryText(envelope("Run mstar lease verify-integration --workflow wf-1"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
+    expect(scanRecoveryText(envelope("Run mstar persist get review --key k"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
   });
 
   test("validates flags after prose connectors rather than truncating them", () => {
@@ -214,7 +214,7 @@ describe("help reachability lint", () => {
     const invalid = scanRecoveryText(envelope("Run mstar persist get nonsense --key k"), "packages/engine/src/fixture.ts", surface);
     expect(invalid.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
     expect(invalid[0]?.reason).toContain("positional value is not in declared choices");
-    expect(scanRecoveryText(envelope("Run mstar persist get status --key k"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
+    expect(scanRecoveryText(envelope("Run mstar persist get review --key k"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
   });
 
   test("uses wrapper call-site arguments instead of shadowed outer recovery declarations", () => {

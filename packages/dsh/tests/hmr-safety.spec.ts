@@ -31,8 +31,8 @@ import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepse
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
-import type { SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { FakeAgentRegistry, FakeLoaderRegistry, FakeSubagentProvider, INVALID_STATUS, seedHarness } from './harness.ts'
+import type { SkillLintAdvisory } from '../src/index.ts'
+import { FakeAgentRegistry, FakeLoaderRegistry, FakeSubagentProvider } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -59,11 +59,6 @@ const ASSIGNMENT_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
-/** FsTarget for `{HARNESS_DIR}/status.json` (local-backend shape). */
-const statusTarget = (harnessDir: string): FsTarget => ({
-  targetKey: join(harnessDir, 'status.json') as FsTarget['targetKey'],
-  displayPath: join(harnessDir, 'status.json'),
-})
 
 /** One pending subagent tool call in the registry pipeline shape. */
 const subagentExec = (prompt: string): ToolExecution => ({
@@ -113,6 +108,7 @@ const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
   decision.kind === 'enter' ? decision.messages.at(-1) : undefined
 
 describe('HMR safety — fiber.dispose removes every gate contribution', () => {
+  // Disposition: status.json write-intent assertions are removed with the retired file-route subject; dispatch/service disposal remains covered here.
   it('disposes the gates + service on fiber.dispose and a reloaded fiber restores them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
     const harnessDir = join(root, 'harness')
@@ -120,46 +116,22 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.
     new FakeLoaderRegistry(ctx)
-    // Advisory capture proves listener liveness: the status gate never throws
-    // (repair-escape design), so a live mount with an invalid on-disk
-    // document emits a repair advisory on BOTH intent slots; a disposed mount
-    // emits nothing.
-    const advisories: StatusGateAdvisory[] = []
-    ctx.on('mstar/status-gate', (payload) => { advisories.push(payload) })
-    try {
-      await seedHarness(harnessDir, { 'status.json': JSON.stringify(INVALID_STATUS) })
 
+    try {
       // Mount 1 — every gate is live on the new fiber.
       const fiber = await ctx.plugin(plugin, { enforcement: 'hard', harnessDir })
       expect(ctx.dshMstar).toBeDefined()
-      const writeLive = await ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined)
-      expect(writeLive).toBeUndefined() // repair escape: allowed, advisory emitted
-      const editLive = await ctx.waterfall('fs/edit-intent', statusTarget(harnessDir), {}, () => undefined)
-      expect(editLive).toBeUndefined()
-      expect(advisories.map((a) => a.operation)).toEqual(['write', 'edit'])
-      expect(advisories.every((a) => a.hard === true && a.repair === true)).toBe(true)
       const denied = await ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
       expect(denied).toMatchObject({ kind: 'deny' })
 
-      // Dispose — the status listeners (BOTH slots), the dispatch listener and
-      // the service are all unwound: no advisory, no deny, no service.
       await fiber.dispose()
       expect(ctx.dshMstar).toBeUndefined()
-      const before = advisories.length
-      const writeAfter = await ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined)
-      expect(writeAfter).toBeUndefined()
-      const editAfter = await ctx.waterfall('fs/edit-intent', statusTarget(harnessDir), {}, () => undefined)
-      expect(editAfter).toBeUndefined()
-      expect(advisories.length).toBe(before) // edit-intent post-dispose: no advisory 
       const dispatchAfter = await ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
       expect(dispatchAfter).toEqual({ kind: 'allow' })
 
       // HMR reload — a fresh fiber restores the full gate set.
       const reloaded = await ctx.plugin(plugin, { enforcement: 'hard', harnessDir })
       expect(ctx.dshMstar).toBeDefined()
-      await ctx.waterfall('fs/write-intent', statusTarget(harnessDir), {}, () => undefined)
-      await ctx.waterfall('fs/edit-intent', statusTarget(harnessDir), {}, () => undefined)
-      expect(advisories.length).toBe(before + 2)
       const deniedAgain = await ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
       expect(deniedAgain).toMatchObject({ kind: 'deny' })
       await reloaded.dispose()

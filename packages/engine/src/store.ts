@@ -20,15 +20,11 @@ import {
   resolveProjectDir,
   resolveWorkflowDir,
 } from "./path.js";
-import {
-  assertExecutionFileReadAllowed,
-  assertExecutionFileWriteAllowed,
-} from "./store-db.js";
 
-/** JSON coordination-doc kinds the store persists. The former `residuals`
- * kind is retired (issue-governance cutover G2a): the issue store (`store.db`)
- * is the only findings authority, and a project `residuals.json` is migration
- * history that must never be (re)created through the runtime store. */
+/** Store artifact kinds. `status` and `snapshot` exist only for internal
+ * migration staging; runtime persistence is `review` / `json`. The former
+ * `residuals` kind is retired: `store.db` is the findings authority, and
+ * `residuals.json` is migration history that must never be recreated. */
 export type ArtifactKind = "status" | "snapshot" | "review" | "json";
 
 /** Stable key inside the kind. Workflow id, project id, or review id;
@@ -228,38 +224,18 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       }
       const filePath = resolveArtifactPath(root, doc);
       assertNotRetiredRegisterTarget(root, doc, filePath);
- // Protected-write boundary (spec §C4): the coordination documents
- // (`status.json`, a workflow `snapshot.json`) accept writes only from
- // inside the private authorization context the locked writers open.
- // Everything else — including a `json`/symlink alias of a protected file —
- // refuses.
+      // Protected coordination documents may be written only inside the
+      // authorization context opened by their locked migration writers.
       const protectedKind = protectedKindOf(root, doc, filePath);
       if (protectedKind !== null) {
-        // Canonical authority discrimination precedes the authorization check
-        // and the write itself (spec §4.3): with an ACTIVE execution authority
-        // in the control harness this file is not a persistence route, even
-        // from inside the authorized protected-write context.
-        assertExecutionFileWriteAllowed({ harnessDir: root });
         assertProtectedWriteAuthorized(filePath, "put", protectedKind);
       }
       writeJson(filePath, doc.payload);
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
       const filePath = resolveArtifactPath(root, ref);
-      // Read-surface symmetry (G2a): the same refusal as put/delete. A read
-      // through a `json` alias is the same authority channel — the runtime
-      // holds no register authority, so legacy register bytes never reach a
-      // consumer that bypasses the findings gate.
+      // Retired project-register aliases are never served as body documents.
       assertNotRetiredRegisterTarget(root, ref, filePath);
-      // Canonical authority discrimination precedes the read itself (spec
-      // §4.3/§5) and is the SAME canonical protected-kind classification the
-      // writer path uses: while the execution authority is ACTIVE this seam is
-      // not a way to observe root/snapshot JSON (a `json` alias included) that
-      // the canonical readers refuse, and a store that exists but cannot be
-      // read refuses here too instead of falling through to the bytes.
-      if (protectedKindOf(root, ref, filePath) !== null) {
-        assertExecutionFileReadAllowed({ harnessDir: root });
-      }
       if (!existsSync(filePath)) return undefined;
       return readJson(filePath) as unknown as T;
     },
@@ -268,7 +244,6 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       assertNotRetiredRegisterTarget(root, ref, filePath);
       const protectedKind = protectedKindOf(root, ref, filePath);
       if (protectedKind !== null) {
-        assertExecutionFileWriteAllowed({ harnessDir: root });
         assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
       }
       if (existsSync(filePath)) unlinkSync(filePath);
@@ -342,61 +317,16 @@ function processControlRoot(): string {
 }
 
 /**
- * Protected control-document class of an injected ref, decided against the
- * canonical control root and never against the injector's `root`: the root
- * register and a workflow snapshot by kind, plus a `json` alias whose
- * canonical target is either — the same classification the FsStore applies to
- * its own writes, so no alias dodges the boundary by entering through
- * injection. Every other ref (review/document bodies, unrelated `json`) is not
- * a control document and keeps the injected store's own route.
+ * Prevent custom stores from recreating or aliasing the retired project
+ * register. Protected status/snapshot files are migration staging and their
+ * writer callsites own authorization.
  */
-function injectedControlKind(controlRoot: string, ref: ArtifactRef): ProtectedWriteKind | null {
-  if (ref.kind === "status") return "root";
-  if (ref.kind === "snapshot") return "snapshot";
-  if (ref.kind !== "json") return null;
-  return protectedKindOf(controlRoot, ref, ref.key);
-}
-
-/**
- * Canonical control-target guard for an injected store (retained-body
- * contract): the protected control documents and the retired project register
- * are not a body-storage target, so an injected `put` / `get` / `delete`
- * reaching one refuses BEFORE the injected method runs.
- *
- * Two rules, with different reach:
- *
- * - the retired register refuses unconditionally — the runtime `residuals`
- *   kind and a `json` alias whose canonical target is the control root's
- *   project register, through the same `assertNotRetiredRegisterTarget` rule
- *   the FsStore applies, so an injected adapter never turns the retired
- *   findings authority into a body route (active and legacy state behave
- *   alike);
- * - the root register and a workflow snapshot (or a `json` alias of either)
- *   refuse while the canonical control root's execution authority is ACTIVE —
- *   the same refusal the FsStore applies to a direct write or read of the same
- *   document. Every body ref, and every ref while that authority is not
- *   active, keeps the injected store's declared route.
- *
- * The class decides whether the control root is resolved at all: the common
- * body ref returns before any root or authority probe.
- *
- * Synchronous by contract, like the guards it reuses: the verdict precedes the
- * injected call.
- */
-function assertInjectedAccessAllowed(ref: ArtifactRef, access: "read" | "write"): void {
+function assertInjectedAccessAllowed(ref: ArtifactRef): void {
   const retirableKind = (ref.kind as string) === "residuals";
   const aliasKind = ref.kind === "json";
-  const declaredControlKind = ref.kind === "status" || ref.kind === "snapshot";
-  if (!retirableKind && !aliasKind && !declaredControlKind) return;
+  if (!retirableKind && !aliasKind) return;
   const controlRoot = processControlRoot();
-  if (retirableKind || aliasKind) {
-    // The third argument is `filePath`, read only by the alias arm of the rule.
-    assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
-  }
-  if (!declaredControlKind && injectedControlKind(controlRoot, ref) === null) return;
-  const context = { harnessDir: controlRoot };
-  if (access === "read") assertExecutionFileReadAllowed(context);
-  else assertExecutionFileWriteAllowed(context);
+  assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
 }
 
 /**
@@ -413,18 +343,18 @@ function assertInjectedAccessAllowed(ref: ArtifactRef, access: "read" | "write")
 export function guardInjectedStore(store: ArtifactStore): ArtifactStore {
   const guarded: ArtifactStore = {
     async put(doc: ArtifactDoc): Promise<void> {
-      assertInjectedAccessAllowed(doc, "write");
+      assertInjectedAccessAllowed(doc);
       return store.put(doc);
     },
     async get<T = unknown>(ref: ArtifactRef): Promise<T | undefined> {
-      assertInjectedAccessAllowed(ref, "read");
+      assertInjectedAccessAllowed(ref);
       return store.get<T>(ref);
     },
   };
   const remove = store.delete;
   if (remove !== undefined) {
     guarded.delete = async (ref: ArtifactRef): Promise<void> => {
-      assertInjectedAccessAllowed(ref, "write");
+      assertInjectedAccessAllowed(ref);
       return remove.call(store, ref);
     };
   }

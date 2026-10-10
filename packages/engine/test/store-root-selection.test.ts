@@ -7,7 +7,7 @@ import { registerCatalogEntity } from "../src/catalog.js";
 import { readCatalogCompleteness } from "../src/iteration.js";
 import { resolveProcessHarnessDir } from "../src/coordination.js";
 import { upgradeStoreMinimal } from "../src/execution-minimal-import.js";
-import { initializeExecutionAuthority, readExecutionState } from "../src/execution-store.js";
+import { readExecutionState } from "../src/execution-store.js";
 import { initializeStore, openStore, upgradeStore, type StoreContext } from "../src/store-db.js";
 
 const roots: string[] = [];
@@ -23,7 +23,7 @@ async function activeWorkspace(): Promise<{ root: string; context: StoreContext;
   mkdirSync(context.harnessDir);
   const created = await initializeStore(context);
   created.close();
-  const authority = await initializeExecutionAuthority(context);
+  const authority = await readExecutionState(context);
   return { root, context, storeId: authority.storeId };
 }
 

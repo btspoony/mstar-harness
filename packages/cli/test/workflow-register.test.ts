@@ -1,34 +1,18 @@
 /**
- * CLI `mstar workflow register` — the generic standalone-plan registration
- * producer (mstar-artifacts/references/plan-workflow-lifecycle-contract.md seam S1; engine-backed).
+ * CLI `mstar workflow register` — ACTIVE catalog-backed registration.
  *
- * Thin wrapper over engine `registerPlanWorkflow` (create-only `type: plan`
- * snapshot + root `workflows[]` entry under one lock).
- * Contract pinned here:
- * - exit 0: a standalone development plan registers before execution — the
- *   root entry appears in `status.json`, the snapshot lands on disk with the
- *   recorded delivery kind / project / branches / single Todo plan row, and
- *   both documents pass `mstar status validate`.
- * - exit 1: a different registration for an existing workflow id refuses;
- *   development registration without branches and verification registration
- *   without a completion policy refuse before any write; a hostile workflow
- *   id is rejected by the shared guard.
- * - exit 2: usage — missing required flags, an unknown delivery kind.
- * - a verification/report-only workflow registers without branch fields,
- *   recording its completion policy instead.
- *
- * Every case runs the real CLI as a subprocess against an isolated temp
- * fixture harness — no live harness is ever touched.
+ * Every case runs the real CLI as a subprocess against an isolated temporary
+ * harness. Registration is asserted through the store, never file transports.
  */
-import { describe, expect, test } from "bun:test";
-import { initializeStore, listPendingCatalogRegistrations, resolveCatalogRegistrationState, type StoreContext } from "@mstar-harness/engine";
+import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+const SRC_ENTRY = resolve(import.meta.dir, "../src/index.ts");
 const WORKFLOW_ID = "20260916-plan-register-cli";
+const SESSION_ID = "registration-cli-session";
 
 interface RunResult {
   exitCode: number | null;
@@ -62,6 +46,9 @@ function runCli(args: string[]): RunResult {
 }
 
 function commandOutput(result: RunResult): Record<string, unknown> {
+  if (result.stdout.trim() === "") {
+    throw new Error(`CLI emitted no JSON envelope (exit ${result.exitCode}); stderr: ${result.stderr}`);
+  }
   const value: unknown = JSON.parse(result.stdout);
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected a command envelope on stdout, received ${JSON.stringify(result.stdout)}`);
@@ -97,6 +84,8 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
     "main",
     "--started-at",
     "2026-09-16T00:00:00.000Z",
+    "--session-id",
+    SESSION_ID,
     "--harness",
     harness,
     ...extra,
@@ -112,9 +101,8 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   mkdirSync(join(harness, "plans"), { recursive: true });
   writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), "# CLI example plan\n\n**plan_id:** 20260916-plan-cli-example\n");
   writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), "# Verification plan\n\n**plan_id:** 20260916-plan-verify\n");
-  // Contract §3: registration goes through the catalog journal, which requires
-  // an initialized ACTIVE store — the fixture provisions one.
-  await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
   try {
     await fn(harness, {
       root: join(harness, "status.json"),
@@ -125,113 +113,125 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   }
 }
 
+async function readWorkflows(harnessDir: string) {
+  const authority = await readExecutionAuthority({ harnessDir });
+  if (!("workflows" in authority.data)) throw new Error("ACTIVE workflow view is unavailable");
+  return authority.data.workflows;
+}
+
+async function expectDevelopmentRegistration(harnessDir: string): Promise<void> {
+  const workflows = await readWorkflows(harnessDir);
+  expect(workflows).toHaveLength(1);
+  const workflow = workflows[0]!;
+  expect(workflow.plans.map((view) => view.plan.id)).toEqual(["20260916-plan-cli-example"]);
+  expect(workflow.state).toMatchObject({
+    delivery_kind: "development",
+    project: "engine",
+    branch: { source: "feature/20260916-plan-cli-example", target: "main" },
+  });
+}
+
 describe("mstar workflow register", () => {
+  test("registers a standalone development plan through the ACTIVE shipped route without explicit CAS inputs", async () => {
+    await setupHarness(async (harness, { root, snapshot }) => {
+      const result = runCli(registerArgs(harness));
+      expect(commandOutput(result)).toMatchObject({
+        status: "ok",
+        code: "workflow.register.ok",
+        exitCode: 0,
+        data: { workflowId: WORKFLOW_ID },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(root)).toBe(false);
+      expect(existsSync(snapshot)).toBe(false);
+
+      await expectDevelopmentRegistration(harness);
+    });
+  });
+
+  test("an identical retry without an explicit operation replays the shipped registration", async () => {
+    await setupHarness(async (harness) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const retry = runCli(registerArgs(harness));
+      expect(retry.exitCode).toBe(0);
+      expect(commandOutput(retry)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+      await expectDevelopmentRegistration(harness);
+    });
+  });
+
+  test("a distinct operation refuses an already-registered workflow without changing ACTIVE state", async () => {
+    await setupHarness(async (harness) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const before = await readExecutionAuthority({ harnessDir: harness });
+
+      const conflict = runCli(registerArgs(harness, [
+        "--expect", before.token,
+        "--operation", "cli-conflicting-registration",
+      ]));
+      expect(conflict.exitCode).toBe(1);
+      expect(commandOutput(conflict).status).toBe("refused");
+
+      const after = await readExecutionAuthority({ harnessDir: harness });
+      expect(after).toEqual(before);
+    });
+  });
+
+  test("an explicit operation and current root token constrain a new shipped registration", async () => {
+    await setupHarness(async (harness) => {
+      const authority = await readExecutionAuthority({ harnessDir: harness });
+      const rootToken = authority.token;
+      const result = runCli(registerArgs(harness, ["--expect", rootToken, "--operation", "cli-explicit-registration"]));
+      expect(result.exitCode).toBe(0);
+      expect(commandOutput(result)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+      await expectDevelopmentRegistration(harness);
+    });
+  });
+
+  test("records delivery evidence through the ACTIVE route under the bound session identity", async () => {
+    await setupHarness(async (harness) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const read = await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID });
+      if (!("workflows" in read.data)) throw new Error("workflow registration did not produce an execution workflow view");
+      const workflow = read.data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
+      if (workflow === undefined) throw new Error("registered workflow was absent from the execution view");
+
+      const bound = runCli([
+        "plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", workflow.workflowToken, "--operation", "bind-registration-cli",
+        "--harness", harness, "--session-id", SESSION_ID,
+      ]);
+      expect(bound.exitCode).toBe(0);
+
+      const evidenceFile = join(harness, "delivery.json");
+      writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "updated" } }));
+      const evidence = runCli([
+        "workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", evidenceFile,
+        "--harness", harness, "--expect", workflow.workflowToken,
+        "--operation", "evidence-registration-cli", "--session-id", SESSION_ID,
+      ]);
+      expect(evidence.exitCode).toBe(0);
+      expect(commandOutput(evidence)).toMatchObject({ status: "ok", code: "workflow.evidence.ok" });
+
+      const after = await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID });
+      if (!("workflows" in after.data)) throw new Error("workflow evidence read did not return a workflow view");
+      expect(after.data.workflows.find((entry) => entry.state.id === WORKFLOW_ID)?.state.delivery)
+        .toEqual({ compound: { outcome: "updated" } });
+    });
+  });
+
   test("mismatched declared title returns the typed constraint refusal verbatim", async () => {
     await setupHarness((harness) => {
       const args = registerArgs(harness);
       args[args.indexOf("--plan-title") + 1] = "Contradictory title";
       const result = runCli([...args, "--json"]);
       expect(result.exitCode).toBe(1);
-      const envelope = commandOutput(result);
-      expect(envelope).toMatchObject({
-        status: "refused",
-        code: "workflow.register.title-constraint",
-        exitCode: 1,
-      });
-      expect(String(envelope.message)).toContain(
-        `derivePlanRegistration: plan "20260916-plan-cli-example" was declared with title "Contradictory title", but the selected document ${realpathSync(join(harness, "plans/20260916-plan-cli-example.md"))} states "CLI example plan" - the selected plan document is the registration authority (R1/section 4), so a supplied title is a constraint against it, never an override`,
-      );
-      expect(String(envelope.message)).toContain("the selected plan document is the registration authority");
-      expect(String(envelope.message)).toContain("Help: mstar workflow register --help");
-      expect(String(envelope.message)).toContain(
-        "Recovery: Use the title in the selected plan document's H1, or correct that document before registering.",
-      );
-    });
-  });
-  test("registers a standalone development plan: root entry + snapshot on disk, both validate (exit 0)", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
-      const result = runCli(registerArgs(harness));
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
-      const response = commandOutput(result);
-      expect(response).toMatchObject({
-        status: "ok",
-        code: "workflow.register.ok",
-        exitCode: 0,
-      });
-      expect(response.data).toMatchObject({ workflowId: WORKFLOW_ID });
-
-      expect(existsSync(snapshot)).toBe(true);
-      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(doc).toMatchObject({
-        schema_version: 1,
-        id: WORKFLOW_ID,
-        type: "plan",
-        status: "running",
-        delivery_kind: "development",
-        project: "engine",
-      });
-      // `--branch-source` records the delivery branch on `branch.source`;
-      // `branch.base` (protected base anchor: cleanup Rule 2 / L1 fallback)
-      // stays unset.
-      expect(doc.branch).toEqual({ source: "feature/20260916-plan-cli-example", target: "main" });
-      expect(doc.plans).toEqual([
-        { id: "20260916-plan-cli-example", title: "CLI example plan", file: realpathSync(join(harness, "plans/20260916-plan-cli-example.md")), status: "Todo" },
-      ]);
-
-      const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([
-        { id: WORKFLOW_ID, type: "plan", started_at: "2026-09-16T00:00:00.000Z", dir: `workflows/${WORKFLOW_ID}` },
-      ]);
-
-      // Product contract: both registered documents validate (exit 0).
-      expect(runCli(["status", "validate", root]).exitCode).toBe(0);
-      expect(runCli(["status", "validate", snapshot]).exitCode).toBe(0);
+      expect(commandOutput(result)).toMatchObject({ status: "refused", code: "workflow.register.title-constraint", exitCode: 1 });
+      expect(commandMessage(result)).toContain("the selected plan document is the registration authority");
     });
   });
 
-  test("success is advertised only after the committed catalog registration (contract §3)", async () => {
+  test("development registration without branches refuses before writing a catalog binding", async () => {
     await setupHarness(async (harness) => {
-      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const context: StoreContext = { harnessDir: harness };
-      const state = await resolveCatalogRegistrationState(context, WORKFLOW_ID);
-      expect(state.pending).toBeNull();
-      expect(state.binding).toMatchObject({ catalogKind: "plan", catalogId: "20260916-plan-cli-example" });
-      expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-    });
-  });
-  test("a distinct operation cannot register an already-registered workflow id", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
-      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const beforeSnapshot = readFileSync(snapshot, "utf8");
-      const beforeRoot = readFileSync(root, "utf8");
-
-      const duplicate = runCli(registerArgs(harness));
-      expect(duplicate.exitCode).toBe(1);
-      expect(commandOutput(duplicate).status).toBe("refused");
-      expect(commandMessage(duplicate)).toContain("[catalog.registration-conflict]");
-      expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
-      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-    });
-  });
-  test("a distinct-operation retry after a lost root entry refuses without restoring bytes", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
-      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const snapshotBytes = readFileSync(snapshot, "utf8");
-      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
-      const lostRootBytes = readFileSync(root, "utf8");
-
-      const retry = runCli(registerArgs(harness));
-      expect(retry.exitCode).toBe(1);
-      expect(commandOutput(retry).status).toBe("refused");
-      expect(commandMessage(retry)).toContain("[catalog.registration-conflict]");
-      expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
-      expect(readFileSync(root, "utf8")).toBe(lostRootBytes);
-    });
-  });
-
-  test("development registration without branches refuses before any write (exit 1)", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
       const args = registerArgs(harness);
       const noBranches: string[] = [];
       for (let i = 0; i < args.length; i++) {
@@ -241,91 +241,51 @@ describe("mstar workflow register", () => {
       const result = runCli(noBranches);
       expect(result.exitCode).toBe(1);
       expect(commandOutput(result).status).toBe("refused");
-      expect(commandMessage(result)).toContain("incomplete registration");
-      // Refusal before any write — no partial activation.
-      expect(existsSync(snapshot)).toBe(false);
-      expect(existsSync(root)).toBe(false);
+      expect((await readWorkflows(harness)).map((workflow) => workflow.state.id)).toEqual([]);
     });
   });
 
-  test("verification/report-only registers without branches but requires the completion policy", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
-      // Without the policy: refusal (exit 1), nothing written — the engine
-      // refuses a verification/report-only registration whose policy is empty.
+  test("verification/report-only registration requires completion policy and succeeds without branches", async () => {
+    await setupHarness(async (harness) => {
       const withoutPolicy = runCli([
-        "workflow",
-        "register",
-        "--workflow",
-        WORKFLOW_ID,
-        "--plan-id",
-        "20260916-plan-verify",
-        "--plan-title",
-        "Verification plan",
-        "--plan-file",
-        "plans/20260916-plan-verify.md",
-        "--delivery-kind",
-        "verification/report-only",
-        "--completion-policy",
-        "",
-        "--harness",
-        harness,
+        "workflow", "register", "--workflow", WORKFLOW_ID, "--plan-id", "20260916-plan-verify",
+        "--plan-title", "Verification plan", "--plan-file", "plans/20260916-plan-verify.md",
+        "--delivery-kind", "verification/report-only", "--completion-policy", "", "--harness", harness,
       ]);
-      const response = commandOutput(withoutPolicy);
       expect(withoutPolicy.exitCode).not.toBe(0);
-      expect(["usage", "refused"]).toContain(response.status);
-      expect(existsSync(snapshot)).toBe(false);
-      expect(existsSync(root)).toBe(false);
+      expect(["usage", "refused"]).toContain(commandOutput(withoutPolicy).status);
 
-      // With the policy: registration succeeds without any branch fields.
       const result = runCli([
-        "workflow",
-        "register",
-        "--workflow",
-        WORKFLOW_ID,
-        "--plan-id",
-        "20260916-plan-verify",
-        "--plan-title",
-        "Verification plan",
-        "--plan-file",
-        "plans/20260916-plan-verify.md",
-        "--delivery-kind",
-        "verification/report-only",
-        "--completion-policy",
-        "acceptance report at plans/20260916-plan-verify/report.md",
-        "--started-at",
-        "2026-09-16T00:00:00.000Z",
-        "--harness",
-        harness,
+        "workflow", "register", "--workflow", WORKFLOW_ID, "--plan-id", "20260916-plan-verify",
+        "--plan-title", "Verification plan", "--plan-file", "plans/20260916-plan-verify.md",
+        "--delivery-kind", "verification/report-only", "--project", "engine", "--completion-policy",
+        "acceptance report at plans/20260916-plan-verify/report.md", "--harness", harness,
       ]);
       expect(result.exitCode).toBe(0);
-      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(doc.delivery_kind).toBe("verification/report-only");
-      expect(doc.completion_policy).toBe("acceptance report at plans/20260916-plan-verify/report.md");
-      expect(doc.branch).toBeUndefined();
-      expect((JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>).workflows).toHaveLength(1);
+      expect(commandOutput(result)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+      const workflow = (await readWorkflows(harness))[0]!;
+      expect(workflow.plans.map((view) => view.plan.id)).toEqual(["20260916-plan-verify"]);
+      expect(workflow.state).toMatchObject({
+        delivery_kind: "verification/report-only",
+        project: "engine",
+        completion_policy: "acceptance report at plans/20260916-plan-verify/report.md",
+      });
+      expect(workflow.state.branch).toBeUndefined();
     });
   });
 
-  test("missing required flags are a usage error (exit 2)", async () => {
+  test("missing required flags and unknown delivery kind are usage errors", async () => {
     await setupHarness((harness) => {
-      const result = runCli(["workflow", "register", "--workflow", WORKFLOW_ID, "--harness", harness]);
-      const response = commandOutput(result);
-      expect(response.status).toBe("usage");
-      expect(commandMessage(result)).toContain("planId");
+      const missing = runCli(["workflow", "register", "--workflow", WORKFLOW_ID, "--harness", harness]);
+      expect(commandOutput(missing).status).toBe("usage");
+      expect(commandMessage(missing)).toContain("planId");
+      const unknown = runCli(registerArgs(harness, ["--delivery-kind", "stealth"]));
+      expect(commandOutput(unknown).status).toBe("usage");
+      expect(commandMessage(unknown)).toContain("development | verification/report-only");
     });
   });
 
-  test("unknown delivery kind is a usage error (exit 2)", async () => {
-    await setupHarness((harness) => {
-      const result = runCli(registerArgs(harness, ["--delivery-kind", "stealth"]));
-      expect(commandOutput(result).status).toBe("usage");
-      expect(commandMessage(result)).toContain("--delivery-kind");
-      expect(commandMessage(result)).toContain("development | verification/report-only");
-      expect(commandMessage(result)).toContain("stealth");
-    });
-  });
-
-  test("hostile workflow id is rejected by the shared id guard (exit 1)", async () => {
+  test("hostile workflow id is rejected by the shared id guard", async () => {
     await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--workflow", "../escape"]));
       expect(result.exitCode).toBe(1);
@@ -335,4 +295,22 @@ describe("mstar workflow register", () => {
     });
   });
 
+  test("retired workflow verbs are absent from CLI help", () => {
+    const result = runCli(["workflow", "--help"]);
+    expect(result.exitCode).toBe(0);
+    for (const verb of ["show-prepare", "amend-prepare", "recover-coordinator"]) {
+      expect(result.stdout).not.toContain(verb);
+    }
+  });
+
+  test("workflow evidence help no longer exposes pre-activation inputs", () => {
+    const help = runCli(["workflow", "evidence", "--help"]);
+    expect(help.exitCode).toBe(0);
+    for (const retired of ["--declare-kind", "--session ", "--at "]) {
+      expect(help.stdout).not.toContain(retired);
+    }
+    expect(help.stdout).toContain("--session-ref");
+    expect(help.stdout).toContain("--expect");
+    expect(help.stdout).toContain("--operation");
+  });
 });

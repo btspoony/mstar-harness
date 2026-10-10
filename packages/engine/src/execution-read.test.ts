@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
 import { readExecutionAuthority, readExecutionCleanupState } from "./execution-read.js";
-import { createExecutionWorkflow, initializeExecutionAuthority, readExecutionState } from "./execution-store.js";
+import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import type { WorkflowEntry } from "./status.js";
 import type { WorkflowSnapshot } from "./workflow.js";
@@ -18,7 +18,7 @@ async function fixture(label: string): Promise<StoreContext> {
   const context: StoreContext = { harnessDir: mkdtempSync(join(ROOT, `${label}-`)) };
   const store = await initializeStore(context);
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   const workflowId = `wf-${label}`;
   const planId = `plan-${label}`;
   await registerCatalogEntity(

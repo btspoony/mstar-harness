@@ -57,8 +57,9 @@ import {
   type MigratePlan,
 } from "../src/migrate.js";
 import { validateProjectRegister, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE } from "../src/project.js";
-import { registerWorkflow, validateStatusV2 } from "../src/status.js";
-import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot, writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
+import { validateStatusV2 } from "../src/status.js";
+import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
+import type { WorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures", "migrate-real");
 
@@ -947,55 +948,6 @@ describe("migration commit point under the root write lock", () => {
     }
   });
 
-  test("a concurrent registerWorkflow is never lost to the migration commit point", async () => {
-    const root = fixtureTree();
-    try {
-      const statusPath = join(root, "status.json");
-      // A registerable entry needs its snapshot present and non-terminal
-      // (removal-at-terminal invariant).
-      await writeWorkflowSnapshot(
-        {
-          schema_version: 1,
-          id: "plan-race",
-          type: "plan",
-          status: "running",
-          started_at: "2026-08-19T08:00:00Z",
-          updated_at: "2026-08-19",
-          plans: [],
-        },
-        join(root, "workflows", "plan-race"),
-      );
-      const plan = planOf(root);
-      const applyPromise = applyMigratePlan(plan);
-      // The first register races the in-flight apply: while the root is
-      // still v1 it is refused (migration hint) — that is expected. The
-      // register then completes against the committed v2 root, and must
-      // survive (the commit point is serialized with it).
-      const entry = {
-        id: "plan-race",
-        type: "plan" as const,
-        started_at: "2026-08-19T08:00:00Z",
-        dir: "workflows/plan-race",
-      };
-      const first = await registerWorkflow(statusPath, entry).catch((error: unknown) => error);
-      const applyResult = await applyPromise;
-      expect(applyResult.applied).toBe(true);
-      let registeredDoc;
-      if (first instanceof Error) {
-        expect(first.message).toContain("workflows must be an array");
-        registeredDoc = await registerWorkflow(statusPath, entry);
-      } else {
-        registeredDoc = first;
-      }
-      expect(registeredDoc.version).toBe(2);
-      const finalDoc = readJson(statusPath) as { version: number; workflows?: Array<{ id: string }> };
-      expect(finalDoc.version).toBe(2);
-      expect(finalDoc.workflows?.map((w) => w.id)).toContain("plan-race");
-      expect(validateStatusV2(statusPath).ok).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   test("a stale apply re-checks version under the lock and no-ops instead of clobbering", async () => {
     const root = fixtureTree();

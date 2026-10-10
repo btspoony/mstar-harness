@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
+import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import {
   ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH,
   readEngineStatusSnapshot,
@@ -77,7 +77,7 @@ describe('engine-status snapshot — written at the real digest-gated emission',
     // The stored payload is the REAL composed catalog payload (the same builder
     // the emission site uses), not a fixture object.
     expect(JSON.stringify(read.entry.payload)).toBe(
-      JSON.stringify(buildCatalogPayload(app.ctx, app.harnessDir)),
+      JSON.stringify(await buildCatalogPayloadWithStore(app.ctx, app.harnessDir)),
     )
   })
 

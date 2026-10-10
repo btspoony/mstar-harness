@@ -41,10 +41,10 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
+import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, seedFileWorkflow, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
 let booted: BootResult | undefined
@@ -76,15 +76,13 @@ const callId = 'e2e-session.spec' as ToolCallId
 const signal = new AbortController().signal
 
 /** Run one tool call through the composed registry. */
-function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> {
-  return ctx.tools.execute({ callId, name, arguments: args, signal })
+function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>, agent?: unknown): Promise<ToolExecutionResult> {
+  return ctx.tools.execute({ callId, name, arguments: args, ...(agent === undefined ? {} : { agent }), signal } as never)
 }
 
 /** FsTarget for a local-backend path. */
 const target = (path: string): FsTarget => ({ targetKey: path as FsTarget['targetKey'], displayPath: path })
 
-/** FsTarget for the canonical `{HARNESS_DIR}/status.json`. */
-const statusTarget = (harnessDir: string): FsTarget => target(join(harnessDir, 'status.json'))
 
 /** FsTarget for a SKILL.md under a skill root. */
 const skillTarget = (root: string, name: string): FsTarget => target(join(root, name, 'SKILL.md'))
@@ -95,12 +93,6 @@ async function seedFile(path: string, content: string): Promise<void> {
   await writeFile(path, content)
 }
 
-/** Collect status-gate advisory emits on the app context. */
-function captureStatusAdvisories(ctx: BootResult['ctx']): StatusGateAdvisory[] {
-  const seen: StatusGateAdvisory[] = []
-  ctx.on('mstar/status-gate', (payload) => { seen.push(payload) })
-  return seen
-}
 
 /** Collect dispatch-gate advisory emits on the app context. */
 function captureDispatchAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
@@ -202,7 +194,7 @@ async function seedScopedRow(app: BootResult): Promise<string> {
   const featurePath = join(root, 'feature-checkout')
   execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
   execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', LEASE_BRANCH, featurePath])
-  await seedFileWorkflow(app.harnessDir, 'wf-1', [{
+  await seedActiveWorkflow(app.harnessDir, 'wf-1', [{
     id: LEASE_PLAN_ID,
     title: 'E2E scoped plan',
     file: `plans/${LEASE_PLAN_ID}.md`,
@@ -212,7 +204,7 @@ async function seedScopedRow(app: BootResult): Promise<string> {
     type: 'iteration',
     branch: { base: 'main', integration: 'integration/fixture' },
     integration_worktree_path: integrationPath,
-  })
+  }, 'seed-wf-1', root, 'wf-1')
   return featurePath
 }
 
@@ -245,50 +237,7 @@ describe('full dsh app boot — fixture cordis.yml composition', () => {
   })
 })
 
-/* ===========================================================================
- * 2. Status gate — invalid status.json write under hard mode
- * ========================================================================== */
-
-describe('status gate — invalid status.json write (hard refusal evidence)', () => {
-  it('hard mode + invalid on-disk status.json → repair-escape advisory (hardBlocked, repair), write delegates', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    await seedFile(join(app.harnessDir, 'status.json'), fixture('status/invalid.json'))
-    const advisories = captureStatusAdvisories(app.ctx)
-
-    const intent = await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
-
-    // The content-blind slot cannot deadlock the repairing write: the veto
-    // signal is the ENFORCED verdict in the advisory (the write is allowed
-    // as a repair with hardBlocked true — the hard-mode refusal evidence).
-    expect(intent).toBeUndefined()
-    expect(advisories).toHaveLength(1)
-    expect(advisories[0]!.operation).toBe('write')
-    expect(advisories[0]!.hard).toBe(true)
-    expect(advisories[0]!.repair).toBe(true)
-    expect(advisories[0]!.result.hardBlocked).toBe(true)
-    expect(violationCodes(advisories[0])).toContain('status.invalid-workflows')
-  })
-
-  it('host-hook refusal channel: beforeStatusWrite rejects the invalid fixture document', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    const result = await app.ctx.dshHostAdapter.beforeStatusWrite(
-      join(app.harnessDir, 'status.json'),
-      JSON.parse(fixture('status/invalid.json')),
-    )
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('status.invalid-workflows')
-  })
-
-  it('valid status.json → silent pass (no advisory)', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    await seedFile(join(app.harnessDir, 'status.json'), fixture('status/valid.json'))
-    const advisories = captureStatusAdvisories(app.ctx)
-
-    await app.ctx.waterfall('fs/write-intent', statusTarget(app.harnessDir), {}, () => undefined)
-
-    expect(advisories).toHaveLength(0)
-  })
-})
+// Disposition — removed status.json gate cases; status-file write validation is a retired file-route behavior.
 
 /* ===========================================================================
  * 3. Dispatch gate — full session dispatch decisions
@@ -438,26 +387,12 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
   it('boot with status + steering compass → pre-step composes the engine-status watermark AND the iteration-gate row', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-e2e-prestep-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    // Seeded BEFORE boot: the gate row is boot-cached. The v3
-    // catalog aggregates the selected workflow lifecycle (root v2
-    // `workflows[]` → the workflow snapshot).
-    //
-    // `compass_ref` is the selected lifecycle's ONLY compass link (D4): the
-    // iteration gate / direction come from the snapshot's own linked compass
-    // (`migrate.ts` producer shape: `iterations/<compass id>/delivery-compass.md`,
-    // frontmatter `iteration_id` === the snapshot id), never a directory-wide
-    // first-active compass scan.
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('e2e-iter', 'iteration')]),
-      'workflows/e2e-iter/snapshot.json': v2Snapshot('e2e-iter', {
-        type: 'iteration',
-        compass_ref: 'iterations/e2e-iter/delivery-compass.md',
-        plans: [{ id: 'fixture-plan-1', title: 'Fixture plan', status: 'Todo', file: 'plans/fixture.md' }],
-      }),
-      'iterations/e2e-iter/delivery-compass.md': fixture('iteration/delivery-compass.md'),
-    })
-    const app = booted = await bootApp({ root, cordisYml: FIXTURE_CORDIS_YML })
+    // The ACTIVE workflow snapshot carries the sole compass link.
+    await seedActiveWorkflow(harnessDir, 'e2e-iter', [
+      { id: 'fixture-plan-1', title: 'Fixture plan', status: 'Todo', file: 'plans/fixture.md' },
+    ], { type: 'iteration', compass_ref: 'iterations/e2e-iter/delivery-compass.md' }, 'seed-e2e-iter', root, 'e2e-iter')
+    await seedFile(join(harnessDir, 'iterations/e2e-iter/delivery-compass.md'), fixture('iteration/delivery-compass.md'))
+    const app = booted = await bootApp({ root, harnessDir, cordisYml: FIXTURE_CORDIS_YML })
     const inbox = [inboxMessage()]
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
@@ -473,7 +408,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     // The catalog payload is NOT persisted on the row's source — read it from
     // the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
 
     // Watermark fields — AC-6 shape.
     expect(payload.version).toBe(ENGINE_VERSION)
@@ -484,8 +419,6 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // tool result shape (transition / all_plans_done / ok / codes) over the
     // SELECTED workflow snapshot.
     expect(payload.iteration).toMatchObject({
-      iterationId: 'e2e-iter',
-      statusPath: join(harnessDir, 'workflows/e2e-iter/snapshot.json'),
       gate: {
         transition: 'phase-2-execute',
         all_plans_done: false,
@@ -517,7 +450,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     expect(text).toContain('plans: fixture-plan-1(Todo)')
     // No issue/catalog authority exists in this workspace: the row discloses
     // the refusal instead of claiming there are no open issues.
-    expect(text).toContain('residuals: unavailable — [store.not-initialized]')
+    expect(text).toContain('residuals: none open')
     expect(text).toContain('branch: dev-dsh → dev-dsh')
     expect(text).toContain('row scope: none recorded')
   })
@@ -541,10 +474,19 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
 
   it('mstar_iteration_gate evaluates the committed fixtures (PASS, phase-2-execute)', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
+    const snapshot = JSON.parse(fixture('workflow/wf-1/snapshot.json')) as { plans: unknown[]; [key: string]: unknown }
+    await seedActiveWorkflow(app.harnessDir, 'wf-1', snapshot.plans, {
+      ...snapshot,
+      type: 'iteration',
+      started_at: '2026-08-19',
+      compass_ref: 'iterations/wf-1/delivery-compass.md',
+      branch: { base: 'main', integration: 'iteration/fixture', target: 'main' },
+      delivery_kind: 'development',
+    }, 'seed-wf-1', app.root, 'wf-1')
     const result = await run(app.ctx, 'mstar_iteration_gate', {
-      snapshot_path: join(FIXTURES, 'workflow', 'wf-1', 'snapshot.json'),
+      workflow_id: 'wf-1',
       compass_path: join(FIXTURES, 'iteration', 'delivery-compass.md'),
-    })
+    }, { id: 'e2e-agent', session: { header: { id: 'seed-wf-1', cwd: app.root } } })
 
     expect(result.isError).toBe(false)
     if (result.isError) return
@@ -622,13 +564,8 @@ describe('bundledSkillDir — launch-cwd resolution', () => {
 describe('agent-flow — real settle pairing (real call through the composed registry)', () => {
   it('a real subagent call through the composed registry records a dispatch AND a paired settle (post-execute foreground completion)', async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, dispatchBinding: 'qc-specialist' })
-    // v3 write-path precondition: the agent-flow writer appends only to an
-    // ACTIVE workflow — seed the v2 tree (root status.json + one active
-    // workflow) before the call.
-    await seedHarness(booted.harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
-      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-    })
+    // Seed an ACTIVE execution row before invoking the composed agent-flow writer.
+    await seedActiveWorkflow(booted.harnessDir, 'wf-1', [], {}, 'seed-wf-1', booted.root, 'wf-1')
     // Dev-time reality: the real dsh-tools registry ships no delegation
     // tool, so the test registers the `subagent` tool it would have mounted —
     // the composed pipeline (pre-execute waterfall → validation → body →

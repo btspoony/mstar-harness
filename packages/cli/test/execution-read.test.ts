@@ -8,12 +8,11 @@
  * package's own `test` script performs).
  *
  * Every case runs the real CLI entry as a subprocess against a temporary Git
- * workspace whose `.mstar` holds a REAL `node:sqlite` store built by the
- * engine's own producers (`initializeExecutionAuthority` /
- * `registerCatalogEntity` / `createExecutionWorkflow`) — no hand-written DB
- * rows. The leftovers the retired file route would have served (`status.json`,
- * `workflows/<id>/snapshot.json`) are planted AFTER that commit, so every
- * assertion distinguishes authority from file bytes.
+ * workspace whose `.mstar` holds a REAL `node:sqlite` store activated by
+ * `initializeStore` and populated by the engine's producers (`registerCatalogEntity` /
+ * `createExecutionWorkflow`) — no hand-written DB rows. The leftovers the
+ * retired file route would have served (`status.json`, `workflows/<id>/snapshot.json`)
+ * are planted afterward, so every assertion distinguishes authority from file bytes.
  *
  * Acceptance criteria carried by these cases:
  *
@@ -48,9 +47,9 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   encodeExecutionSessionRef,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionState,
   registerCatalogEntity,
   type StoreContext,
 } from "@mstar-harness/engine";
@@ -139,7 +138,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const fixture = workspace(label);
   const handle = await initializeStore(fixture.context);
   handle.close();
-  const initialized = await initializeExecutionAuthority(fixture.context);
+  const initialized = await readExecutionState(fixture.context);
   await registerCatalogEntity(
     fixture.context,
     { kind: "plan", id: PLAN_ID, title: "Execution read plan", rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` },
@@ -182,8 +181,8 @@ async function activeFixture(label: string): Promise<Fixture> {
   return fixture;
 }
 
-/** A workspace whose store has the execution schema recorded `legacy` (§2.1). */
-async function legacyFixture(label: string): Promise<Fixture> {
+/** An ACTIVE workspace with an empty execution authority. */
+async function emptyActiveFixture(label: string): Promise<Fixture> {
   const fixture = workspace(label);
   const handle = await initializeStore(fixture.context);
   handle.close();
@@ -300,10 +299,11 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     const sessionPath = plantLeftoverSession(fixture);
     plantLeftoverSnapshot(fixture);
 
-    // The file route would need the retired session credential: not-ready.
+    // The old `--session` transport is no longer an accepted option; the CLI
+    // rejects it as usage instead of attempting the retired file route.
     const legacyRead = runCli(["plan", "show", "--session", sessionPath, "--plan", PLAN_ID], fixture);
-    expect(legacyRead.exitCode).toBe(1);
-    expect(jsonOf(legacyRead).code).toBe("execution.consumer-not-ready");
+    expect(legacyRead.exitCode).toBe(2);
+    expect(jsonOf(legacyRead).code).toBe("command.invalid-input");
     const unaddressed = runCli(["plan", "show", "--session", sessionPath], fixture);
     expect(unaddressed.exitCode).toBe(2);
     expect(jsonOf(unaddressed).code).toBe("command.invalid-input");
@@ -317,13 +317,12 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(mixed.exitCode).toBe(2);
     expect(jsonOf(mixed).code).toBe("command.invalid-input");
 
-    // On a harness whose execution authority is not active, this address form
-    // has no DB row to serve — a usage refusal that names the file form, not an
-    // empty view and not a silent file read.
-    const legacy = await legacyFixture("cli-read-session-legacy");
-    const noAuthority = runCli(planShowArgs(fixture, legacy.harnessDir), legacy);
+    // An ACTIVE session reference cannot be replayed against a different
+    // authority root.
+    const other = await emptyActiveFixture("cli-read-session-other-root");
+    const noAuthority = runCli(planShowArgs(fixture, other.harnessDir), other);
     expect(noAuthority.exitCode).toBe(1);
-    expect(jsonOf(noAuthority).code).toBe("execution.not-active");
+    expect(jsonOf(noAuthority).code).toBe("execution.scope-mismatch");
 
     // A usage shape with neither address is refused before any store access.
     const bare = runCli(["plan", "show"], fixture);
@@ -331,16 +330,13 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(jsonOf(bare).code).toBe("command.invalid-input");
   });
 
-  test("gates read authority rows and keep usage plus legacy file-route behavior", async () => {
+  test("gates read authority rows and validate usage before an ACTIVE transition", async () => {
     const fixture = await activeFixture("cli-read-gates");
     // A snapshot claiming a held lease for the plan and a held merge lease.
     plantLeftoverSnapshot(fixture);
 
-    // The workflow-wide merge lease is unclaimed in the DB although the file
-    // claims one.
-    const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
-    expect(merge.exitCode).toBe(0);
-    expect(jsonOf(merge)).toMatchObject({ status: "ok", data: { claimed: false } });
+    // Retired `lease.verify-integration` setup-verb assertions were removed;
+    // T13 covers surviving lease facts through `worktree check`.
 
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6"], fixture);
     expect(gate.exitCode).toBe(1);
@@ -366,20 +362,10 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(transition.stdout).toContain('"status":"ok"');
     expect(transition.stdout).toContain('"transition":"phase-2-execute"');
 
-    const legacyHarness = await legacyFixture("cli-read-gate-legacy");
-    const legacyBadPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], legacyHarness);
-    expect(legacyBadPhase.exitCode).toBe(2);
-    expect(jsonOf(legacyBadPhase).code).toBe("command.invalid-input");
-    writeJson(
-      join(legacyHarness.harnessDir, "workflows", WORKFLOW_ID, "snapshot.json"),
-      { schema_version: 1, id: WORKFLOW_ID, type: "plan", status: "running", plans: [{ id: PLAN_ID, status: "Todo" }] },
-    );
-    const legacyTransition = runCli(
-      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(legacyHarness)],
-      legacyHarness,
-    );
-    expect(legacyTransition.exitCode).toBe(0);
-    expect(jsonOf(legacyTransition)).toMatchObject({ status: "ok", data: { transition: "phase-2-execute" } });
+    const emptyActive = await emptyActiveFixture("cli-read-gate-empty");
+    const invalidPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], emptyActive);
+    expect(invalidPhase.exitCode).toBe(2);
+    expect(jsonOf(invalidPhase).code).toBe("command.invalid-input");
   });
 
   test("status validates the authority register, and refuses the retired file", async () => {
@@ -404,19 +390,16 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(inconsistent.exitCode).toBe(1);
     expect(jsonOf(inconsistent).code).toBe("store.corrupt");
 
-    const retiredFile = runCli(["status", "validate", join(fixture.harnessDir, "status.json")], fixture);
+    const retiredFile = runCli(["status", "validate", "--path", join(fixture.harnessDir, "status.json")], fixture);
     expect(retiredFile.exitCode).toBe(1);
-    expect(jsonOf(retiredFile).code).toBe("status.execution-authority-active");
+    expect(jsonOf(retiredFile).code).toBe("status.file-route-retired");
 
-    const retiredSnapshot = runCli(["status", "validate", snapshotPath], fixture);
+    const retiredSnapshot = runCli(["status", "validate", "--path", snapshotPath], fixture);
     expect(retiredSnapshot.exitCode).toBe(1);
-    expect(jsonOf(retiredSnapshot).code).toBe("execution.consumer-not-ready");
+    expect(jsonOf(retiredSnapshot).code).toBe("status.file-route-retired");
 
-    const legacy = await legacyFixture("cli-read-status-legacy");
-    writeJson(join(legacy.harnessDir, "status.json"), { version: 2, updated_at: "2026-09-21", workflows: [] });
-    const legacyOk = runCli(["status", "validate"], legacy);
-    expect(legacyOk.exitCode).toBe(0);
-    expect(jsonOf(legacyOk).status).toBe("ok");
+    // `initializeStore` creates ACTIVE authority; it no longer provides a
+    // pre-activation file-route fixture for legacy status validation.
   });
 
   test("refuses an unusable store instead of an empty view", async () => {
@@ -427,9 +410,6 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(show.exitCode).toBe(1);
     expect(jsonOf(show).code).toBe("store.corrupt");
 
-    const lease = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], corrupt);
-    expect(lease.exitCode).toBe(1);
-    expect(jsonOf(lease)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
 
     const status = runCli(["status", "validate"], corrupt);
     expect(status.exitCode).toBe(1);
@@ -442,7 +422,7 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(jsonOf(noStore).code).toBe("store.not-initialized");
     const noStoreStatus = runCli(["status", "validate"], absent);
     expect(noStoreStatus.exitCode).toBe(1);
-    expect(jsonOf(noStoreStatus).code).toBe("status.file-not-found");
+    expect(jsonOf(noStoreStatus).code).toBe("store.not-initialized");
   });
 
   test("dashboard views answer from the ACTIVE projection instead of refusing", async () => {
@@ -503,18 +483,15 @@ describe("execution-cross-domain", () => {
     expect(jsonOf(show).code).toBe("store.corrupt");
     expect(show.stdout).not.toContain("plan-from-the-file");
 
-    // The retired file form is refused on the same unreadable store too: the
-    // leftover session file is never promoted to an authority answer.
+    // The retired `--session` option is rejected as usage before it could
+    // consult a corrupt store or adopt the leftover file credential.
     const fileForm = runCli(["plan", "show", "--session", sessionPath, "--plan", PLAN_ID], fixture);
-    expect(fileForm.exitCode).toBe(1);
-    expect(jsonOf(fileForm).code).toBe("store.corrupt");
+    expect(fileForm.exitCode).toBe(2);
+    expect(jsonOf(fileForm).code).toBe("command.invalid-input");
 
     const status = runCli(["status", "validate"], fixture);
     expect(status.exitCode).toBe(1);
     expect(jsonOf(status).code).toBe("store.corrupt");
-    const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
-    expect(merge.exitCode).toBe(1);
-    expect(jsonOf(merge)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(fixture)], fixture);
     expect(gate.exitCode).toBe(1);
     expect(jsonOf(gate)).toMatchObject({ status: "refused", code: "coordination.check-refused", details: { underlyingCode: "store.corrupt" } });

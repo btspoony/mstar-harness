@@ -1,17 +1,17 @@
 import fs, { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { SddScriptError, WorkflowSnapshotValidationError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
+import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, planWorktreeCleanup, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
 import { z } from "zod";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { refusalEnvelope } from "../envelope.js";
 
-type Input = { context?: string; argv?: string[]; workflow?: string; harness?: string; apply?: boolean; remote?: boolean; allWorkflows?: boolean; worktree?: string[]; verbose?: boolean; ignoreUnreadableSnapshots?: boolean; pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; targetPath?: string };
+type Input = { context?: string; argv?: string[]; workflow?: string; harness?: string; apply?: boolean; remote?: boolean; allWorkflows?: boolean; worktree?: string[]; verbose?: boolean; pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; targetPath?: string };
 const execArgvSchema = z.array(z.string()).min(1);
 const cleanupWorktreeSchema = z.array(z.string());
 const execInput = z.object({ context: z.string(), argv: execArgvSchema }) as z.ZodType<Input>;
-const cleanupInput = z.object({ workflow: z.string(), harness: z.string().optional(), apply: z.boolean().optional(), remote: z.boolean().optional(), worktree: cleanupWorktreeSchema.optional(), allWorkflows: z.boolean().optional(), verbose: z.boolean().optional(), ignoreUnreadableSnapshots: z.boolean().optional() }) as z.ZodType<Input>;
+const cleanupInput = z.object({ workflow: z.string(), harness: z.string().optional(), apply: z.boolean().optional(), remote: z.boolean().optional(), worktree: cleanupWorktreeSchema.optional(), allWorkflows: z.boolean().optional(), verbose: z.boolean().optional() }) as z.ZodType<Input>;
 const setupInput = z.object({ pr: z.string().optional(), branch: z.string().optional(), diff: z.boolean().optional(), workingTree: z.boolean().optional(), commit: z.string().optional(), targetPath: z.string().optional() }) as z.ZodType<Input>;
 
 function ok(id: string, data: unknown): CommandEnvelope { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
@@ -56,7 +56,7 @@ function definitions(): readonly CommandDefinition[] {
         if (!input.argv?.length) throw new SddScriptError("argv after -- must include the child executable", 2);
         const decoded: unknown = JSON.parse(fs.readFileSync(input.context, "utf8"));
         if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) throw new SddScriptError("context file must contain a JSON object", 2);
-        const context = resolveSddExecutionContext(decoded as SddExecutionContext);
+        const context = await resolveSddExecutionContext(decoded as SddExecutionContext);
         const gate = checkSddAction(context, { kind: "launch", cwd: invocation.cwd });
         if (!gate.ok) throw new SddScriptError(gate.violations.map(({ code, message }) => `${code}: ${message}`).join("; "), 1);
         if (invocation.signal.aborted) throw Object.assign(new Error("process admission cancelled"), { code: "command.cancelled" });
@@ -65,7 +65,7 @@ function definitions(): readonly CommandDefinition[] {
         return { version: 1, command: "sdd.exec", status: "error", code: "sdd.exec.child-exit", exitCode: child.exitCode ?? 1, message: child.signal ? `child terminated by ${child.signal}` : `child exited with status ${child.exitCode}`, details: { stdout: child.stdout, stderr: child.stderr, signal: child.signal } };
       } catch (error) { return failure("sdd.exec", error); }
     }),
-    make("worktree.cleanup", cleanupInput, [], [{ key: "workflow", flags: "--workflow <id>", required: false }, { key: "harness", flags: "--harness <path>", required: false }, { key: "apply", flags: "--apply", required: false }, { key: "remote", flags: "--remote", required: false }, { key: "worktree", flags: "--worktree <path...>", required: false, variadic: true }, { key: "allWorkflows", flags: "--all-workflows", required: false }, { key: "verbose", flags: "--verbose", required: false }, { key: "ignoreUnreadableSnapshots", flags: "--ignore-unreadable-snapshots", required: false }], ["read", "write", "process"], "Plan and optionally execute guarded worktree/branch cleanup. Dry-run by default; apply uses ownership, merge-evidence, active-lease, checked-out, foreign, dirty, locked, and non-terminal protections.", async (input, invocation) => {
+    make("worktree.cleanup", cleanupInput, [], [{ key: "workflow", flags: "--workflow <id>", required: false }, { key: "harness", flags: "--harness <path>", required: false }, { key: "apply", flags: "--apply", required: false }, { key: "remote", flags: "--remote", required: false }, { key: "worktree", flags: "--worktree <path...>", required: false, variadic: true }, { key: "allWorkflows", flags: "--all-workflows", required: false }, { key: "verbose", flags: "--verbose", required: false }], ["read", "write", "process"], "Plan and optionally execute guarded worktree/branch cleanup. Dry-run by default; apply uses ownership, merge-evidence, active-lease, checked-out, foreign, dirty, locked, and non-terminal protections.", async (input, invocation) => {
       try {
         if (!input.workflow) throw new SddScriptError("usage: worktree cleanup --workflow <id>", 2);
         return await cleanupWorktrees(input, invocation);
@@ -245,46 +245,6 @@ function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", val
   return claims;
 }
 
-function degradedCleanupSnapshot(value: unknown, fallbackId: string): WorkflowSnapshot | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  if (!Array.isArray(raw.plans)) return null;
-  const plans = raw.plans.flatMap((value) => {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
-    const row = value as Record<string, unknown>;
-    const metadata = row.metadata !== null && typeof row.metadata === "object" && !Array.isArray(row.metadata)
-      ? { ...(row.metadata as Record<string, unknown>) }
-      : {};
-    const handoff = row.coordination !== null && typeof row.coordination === "object" && !Array.isArray(row.coordination)
-      ? (row.coordination as Record<string, unknown>).handoff
-      : undefined;
-    if (handoff !== null && typeof handoff === "object" && !Array.isArray(handoff)) {
-      const sourceBranch = (handoff as Record<string, unknown>).source_branch;
-      const worktreePath = (handoff as Record<string, unknown>).worktree_path;
-      if (typeof sourceBranch === "string" && sourceBranch !== "") metadata.working_branch = sourceBranch;
-      if (typeof worktreePath === "string" && worktreePath !== "") {
-        const existing = Array.isArray(metadata.cleanup_protective_worktree_paths)
-          ? metadata.cleanup_protective_worktree_paths.filter((item): item is string => typeof item === "string")
-          : [];
-        metadata.cleanup_protective_worktree_paths = [...new Set([...existing, worktreePath])];
-      }
-    }
-    return [{ ...row, status: "InProgress", metadata }];
-  });
-  const branch = raw.branch !== null && typeof raw.branch === "object" && !Array.isArray(raw.branch)
-    ? raw.branch as WorkflowSnapshot["branch"]
-    : undefined;
-  return {
-    schema_version: 1,
-    id: typeof raw.id === "string" && raw.id !== "" ? raw.id : fallbackId,
-    type: raw.type === "iteration" ? "iteration" : "plan",
-    status: "running",
-    started_at: typeof raw.started_at === "string" ? raw.started_at : "1970-01-01T00:00:00.000Z",
-    updated_at: typeof raw.updated_at === "string" ? raw.updated_at : "1970-01-01T00:00:00.000Z",
-    plans: plans as unknown as WorkflowSnapshot["plans"],
-    ...(branch ? { branch } : {}),
-  };
-}
 function cleanupOwner(claims: CleanupClaim[], snapshots: readonly WorkflowSnapshot[]): CleanupClaim | null {
   const owners = new Map(claims.map((claim) => [JSON.stringify(claim), claim]));
   if (owners.size === 1) return [...owners.values()][0]!;
@@ -302,50 +262,13 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   if (!main) throw new Error("cannot resolve the main worktree of the current repository — run inside the repo");
   const harness = resolveProcessHarnessDir(invocation.cwd, input.harness);
   if (!harness) throw new Error("harness directory not found");
-  // Source selection: an ACTIVE execution authority answers with ONE
-  // authoritative read (`readExecutionCleanupState`) that addresses the
-  // workflow independently of registry membership and carries the complete
-  // protective inventory of every retained sibling — retired/absent JSON
-  // snapshots are never consulted, and a corrupt authority refuses rather than
-  // degrading. The pre-activation route keeps the file reader and its
-  // degraded/unreadable-sibling safety policy unchanged.
-  let selected: WorkflowSnapshot;
-  let snapshots: WorkflowSnapshot[];
-  let unreadable = false;
-  if ((await resolveExecutionReadRoute({ harnessDir: harness })) === "execution") {
-    const read = await readExecutionCleanupState({ harnessDir: harness }, input.workflow);
-    selected = read.selected;
-    snapshots = [...read.workflows];
-  } else {
-    const root = resolveWorkflowDir(harness, { harnessDir: harness });
-    try {
-      selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
-    } catch (error) {
-      if (error instanceof WorkflowSnapshotValidationError && error.violations.some((violation) =>
-        violation.code === "coordination.row.field" &&
-        (violation.message.endsWith("unexpected key: handoff") || violation.message.endsWith("unexpected key: session")))) {
-        throw new SddScriptError(`${error.message}. Historical coordination state requires the supported public cutover: stop the workspace's writers, then run mstar store upgrade --harness ${JSON.stringify(harness)} --operator <name> (see mstar store upgrade --help for applicable stop attestation), and retry this cleanup. No state was changed.`, 1);
-      }
-      throw error;
-    }
-    snapshots = [selected];
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === input.workflow) continue;
-      const snapshotPath = path.join(root, entry.name, WORKFLOW_SNAPSHOT_FILE);
-      if (!fs.existsSync(snapshotPath)) continue;
-      try {
-        snapshots.push(readWorkflowSnapshot(path.dirname(snapshotPath)).snapshot);
-      } catch {
-        try {
-          const degraded = degradedCleanupSnapshot(JSON.parse(fs.readFileSync(snapshotPath, "utf8")), entry.name);
-          if (degraded) snapshots.push(degraded);
-          else if (!input.ignoreUnreadableSnapshots) unreadable = true;
-        } catch {
-          if (!input.ignoreUnreadableSnapshots) unreadable = true;
-        }
-      }
-    }
-  }
+  // Source selection: the ACTIVE execution authority answers with ONE
+  // authoritative read (`readExecutionCleanupState`) that addresses the workflow
+  // independently of registry membership and carries the complete protective
+  // inventory of every retained sibling. The pre-activation file route is
+  // retired (issue #428), so a control root without an ACTIVE authority refuses
+  // out of that read instead of degrading to retired/absent JSON snapshots.
+  const { selected, workflows: snapshots } = await readExecutionCleanupState({ harnessDir: harness }, input.workflow);
   const records: Array<CleanupFacts["worktrees"][number] & { tip: string }> = [];
   let current: { path: string; branch: string | null; tip: string; locked: boolean } | undefined;
   for (const line of (await git(invocation, ["worktree", "list", "--porcelain"], main.root)).split(/\r?\n/)) {
@@ -457,13 +380,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
   const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence };
-  const plan = planWorktreeCleanup(selected, facts).map((row) => unreadable && row.verdict === "remove"
-    ? {
-        ...row,
-        verdict: "refuse" as const,
-        reason: "cleanup.refuse.unreadable-snapshot",
-      }
-    : row);
+  const plan = planWorktreeCleanup(selected, facts);
   if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan });
   const evidenceBaseBranches = new Set(snapshots.flatMap((snapshot) => [snapshot.branch?.integration, snapshot.branch?.target]).filter((value): value is string => Boolean(value)));
   const deferred = new Set(plan.filter((row) => row.kind === "worktree" && row.verdict === "remove" && records.some((wt) => wt.path === row.ref && wt.branch !== null && evidenceBaseBranches.has(wt.branch))).map(({ ref }) => ref));

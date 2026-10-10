@@ -15,8 +15,8 @@
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md`（gitignored；authored artifact，非执行状态权威） | PM / `mstar-artifacts` |
 | **Review bundle（QC/QA 原始过程报告）** | `{HARNESS_DIR}/sdd/<plan-id>/review/`（gitignored；默认 `.mstar/sdd/<plan-id>/review/`） | `mstar-sdd`、`mstar-review-qc`、`qa-engineer` |
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
-| **status.json（v2 根，legacy）** | `.mstar/status.json`（gitignored；仅 pre-activation bootstrap / engine-absent transport / 迁移源；ACTIVE root register 在 store.db，文件读写被拒） | `mstar-artifacts`、`mstar-iteration` |
-| **workflow snapshot（legacy）** | `{WORKFLOW_DIR}/<id>/snapshot.json`（gitignored；仅 pre-activation / engine-absent transport / 迁移源；ACTIVE plan 行、leases、branch anchors 在 store.db，文件读写被拒；notes 等 retained bodies 仍活写） | `mstar-artifacts`、`mstar-iteration`、`mstar-branch-worktree` |
+| **status.json（v2 根，legacy）** | `.mstar/status.json`（gitignored；仅迁移源/历史，由保留的 `mstar` 迁移工具 engine-internally 读写；ACTIVE root register 在 store.db） | `mstar-artifacts`、`mstar-iteration` |
+| **workflow snapshot（legacy）** | `{WORKFLOW_DIR}/<id>/snapshot.json`（gitignored；仅迁移源/历史，由保留的 `mstar` 迁移工具 engine-internally 读写；ACTIVE plan 行、leases、branch anchors 在 store.db；notes 等 retained bodies 仍活写） | `mstar-artifacts`、`mstar-iteration`、`mstar-branch-worktree` |
 | **workflow notes ledger** | `{HARNESS_DIR}/workflows/<id>/notes.jsonl`（gitignored；append-only 运行时笔记） | `mstar-artifacts`、`mstar-iteration` |
 | **project roadmap transport/history** | `{PROJECT_DIR}/<id>/roadmap.md`（legacy 文件或 reviewed import / export 候选；**不**是 live 内容权威；文件可不存在） | `mstar-project-governance`（唯一读写/校验规则）；`mstar-iteration`（close 时导出独立候选） |
 | **project register（退役）** | `.mstar/projects/<id>/residuals.json`（gitignored；迁移历史只读，与 authority 状态无关；open findings 权威在 store.db issues；项目缺失用 `_default`） | `mstar-artifacts`、`mstar-review-qc` |

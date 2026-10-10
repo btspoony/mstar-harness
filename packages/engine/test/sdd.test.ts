@@ -28,7 +28,12 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, isAbsolute, join, relative } from "node:path";
+import { registerCatalogEntity } from "../src/catalog.js";
+import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "../src/execution-store.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
+import type { WorkflowSnapshot } from "../src/workflow.js";
 import {
   SddScriptError,
   assertBaseSha,
@@ -44,8 +49,6 @@ import {
   type ImplementerSessionLedger,
   type SddExecutionContext,
 } from "../src/sdd.js";
-import { readWorkflowSnapshot, registerPlanWorkflow } from "../src/workflow.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -131,6 +134,21 @@ async function errOfAsync(fn: () => Promise<unknown>): Promise<SddScriptError> {
     return e as SddScriptError;
   }
   throw new Error("expected SddScriptError, got no throw");
+}
+
+/**
+ * Capture ANY rejection (store-level refusals surface as the store's own
+ * typed errors — `StoreError`/`ExecutionError` with a `.code` — not
+ * `SddScriptError`), failing the test when nothing throws.
+ */
+async function rejectionOf(fn: () => Promise<unknown>): Promise<Error & { code?: string; exitCode?: number }> {
+  try {
+    await fn();
+  } catch (e) {
+    expect(e).toBeInstanceOf(Error);
+    return e as Error & { code?: string; exitCode?: number };
+  }
+  throw new Error("expected a refusal, got no throw");
 }
 
 describe("assertBaseSha — BASE_SHA rule (mstar-sdd SKILL.md § Red flags: NEVER `HEAD~1` as review BASE)", () => {
@@ -278,12 +296,11 @@ describe("implementerSessionStickyRules — sticky resume rules (sticky-implemen
 });
 
 describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CLI)", () => {
-  test("resolves/creates {HARNESS_DIR}/sdd/<plan-id>/.gitignore when .mstar/status.json exists", () => {
+  test("resolves/creates {HARNESS_DIR}/sdd/<plan-id>/.gitignore for an existing .mstar harness dir", () => {
     const root = tmpRoot("sdd-ws-mstar-");
     try {
       git(["init", "-q"], root);
       mkdirSync(join(root, ".mstar"), { recursive: true });
-      writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
       const dir = sddWorkspace("plan-1", { cwd: root });
       expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "plan-1")));
       expect(statSync(dir).isDirectory()).toBe(true);
@@ -292,19 +309,15 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
-  test("probes an active workflow via snapshot presence when status.json is absent (v3 probe)", () => {
- // probe semantics unchanged (root status.json existence) PLUS
- // workflow-snapshot presence detects an active lifecycle — a harness
- // whose root status.json does not exist yet still resolves.
+  test("resolves a harness dir without status.json (the retired file probe no longer gates resolution)", () => {
+ // issue #428 retires the `status.json`/`workflows/<id>/snapshot.json`
+ // harness probe: a harness dir is resolved by location (`.mstar` first,
+ // then `.agents`); its authority is the store inside it, not a file
+ // marker. An existing `.mstar` dir resolves without any retired file.
     const root = tmpRoot("sdd-ws-snapshot-");
     try {
       git(["init", "-q"], root);
       mkdirSync(join(root, ".mstar", "workflows", "wf-1"), { recursive: true });
-      writeFileSync(
-        join(root, ".mstar", "workflows", "wf-1", "snapshot.json"),
-        JSON.stringify({ schema_version: 1, id: "wf-1", type: "plan", status: "running", started_at: "2026-08-19T08:00:00Z", updated_at: "2026-08-19", plans: [] }),
-        "utf8",
-      );
       const dir = sddWorkspace("plan-1", { cwd: root });
       expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "plan-1")));
     } finally {
@@ -312,34 +325,12 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
-  test("probes a custom `.mstarc` workflow_dir via the engine resolver (Phase-5 F1)", () => {
- // The v3 snapshot probe must look under the DECLARED workflow_dir
- // (`.mstarc` `[config] workflow_dir`) — the hardcoded `workflows`
- // name would miss the active lifecycle and the probe would fall
- // through to the decoy default-layout `.mstar/` root (wrong root
- // for a custom layout). Assert the declared dir is consulted.
-    const root = tmpRoot("sdd-ws-custom-wf-");
-    try {
-      git(["init", "-q"], root);
- // Decoy default-layout root: exists, but carries no status.json
- // and no workflows/ — it must NOT win over the active lifecycle.
-      mkdirSync(join(root, ".mstar"), { recursive: true });
-      mkdirSync(join(root, ".agents", "cw-wf", "wf-1"), { recursive: true });
-      writeFileSync(join(root, ".agents", ".mstarc"), "[config]\nworkflow_dir=cw-wf\n", "utf8");
-      writeFileSync(
-        join(root, ".agents", "cw-wf", "wf-1", "snapshot.json"),
-        JSON.stringify({ schema_version: 1, id: "wf-1", type: "plan", status: "running", started_at: "2026-08-19T08:00:00Z", updated_at: "2026-08-19", plans: [] }),
-        "utf8",
-      );
-      const dir = sddWorkspace("plan-1", { cwd: root });
-      expect(dir).toBe(realpathSync(join(root, ".agents", "sdd", "plan-1")));
- // The default-layout dirs are never consulted.
-      expect(existsSync(join(root, ".mstar", "sdd"))).toBe(false);
-      expect(existsSync(join(root, ".agents", "workflows"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+// The `.mstarc` `[config] workflow_dir` snapshot probe retired with the
+// file route (issue #428): harness resolution is location-based
+// (`.mstarc harness_dir` → existing `.mstar` → `.agents`), and no probe
+// reads `workflows/<id>/snapshot.json` for authority anymore. The
+// dir-existence order (`.mstar` before `.agents`) is asserted by the
+// status.json-less case above.
 
   test("honors the CONTROL_ROOT option (CLI 2nd arg) and MSTAR_CONTROL_ROOT env", () => {
     const control = tmpRoot("sdd-ws-control-");
@@ -912,26 +903,82 @@ function rowMetadata(f: ExecutionFixture, overrides: Record<string, string> = {}
   };
 }
 
-function writeSnapshot(f: ExecutionFixture, workflowId: string, plans: unknown[], extra: Record<string, unknown> = {}): void {
-  const dir = join(f.harnessDir, "workflows", workflowId);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "snapshot.json"), JSON.stringify({ schema_version: 1, ...extra, plans }));
+const ACTIVE_STARTED_AT = "2026-09-07T00:00:00.000Z";
+
+function rowPlanIdOf(row: Record<string, unknown>): string {
+  return String(row.id ?? row.plan_id);
 }
 
+/** Initialize the fixture's ACTIVE execution authority once (idempotent). */
+async function ensureAuthority(f: ExecutionFixture): Promise<StoreContext> {
+  const context: StoreContext = { harnessDir: f.harnessDir };
+  if (!existsSync(join(f.harnessDir, "store.db"))) {
+    (await initializeStore(context)).close();
+  }
+  return context;
+}
+
+/** Plan ids already registered in the fixture catalog across this run (tmp fixture roots are unique). */
+const catalogRegistered = new Set<string>();
+
 /**
- * Write the v2 root `status.json` register listing the given workflow ids as
- * ACTIVE lifecycles (removal-at-terminal: the register holds the live set).
+ * ACTIVE replacement for the retired file-probe fixture writers
+ * (`writeSnapshot` + `writeStatusRegister`): registers the workflow — and
+ * the catalog plan identities its rows address — in the fixture's execution
+ * store, so `resolveSddExecutionContext` reads it through the same
+ * transactional graph read production uses (the `dbPrepareFixture` pattern).
  */
-function writeStatusRegister(f: ExecutionFixture, workflowIds: string[]): void {
-  writeFileSync(
-    join(f.harnessDir, "status.json"),
-    JSON.stringify({
-      version: 2,
-      updated_at: "2026-09-07",
-      workflows: workflowIds.map((id) => ({ id, type: "plan", started_at: "2026-09-07T00:00:00Z", dir: `workflows/${id}` })),
-    }),
-    "utf8",
+async function seedWorkflow(
+  f: ExecutionFixture,
+  workflowId: string,
+  plans: Array<Record<string, unknown>>,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  const context = await ensureAuthority(f);
+  for (const planId of new Set(plans.map(rowPlanIdOf))) {
+    const catalogKey = `${context.harnessDir}\n${planId}`;
+    if (catalogRegistered.has(catalogKey)) continue;
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `plans/${planId}.md` },
+      { operationId: `catalog-${planId}`, actor: "sdd.test" },
+    );
+    catalogRegistered.add(catalogKey);
+  }
+  const type = extra.type === "iteration" ? "iteration" : "plan";
+  const snapshot = {
+    schema_version: 1,
+    id: workflowId,
+    type,
+    status: "running",
+    started_at: ACTIVE_STARTED_AT,
+    updated_at: ACTIVE_STARTED_AT,
+    delivery_kind: "development",
+    ...extra,
+    plans: plans.map((row) => ({ title: rowPlanIdOf(row), file: `plans/${rowPlanIdOf(row)}.md`, ...row })),
+  } as unknown as WorkflowSnapshot;
+  await createExecutionWorkflow(
+    {
+      harnessDir: context.harnessDir,
+      caller: { sessionId: `creator-${workflowId}`, role: "coordinator", workflowId },
+    },
+    {
+      entry: { id: workflowId, type, started_at: ACTIVE_STARTED_AT, dir: `workflows/${workflowId}` },
+      snapshot,
+      expected: (await readExecutionState(context)).token,
+      operationId: `seed-${workflowId}`,
+    },
   );
+}
+
+/** A registered row that carries no feature scope yet (the resolver's standalone arm). */
+function todoRow(): Record<string, unknown> {
+  return { id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" };
+}
+
+/** A registered row that owns the fixture feature scope (the resolver's L1 arm). */
+function scopedRow(f: ExecutionFixture, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "InProgress", metadata: rowMetadata(f), ...overrides };
 }
 
 function codesOf(result: { ok: boolean; violations: { code: string }[] }): string[] {
@@ -952,11 +999,12 @@ function listTree(root: string): string[] {
 }
 
 describe("resolveSddExecutionContext — A3 declared-context resolution", () => {
-  test("resolves against the declared control root and canonicalizes every path", () => {
+  test("resolves against the declared control root and canonicalizes every path", async () => {
     const root = tmpRoot("sdd-ctx-ok-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.planId).toBe(PLAN_ID);
       expect(resolved.workingBranch).toBe(f.workingBranch);
       expect(resolved.controlHarnessRoot).toBe(realpathSync(f.harnessDir));
@@ -968,11 +1016,12 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("mismatched declared branch fails the gate (exit 1, reused worktree.branch-mismatch)", () => {
+  test("mismatched declared branch fails the gate (exit 1, reused worktree.branch-mismatch)", async () => {
     const root = tmpRoot("sdd-ctx-branch-");
     try {
       const f = executionFixture(root);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("worktree.branch-mismatch");
     } finally {
@@ -980,11 +1029,11 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("missing feature worktree fails the gate (exit 1)", () => {
+  test("missing feature worktree fails the gate (exit 1)", async () => {
     const root = tmpRoot("sdd-ctx-nofeature-");
     try {
       const f = executionFixture(root);
-      const err = errOf(() =>
+      const err = await errOfAsync(() =>
         resolveSddExecutionContext({ ...contextOf(f), featureCwd: join(root, "no-such-feature") }),
       );
       expect(err.exitCode).toBe(1);
@@ -994,26 +1043,26 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("usage errors are exit 2: relative paths, unsafe planId, plan/sdd identity mismatch", () => {
+  test("usage errors are exit 2: relative paths, unsafe planId, plan/sdd identity mismatch", async () => {
     const root = tmpRoot("sdd-ctx-usage-");
     try {
       const f = executionFixture(root);
-      expect(errOf(() => resolveSddExecutionContext({ ...contextOf(f), controlHarnessRoot: "relative/.mstar" })).exitCode).toBe(2);
-      expect(errOf(() => resolveSddExecutionContext({ ...contextOf(f), planId: "../escape" })).exitCode).toBe(2);
-      expect(errOf(() => resolveSddExecutionContext({ ...contextOf(f), sddDir: join(f.harnessDir, "sdd", "other-plan") })).exitCode).toBe(2);
-      expect(errOf(() => resolveSddExecutionContext({ ...contextOf(f), planFile: join(f.harnessDir, "plans", "other-plan.md") })).exitCode).toBe(2);
-      expect(errOf(() => resolveSddExecutionContext({ ...contextOf(f), planFile: join(f.harnessDir, "plans", "no-such-plan.md") })).exitCode).toBe(2);
+      expect((await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), controlHarnessRoot: "relative/.mstar" }))).exitCode).toBe(2);
+      expect((await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), planId: "../escape" }))).exitCode).toBe(2);
+      expect((await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), sddDir: join(f.harnessDir, "sdd", "other-plan") }))).exitCode).toBe(2);
+      expect((await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), planFile: join(f.harnessDir, "plans", "other-plan.md") }))).exitCode).toBe(2);
+      expect((await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), planFile: join(f.harnessDir, "plans", "no-such-plan.md") }))).exitCode).toBe(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("feature cwd inside the control checkout is refused (L1 hard rule, exit 1)", () => {
+  test("feature cwd inside the control checkout is refused (L1 hard rule, exit 1)", async () => {
     const root = tmpRoot("sdd-ctx-nest1-");
     try {
       const f = executionFixture(root);
       mkdirSync(join(f.control, "accidental-feature"));
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: join(f.control, "accidental-feature") }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: join(f.control, "accidental-feature") }));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.feature-in-control");
     } finally {
@@ -1021,7 +1070,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("control harness declared inside the feature checkout is refused (exit 1)", () => {
+  test("control harness declared inside the feature checkout is refused (exit 1)", async () => {
     const root = tmpRoot("sdd-ctx-nest2-");
     try {
       const f = executionFixture(root);
@@ -1029,7 +1078,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       const strayPlan = join(strayHarness, "plans", `${PLAN_ID}.md`);
       mkdirSync(dirname(strayPlan), { recursive: true });
       writeFileSync(strayPlan, "# stray\n");
-      const err = errOf(() =>
+      const err = await errOfAsync(() =>
         resolveSddExecutionContext({
           ...contextOf(f),
           controlHarnessRoot: strayHarness,
@@ -1044,11 +1093,12 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("nested feature worktree inside the control checkout passes (real linked worktree, arbitrary folder name)", () => {
+  test("nested feature worktree inside the control checkout passes (real linked worktree, arbitrary folder name)", async () => {
     const root = tmpRoot("sdd-ctx-nested-ok-");
     try {
       const f = executionFixture(root, { nested: true });
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
       expect(resolved.controlHarnessRoot).toBe(realpathSync(f.harnessDir));
     } finally {
@@ -1056,26 +1106,27 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("nested feature worktree recorded in row metadata resolves (L1 + scope binding)", () => {
+  test("nested feature worktree recorded in row metadata resolves (L1 + scope binding)", async () => {
     const root = tmpRoot("sdd-ctx-nested-lease-");
     try {
       const f = executionFixture(root, { nested: true });
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [scopedRow(f)]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("coherent harness alias passes (control harness root declared through a symlink alias)", () => {
+  test("coherent harness alias passes (control harness root declared through a symlink alias)", async () => {
     const root = tmpRoot("sdd-ctx-alias-ok-");
     try {
       const f = executionFixture(root, { nested: true });
+      await seedWorkflow(f, "wf-1", [todoRow()]);
       const alias = join(root, "control-alias");
       symlinkSync(f.control, alias);
       const aliasHarness = join(alias, ".mstar");
-      const resolved = resolveSddExecutionContext({
+      const resolved = await resolveSddExecutionContext({
         ...contextOf(f),
         controlHarnessRoot: aliasHarness,
         planFile: join(aliasHarness, "plans", `${PLAN_ID}.md`),
@@ -1088,11 +1139,11 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("feature cwd equal to the control checkout is refused (exit 1)", () => {
+  test("feature cwd equal to the control checkout is refused (exit 1)", async () => {
     const root = tmpRoot("sdd-ctx-same-");
     try {
       const f = executionFixture(root);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: f.control }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: f.control }));
       expect(err.exitCode).toBe(1);
       // The control harness lives inside the feature cwd (the control
       // checkout itself) — control-inside-feature is the first gate.
@@ -1102,13 +1153,13 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("symlink alias of the control checkout is refused as feature cwd (exit 1)", () => {
+  test("symlink alias of the control checkout is refused as feature cwd (exit 1)", async () => {
     const root = tmpRoot("sdd-ctx-alias-neg-");
     try {
       const f = executionFixture(root);
       const alias = join(root, "control-alias");
       symlinkSync(f.control, alias);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: alias }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: alias }));
       expect(err.exitCode).toBe(1);
       // The alias canonicalizes to the control checkout, whose harness is
       // inside the feature cwd — control-inside-feature is the first gate.
@@ -1118,14 +1169,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("plain subdirectory of the control checkout refused even when the declared branch equals the control branch (exit 1)", () => {
+  test("plain subdirectory of the control checkout refused even when the declared branch equals the control branch (exit 1)", async () => {
     const root = tmpRoot("sdd-ctx-branch-eq-");
     try {
       const f = executionFixture(root);
       const subdir = join(f.control, "plain-subdir");
       mkdirSync(subdir);
       const controlBranch = git(["branch", "--show-current"], f.control);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch }));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.feature-in-control");
     } finally {
@@ -1133,11 +1184,12 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("configured nested harness (standalone): nested real linked worktree passes", () => {
+  test("configured nested harness (standalone): nested real linked worktree passes", async () => {
     const root = tmpRoot("sdd-ctx-nested-harness-ok-");
     try {
       const f = executionFixture(root, { nested: true, nestedHarness: true });
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
       expect(resolved.controlHarnessRoot).toBe(realpathSync(f.harnessDir));
     } finally {
@@ -1145,14 +1197,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("configured nested harness (standalone): plain subdirectory of the control checkout refused", () => {
+  test("configured nested harness (standalone): plain subdirectory of the control checkout refused", async () => {
     const root = tmpRoot("sdd-ctx-nested-harness-subdir-");
     try {
       const f = executionFixture(root, { nestedHarness: true });
       const subdir = join(f.control, "plain-feature");
       mkdirSync(subdir);
       const controlBranch = git(["branch", "--show-current"], f.control);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch }));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.feature-in-control");
     } finally {
@@ -1160,14 +1212,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("configured nested harness (standalone): symlink alias of the control checkout refused", () => {
+  test("configured nested harness (standalone): symlink alias of the control checkout refused", async () => {
     const root = tmpRoot("sdd-ctx-nested-harness-alias-");
     try {
       const f = executionFixture(root, { nestedHarness: true });
       const alias = join(root, "control-alias");
       symlinkSync(f.control, alias);
       const controlBranch = git(["branch", "--show-current"], f.control);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: alias, workingBranch: controlBranch }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), featureCwd: alias, workingBranch: controlBranch }));
       expect(err.exitCode).toBe(1);
       // The alias canonicalizes to the control checkout, whose harness is
       // inside the feature cwd — control-inside-feature is the first gate.
@@ -1177,23 +1229,21 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("configured nested harness: an active row cannot authorize a plain control-checkout subdirectory", () => {
+  test("an ACTIVE row cannot authorize a plain control-checkout subdirectory (the nesting gate runs first)", async () => {
     const root = tmpRoot("sdd-ctx-nested-harness-row-");
     try {
       const f = executionFixture(root, { nested: true, nestedHarness: true });
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [scopedRow(f)]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
 
-      // A row naming a plain subdirectory of the harness checkout is not
-      // an isolated feature checkout, so L1 refuses it.
+      // The registered row's scope cannot authorize a plain subdirectory of
+      // the harness checkout: the distinct-checkout gate refuses before any
+      // row scope is consulted.
       const subdir = join(f.control, "plain-feature");
       mkdirSync(subdir);
       const controlBranch = git(["branch", "--show-current"], f.control);
-      writeSnapshot(f, "wf-1", [
-        { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: subdir, working_branch: controlBranch }) },
-      ]);
-      const err = errOf(() => resolveSddExecutionContext({
+      const err = await errOfAsync(() => resolveSddExecutionContext({
         ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch,
       }));
       expect(err.exitCode).toBe(1);
@@ -1203,16 +1253,16 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("row metadata naming a plain subdirectory of the MAIN worktree is refused by L1", () => {
+  test("row metadata naming a plain subdirectory of the MAIN worktree is refused by L1", async () => {
     const root = tmpRoot("sdd-ctx-row-mainsub-");
     try {
       const f = executionFixture(root);
       const subdir = join(f.primary, "plain-subdir");
       mkdirSync(subdir);
-      writeSnapshot(f, "wf-1", [
-        { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: subdir, working_branch: "feature/sub" }) },
+      await seedWorkflow(f, "wf-1", [
+        scopedRow(f, { metadata: rowMetadata(f, { worktree_path: subdir, working_branch: "feature/sub" }) }),
       ]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("worktree.l1.feature-equals-main");
     } finally {
@@ -1220,40 +1270,47 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("active workflow row metadata matching the context resolves; a mismatching context is refused", () => {
+  test("active workflow row metadata matching the context resolves; a mismatching context is refused", async () => {
     const root = tmpRoot("sdd-ctx-row-scope-");
     try {
       const f = executionFixture(root);
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [scopedRow(f)]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
 
-      // Context featureCwd differs from the registered row worktree.
-      // L1 still requires feature scope to be distinct from main.
-      writeSnapshot(f, "wf-1", [
-        { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: f.primary, working_branch: "main" }) },
-      ]);
-      const worktreeErr = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(worktreeErr.exitCode).toBe(1);
-      expect(worktreeErr.message).toContain("worktree.l1.feature-equals-main");
-
       // Context workingBranch differs from the registered row branch.
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
-      const branchErr = errOf(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
+      const branchErr = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
       expect(branchErr.exitCode).toBe(1);
       expect(branchErr.message).toContain("sdd.context.row-branch-mismatch");
       expect(branchErr.message).toContain("plan prepare --workflow wf-1 --plan");
+
+      // Context featureCwd differs from the registered row worktree: L1
+      // still requires feature scope to be distinct from main.
+      const root2 = tmpRoot("sdd-ctx-row-scope2-");
+      const f2 = executionFixture(root2);
+      try {
+        await seedWorkflow(f2, "wf-1", [
+          scopedRow(f2, { metadata: rowMetadata(f2, { worktree_path: f2.primary, working_branch: "main" }) }),
+        ]);
+        const worktreeErr = await errOfAsync(() => resolveSddExecutionContext(contextOf(f2)));
+        expect(worktreeErr.exitCode).toBe(1);
+        expect(worktreeErr.message).toContain("worktree.l1.feature-equals-main");
+      } finally {
+        rmSync(root2, { recursive: true, force: true });
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("InProgress row without recorded worktree metadata refuses with the supported scope requirement", () => {
+  test("InProgress row without recorded worktree metadata refuses with the supported scope requirement", async () => {
     const root = tmpRoot("sdd-ctx-row-scope-missing-");
     try {
       const f = executionFixture(root);
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress" }]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      await seedWorkflow(f, "wf-1", [
+        { id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "InProgress" },
+      ]);
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("worktree.l1.feature-scope-missing");
       expect(err.message).toContain(`plan prepare --workflow wf-1 --plan ${PLAN_ID}`);
@@ -1262,72 +1319,75 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("standalone behavior is preserved: no snapshot / non-InProgress row without scope metadata", () => {
+  test("a registered row without feature scope yet keeps the standalone branch alignment", async () => {
     const root = tmpRoot("sdd-ctx-standalone-");
     try {
       const f = executionFixture(root);
- // No workflow snapshots at all — existing branch policy only.
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
-      // A finished plan row without feature-scope metadata never mandates it.
-      writeSnapshot(f, "wf-done", [{ id: PLAN_ID, status: "Done" }]);
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+      // Registered ACTIVE workflow, row not InProgress and no scope
+      // metadata: the plan IS registered, only its execution ownership is
+      // not — the existing branch policy still gates the context.
+      await seedWorkflow(f, "wf-done", [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Done" }]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
+      expect(resolved.planId).toBe(PLAN_ID);
+
+      // The declared branch must still align: a mismatching branch refuses.
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("worktree.branch-mismatch");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("the registered active workflow's row metadata governs when a retained terminal snapshot also lists the plan", () => {
+  test("a control root without an ACTIVE execution store refuses with the bootstrap recovery (S1/S2 mapping)", async () => {
+    const root = tmpRoot("sdd-ctx-nostore-");
+    try {
+      const f = executionFixture(root);
+      const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(rejection.code).toBe("store.not-initialized");
+      expect(rejection.message).toContain("mstar harness scaffold");
+      expect(rejection.message).toContain("mstar store init");
+      expect(rejection.message).toContain("mstar store upgrade");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a retained (unregistered) row is history, never registration evidence; the ACTIVE row governs (§4b)", async () => {
     const root = tmpRoot("sdd-ctx-terminal-shadow-");
     try {
       const f = executionFixture(root);
- // A completed lifecycle's snapshot stays on disk next to the live one;
- // the root register names the live workflow, and scan order must never
- // let the retained terminal row shadow it.
-      writeSnapshot(f, "wf-completed", [
-        { id: PLAN_ID, title: "finished run", file: `plans/${PLAN_ID}.md`, status: "Done" },
-      ]);
-      writeSnapshot(f, "wf-live", [
-        { id: PLAN_ID, title: "live run", file: `plans/${PLAN_ID}.md`, status: "InProgress", metadata: rowMetadata(f) },
-      ]);
-      writeStatusRegister(f, ["wf-live"]);
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+      await seedWorkflow(f, "wf-live", [scopedRow(f)]);
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
 
-      // The ACTIVE row metadata names main, so L1 refuses; a terminal-row
-      // match must never shadow the running workflow.
-      writeSnapshot(f, "wf-live", [
-        {
-          id: PLAN_ID,
-          title: "live run",
-          file: `plans/${PLAN_ID}.md`,
-          status: "InProgress",
-          metadata: rowMetadata(f, { worktree_path: f.primary, working_branch: "main" }),
-        },
-      ]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      // A completed lifecycle leaves registry membership: its plan row is
+      // retained by the store but the ACTIVE graph no longer lists it, so
+      // the row cannot satisfy registration (a completed plan id can never
+      // be reused by riding its own history).
+      const db = new DatabaseSync(join(f.harnessDir, "store.db"));
+      try {
+        db.exec("delete from execution_registry");
+      } finally {
+        db.close();
+      }
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("worktree.l1.feature-equals-main");
+      expect(err.message).toContain("sdd.context.plan-not-registered");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a plan claimed by two registered active workflows fails closed (never a silent standalone fallback)", () => {
+  test("a plan claimed by two registered active workflows fails closed (never a silent standalone fallback)", async () => {
     const root = tmpRoot("sdd-ctx-ambiguous-");
     try {
       const f = executionFixture(root);
- // Both rows' leases match the declared context, so a silent standalone
- // fallback would RESOLVE — the refusal itself is the contract.
-      writeStatusRegister(f, ["wf-a", "wf-b"]);
-      const row = {
-        id: PLAN_ID,
-        title: "claimed twice",
-        file: `plans/${PLAN_ID}.md`,
-        status: "InProgress",
-        metadata: rowMetadata(f),
-      };
-      writeSnapshot(f, "wf-a", [row]);
-      writeSnapshot(f, "wf-b", [row]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      // Both rows' scopes match the declared context, so a silent standalone
+      // fallback would RESOLVE — the refusal itself is the contract.
+      const row = scopedRow(f, { title: "claimed twice" });
+      await seedWorkflow(f, "wf-a", [row]);
+      await seedWorkflow(f, "wf-b", [row]);
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.workflow-plan-ambiguous");
       expect(err.message).toContain("wf-a");
@@ -1337,253 +1397,188 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("a plan matching only unregistered (terminal) snapshots is refused; an active row passes; a legacy root is unchanged (§4b/§6 S2)", () => {
+  test("a plan matching only retained (unregistered) rows is refused; an ACTIVE row passes (§4b/§6 S2)", async () => {
     const root = tmpRoot("sdd-ctx-terminal-only-");
     try {
       const f = executionFixture(root);
-      // The register names a different live workflow; the plan's only snapshot
-      // row belongs to a retained completed lifecycle and carries a stale
-      // lease. A terminal row is history, never registration evidence — and
-      // its stale lease must not satisfy lease enforcement either.
-      writeStatusRegister(f, ["wf-other"]);
-      writeSnapshot(f, "wf-other", [
+      // Another workflow runs in the store, but this plan has no ACTIVE
+      // registration: a retained row (or no row at all) is never
+      // registration evidence, and branch alignment is never a bypass.
+      await seedWorkflow(f, "wf-other", [
         { id: "another-plan", title: "other plan", file: "plans/another-plan.md", status: "InProgress" },
       ]);
-      writeSnapshot(f, "wf-finished", [
-        {
-          id: PLAN_ID,
-          title: "finished",
-          file: `plans/${PLAN_ID}.md`,
-          status: "Done",
-          metadata: rowMetadata(f, { worktree_path: f.primary, working_branch: "main" }),
-        },
-      ]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.plan-not-registered");
 
       // An ACTIVE registered row IS registration evidence: the same plan id
-      // under the register resolves (its lease governs).
-      writeStatusRegister(f, ["wf-live"]);
-      writeSnapshot(f, "wf-live", [
-        {
-          id: PLAN_ID,
-          title: "live",
-          file: `plans/${PLAN_ID}.md`,
-          status: "InProgress",
-          metadata: rowMetadata(f),
-        },
-      ]);
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
-
-      // Legacy root: no v2 register at all → the standalone policy applies
-      // byte-for-byte. The retained terminal row (now lease-free, so nothing
-      // register-governed is consulted and no lease check is demanded) keeps
-      // the legacy first-match behavior: the plan resolves on branch
-      // alignment exactly as before this change.
-      rmSync(join(f.harnessDir, "status.json"));
-      writeSnapshot(f, "wf-finished", [
-        { id: PLAN_ID, title: "finished", file: `plans/${PLAN_ID}.md`, status: "Done" },
-      ]);
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+      // under the graph resolves (its scope governs).
+      await seedWorkflow(f, "wf-live", [scopedRow(f)]);
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("an unregistered plan on a register-governed root is refused with the register verb (lifecycle contract §6 S2)", () => {
+  test("an unregistered plan on an ACTIVE authority is refused with the register verb (lifecycle contract §6 S2)", async () => {
     const root = tmpRoot("sdd-ctx-unregistered-");
     try {
       const f = executionFixture(root);
- // The v2 register is live (another workflow runs), but this plan has no
- // registration evidence in ANY workflow snapshot — the admission fallback
- // no longer silently continues on branch alignment alone (S2).
-      writeStatusRegister(f, ["wf-other"]);
-      writeSnapshot(f, "wf-other", [
+      // The store is ACTIVE (another workflow runs), but this plan has no
+      // registration evidence in any workflow row — admission never
+      // silently continues on branch alignment alone (S2).
+      await seedWorkflow(f, "wf-other", [
         { id: "another-plan", title: "other plan", file: "plans/another-plan.md", status: "InProgress" },
       ]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.plan-not-registered");
- // The refusal names the registration command and the recovery path.
+      // The refusal names the registration command and the recovery path.
       expect(err.message).toContain("mstar workflow register");
       expect(err.message).toContain("--delivery-kind");
-      expect(err.message).toContain("registerPlanWorkflow");
       expect(err.message).toContain("retry");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a PRESENT-but-unreadable register refuses admission closed (a damaged status.json is never 'no register', §6 S2)", () => {
+  test("a store file that cannot be read refuses admission closed (a damaged store is never 'no authority', §6 S2)", async () => {
     const root = tmpRoot("sdd-ctx-register-corrupt-");
     try {
       const f = executionFixture(root);
- // status.json exists but is malformed — exactly the damaged-register state
- // where the admission gate used to silently downgrade to legacy
- // branch-alignment-only, while S1 and PHASE6_INVALID_ROOT refuse closed.
-      writeFileSync(join(f.harnessDir, "status.json"), "{ corrupted", "utf8");
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("sdd.context.register-unreadable");
- // The refusal names the repair path for the damaged root, not the
- // registration verb.
-      expect(err.message).toContain("mstar migrate");
+      // A PRESENT-but-unreadable store is a damaged control root, never
+      // "no store": admission refuses through the store's own read refusal
+      // instead of silently downgrading to branch-alignment-only.
+      writeFileSync(join(f.harnessDir, "store.db"), "{ corrupted", "utf8");
+      const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(rejection.code).toBe("store.corrupt");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a present-but-non-v2 register refuses admission closed with the same code (a v1 root must be migrated, not ignored)", () => {
+  test("a store whose execution authority is not ACTIVE refuses closed (a staged store must be upgraded, not served)", async () => {
     const root = tmpRoot("sdd-ctx-register-v1-");
     try {
       const f = executionFixture(root);
-      writeFileSync(
-        join(f.harnessDir, "status.json"),
-        JSON.stringify({ version: 1, updated_at: "2026-09-07", plans: [] }),
-        "utf8",
-      );
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("sdd.context.register-unreadable");
+      await ensureAuthority(f);
+      const db = new DatabaseSync(join(f.harnessDir, "store.db"));
+      try {
+        db.exec("update execution_meta set authority_state = 'staged' where id = 1");
+      } finally {
+        db.close();
+      }
+      const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(rejection.code).toBe("execution.not-active");
+      // Fail-closed, never served as an empty authority: the read refuses a
+      // staged store (its upgrade recovery lives in the store's own
+      // authority readers, single-sourced).
+      expect(rejection.message).toContain("staged store");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("registration clears the refusal: register then retry proceeds, prior state preserved (S2 recovery path)", async () => {
-    const root = tmpRoot("sdd-ctx-register-recovery-");
+  test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", async () => {
+    // Recorded plan header (the fixture plan carries "Main worktree branch:
+    // main") — resolves.
+    const root1 = tmpRoot("sdd-ctx-mainbranch-");
     try {
-      const f = executionFixture(root, { primaryHarness: true });
-      writeStatusRegister(f, ["wf-other"]);
-      writeSnapshot(f, "wf-other", [
-        { id: "another-plan", title: "other plan", file: "plans/another-plan.md", status: "InProgress" },
-      ]);
-      const otherSnapshotPath = join(f.harnessDir, "workflows", "wf-other", "snapshot.json");
-      const otherSnapshotBefore = readFileSync(otherSnapshotPath, "utf8");
-      const otherEntryBefore = JSON.parse(readFileSync(join(f.harnessDir, "status.json"), "utf8")).workflows[0];
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(err.message).toContain("sdd.context.plan-not-registered");
-
- // Recovery exactly as the refusal documents: register (create-only — the
- // pre-existing wf-other entry stays), then retry the execution.
-      setArtifactStore(createFsStore(f.harnessDir));
-      await registerPlanWorkflow("wf-recovered", {
-        harnessDir: f.harnessDir,
-        // The declared title is the one the selected document states (its
-        // heading is the title authority, §4/R1).
-        plan: { id: PLAN_ID, title: "Plan", file: `plans/${PLAN_ID}.md` },
-        deliveryKind: "development",
-        branchSource: "main",
-        branchTarget: f.workingBranch,
-      });
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
-      const rootDoc = JSON.parse(readFileSync(join(f.harnessDir, "status.json"), "utf8")) as {
-        workflows: { id: string }[];
-      };
-      expect(rootDoc.workflows.map((w) => w.id).sort()).toEqual(["wf-other", "wf-recovered"]);
-      expect(rootDoc.workflows.find((w) => w.id === "wf-other")).toEqual(otherEntryBefore);
-      expect(readFileSync(otherSnapshotPath, "utf8")).toBe(otherSnapshotBefore);
+      const f = executionFixture(root1);
+      await seedWorkflow(f, "wf-1", [scopedRow(f)]);
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
     } finally {
-      setArtifactStore(undefined);
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root1, { recursive: true, force: true });
     }
-  });
 
-  test("a registered verification/report-only workflow without branch.target proceeds (registration is the only admission demand)", async () => {
-    const root = tmpRoot("sdd-ctx-verification-");
+    // Headerless plan falls back conservatively to the workflow's explicit
+    // branch.base — never the branch observed at check time.
+    const root2 = tmpRoot("sdd-ctx-mainbranch-headerless-");
     try {
-      const f = executionFixture(root, { primaryHarness: true });
- // Recorded alternative completion policy, no branch fields — admission
- // demands registration only, never a PR (contract §1 binding negatives).
-      setArtifactStore(createFsStore(f.harnessDir));
-      await registerPlanWorkflow("wf-verify", {
-        harnessDir: f.harnessDir,
-        plan: { id: PLAN_ID, title: "Plan", file: `plans/${PLAN_ID}.md` },
-        deliveryKind: "verification/report-only",
-        completionPolicy: "acceptance artifacts recorded under the plan's sddDir",
-      });
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
-      const { snapshot } = readWorkflowSnapshot(join(f.harnessDir, "workflows", "wf-verify"));
-      expect(snapshot.branch).toBeUndefined();
-      expect(snapshot.completion_policy).toBe("acceptance artifacts recorded under the plan's sddDir");
+      const f2 = executionFixture(root2);
+      writeFileSync(f2.planFile, "# Plan\n\n## Task 1\n\n- implement\n");
+      await seedWorkflow(f2, "wf-1", [scopedRow(f2)], { branch: { base: "main" } });
+      expect((await resolveSddExecutionContext(contextOf(f2))).planId).toBe(PLAN_ID);
     } finally {
-      setArtifactStore(undefined);
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root2, { recursive: true, force: true });
     }
-  });
 
-  test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", () => {
-    const root = tmpRoot("sdd-ctx-mainbranch-");
+    // Neither recorded header nor branch.base → expected-branch-missing refusal.
+    const root3 = tmpRoot("sdd-ctx-mainbranch-missing-");
     try {
-      const f = executionFixture(root);
-      const row = { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) };
- // Recorded plan header (the fixture plan carries "Main worktree branch:
- // main") — resolves.
-      writeSnapshot(f, "wf-1", [row]);
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
- // Headerless plan falls back conservatively to the snapshot's explicit
- // branch.base — never the branch observed at check time.
-      writeFileSync(f.planFile, "# Plan\n\n## Task 1\n\n- implement\n");
-      writeSnapshot(f, "wf-1", [row], { branch: { base: "main" } });
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
- // Neither recorded header nor branch.base → expected-branch-missing refusal.
-      writeSnapshot(f, "wf-1", [row]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      const f3 = executionFixture(root3);
+      writeFileSync(f3.planFile, "# Plan\n\n## Task 1\n\n- implement\n");
+      await seedWorkflow(f3, "wf-1", [scopedRow(f3)]);
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f3)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("worktree.main.expected-branch-missing");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root3, { recursive: true, force: true });
     }
   });
 
-  test("an iteration snapshot's integration worktree drives the full L1 checks", () => {
-    const root = tmpRoot("sdd-ctx-iteration-");
+  test("an iteration workflow's integration worktree drives the full L1 checks", async () => {
+    // Aligned, distinct integration checkout (the control worktree is on the
+    // integration branch in this fixture) — full checks pass.
+    const rootOk = tmpRoot("sdd-ctx-iteration-ok-");
     try {
-      const f = executionFixture(root);
-      const row = { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) };
- // Aligned, distinct integration checkout (the control worktree is on the
- // integration branch in this fixture) — full checks pass.
-      writeSnapshot(f, "wf-iter", [row], {
+      const f = executionFixture(rootOk);
+      await seedWorkflow(f, "wf-iter", [scopedRow(f)], {
         type: "iteration",
         integration_worktree_path: f.control,
         branch: { integration: "codex/iter-integration" },
       });
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
- // Integration checkout IS the main worktree → integration-equals-main.
-      writeSnapshot(f, "wf-iter", [row], {
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
+    } finally {
+      rmSync(rootOk, { recursive: true, force: true });
+    }
+
+    // Integration checkout IS the main worktree → integration-equals-main.
+    const rootMain = tmpRoot("sdd-ctx-iteration-main-");
+    try {
+      const f = executionFixture(rootMain);
+      await seedWorkflow(f, "wf-iter", [scopedRow(f)], {
         type: "iteration",
         integration_worktree_path: f.primary,
         branch: { integration: "main" },
       });
-      const eqMain = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(eqMain.exitCode).toBe(1);
-      expect(eqMain.message).toContain("worktree.l1.integration-equals-main");
-      // Feature worktree equals the integration checkout → feature-equals-integration.
-      writeSnapshot(f, "wf-iter", [row], {
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("worktree.l1.integration-equals-main");
+    } finally {
+      rmSync(rootMain, { recursive: true, force: true });
+    }
+
+    // Feature worktree equals the integration checkout → feature-equals-integration.
+    const rootLease = tmpRoot("sdd-ctx-iteration-lease-");
+    try {
+      const f = executionFixture(rootLease);
+      await seedWorkflow(f, "wf-iter", [scopedRow(f)], {
         type: "iteration",
         integration_worktree_path: f.feature,
         branch: { integration: f.workingBranch },
       });
-      const eqLease = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(eqLease.exitCode).toBe(1);
-      expect(eqLease.message).toContain("worktree.l1.feature-equals-integration");
+      const err = await errOfAsync(() => resolveSddExecutionContext(contextOf(f)));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("worktree.l1.feature-equals-integration");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(rootLease, { recursive: true, force: true });
     }
   });
 
-  test("a declared control root is never re-inferred from a stray feature-local harness", () => {
+  test("a declared control root is never re-inferred from a stray feature-local harness", async () => {
     const root = tmpRoot("sdd-ctx-stray-");
     try {
       const f = executionFixture(root);
- // Feature-local second-harness shape (the Aug-26 incident scene).
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      // Feature-local second-harness shape (the Aug-26 incident scene):
+      // residue in the feature checkout never redirects resolution.
       const straySdd = join(f.feature, ".mstar", "sdd", PLAN_ID);
       mkdirSync(straySdd, { recursive: true });
       writeFileSync(join(f.feature, ".mstar", "status.json"), "{}\n");
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(resolved.controlHarnessRoot).toBe(realpathSync(f.harnessDir));
- // …and the artifact gate refuses the stray feature-local SDD tree.
+      // …and the artifact gate refuses the stray feature-local SDD tree.
       const stray = checkSddAction(resolved, {
         kind: "artifact",
         cwd: f.feature,
@@ -1598,11 +1593,12 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
 });
 
 describe("checkSddAction — A3 source/artifact/launch seams", () => {
-  test("correct declared context with wrong actual source cwd fails", () => {
+  test("correct declared context with wrong actual source cwd fails", async () => {
     const root = tmpRoot("sdd-act-wrongcwd-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const result = checkSddAction(resolved, { kind: "source", cwd: f.primary, target: "src/probe.txt" });
       expect(result.ok).toBe(false);
       expect(codesOf(result)).toContain("sdd.context.source-cwd-outside-feature");
@@ -1614,14 +1610,15 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("safe relative nested source passes; traversal and absolute escape fail", () => {
+  test("safe relative nested source passes; traversal and absolute escape fail", async () => {
     const root = tmpRoot("sdd-act-nested-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
       const nested = join(f.feature, "src", "nested");
       mkdirSync(nested, { recursive: true });
       writeFileSync(join(nested, "writer.ts"), "export const w = 1;\n");
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(
         checkSddAction(resolved, { kind: "source", cwd: nested, target: "../../src/deep/new.txt" }).ok,
       ).toBe(true);
@@ -1634,12 +1631,13 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("symlink escape fails before mutation", () => {
+  test("symlink escape fails before mutation", async () => {
     const root = tmpRoot("sdd-act-symlink-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
       symlinkSync(join(f.primary, "src"), join(f.feature, "src", "escape"));
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const result = checkSddAction(resolved, { kind: "source", cwd: f.feature, target: "src/escape/probe.txt" });
       expect(result.ok).toBe(false);
       expect(codesOf(result)).toContain("sdd.context.target-symlink-escape");
@@ -1650,11 +1648,12 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("valid control artifact targets pass: fresh leaf, nested review dir, repair, planFile", () => {
+  test("valid control artifact targets pass: fresh leaf, nested review dir, repair, planFile", async () => {
     const root = tmpRoot("sdd-act-artifact-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(
         checkSddAction(resolved, { kind: "artifact", cwd: f.feature, target: join(f.sddDir, "task-1-report.md") }).ok,
       ).toBe(true);
@@ -1673,12 +1672,13 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("arbitrary control source edits and artifact symlink escapes fail", () => {
+  test("arbitrary control source edits and artifact symlink escapes fail", async () => {
     const root = tmpRoot("sdd-act-artifact-bad-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
       symlinkSync(f.primary, join(f.sddDir, "escape"));
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const controlSource = checkSddAction(resolved, {
         kind: "artifact",
         cwd: f.control,
@@ -1700,11 +1700,12 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("launch check verifies the resolved launch destination, not the parent cwd", () => {
+  test("launch check verifies the resolved launch destination, not the parent cwd", async () => {
     const root = tmpRoot("sdd-act-launch-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
  // Launch may be invoked from control/main — the destination is what is gated.
       expect(checkSddAction(resolved, { kind: "launch", cwd: f.primary }).ok).toBe(true);
       expect(checkSddAction(resolved, { kind: "launch", cwd: f.control }).ok).toBe(true);
@@ -1722,11 +1723,12 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("checks perform no writes anywhere in the fixture", () => {
+  test("checks perform no writes anywhere in the fixture", async () => {
     const root = tmpRoot("sdd-act-readonly-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const before = listTree(root);
       checkSddAction(resolved, { kind: "artifact", cwd: f.control, target: join(f.sddDir, "review", "qc1.md") });
       checkSddAction(resolved, { kind: "source", cwd: f.feature, target: "src/never.txt" });
@@ -1738,11 +1740,12 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
     }
   });
 
-  test("usage-level refusals: unknown kind, missing cwd, artifact without target", () => {
+  test("usage-level refusals: unknown kind, missing cwd, artifact without target", async () => {
     const root = tmpRoot("sdd-act-usage-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(codesOf(checkSddAction(resolved, { kind: "rename" as never, cwd: f.feature }))).toContain("sdd.context.kind-unknown");
       expect(codesOf(checkSddAction(resolved, { kind: "source", cwd: "" }))).toContain("sdd.context.cwd-missing");
       expect(codesOf(checkSddAction(resolved, { kind: "artifact", cwd: f.control }))).toContain("sdd.context.target-missing");
@@ -1759,7 +1762,7 @@ describe("checkSddAction — A3 source/artifact/launch seams", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveSddExecutionContext sddDir escape classification (task-1 review Minor 1)", () => {
-  test("a declared sddDir that canonicalizes outside the control harness is a gate fail (exit 1, sdd.context.sdd-dir-escape)", () => {
+  test("a declared sddDir that canonicalizes outside the control harness is a gate fail (exit 1, sdd.context.sdd-dir-escape)", async () => {
     const root = tmpRoot("sdd-esc-out-");
     try {
       const f = executionFixture(root);
@@ -1771,7 +1774,7 @@ describe("resolveSddExecutionContext sddDir escape classification (task-1 review
       mkdirSync(outside, { recursive: true });
       const alias = join(f.harnessDir, "sdd", "escape-plan");
       symlinkSync(outside, alias);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), sddDir: alias }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), sddDir: alias }));
  // Environmental escape — exit 1, not the exit-2 usage mismatch.
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.sdd-dir-escape");
@@ -1780,7 +1783,7 @@ describe("resolveSddExecutionContext sddDir escape classification (task-1 review
     }
   });
 
-  test("a divergent-but-inside sddDir stays a usage error (exit 2) — only the escaping divergence is exit 1", () => {
+  test("a divergent-but-inside sddDir stays a usage error (exit 2) — only the escaping divergence is exit 1", async () => {
     const root = tmpRoot("sdd-esc-in-");
     try {
       const f = executionFixture(root);
@@ -1791,7 +1794,7 @@ describe("resolveSddExecutionContext sddDir escape classification (task-1 review
       mkdirSync(other, { recursive: true });
       const alias = join(f.harnessDir, "sdd", "alias-plan");
       symlinkSync(other, alias);
-      const err = errOf(() => resolveSddExecutionContext({ ...contextOf(f), sddDir: alias }));
+      const err = await errOfAsync(() => resolveSddExecutionContext({ ...contextOf(f), sddDir: alias }));
       expect(err.exitCode).toBe(2);
       expect(err.message).toMatch(/does not match plan/);
     } finally {
@@ -1799,10 +1802,11 @@ describe("resolveSddExecutionContext sddDir escape classification (task-1 review
     }
   });
 
-  test("a symlinked sdd base whose canonical form equals the composition is valid (canonical comparison on both sides)", () => {
+  test("a symlinked sdd base whose canonical form equals the composition is valid (canonical comparison on both sides)", async () => {
     const root = tmpRoot("sdd-esc-canonical-eq-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
  // The repo declares its sdd base through a symlink while the context
  // carries the physical path: equivalent destinations in different
  // string forms must resolve, not misclassify as a composition mismatch.
@@ -1810,17 +1814,18 @@ describe("resolveSddExecutionContext sddDir escape classification (task-1 review
       mkdirSync(join(realBase, PLAN_ID), { recursive: true });
       symlinkSync(realBase, join(f.harnessDir, "sdd-link"));
       writeFileSync(join(f.control, ".mstarc"), `[config]\nsdd_dir=${join(".mstar", "sdd-link")}\n`);
-      const resolved = resolveSddExecutionContext({ ...contextOf(f), sddDir: join(realBase, PLAN_ID) });
+      const resolved = await resolveSddExecutionContext({ ...contextOf(f), sddDir: join(realBase, PLAN_ID) });
       expect(resolved.sddDir).toBe(realpathSync(join(realBase, PLAN_ID)));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a `.mstarc` sdd base composed outside the harness honors the matching declaration (canonical equality is valid)", () => {
+  test("a `.mstarc` sdd base composed outside the harness honors the matching declaration (canonical equality is valid)", async () => {
     const root = tmpRoot("sdd-esc-out-composed-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
  // The repo's own path SSOT composes an sdd base that physically lands
  // outside the harness (symlinked declaration); the engine honors a
  // context whose sddDir canonicalizes to that composition instead of
@@ -1829,7 +1834,7 @@ describe("resolveSddExecutionContext sddDir escape classification (task-1 review
       mkdirSync(join(outside, PLAN_ID), { recursive: true });
       symlinkSync(outside, join(f.harnessDir, "outside-link"));
       writeFileSync(join(f.control, ".mstarc"), `[config]\nsdd_dir=${join(".mstar", "outside-link")}\n`);
-      const resolved = resolveSddExecutionContext({ ...contextOf(f), sddDir: join(outside, PLAN_ID) });
+      const resolved = await resolveSddExecutionContext({ ...contextOf(f), sddDir: join(outside, PLAN_ID) });
       expect(resolved.sddDir).toBe(realpathSync(join(outside, PLAN_ID)));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1854,8 +1859,9 @@ describe("runInSddContext — A3 bound argv launcher ()", () => {
     const root = tmpRoot("sdd-exec-cwd-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
       const writer = childWriterFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const record = join(root, "record.json");
       const code = await runInSddContext(resolved, [process.execPath, writer, record, "a b", "$(touch pwn.txt)", "`touch pwn.txt`", "*"]);
       expect(code).toBe(0);
@@ -1874,7 +1880,8 @@ describe("runInSddContext — A3 bound argv launcher ()", () => {
     const root = tmpRoot("sdd-exec-exit-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       expect(await runInSddContext(resolved, [process.execPath, "-e", "process.exit(7)"])).toBe(7);
       expect(await runInSddContext(resolved, ["definitely-not-a-real-binary-xyz"])).toBe(127);
     } finally {
@@ -1886,8 +1893,9 @@ describe("runInSddContext — A3 bound argv launcher ()", () => {
     const root = tmpRoot("sdd-exec-gate-");
     try {
       const f = executionFixture(root);
+      await seedWorkflow(f, "wf-1", [todoRow()]);
       const writer = childWriterFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      const resolved = await resolveSddExecutionContext(contextOf(f));
  // Swap the feature branch after resolution: the gate must refuse
  // BEFORE the child runs — the child itself is the probe (it would
  // write the probe file as its first action).
@@ -1906,7 +1914,8 @@ describe("runInSddContext — A3 bound argv launcher ()", () => {
     const root = tmpRoot("sdd-exec-term-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const beforeInt = process.listenerCount("SIGINT");
       const beforeTerm = process.listenerCount("SIGTERM");
       const pending = runInSddContext(resolved, [process.execPath, "-e", "setInterval(() => {}, 1000)"]);
@@ -1925,7 +1934,8 @@ describe("runInSddContext — A3 bound argv launcher ()", () => {
     const root = tmpRoot("sdd-exec-int-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       const beforeInt = process.listenerCount("SIGINT");
       const pending = runInSddContext(resolved, [process.execPath, "-e", "setInterval(() => {}, 1000)"]);
       await new Promise((r) => setTimeout(r, 300));
@@ -1939,11 +1949,12 @@ describe("runInSddContext — A3 bound argv launcher ()", () => {
 });
 
 describe("bound task-brief / review-package — A3 artifact producers ()", () => {
-  test("bound task-brief defaults into the control sddDir and emits an absolute path", () => {
+  test("bound task-brief defaults into the control sddDir and emits an absolute path", async () => {
     const root = tmpRoot("sdd-bound-brief-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
  // Observed invocation cwd = the primary checkout — the producer's own
  // cwd is not gated; the ARTIFACT destination is.
       const out = taskBrief(f.planFile, 1, undefined, { context: resolved, cwd: f.primary });
@@ -1955,11 +1966,12 @@ describe("bound task-brief / review-package — A3 artifact producers ()", () =>
     }
   });
 
-  test("bound task-brief refuses an escaping destination before any write (nothing created)", () => {
+  test("bound task-brief refuses an escaping destination before any write (nothing created)", async () => {
     const root = tmpRoot("sdd-bound-brief-esc-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
  // Same string universe as the resolved context (macOS /var →
  // /private/var): the symlink escape diagnostic is a same-universe
  // declared-prefix classification (Task-1 self-review note).
@@ -1976,11 +1988,12 @@ describe("bound task-brief / review-package — A3 artifact producers ()", () =>
     }
   });
 
-  test("bound task-brief refuses a foreign plan file before any read or write; the matching plan file works", () => {
+  test("bound task-brief refuses a foreign plan file before any read or write; the matching plan file works", async () => {
     const root = tmpRoot("sdd-bound-brief-foreign-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
  // Another plan's plan file passed with THIS plan's bound context: the
  // extraction must refuse instead of writing foreign content into this
  // plan's control SDD dir.
@@ -2001,11 +2014,12 @@ describe("bound task-brief / review-package — A3 artifact producers ()", () =>
     }
   });
 
-  test("bound review-package probes git in the feature worktree and lands in the control sddDir (absolute path)", () => {
+  test("bound review-package probes git in the feature worktree and lands in the control sddDir (absolute path)", async () => {
     const root = tmpRoot("sdd-bound-rp-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       writeFileSync(join(f.feature, "feature-file.txt"), "feature change\n");
       git(["add", "-A"], f.feature);
       git(["commit", "-q", "-m", "feature commit"], f.feature);
@@ -2022,11 +2036,12 @@ describe("bound task-brief / review-package — A3 artifact producers ()", () =>
     }
   });
 
-  test("bound review-package refuses an artifact outside the plan and writes nothing", () => {
+  test("bound review-package refuses an artifact outside the plan and writes nothing", async () => {
     const root = tmpRoot("sdd-bound-rp-esc-");
     try {
       const f = executionFixture(root);
-      const resolved = resolveSddExecutionContext(contextOf(f));
+      await seedWorkflow(f, "wf-1", [todoRow()]);
+      const resolved = await resolveSddExecutionContext(contextOf(f));
       writeFileSync(join(f.feature, "feature-file.txt"), "feature change\n");
       git(["add", "-A"], f.feature);
       git(["commit", "-q", "-m", "feature commit"], f.feature);
@@ -2075,16 +2090,13 @@ test("explicit linked marker refuses unavailable Git without creating process st
 });
 
 
-test("governing active snapshot with both topology keys refuses standalone downgrade", () => {
-  const root = tmpRoot("sdd-both-topology-");
-  try {
-    const f = executionFixture(root);
-    writeSnapshot(f, "wf-a", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }], {
-      integration_worktree_path: f.control, control_worktree_path: f.control,
-    });
-    expect(() => resolveSddExecutionContext(contextOf(f))).toThrow("refusing conflicting");
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
+// The file-snapshot "both topology keys" refusal (`control_worktree_path`
+// alongside `integration_worktree_path`) retired with the file probe: the
+// ACTIVE graph is written only through `createExecutionWorkflow`, whose
+// `validateWorkflowSnapshot` refuses the dual-key shape at registration, so
+// the resolver can never observe it (workflow.snapshot validation tests own
+// that invariant).
+
 
 test("review and base verification bound hung Git before artifact writes", () => {
   const root = tmpRoot("sdd-bounded-git-");

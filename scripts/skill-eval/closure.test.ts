@@ -575,9 +575,9 @@ describe("mstar-iteration phase route map ", () => {
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
     expect(phase2.includes("execution_integration_leases") || phase2.includes("integration_merge_lease")).toBe(true);
-    expect(phase2.includes("integration_merge_lease")).toBe(true);
+    expect(phase2.includes("execution_integration_leases")).toBe(true);
     expect(phase2.includes("MUST differ from")).toBe(true);
-    expect(phase2.includes("same-host exclusive lock") || phase2.includes("same-host file lock")).toBe(true);
+    expect(phase2.includes("Existing foreign claims are not stealable")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
  // Phase 3 / 4-5 detail keeps its hard gates.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));

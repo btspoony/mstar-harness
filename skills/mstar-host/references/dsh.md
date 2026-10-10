@@ -205,7 +205,7 @@ message: the watermark (unified mstar version, harness dir, enforcement),
 the iteration phase-gate section when a steering compass resolved, and the
 workspace-state digest section (plan registry, open issues from the store rollup,
 branch/policy anchors, active leases, knowledge digest, compass direction)
-when the workspace has harness authority (store.db registry or pre-activation `status.json`). The row is digest-gated (once per
+when the workspace has harness authority (store.db registry). The row is digest-gated (once per
 turn, re-injected only when it changed) over one per-workspace TTL-cached
 build (`catalogTtlMs`, default 60 s).
 
@@ -222,9 +222,10 @@ answers, and no tool argument or config key selects one:
   canonical path and symlink alias alike. A register write while an active store
   answers is refused as migration history; a register write while the authority
   cannot be read at all fails closed.
-- A missing (`store.not-initialized`) or staged (`store.not-active`) store keeps
-  the legacy file authority in force, so those writes still pass through the
-  register's own document validator.
+- A missing (`store.not-initialized`) or staged (`store.not-active`) store is not
+  an execution route: coordination documents have no file fallback there
+  (`execution.not-active` — the file route is retired), and the
+  register kind stays under its own document validator.
 - This plugin **does** ship one host-native human execution entry: the
   plugin-owned command **`/mstar-execution`**, registered through the `ctx.commands`
   service (`registerExecutionSessionCommand` →

@@ -32,8 +32,9 @@ import { assertKnowledgeCatalogCompleteness, assertIndexRows } from "./compound.
 import { assertCatalogCompleteness, readCatalogCompleteness } from "./iteration.js";
 import { scaffoldHarness } from "./path.js";
 import { createFsStore, setArtifactStore } from "./store.js";
-import { assertCatalogExecutionCommitted, resolveCatalogRegistrationState } from "./catalog-registration.js";
+import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { findRegisteredWorkflow, validateStatus } from "./status.js";
+import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-consumers-"));
@@ -377,39 +378,44 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);
   });
 
-  test("catalog discovery: root active routing is still JSON authority, not a catalog read", async () => {
-    const { harness } = await withStore("routing-json-");
-    const context: StoreContext = { harnessDir: harness };
-    // status.json registers the workflow; the catalog holds NO row for it.
-    writeFileSync(
-      join(harness, "status.json"),
-      `${JSON.stringify(
-        {
-          version: 2,
-          updated_at: "2026-09-18",
-          workflows: [
-            { id: WORKFLOW_ID, type: "iteration", started_at: "2026-09-18T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
+  test("catalog discovery: the registration gate is answered from the ACTIVE store, not a file view", async () => {
+    const { harness, context } = await withStore("routing-active-");
+    // A workflow the ACTIVE store knows with NO pending journal operation: the
+    // registration gate passes (a committed registration is never
+    // retro-refused), and it never consults the retired file registration route.
+    const created = await readExecutionState(context);
+    await createExecutionWorkflow(
+      { harnessDir: harness, caller: { sessionId: "catalog-consumers", role: "coordinator", workflowId: WORKFLOW_ID } },
+      {
+        entry: { id: WORKFLOW_ID, type: "iteration", started_at: "2026-09-18T00:00:00Z", dir: `workflows/${WORKFLOW_ID}` },
+        snapshot: {
+          schema_version: 1, id: WORKFLOW_ID, type: "iteration", status: "running",
+          started_at: "2026-09-18T00:00:00Z", updated_at: "2026-09-18T00:00:00Z",
+          phase: "phase-2-execute", plans: [],
+        } as never,
+        expected: created.token,
+        operationId: "routing-active-create",
+      },
     );
-    expect(findRegisteredWorkflow(harness, WORKFLOW_ID)?.id).toBe(WORKFLOW_ID);
-    const state = await resolveCatalogRegistrationState(context, WORKFLOW_ID);
-    expect(state.rootVisible).toBe(true);
-    expect(state.binding).toBeNull();
-    // A root-visible workflow with no journal operation is not retro-refused.
     await assertCatalogExecutionCommitted(context, WORKFLOW_ID);
-    // The root document is validated as JSON, and an invalid root is a JSON
-    // verdict — routing never falls back to a catalog lookup.
-    expect(validateStatus(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).ok).toBe(true);
-    const invalid = validateStatus({
-      version: 2,
-      updated_at: "2026-09-18",
-      workflows: [{ id: "", type: "iteration", started_at: "", dir: "" }],
+
+    // A pending journal row IS the half-registered state and is refused,
+    // naming the legacy-journal recovery instead of completing file writes.
+    const handle = await openStore(context, "write");
+    try {
+      handle.db.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+          "values (?, ?, 'prepared', ?, '{}', '{}', null, ?, ?)",
+      ).run(
+        "routing-pending",
+        "0".repeat(64),
+        JSON.stringify({ workflow: { workflowId: WORKFLOW_ID, kind: "plan" } }),
+        "2026-09-18T00:00:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+      );
+    } finally { handle.close(); }
+    await expect(assertCatalogExecutionCommitted(context, WORKFLOW_ID)).rejects.toMatchObject({
+      code: "catalog.registration-pending",
     });
-    expect(invalid.ok).toBe(false);
-    expect(invalid.violations.map((violation) => violation.code)).toContain("status.workflow.invalid-id");
   });
 });

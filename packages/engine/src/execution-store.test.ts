@@ -366,11 +366,11 @@ describe("execution-schema: append-only coverage migration", () => {
       }
     });
 
-    test("a fresh store is issue/catalog active while execution stays legacy", async () => {
+    test("a fresh store opens issue/catalog and the execution authority active", async () => {
       const context = controlRoot("fresh-mode");
       const handle = await initializeStore(context);
       try {
-        expect(handle.execution?.authorityState).toBe("legacy");
+        expect(handle.execution?.authorityState).toBe("active");
         expect(scalar(handle.db, "select authority_state from store_meta where id = 1")).toBe("active");
         for (const table of EXECUTION_TABLES) {
           expect(scalar(handle.db, `select count(*) as n from ${table}`), table).toBe(
@@ -786,10 +786,12 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("initializes an empty active execution authority and bumps the epoch once", async () => {
     const { context, epoch } = await freshStore("initialize-empty");
-    const initialized = await initializeExecutionAuthority(context);
+    // The store initializer creates the schema and the ACTIVE EMPTY execution
+    // authority together; the activated token is read, never minted again.
+    const initialized = await readExecutionState(context);
     expect(initialized.storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(initialized.epoch).toBe(epoch + 1);
-    expect(String(initialized.token)).toBe(`exec-v1:root:${initialized.storeId}:${epoch + 1}:W10K:2`);
+    expect(initialized.epoch).toBe(epoch);
+    expect(String(initialized.token)).toBe(`exec-v1:root:${initialized.storeId}:${epoch}:W10K:1`);
     expect(initialized.data).toEqual({
       root: { version: 2, updated_at: initialized.data.root.updated_at, workflows: [] },
       workflows: [],
@@ -800,14 +802,14 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     try {
       expect(one(raw, "select authority_state, revision, manifest_id from execution_meta where id = 1")).toEqual({
         authority_state: "active",
-        revision: 2,
+        revision: 1,
         manifest_id: null,
       });
       expect(String(scalar(raw, "select activated_at from execution_meta where id = 1"))).toMatch(/Z$/);
       expect(one(raw, "select authority_state, authority_epoch, revision from store_meta where id = 1")).toEqual({
         authority_state: "active",
-        authority_epoch: epoch + 1,
-        revision: 1,
+        authority_epoch: epoch,
+        revision: 0,
       });
     } finally {
       raw.close();
@@ -817,8 +819,8 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
     const unchanged = rawDb(storePath(context));
     try {
-      expect(scalar(unchanged, "select revision from execution_meta where id = 1")).toBe(2);
-      expect(scalar(unchanged, "select authority_epoch from store_meta where id = 1")).toBe(epoch + 1);
+      expect(scalar(unchanged, "select revision from execution_meta where id = 1")).toBe(1);
+      expect(scalar(unchanged, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
     } finally {
       unchanged.close();
     }
@@ -857,6 +859,11 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
   });
 
   test("refuses a live legacy execution source without touching the store", async () => {
+    // Disposition: the pre-activation file route is retired (§4.3), so a
+    // status.json / snapshot tree is no longer an authority source that
+    // initialization converts. A second initialization of the ACTIVE store
+    // created by `initializeStore` is refused create-only, and leftover file
+    // state changes nothing about that refusal.
     const { context, epoch } = await freshStore("initialize-legacy-source");
     writeFileSync(
       join(context.harnessDir, "status.json"),
@@ -870,11 +877,12 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     writeFileSync(join(context.harnessDir, "workflows", "wf-1", "snapshot.json"), "{}");
     await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
 
-    // Neither refusal committed anything.
+    // Neither refusal committed anything: the authority stays ACTIVE and at
+    // its activation revision.
     const raw = rawDb(storePath(context));
     try {
       expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
-        authority_state: "legacy",
+        authority_state: "active",
         revision: 1,
       });
       expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
@@ -882,9 +890,10 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
       raw.close();
     }
 
-    // An EMPTY workflow tree is not a source: the empty workspace still initializes.
+    // Removing the leftover files does not re-open initialization either: the
+    // live ACTIVE authority is never reset.
     rmSync(join(context.harnessDir, "workflows"), { recursive: true, force: true });
-    expect((await initializeExecutionAuthority(context)).epoch).toBe(epoch + 1);
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
   });
 
   test("refuses a nonempty execution domain without clearing it", async () => {
@@ -902,7 +911,7 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
       expect(scalar(raw, "select count(*) as n from execution_workflows")).toBe(1);
       expect(scalar(raw, "select count(*) as n from execution_plans")).toBe(2);
       expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
-        authority_state: "legacy",
+        authority_state: "active",
         revision: 1,
       });
       expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
@@ -946,7 +955,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
     const raw = rawDb(storePath(context));
     try {
-      expect(scalar(raw, "select authority_state from execution_meta where id = 1")).toBe("legacy");
+      // The staged issue/catalog flag refuses initialization; the execution
+      // authority itself stays at the ACTIVE state the store init created.
+      expect(scalar(raw, "select authority_state from execution_meta where id = 1")).toBe("active");
       expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
     } finally {
       raw.close();
@@ -978,7 +989,7 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
     // The boundary is released afterwards: sequential transactions are not nested.
     const storeId = await withExecutionTransaction(context, (tx) => {
-      expect(tx.execution.authorityState).toBe("legacy");
+      expect(tx.execution.authorityState).toBe("active");
       return tx.storeId;
     });
     expect(storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -986,18 +997,18 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("reads the active authority as one assembled state graph", async () => {
     const { context, epoch } = await freshStore("read-populated");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
     } finally {
       writer.close();
     }
 
     const state = await readExecutionState(context);
     expect(state.storeId).toBe(initialized.storeId);
-    expect(state.epoch).toBe(epoch + 1);
-    expect(state.token).toBe(executionToken("root", initialized.storeId, epoch + 1, [], 2));
+    expect(state.epoch).toBe(epoch);
+    expect(state.token).toBe(executionToken("root", initialized.storeId, epoch, [], 1));
     expect(state.data.root).toEqual({
       version: 2,
       updated_at: initialized.data.root.updated_at,
@@ -1005,13 +1016,13 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     });
     expect(state.data.workflows).toHaveLength(1);
     const [workflow] = state.data.workflows;
-    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch + 1, ["wf-1"], 4));
+    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch, ["wf-1"], 4));
     expect(workflow.planTokens).toEqual({
-      "p-1": executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-1"], 6),
+      "p-1": executionToken("plan", initialized.storeId, epoch, ["wf-1", "p-1"], 6),
     });
     expect(workflow.coordinator).toMatchObject({
       storeId: initialized.storeId,
-      epoch: epoch + 1,
+      epoch,
       workflowId: "wf-1",
       role: "coordinator",
       sessionId: "s-1",
@@ -1030,10 +1041,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses to serve a workflow whose stored state does not describe its own key", async () => {
     const { context, epoch } = await freshStore("read-foreign-state");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1, { stateId: "wf-other" });
+      seedAuthorityGraph(writer.db, epoch, { stateId: "wf-other" });
     } finally {
       writer.close();
     }
@@ -1042,10 +1052,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses a plan whose stored state does not describe its own key", async () => {
     const { context, epoch } = await freshStore("read-foreign-plan");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
       writer.db
         .prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
         .run(JSON.stringify({ id: "p-other", status: "InProgress" }));
@@ -1057,10 +1066,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses a frozen pin that is not a complete catalog execution identity", async () => {
     const { context, epoch } = await freshStore("read-malformed-pin");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
       writer.db
         .prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
         .run(JSON.stringify({ ...FROZEN_PIN, document_hash: "" }));
@@ -1072,10 +1080,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses a session row that contradicts the session identity contract", async () => {
     const { context, epoch } = await freshStore("read-malformed-session");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
       writer.db
         .prepare("update execution_sessions set session_id = '' where workflow_id = 'wf-1' and session_id = 's-1'")
         .run();
@@ -1174,7 +1181,7 @@ function sealedInput(context: StoreContext, planId: string): Record<string, unkn
 describe("execution-domain: \u00A73 workflow creation, sealed input and authoritative read", () => {
   test("creates registry, workflow, plan rows and sealed inputs in one transaction", async () => {
     const { context, epoch } = await freshStore("domain-create");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
     await registerPlan(context, "p-2");
     const storeRevisionBefore = executionFootprint(context).storeRevision;
@@ -1189,17 +1196,19 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     expect(created.replayed).toBe(false);
     expect(created.operationId).toBe("create-wf-1");
     expect(created.storeId).toBe(initialized.storeId);
-    expect(created.epoch).toBe(epoch + 1);
+    expect(created.epoch).toBe(epoch);
     // Registry membership is a root change: the root revision advances once.
-    expect(created.token).toBe(executionToken("root", initialized.storeId, epoch + 1, [], 3));
+    // The ACTIVE store already carries the activation epoch, so creation
+    // commits at that epoch and the root token it mints is revision 2.
+    expect(created.token).toBe(executionToken("root", initialized.storeId, epoch, [], 2));
     expect(created.data.root).toEqual({ version: 2, updated_at: created.data.root.updated_at, workflows: [entry] });
     expect(created.data.workflows).toHaveLength(1);
     const [workflow] = created.data.workflows;
     // Every record created here starts at revision 1 (§2.2/§3.1).
-    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch + 1, ["wf-1"], 1));
+    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch, ["wf-1"], 1));
     expect(workflow.planTokens).toEqual({
-      "p-1": executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-1"], 1),
-      "p-2": executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-2"], 1),
+      "p-1": executionToken("plan", initialized.storeId, epoch, ["wf-1", "p-1"], 1),
+      "p-2": executionToken("plan", initialized.storeId, epoch, ["wf-1", "p-2"], 1),
     });
     expect(workflow.state).toEqual({
       schema_version: 1,
@@ -1264,7 +1273,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
         "select epoch, operation_id, request_hash, store_id, workflow_id, plan_id, committed_at from execution_operations",
       );
       expect(operation).toEqual({
-        epoch: epoch + 1,
+        epoch,
         operation_id: "create-wf-1",
         request_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
         store_id: initialized.storeId,
@@ -1274,11 +1283,11 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       });
       expect(one(db, "select authority_state, revision, root_updated_at from execution_meta where id = 1")).toEqual({
         authority_state: "active",
-        revision: 3,
+        revision: 2,
         root_updated_at: workflowRow.created_at,
       });
       expect(one(db, "select authority_epoch, revision from store_meta where id = 1")).toEqual({
-        authority_epoch: epoch + 1,
+        authority_epoch: epoch,
         revision: (storeRevisionBefore as number) + 1,
       });
       // Creation binds identity only: it mints no session and claims no lease.
@@ -1290,7 +1299,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("refuses a duplicate workflow identity and leaves the first one untouched", async () => {
     const { context } = await freshStore("domain-duplicate");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
     const first = creationInput("wf-1", [planRow("p-1")]);
     await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
@@ -1323,7 +1332,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("refuses an operation id reused for another payload or caller", async () => {
     const { context } = await freshStore("domain-operation-conflict");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
     await registerPlan(context, "p-2");
     const first = creationInput("wf-1", [planRow("p-1")]);
@@ -1360,7 +1369,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("an exact retry returns the recorded receipt and advances no revision", async () => {
     const { context } = await freshStore("domain-replay");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
     const request = creationInput("wf-1", [planRow("p-1")]);
     const committed = await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
@@ -1388,7 +1397,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("refuses a snapshot that is bound, leased, terminal or carries accepted evidence", async () => {
     const { context } = await freshStore("domain-not-new");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
     const footprint = executionFootprint(context);
     const caller = domainCaller("wf-1");
@@ -1438,43 +1447,60 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("refuses a stale root token, a foreign store token, a wrong kind and a foreign caller without writing", async () => {
     const { context, epoch } = await freshStore("domain-refusals");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
+    // Advance the root revision once with an accepted creation, so a superseded
+    // root revision exists to present: a fresh ACTIVE store's root token is
+    // revision 1 and no lower positive revision exists.
+    await createExecutionWorkflow(domainContext(context, domainCaller("wf-0")), {
+      ...creationInput("wf-0", [planRow("p-1")]),
+      expected: initialized.token,
+      operationId: "create-wf-0",
+    });
+    const current = await readExecutionState(context);
     const footprint = executionFootprint(context);
     const request = creationInput("wf-1", [planRow("p-1")]);
     const attempt = (caller: ExecutionCaller, expected: ExecutionToken, operationId: string) =>
       createExecutionWorkflow(domainContext(context, caller), { ...request, expected, operationId });
 
-    // A superseded root revision.
-    await expect(
-      attempt(domainCaller("wf-1"), executionToken("root", initialized.storeId, epoch + 1, [], 1), "stale-revision"),
-    ).rejects.toMatchObject({ code: "execution.stale-token" });
-    // A superseded epoch.
-    await expect(
-      attempt(domainCaller("wf-1"), executionToken("root", initialized.storeId, epoch, [], 2), "stale-epoch"),
-    ).rejects.toMatchObject({ code: "store.stale-epoch" });
+    // A superseded root revision (current epoch, stale revision).
+    await expect(attempt(domainCaller("wf-1"), initialized.token, "stale-revision")).rejects.toMatchObject({
+      code: "execution.stale-token",
+    });
     // A token minted for another store.
     await expect(
-      attempt(domainCaller("wf-1"), executionToken("root", OTHER_STORE, epoch + 1, [], 2), "foreign-store"),
+      attempt(domainCaller("wf-1"), executionToken("root", OTHER_STORE, epoch, [], 2), "foreign-store"),
     ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
     // Another address kind is never coerced into a root token.
     await expect(
-      attempt(domainCaller("wf-1"), executionToken("workflow", initialized.storeId, epoch + 1, ["wf-1"], 2), "wrong-kind"),
+      attempt(domainCaller("wf-1"), executionToken("workflow", initialized.storeId, epoch, ["wf-1"], 2), "wrong-kind"),
     ).rejects.toMatchObject({ code: "execution.token-kind" });
     await expect(
-      attempt(domainCaller("wf-1"), executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-1"], 2), "wrong-address"),
+      attempt(domainCaller("wf-1"), executionToken("plan", initialized.storeId, epoch, ["wf-1", "p-1"], 2), "wrong-address"),
     ).rejects.toMatchObject({ code: "execution.token-kind" });
     // A caller that does not own the workflow it is creating.
     await expect(
-      attempt(domainCaller("wf-other"), initialized.token, "foreign-caller"),
+      attempt(domainCaller("wf-other"), current.token, "foreign-caller"),
     ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
+    // A superseded epoch: the live authority generation advances past the
+    // presented token (a fresh ACTIVE store is at epoch 1, so the stale epoch
+    // is produced by advancing the live store, never by minting epoch 0).
+    const bump = rawDb(storePath(context));
+    try {
+      bump.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      bump.close();
+    }
+    await expect(
+      attempt(domainCaller("wf-1"), executionToken("root", initialized.storeId, epoch, [], 2), "stale-epoch"),
+    ).rejects.toMatchObject({ code: "store.stale-epoch" });
 
     expect(executionFootprint(context)).toEqual(footprint);
   });
 
   test("refuses a selection whose catalog entity the store does not hold", async () => {
     const { context } = await freshStore("domain-missing-catalog-entity");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     const row = planRow("p-2");
     const pin: CatalogExecutionPin = {
       store_id: "not-this-store",
@@ -1506,7 +1532,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("two writers on one root token commit once and conflict once, and the loser retries", async () => {
     const { context } = await freshStore("domain-contention");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     await registerPlan(context, "p-1");
     await registerPlan(context, "p-2");
     // Two genuinely distinct SQLite handles: each attempt opens its own
@@ -1539,7 +1565,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
     // One commit: the winner's workflow is registered and only its receipt exists.
     expect(winner.data.root.workflows.map((entry) => entry.id)).toEqual([winnerAttempt.workflowId]);
-    expect(winner.token).toBe(executionToken("root", initialized.storeId, initialized.epoch, [], 3));
+    expect(winner.token).toBe(executionToken("root", initialized.storeId, initialized.epoch, [], 2));
     const db = rawDb(storePath(context));
     try {
       expect(scalar(db, "select count(*) as n from execution_operations")).toBe(1);
@@ -1572,7 +1598,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
 
   test("an unrelated current catalog edit never rewrites the sealed input", async () => {
     const { context } = await freshStore("domain-sealed-input");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     const planRevision = await registerPlan(context, "p-1");
     await registerPlan(context, "p-2");
     const row = planRow("p-1");
@@ -1641,7 +1667,7 @@ type CreatedWorkflowFixture = {
 /** An active store holding ONE created workflow (`wf-1`, plans `p-1`/`p-2`). */
 async function createdWorkflow(label: string, creatorSessionId = "host-coord"): Promise<CreatedWorkflowFixture> {
   const { context } = await freshStore(label);
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   await registerPlan(context, "p-1");
   await registerPlan(context, "p-2");
   const { entry, snapshot } = creationInput("wf-1", [planRow("p-1"), planRow("p-2")]);
@@ -1733,11 +1759,13 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
       expect(String(session.bound_at)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
       // A session is a child of the workflow: the workflow revision advances
       // once, root membership does not, and the store revision advances once.
+      // The ACTIVE store's own activation already wrote execution_meta once,
+      // so the bind is the second revision, not the third.
       expect(one(db, "select revision, updated_at from execution_workflows")).toEqual({
         revision: 2,
         updated_at: session.bound_at,
       });
-      expect(one(db, "select revision from execution_meta where id = 1")).toEqual({ revision: 3 });
+      expect(one(db, "select revision from execution_meta where id = 1")).toEqual({ revision: 2 });
       expect(
         one(db, "select epoch, workflow_id, plan_id from execution_operations where operation_id = 'bind-coordinator'"),
       ).toEqual({ epoch, workflow_id: "wf-1", plan_id: null });
@@ -2102,13 +2130,23 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     await expect(
       attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch, ["wf-9"], 1), "other-workflow")),
     ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
-    // A superseded epoch, and a superseded revision of the same address.
-    await expect(
-      attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch - 1, ["wf-1"], 1), "stale-epoch")),
-    ).rejects.toMatchObject({ code: "store.stale-epoch" });
+    // A superseded revision of the same address, then a superseded epoch: the
+    // live authority generation advances past the presented token (a fresh
+    // ACTIVE store is at epoch 1, so the stale epoch must be produced by
+    // advancing the live store, not by minting epoch 0 — the token grammar
+    // refuses a non-positive epoch before any store read).
     await expect(
       attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch, ["wf-1"], 9), "stale-revision")),
     ).rejects.toMatchObject({ code: "execution.stale-token" });
+    const bump = rawDb(storePath(context));
+    try {
+      bump.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      bump.close();
+    }
+    await expect(
+      attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch, ["wf-1"], 1), "stale-epoch")),
+    ).rejects.toMatchObject({ code: "store.stale-epoch" });
 
     expect(sessionRows(context)).toEqual([]);
     expect(executionFootprint(context)).toEqual(footprint);
@@ -2126,9 +2164,6 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     // A reference whose store, epoch or identity the live row does not back.
     await expect(read(coordinator, { ...bound.data, storeId: OTHER_STORE }, "p-1")).rejects.toMatchObject({
       code: "execution.scope-mismatch",
-    });
-    await expect(read(coordinator, { ...bound.data, epoch: epoch - 1 }, "p-1")).rejects.toMatchObject({
-      code: "store.stale-epoch",
     });
     await expect(
       read(sessionCaller("wf-1", "host-ghost"), { ...bound.data, sessionId: "host-ghost" }, "p-1"),
@@ -2149,6 +2184,18 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
       db.close();
     }
     await expect(read(coordinator, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
+
+    // A reference from a superseded authority generation is stale, not absent:
+    // the live epoch advances past the generation the session was bound in
+    // (a fresh ACTIVE store is at epoch 1, so the stale generation is produced
+    // by advancing the live store rather than by presenting epoch 0).
+    const bump = rawDb(storePath(context));
+    try {
+      bump.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      bump.close();
+    }
+    await expect(read(coordinator, bound.data, "p-1")).rejects.toMatchObject({ code: "store.stale-epoch" });
     expect(storeId).toBe(bound.storeId);
   });
 

@@ -35,18 +35,16 @@ import { join } from "node:path";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
-import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
 import { validateIntegrationMergeLease, type IntegrationMergeLease } from "./lease.js";
 import { readExecutionState, type ExecutionState } from "./execution-store.js";
-import { rowPlanId, validatePlanRow, validateWorkflowEntry, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
+import { rowPlanId, validatePlanRow, validateWorkflowEntry, type PlanRow } from "./status.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
   LEGACY_WORKTREE_PATH_CODE,
   validateWorkflowSnapshot,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
-  WORKFLOW_SNAPSHOT_FILE,
   type WorkflowSnapshot,
 } from "./workflow.js";
 /** Projection payload/format version (contract §5). A bump invalidates every
@@ -54,7 +52,6 @@ import {
 export const PROJECTION_FORMAT_VERSION = 2;
 
 /** Root execution source, resolved under the harness root. */
-export const PROJECTION_ROOT_FILE = "status.json";
 
 /** Freshness contract §6 exposes: the published generation is current, a
  * failed read retained an older one (stale), or nothing valid was ever
@@ -206,24 +203,14 @@ export class ProjectionError extends Error {
 // ---------------------------------------------------------------------------
 
 
-type SourceSpec =
-  | { source: "file"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; absolutePath: string; declared: boolean }
-  | { source: "database"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; declared: boolean };
+type SourceSpec = { source: "database"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; declared: boolean };
 
-type SourceRead = { state: ProjectionSourceState; sha256: string | null; content: string | null; diagnostic: string | null };
+/** A compass document is still read as a FILE (compasses stay Markdown on disk). */
+type CompassSourceSpec = { sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; absolutePath: string; declared: boolean };
+type CompassSourceRead = { state: ProjectionSourceState; sha256: string | null; content: string | null; diagnostic: string | null };
 
-/** Canonical source key: `<kind>:<root_kind>:<relative path>`. Stable across
- * refreshes and independent of where the root happens to be mounted. */
-function sourceKeyOf(kind: ProjectionSourceKind, rootKind: CatalogRootKind, relativePath: string): string {
-  return `${kind}:${rootKind}:${relativePath}`;
-}
-
-function text(value: unknown): string | null {
-  return typeof value === "string" && value !== "" ? value : null;
-}
-
-/** Read one source's bytes and classify the outcome. */
-function readSource(spec: Extract<SourceSpec, { source: "file" }>): SourceRead {
+/** Read one compass document's bytes and classify the outcome. */
+function readCompassSource(spec: CompassSourceSpec): CompassSourceRead {
   let content: string;
   try {
     content = readFileSync(spec.absolutePath, "utf8");
@@ -242,6 +229,16 @@ function readSource(spec: Extract<SourceSpec, { source: "file" }>): SourceRead {
   return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
 }
 
+/** Canonical source key: `<kind>:<root_kind>:<relative path>`. Stable across
+ * refreshes and independent of where the root happens to be mounted. */
+function sourceKeyOf(kind: ProjectionSourceKind, rootKind: CatalogRootKind, relativePath: string): string {
+  return `${kind}:${rootKind}:${relativePath}`;
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
 /** Root-kind guard for values read back from the catalog binding table. */
 const CATALOG_ROOT_KINDS: Record<string, true> = {
   repository: true,
@@ -255,16 +252,6 @@ const CATALOG_ROOT_KINDS: Record<string, true> = {
 
 function asCatalogRootKind(value: unknown): CatalogRootKind | null {
   return typeof value === "string" && CATALOG_ROOT_KINDS[value] === true ? (value as CatalogRootKind) : null;
-}
-
-/** Normalize a root-declared snapshot dir; `null` refuses an escaping location. */
-function normalizeDeclaredDir(value: unknown): string | null {
-  if (typeof value !== "string" || value === "") return null;
-  const unified = value.replace(/\\/g, "/");
-  if (unified.includes("\0") || unified.startsWith("/") || /^[A-Za-z]:/.test(unified)) return null;
-  const segments = unified.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (segments.length === 0 || segments.includes("..")) return null;
-  return segments.join("/");
 }
 
 type CatalogInputs = {
@@ -377,56 +364,6 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
 }
 
 // ---------------------------------------------------------------------------
-// Root source (status.json)
-// ---------------------------------------------------------------------------
-
-/**
- * Root validation is the shared `validateStatus` over the document we read.
- * Two of its finding codes are the workflow-source findings this capture
- * reports on the named workflow source instead
- * (`status.workflow.snapshot-missing` / `status.workflow.snapshot-invalid`);
- * every other finding -- including a listed terminal snapshot, a snapshot
- * outside the harness, a root/snapshot type or started_at mismatch and a
- * duplicate id -- invalidates the ROOT source, so the refresh fails closed
- * rather than projecting an incoherent register.
- */
-const ROOT_WORKFLOW_SOURCE_CODES: Record<string, true> = {
-  "status.workflow.snapshot-missing": true,
-  "status.workflow.snapshot-invalid": true,
-};
-
-type RootRead = { entries: Array<{ id: string; dir: string }>; diagnostic: string | null };
-
-function readRootSource(content: string, harnessDir: string): RootRead {
-  let doc: unknown;
-  try {
-    doc = JSON.parse(content);
-  } catch {
-    return { entries: [], diagnostic: "invalid: status.json is not valid JSON" };
-  }
-  const gate = validateStatus(doc as StatusV2Doc, { harnessDir });
-  const blocking: ValidationResult[] = gate.violations.filter(
-    (violation) => ROOT_WORKFLOW_SOURCE_CODES[violation.code] !== true,
-  );
-  if (blocking.length > 0) {
-    return { entries: [], diagnostic: `invalid: ${blocking.map((violation) => violation.code).join(", ")}` };
-  }
-  const entries: Array<{ id: string; dir: string }> = [];
-  for (const raw of (doc as StatusV2Doc).workflows) {
-    const id = text(raw.id);
-    const dir = normalizeDeclaredDir(raw.dir);
-    if (id === null || dir === null) {
-      return {
-        entries: [],
-        diagnostic: `invalid: workflow entry ${id === null ? "(missing id)" : JSON.stringify(id)} has no usable harness-relative dir`,
-      };
-    }
-    entries.push({ id, dir });
-  }
-  return { entries, diagnostic: null };
-}
-
-// ---------------------------------------------------------------------------
 // Derived rows (shared validators/parsers, no forks)
 // ---------------------------------------------------------------------------
 
@@ -439,76 +376,6 @@ function readRootSource(content: string, harnessDir: string): RootRead {
  * for readers that DO consume the path; `readWorkflowSnapshot`'s write
  * permission is untouched here.
  */
-function deriveWorkflowRows(
-  content: string,
-  declared: boolean,
-): { workflow: ProjectedWorkflow; plans: ProjectedPlan[]; leases: ProjectedLease[] } | { diagnostic: string } {
-  let doc: unknown;
-  try {
-    doc = JSON.parse(content);
-  } catch {
-    return { diagnostic: "invalid: snapshot is not valid JSON" };
-  }
-  const gate = validateWorkflowSnapshot(doc);
-  const blocking = gate.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
-  if (blocking.length > 0) {
-    return { diagnostic: `invalid: ${blocking.map((violation) => violation.code).join(", ")}` };
-  }
-  const snapshot = doc as WorkflowSnapshot;
-  const phase = text(snapshot.phase);
-  const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
-  const workflows: ProjectedWorkflow[] = [
-    {
-      id: snapshot.id,
-      type: snapshot.type,
-      status: snapshot.status,
-      phase,
-      startedAt: text(snapshot.started_at),
-      endedAt: text(snapshot.ended_at),
-      updatedAt: text(snapshot.updated_at),
-      branchBase: text(branch.base),
-      branchSource: text(branch.source),
-      branchIntegration: text(branch.integration),
-      branchTarget: text(branch.target),
-      activeRegistration: declared,
-    },
-  ];
-  const plans: ProjectedPlan[] = [];
-  const leases: ProjectedLease[] = [];
-  for (const raw of Array.isArray(snapshot.plans) ? snapshot.plans : []) {
-    const row = raw as PlanRow;
-    const planId = rowPlanId(row);
-    // validateWorkflowSnapshot (validatePlanRow) already refused a row with
-    // neither id nor plan_id, so this only guards a hand-built document.
-    if (planId === undefined) continue;
-    const coordination = isPlainObject(row.coordination) ? (row.coordination as Record<string, unknown>) : {};
-    const progress = isPlainObject(coordination.progress) ? (coordination.progress as Record<string, unknown>) : {};
-    const metadata = isPlainObject(row.metadata) ? (row.metadata as Record<string, unknown>) : {};
-    const pin = isPlainObject(metadata.catalog_pin) ? (metadata.catalog_pin as Record<string, unknown>) : {};
-    plans.push({
-      workflowId: snapshot.id,
-      planId,
-      status: text(row.status),
-      progress: text(progress.summary),
-      phase,
-      doneAt: text(row.done_at),
-      catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null,
-    });
-  }
-  if (isPlainObject(snapshot.integration_merge_lease)) {
-    const lease = snapshot.integration_merge_lease as IntegrationMergeLease;
-    leases.push({
-      workflowId: snapshot.id,
-      planId: text(lease.plan_id) ?? "",
-      kind: "integration-merge",
-      holder: text(lease.holder),
-      worktreePath: null,
-      expiresAt: text(lease.expires_at),
-    });
-  }
-  return { workflow: workflows[0]!, plans, leases };
-}
-
 function bodyOf(content: string): string {
   const lines = content.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") return content;
@@ -598,10 +465,11 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
  * fingerprint is recorded provenance, not a publication re-verification gate.
  */
 export async function captureProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
-  const authority = await resolveCurrentAuthority(context);
-  return authority.route === "execution"
-    ? captureExecutionProjectionSources(context)
-    : captureFileProjectionSources(context);
+  // The ACTIVE execution DB is the only execution-SOURCE authority; the retired
+  // file route is gone, so an authority that cannot be established refuses out
+  // of `resolveCurrentAuthority` instead of falling back to leftover JSON.
+  await resolveCurrentAuthority(context);
+  return captureExecutionProjectionSources(context);
 }
 function safeExecutionAuthorityError(error: unknown): string {
   const name = error instanceof Error ? error.constructor.name : "UnknownError";
@@ -778,8 +646,8 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
-      const read = readSource(fspec);
+      const fspec: CompassSourceSpec = { sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
@@ -827,159 +695,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   } finally {
     handle.close();
   }
-}
-
-async function captureFileProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
-  const harness = catalogRootDir(context, "harness");
-  const inputs = await readCatalogInputs(context);
-
-  const sources: ProjectionSourceDigest[] = [];
- 
-  const diagnostics: SourceDiagnostic[] = [];
-  const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
-
-  const record = (
-    spec: SourceSpec,
-    read: { sha256: string | null },
-    state: ProjectionSourceState,
-    diagnostic: string | null,
-    options: { tolerate?: boolean } = {},
-  ): void => {
-    sources.push({
-      sourceKey: spec.sourceKey,
-      kind: spec.kind,
-      rootKind: spec.rootKind,
-      relativePath: spec.relativePath,
-      sha256: read.sha256,
-      state,
-      diagnostic,
-      declared: spec.declared,
-    });
-
-    if (options.tolerate === true) return;
-    if (state === "ok" && diagnostic === null) return;
-    diagnostics.push({
-      sourceKey: spec.sourceKey,
-      reason: state === "ok" ? "changed-during-read" : state,
-      message:
-        diagnostic ??
-        `the declared source ${spec.relativePath} could not be read; the in-memory capture keeps its state instead of inventing rows`,
-    });
-  };
-
-  // --- root execution source ------------------------------------------------
-  const rootSpec: SourceSpec = {
-    source: "file",
-    sourceKey: sourceKeyOf("root", "harness", PROJECTION_ROOT_FILE),
-    kind: "root",
-    rootKind: "harness",
-    relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join(harness, PROJECTION_ROOT_FILE),
-    declared: true,
-  };
-  const rootRead = readSource(rootSpec);
-  let declaredEntries: Array<{ id: string; dir: string }> = [];
-  if (rootRead.state === "ok" && rootRead.content !== null) {
-    const parsed = readRootSource(rootRead.content, harness);
-    if (parsed.diagnostic !== null) {
-      record(rootSpec, rootRead, "invalid", parsed.diagnostic);
-    } else {
-      declaredEntries = parsed.entries;
-      record(rootSpec, rootRead, "ok", null);
-    }
-  } else {
-    record(rootSpec, rootRead, rootRead.state, rootRead.diagnostic);
-  }
-
-  // --- workflow sources (root-declared, then retained history) --------------
-  const declaredIds = new Set(declaredEntries.map((entry) => entry.id));
-  const workflowSpecs: Array<Extract<SourceSpec, { source: "file" }>> = declaredEntries.map((entry) => {
-    const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
-    return {
-      source: "file",
-      sourceKey: sourceKeyOf("workflow", "harness", relativePath),
-      kind: "workflow",
-      rootKind: "harness",
-      relativePath,
-      absolutePath: join(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
-      declared: true,
-    };
-  });
-  for (const binding of inputs.bindings) {
-    if (declaredIds.has(binding.workflowId)) continue;
-    const root = catalogRootDir(context, binding.rootKind);
-    const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
-    workflowSpecs.push({
-      source: "file",
-      sourceKey: sourceKeyOf("workflow", binding.rootKind, relativePath),
-      kind: "workflow",
-      rootKind: binding.rootKind,
-      relativePath,
-      absolutePath: join(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
-      declared: false,
-    });
-  }
-
-  for (const spec of workflowSpecs) {
-    const read = readSource(spec);
-    if (read.state !== "ok" || read.content === null) {
-      // A workflow that the root cleanly unregistered and whose snapshot was
-      // removed is a valid source-set change: retain its catalog identity and
-      // project nothing, without a diagnostic. Its row is still published with
-      // `state = missing`, so a reader keys freshness on `projection_meta` and
-      // never treats a missing row of a current generation as a failure. A
-      // still-declared snapshot that is gone IS an error.
-      record(spec, read, read.state, read.diagnostic, { tolerate: !spec.declared && read.state === "missing" });
-      continue;
-    }
-    const derived = deriveWorkflowRows(read.content, spec.declared);
-    if ("diagnostic" in derived) {
-      record(spec, read, "invalid", derived.diagnostic);
-      continue;
-    }
-    record(spec, read, "ok", null);
-    rows.workflows.push(derived.workflow);
-    rows.plans.push(...derived.plans);
-    rows.leases.push(...derived.leases);
-  }
-
-  // --- catalog-linked compass documents ------------------------------------
-  for (const doc of inputs.compassDocs) {
-    const spec: SourceSpec = {
-      source: "file",
-      sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath),
-      kind: "compass",
-      rootKind: doc.rootKind,
-      relativePath: doc.relativePath,
-      absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath),
-      declared: true,
-    };
-    const read = readSource(spec);
-    if (read.state !== "ok" || read.content === null) {
-      record(spec, read, read.state, read.diagnostic);
-      continue;
-    }
-    const derived = deriveCompass(doc.iterationId, read.content, doc.relativePath);
-    if ("diagnostic" in derived) {
-      record(spec, read, "invalid", derived.diagnostic);
-      continue;
-    }
-    record(spec, read, "ok", null);
-    rows.compasses.push(derived);
-  }
-
-
-  sources.sort((a, b) => (a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0));
-  const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
-  return {
-    formatVersion: PROJECTION_FORMAT_VERSION,
-    catalogRevision: inputs.catalogRevision,
-    sources,
-    rows,
-    diagnostics,
-    sourceSetHash,
-    blocked: diagnostics.length > 0,
-  };
 }
 
 /**

@@ -12,7 +12,7 @@ description: Morning Star lifecycle and authorization authority — source prior
 - 本 skill 是 harness 的**生命周期 / 授权语义权威**（状态机、Done 权限、门禁、路由以本 skill 为准）；加载**选择**权威是 **`mstar-roles`**（hub bootstrap → 角色身份 → Assignment `Skill presets:` 决策，见其 § Load Order）。本 skill 不维护第二份全局必读角色表。
 - Directly invoked `mstar-*` topics declare `mstar-harness-core` first in Load Order / First action unless `lintLoadOrder` exempts their exact identity. The existing `mstar-roles` hub bootstraps role-preset selection; explicit `none` still retains identity and shared-leaf authorization, anti-recursion, and evidence obligations.
 - Load only topics selected by `mstar-roles` and the relevant topic index; do not read all topics as a precaution. General-engineering wording is not a load-order exemption.
-- **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是**条件契约档案**（engine-absent fallback）。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为找回被 engine 校验接管的 contract 全文而读取（触发契约见其 description）。
+- **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是**条件契约档案**（engine-absent archive）。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为找回被 engine 校验接管的 contract 全文而读取（触发契约见其 description）。engine-absent 宿主没有文件执行路径：执行状态走对话追踪（no-plan mode）。
 
 ## Standalone harness（`mstar-*` 自洽）
 
@@ -58,7 +58,7 @@ Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/
 - Done sign-off belongs to project-manager or qualified QA evidence; the authoritative row write uses the sole primary coordinator's direct complete operation with QC/QA and declared-route proof. Leaf implementers never write Done.
 - The primary coordinator uses revisable prepare, progress and direct complete; no per-row PM identity/bind/claim, sealed Assignment or transfer protocol. Default cleanup is allow-residual. Ordinary metadata/defaults need no ceremonial prepare record.
 
-ACTIVE 状态字段权威在 store.db 的 root register / workflow / plan 行；`status.json` / snapshot 仅 pre-activation 或 engine-absent 回退，project register 无条件退役为迁移历史。字段与 issue severity/lifecycle → **`mstar-artifacts`**。
+ACTIVE 状态字段权威在 store.db 的 root register / workflow / plan 行（唯一执行权威）；无 store 的 harness plan 不登记——走对话追踪（no-plan mode）；`status.json` / snapshot 仅迁移源/历史，project register 无条件退役为迁移历史。字段与 issue severity/lifecycle → **`mstar-artifacts`**。
 
 ## Task category（路由摘要）
 
@@ -74,7 +74,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `docs` | `@product-manager` / `@architect` / `@writing-specialist` |
 | `audit` | `@code-reviewer`（mstar-audit 承载；大型仓库经 Assignment `Delegation: allowed (scout/explore only, read-only)` 扇出只读 scout；read-only advisory；不进入状态机） |
 
-**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + workflow/plan 行登记（ACTIVE 在 store.db，经 `mstar workflow register` 等公共注册动词；`status.json` 仅 pre-activation / engine-absent 回退，见 **`mstar-conventions`**）。workflow 注册本身是 authorized domain operation（经授权 producer 的引擎原语，不自创第二注册机制），语义 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
+**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + workflow/plan 行登记（ACTIVE 在 store.db，经 `mstar workflow register` 等公共注册动词；无 store 则 plan 不登记——走对话追踪（no-plan mode），见 **`mstar-conventions`**）。workflow 注册本身是 authorized domain operation（经授权 producer 的引擎原语，不自创第二注册机制），语义 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
 ## `@explore` 边界
 
@@ -97,11 +97,11 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
-| `mstar-engine-legacy` | Engine-absent safety/field-history archive; no recreated claim/bind/transfer fallback |
+| `mstar-engine-legacy` | Engine-absent safety/field-history archive; execution state = conversation tracking; no recreated file execution route |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
-| `mstar-artifacts` | 主 plan、review bundle / durable summaries、store.db root register/plan 行与 issue severity/lifecycle、notes.jsonl ledger、knowledge；root/snapshot 文件仅 legacy，project register 仅迁移历史 |
+| `mstar-artifacts` | 主 plan、review bundle / durable summaries、store.db root register/plan 行与 issue severity/lifecycle、notes.jsonl ledger、knowledge；root/snapshot 文件仅迁移源/历史，project register 仅迁移历史 |
 | `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |

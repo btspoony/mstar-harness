@@ -14,19 +14,13 @@
  *
  * Therefore this verb:
  *
- * - writes NO JSON registration file — not a snapshot, not a root entry, not a
- *   session envelope. The DB is the execution authority in active mode, and the
- *   `execution.direct-write-refused` guards on the file writers are the fence
- *   behind that promise, not the promise itself;
- * - generates NO `prepared` / `execution-written` phase. Those phases exist to
- *   describe a half-finished FILE registration; in DB mode nothing is ever
- *   half-finished, and an operation that refuses leaves no trace at all;
- * - NEVER adopts pending file work. A legacy `catalog_operations` row that is
- *   still `prepared` / `execution-written` refuses through the SAME verdict the
- *   legacy gate uses (`pendingRegistrationOf` + `refusePendingRegistration`),
- *   because adopting it here would mean trusting file-protocol state — a
- *   snapshot and a root entry this transaction did not write — as this store's
- *   registration;
+ * - writes NO JSON registration file; ACTIVE execution authority is the store;
+ * - records no journal phases. A transaction either commits the lifecycle and
+ *   catalog delta together or leaves no partial ACTIVE registration;
+ * - NEVER adopts legacy journal work. A `prepared` / `execution-written` row
+ *   refuses through `pendingRegistrationOf` + `refusePendingRegistration`;
+ *   recovery is explicit `catalog reconcile --abort` or identity-checked
+ *   `catalog purge-registration`, never file-effect adoption;
  * - is idempotent by operation id SEMANTICALLY: a retry of the same reviewed
  *   intent returns the RECORDED receipt without re-evaluating the CAS the first
  *   attempt advanced and without re-reading the catalog revision, even when the
@@ -54,9 +48,12 @@ import {
   resolveCatalogExecutionPlan,
   workflowEntryOf,
   writeBinding,
+  CatalogRegistrationError,
+  type CatalogExecutionCatalogDelta,
   type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
+  type CatalogExecutionWorkflow,
 } from "./catalog-registration.js";
 import { isPlainObject } from "./coordination-write.js";
 import {
@@ -74,25 +71,21 @@ import {
   type ExecutionToken,
 } from "./execution-store.js";
 import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
+import { createHash } from "node:crypto";
+import { promotedAuditPlanRows } from "./audit.js";
+import { derivePlanRegistration, stableJson } from "./workflow.js";
 
 /** §3.1: the operation kind this verb hashes its request under. */
 const COMMIT_REGISTRATION_OPERATION = "commitExecutionRegistration";
 
 /**
- * §4.2 the SEMANTIC selection of one registration intent: the reviewed producer
- * call, the reviewed catalog delta and the actor every published row is
- * attributed to — the facts that make "which registration is this" true.
+ * §4.2 the semantic selection of one registration intent: the reviewed workflow,
+ * catalog delta and actor attributed to every published row.
  *
- * Deliberately NOT selected: `operationId` is the idempotency key the receipt is
- * looked up BY, `expected` is the root CAS the caller happened to have read, and
- * `expectedCatalogRevision` is the catalog freshness the delta was reviewed
- * against. A repeat after a lost response is the same intent even when the
- * caller re-read the store and re-presented both tokens (design §4.2/R6/R7), so
- * the fingerprint must not move with them — the same rule E06a applies to the
- * file route's own journal fingerprint, where the reviewed expectation stays in
- * the journal payload and is enforced at reconcile instead of being hashed as
- * intent. A different producer call or delta still moves the fingerprint and
- * stays an operation conflict (A13).
+ * `operationId` is the replay address; root and catalog expectations are
+ * checked constraints rather than business intent. The fingerprint therefore
+ * remains actor + canonical workflow + catalog delta. Retries with that same
+ * intent replay; a changed intent conflicts (A13).
  */
 const REGISTRATION_SEMANTICS: SemanticSelection = ["actor", "workflow", "delta"];
 
@@ -154,28 +147,20 @@ function registrationRequestHash(caller: ExecutionCaller, plan: CatalogExecution
  * §3.1 the accepted multi-domain transaction advances the SHARED
  * `store_meta.revision` exactly once, however many catalog rows the delta
  * publishes: the catalog rows join the transaction's single advance and the
- * catalog revision advances once per published row, as it does on the file
- * route. A retry of the same reviewed intent advances none of them, and
- * re-evaluates neither this store's CAS nor the catalog expectation the first
- * attempt already consumed — it returns the receipt the committed transaction
- * recorded (A05/A28: an interruption before this call committed leaves nothing,
- * and an interruption after it committed converges on that one recorded
- * registration, never on a second one).
+ * catalog revision advances once per published row. A retry of the same reviewed
+ * intent advances none of them and returns its recorded receipt.
  *
  * Refusals, in the order they are evaluated:
  *
- * - `execution.not-active` — the execution authority is not active (a legacy or
- *   staged store, or a store predating the execution schema keeps the file
- *   route);
+ * - `execution.not-active` — the execution authority is not active;
  * - `execution.operation-conflict` — this operation id is already committed for
  *   a different reviewed intent (another producer call, delta or actor);
  * - `execution.token-kind` / `execution.scope-mismatch` / `store.stale-epoch` /
  *   `execution.stale-token` — `expected` is not this store's CURRENT root token;
  * - `catalog.revision-conflict` — the catalog moved past the revision the delta
  *   was reviewed against (nothing was published);
- * - `catalog.registration-pending` — a legacy registration operation for this
- *   workflow is still `prepared` / `execution-written`: it must be settled on
- *   the file route first, never adopted or overwritten here;
+ * - `catalog.registration-pending` — a legacy journal is still prepared or
+ *   execution-written; settle it through abort/purge recovery before retrying;
  * - `execution.not-empty` — the workflow identity already exists (a lifecycle is
  *   create-only), or the supplied snapshot already carries a binding, a lease or
  *   delivery evidence;
@@ -241,9 +226,8 @@ export async function commitExecutionRegistration(
       );
     }
 
-    // §7 a legacy operation that is still in flight is settled on the file route
-    // BEFORE this store can register anything; the DB route never adopts the
-    // file protocol's partial state.
+    // A legacy operation still in flight must be settled explicitly before this
+    // ACTIVE transaction can register; it never adopts legacy journal state.
     const pending = pendingRegistrationOf(tx.db, plan.workflowId);
     if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
 
@@ -291,8 +275,7 @@ export async function commitExecutionRegistration(
       operationId,
       workflowId: plan.workflowId,
       catalogRevision: published.catalogRevision,
-      // The DB route has no orphan-file recovery and no pending adoption: this
-      // call created exactly the lifecycle the review describes.
+      // ACTIVE creation and catalog publication committed in this transaction.
       recovered: false,
     };
     writeOperationReceipt(tx, {
@@ -305,4 +288,146 @@ export async function commitExecutionRegistration(
     });
     return receipt;
   });
+}
+
+/**
+ * Derive the catalog delta from the ACTIVE workflow intent: plan and iteration
+ * entities follow their workflow options; audit entities follow selected plan
+ * documents, whose bodies supply the titles. The binding follows the workflow's
+ * primary association.
+ */
+function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCatalogDelta {
+  if (workflow.kind === "plan") {
+    // The plan entity's identity, title and catalog LOCATION are derived from
+    // the selected document (R1) through the same derivation the snapshot row
+    // uses: the reviewed delta states the catalog spelling (plans-root-relative)
+    // while the registered row keeps the §4 canonical pointer, and the two can
+    // never disagree about which document this registration is.
+    const selected = derivePlanRegistration({ harnessDir: workflow.options.harnessDir, plan: workflow.options.plan });
+    return {
+      entities: [
+        {
+          kind: "plan",
+          id: selected.plan.id,
+          title: selected.plan.title,
+          rootKind: "plans",
+          relativePath: selected.catalogRelativePath,
+        },
+      ],
+      binding: { catalogKind: "plan", catalogId: selected.plan.id },
+    };
+  }
+  if (workflow.kind === "iteration") {
+    return {
+      entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+      binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
+    };
+  }
+  const rows = promotedAuditPlanRows(workflow.outDir, workflow.selected);
+  if (rows.length === 0) {
+    throw new CatalogRegistrationError(
+      "catalog.registration-invalid",
+      "an audit promotion selects no plan rows; there is no catalog delta to register",
+    );
+  }
+  const entities: CatalogExecutionCatalogDelta["entities"] = [];
+  for (const row of rows) {
+    if (typeof row.id !== "string" || typeof row.title !== "string" || typeof row.file !== "string") {
+      throw new CatalogRegistrationError("catalog.registration-invalid", "an audit plan row is missing its catalog identity or path");
+    }
+    entities.push({ kind: "plan", id: row.id, title: row.title, rootKind: "plans", relativePath: row.file });
+  }
+  return {
+    entities,
+    binding: { catalogKind: "plan", catalogId: entities[0]!.id },
+  };
+}
+/**
+ * Register a shipped workflow on the ACTIVE store. Expectations are read from
+ * one transaction so the root token and catalog revision describe one snapshot;
+ * commitExecutionRegistration rechecks both under its own atomic write.
+ *
+ * §4.1 the recorded receipt is resolved BEFORE the optional supplied
+ * expectations are enforced: an identical retry after a lost response
+ * re-presents the tokens its own first attempt already advanced, so it must
+ * replay rather than be judged stale. A supplied expectation is a constraint on
+ * a NEW registration attempt, never a veto over an already-recorded operation.
+ */
+export async function registerShippedCatalogExecution(
+  context: ExecutionContext,
+  input: {
+    actor: string;
+    workflow: CatalogExecutionWorkflow;
+    operationId?: string;
+    expected?: ExecutionToken;
+    expectedCatalogRevision?: number;
+  },
+): Promise<CatalogExecutionReceipt> {
+  const initialDelta = catalogDeltaFor(input.workflow);
+  const canonical = resolveCatalogExecutionPlan(context, {
+    actor: input.actor,
+    operationId: input.operationId ?? "request-derived",
+    expectedCatalogRevision: 0,
+    workflow: input.workflow,
+    delta: initialDelta,
+  });
+  const workflow = canonical.request.workflow;
+  const delta = catalogDeltaFor(workflow);
+  const intent = { actor: input.actor, workflow, delta };
+  const operationId =
+    input.operationId ?? `op-${createHash("sha256").update(stableJson(intent), "utf8").digest("hex").slice(0, 24)}`;
+  const request: CatalogExecutionRequest = {
+    ...intent,
+    operationId,
+    expectedCatalogRevision: 0,
+  };
+  const resolved = await withExecutionTransaction<
+    { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
+  >(context, (tx) => {
+    const expected = executionRootTokenOf(tx);
+    // §4.1 resolve the recorded receipt FIRST: a retry that re-presents the
+    // constraints its own first attempt advanced must replay through
+    // `readOperationReplay` (the one idempotency rule) instead of being judged
+    // stale before the lookup. Only a genuinely new attempt is constrained.
+    const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+      operationId,
+      requestHash: registrationRequestHash(context.caller, canonical),
+      workflowId: canonical.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+    if (replayed !== null) return { replayed: replayed.data };
+    const versions = readCatalogStoreVersionsOn(tx.db);
+    if (input.expected !== undefined) {
+      // The ADDRESS half keeps its own precise refusal; the REVISION half is
+      // compared below so this seam can name the recovery for a stale root
+      // expectation instead of the bare shared message.
+      assertExecutionToken(input.expected, {
+        kind: "root",
+        storeId: tx.storeId,
+        epoch: tx.epoch,
+        key: [],
+      });
+      if (input.expected !== expected) {
+        throw new ExecutionError(
+          "execution.stale-token",
+          "the supplied root expectation is not this store's current execution token. Re-read the current root token " +
+            "with `mstar status validate` (output field data.token) and retry with it; an operation id already committed " +
+            "for this intent replays instead of being refused.",
+        );
+      }
+    }
+    if (input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== versions.catalogRevision) {
+      throw new CatalogError(
+        "catalog.revision-conflict",
+        `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the store is at ` +
+          `${versions.catalogRevision}. Read the current store and catalog revisions (the ACTIVE catalog-revisions read), ` +
+          "or omit the catalog expectation on the shipped registration so it derives the current revision, then retry.",
+      );
+    }
+    return { expected, catalogRevision: versions.catalogRevision };
+  });
+  if ("replayed" in resolved) return resolved.replayed;
+  request.expectedCatalogRevision = resolved.catalogRevision;
+  return commitExecutionRegistration(context, { ...request, expected: resolved.expected });
 }

@@ -30,26 +30,24 @@ Complete synthetic `CaptureInput` example (adapt evidence, timestamp and semanti
 }
 ```
 
-## The coordinated write surfaces
+## The execution authority and its migration staging
 
-ACTIVE root/workflow/plan/lease/session authority is `{HARNESS_DIR}/store.db` (`execution_*`), read through `mstar status validate` / `mstar plan show` and written only through public workflow/plan verbs. The table below is the **pre-activation / engine-absent file mapping** of persist kinds, not an ACTIVE write surface.
+ACTIVE root/workflow/plan/lease/session authority is `{HARNESS_DIR}/store.db` (`execution_*`), read through `mstar status validate` / `mstar plan show` and written only through public workflow/plan verbs. The files below are **migration staging**: the v1/v2 file forms the retired file route used, still read and written engine-internally by the kept migration tooling (`mstar migrate`, `mstar store upgrade`) and never reachable through the persist family, whose surface is `review` and `json`.
 
-| Surface | Path shape | Holds | Store kind |
-|---|---|---|---|
-| root register | `{HARNESS_DIR}/status.json` | schema version, update timestamp, and the registry of active workflows (id, type, start, directory) | `status`, key `root` |
-| workflow snapshot | `{WORKFLOW_DIR}/<workflow-id>/snapshot.json` | one lifecycle: plan rows, coordination blocks, leases, branch anchors, delivery block | `snapshot`, key = workflow id |
+| Migration staging file | Path shape | Holds |
+|---|---|---|
+| root register | `{HARNESS_DIR}/status.json` | schema version, update timestamp, and the registry of active workflows (id, type, start, directory) |
+| workflow snapshot | `{WORKFLOW_DIR}/<workflow-id>/snapshot.json` | one lifecycle: plan rows, coordination blocks, leases, branch anchors, delivery block |
 
-The root register is a registry, not a plan store: ACTIVE plan rows live in `execution_plans` (pre-activation: snapshot); open findings live in store issues. Persist mappings do not authorize coordinated writes.
+The root register is a registry, not a plan store: plan rows live in `execution_plans`; open findings live in store issues.
 
 A third legacy document still exists — the project register `{PROJECT_DIR}/<project-id>/residuals.json`. It is **migration history only**: it stays readable for the migration mapping, but it is no longer a write surface, and no command maintains it (see § Open items and § Store lifecycle).
 
 ## Protection levels
 
-**ACTIVE file-route guard first** — raw root/snapshot/session-file writes and deletes refuse `execution.direct-write-refused`; reads refuse `execution.consumer-not-ready`, including canonical generic-file aliases. Do not retry via `persist json`; use the public verb.
+**Active file-route guard first** — raw root/snapshot/session-file writes and deletes refuse `execution.direct-write-refused`; reads refuse `execution.consumer-not-ready`, including canonical generic-file aliases. Do not retry via `persist json`; use the public verb.
 
-**Pre-activation protected kinds** — `status`, `snapshot` bare put/delete refuse `coordination.direct-write-refused`; aliases do not bypass protection.
-
-**Unconditionally retired** — `residuals` kind refuses `persist.kind-retired`; project residual registers are migration history, not a live persist read/write surface. Register replacement/JSON aliases refuse `coordination.store`. Open findings use issue verbs.
+**Unconditionally retired** — `residuals` kind refuses `persist.kind-retired`; project residual registers are migration history, not a live persist read/write surface. The root/snapshot file kinds are outside the persist surface entirely — it accepts `review` and `json` only. Open findings use issue verbs.
 
 **Unprotected** — the review envelope kind and unrelated generic files. They keep the ordinary put / get / list / delete contract, delete is an idempotent no-op when absent, and there is no confirmation prompt. A review envelope is not a coordination document: its schema and validation belong to the review workflow's owning skill; the store face only persists and reads it.
 
@@ -57,46 +55,45 @@ Enumeration reflects what exists: listing a kind prints its stored keys, one per
 
 ## Protected document writes
 
-Use the supported coordination/lifecycle action for the current authority, not a raw protected-document replacement recipe. Protected snapshot/status targets and retired residual registers keep their writer/actor boundary. A versioned read may expose a digest or `absent` as historical information; neither is a mandatory mutation flag or a consumed byte-CAS token. Current semantic validation, lock/transaction behavior, numeric revisions and active execution tokens remain separate requirements.
+Use the supported lifecycle action for the current authority, not a raw protected-document replacement recipe. Protected status/snapshot targets and retired residual registers keep their writer/actor boundary: the migration tooling is their only writer. A versioned read may expose a digest or `absent` as historical information; neither is a mandatory mutation flag or a consumed byte-CAS token. Current semantic validation, lock/transaction behavior, numeric revisions and active execution tokens remain separate requirements.
 
 ## Lifecycle close
 
 Closing one finished lifecycle is a single verb whose work has a fixed order:
 
 1. consult the registered delivery kind and its recorded evidence;
-2. write terminal workflow state in the ACTIVE execution store (pre-activation: snapshot lock);
+2. write terminal workflow state in the ACTIVE execution store;
 3. unregister the root entry, idempotently.
 
 ```sh
-# active: the coordinator's own reference plus the workflow's full execution token
+# the coordinator's own reference plus the workflow's full execution token
 mstar status workflow-close --workflow <id> --session-ref <wire> \
   --expect <full-execution-token> --operation <id> --reason <text> [--harness <absolute-path>] [--json]
-
-# pre-activation only (refused on an ACTIVE authority)
-mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]
 ```
 
-Read the action-local receipt: ACTIVE close acts on store rows, not file bytes; pre-activation file-route refusal leaves the protected documents unchanged.
+Read the action-local receipt: the close acts on store rows, not file bytes, and a refusal leaves the protected documents unchanged.
 
 - dangling leases or unfinished plan rows refuse;
-- incomplete or absent delivery evidence for the registered kind refuses, and the snapshot stays running with its root entry still registered;
-- a **coordinated** workflow refuses a session-less close — it reports that the snapshot is coordinated and that the close needs the authority that owns it. Only that workflow's own coordinator can close it; a plan session's reference is not sufficient. On the active route the close carries its own reason and takes no `--ended-at` (the pre-activation form's `--ended-at` belongs to the file write, and an active call that states it is a usage refusal).
+- incomplete or absent delivery evidence for the registered kind refuses, and the workflow row stays running with its root entry still registered;
+- a **coordinated** workflow refuses a session-less close — it reports that the workflow is coordinated and that the close needs the authority that owns it. Only that workflow's own coordinator can close it; a plan session's reference is not sufficient. The close carries its own reason; the retired file-route `--ended-at` input is a usage refusal.
 - An uncoordinated workflow closes with or without the coordinator's authority.
 
-Failure between steps 2 and 3 is reported as a partial close. A re-run finishes it, and a fully closed retry rewrites nothing. The close verb is the lifecycle route for a finished workflow: the protected snapshot refuses the generic delete face, and the removed residual-archival command fails and names the issue disposition that replaced it.
+Failure between steps 2 and 3 is reported as a partial close. A re-run finishes it, and a fully closed retry rewrites nothing. The close verb is the lifecycle route for a finished workflow: the protected staging files refuse the generic delete face, and the removed residual-archival command fails and names the issue disposition that replaced it.
 
 ## Open items: the issue store
 
 Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above is migration history and no command maintains it. The capture contract, its authorization and the migration mapping live in **`mstar-project-governance`「Issue capture」** — this file only names the transport.
 
-- **Capture** is plan-scoped (`mstar plan issue-add`; active: `--session-ref`/`--operation` under the caller's independently acquired `--session-id`/`sessionId`, the execution token supplied only as an explicit constraint — on plan operations an omitted one is derived by the engine from the plan's own read; pre-activation: the row revision as `--expect`; the report names the DB-assigned issue ids and revisions) or unscoped (`mstar issue add`). A recurrence appends an occurrence to the existing issue instead of opening a second one.
-- **Close** is a separate authorized act with a terminal disposition: `mstar plan issue-close` on the plan's own linked issue (`--issue`, `--disposition`, `--expect-issue`), or `mstar issue close|waive|duplicate|supersede` unscoped. Each mutation is CAS-guarded by the issue revision, which stays an integer on every transport.
+- **Capture** is plan-scoped (`mstar plan issue-add`; `--session-ref`/`--operation` under the caller's independently acquired `--session-id`/`sessionId`, the execution token supplied only as an explicit constraint — on plan operations an omitted one is derived by the engine from the plan's own read; the report names the DB-assigned issue ids and revisions) or unscoped (`mstar issue add`). A recurrence appends an occurrence to the existing issue instead of opening a second one.
+- **Close** is a separate authorized act with a terminal disposition: `mstar plan issue-close` on the plan's own linked issue (`--issue`, `--disposition`, `--expect-issue`), or `mstar issue close|waive|duplicate|supersede` unscoped. Each mutation is CAS-guarded by the issue revision.
 - **Removed plan aliases:** residual-add/residual-close are absent, not a compatibility/refusal path. Use issue-add/issue-close under the coordinator; no second findings store. Status backlog-register/backlog-close retain their independently documented refusal surface.
 - **Reading is not a rollup of the registers.** `mstar status tech-debt` prints the store's open-issue rollup and `mstar status findings-cleanup <plan-id>` enforces the plan's mode over its **linked open issues**; a missing, corrupt or staged store refuses (exit 1) instead of reporting an empty rollup.
 
 ## Store lifecycle: migration, activation, retirement
 
 `store init` creates a fresh active issue/catalog store; `store upgrade` opens/creates the store, imports recognizable execution state, activates authority and reports skipped inputs. Neither requires routine `activate` afterwards. The sequence below is the **staged migration** route; `activate` consumes its reviewed apply and attestation, not an init receipt. Initialization semantics → `mstar-conventions`.
+
+**When no store exists**, a consumer command refuses `store.not-initialized` (exit 1) instead of falling back to file state. Recovery names the two bootstrap paths and the third disposition: a genuinely empty workspace runs `mstar harness scaffold` then `mstar store init`; a workspace holding historical file state runs `mstar store upgrade --harness <absolute-path> --operator <name>` to import it and activate the store; and a workspace that needs no execution authority uses **conversation tracking (no-plan mode)** — plans stay unregistered and the gates still apply.
 
 ```sh
 mstar store migrate --out <path>              # default: read-only preview manifest (writes no DB)
@@ -113,13 +110,13 @@ mstar store retire --manifest <path>          # moves the reviewed legacy source
 
 Execution migration apply/activate/retire requests no longer take `manifestHash`, activation no longer takes `coverageDigest`, and restore no longer takes `acceptLossDigest`. Generated manifest/coverage/loss digests remain historical diagnostics only. Use current verb help for the remaining actor, authorization, identity, path, state and numeric revision inputs; no digest-confirmation flag or replacement seal is required.
 
-**Readiness guidance (not an action).** These are the readiness checks an operator performs *before* a live activation; running a documentation or source task performs none of them, and no stored flag stands in for them. Activation is an authorized ops act under a recorded, bounded authorization covering the affected installed CLI/plugin upgrades or reloads; credentials and unrelated global configuration stay out of scope. Ready means every compatible consumer is quiesced and then reloaded, upgraded or explicitly excluded, and old software is kept out by that operational barrier — a marker, a chmod or a missing register cannot stop an old binary. If a host cannot reload safely, **stop at that host's exact manual-restart step**, have the user restart, then re-check entrypoint, runtime, version and session identity read-only before activating; until activation succeeds the legacy authority remains in force, and a below-floor runtime or missing capability refuses actionably rather than falling back to JSON.
+**Readiness guidance (not an action).** These are the readiness checks an operator performs *before* a live activation; running a documentation or source task performs none of them, and no stored flag stands in for them. Activation is an authorized ops act under a recorded, bounded authorization covering the affected installed CLI/plugin upgrades or reloads; credentials and unrelated global configuration stay out of scope. Ready means every compatible consumer is quiesced and then reloaded, upgraded or explicitly excluded, and old software is kept out by that operational barrier — a marker, a chmod or a missing register cannot stop an old binary. If a host cannot reload safely, **stop at that host's exact manual-restart step**, have the user restart, then re-check entrypoint, runtime, version and session identity read-only before activating. Execution stays **unavailable** until an ACTIVE authority exists: a staged store serves no ordinary mutation, a workspace without a store bootstraps (`mstar harness scaffold` + `mstar store init`, or `mstar store upgrade`) or uses conversation tracking (no-plan mode), and the historical input files are migration sources, never live execution authority. A below-floor runtime or missing capability refuses actionably rather than falling back to JSON.
 
 ## Authorization
 
 The protected writes are authorized, not merely gated:
 
-- every coordinated document is written only through the transport that owns it — the scope's execution token plus an independently acquired caller identity on the active route, or the engine-generated session envelope for its own role and scope on the pre-activation route — re-checked inside the lock either way;
+- every coordinated document is written only through the transport that owns it — the scope's execution token plus an independently acquired caller identity — re-checked inside the lock;
 - **a reference and a token are not credentials a caller declares or forwards.** The active reference is a lookup into stored session rows; it grants nothing without the independently acquired caller the engine compares in its own transaction. Both the reference and every token stay with the coordinator or PM session: handing one to a leaf executor, or restating a token in a leaf's assignment, is a scope violation regardless of intent;
 - **no resume stands in for recovery**, and no recovery stands in for a fresh bind: a stopped owner is replaced by the recovery verb that owns its authority, never by a copied id, a restarted launcher or a hand-edited record;
 - the store face's own escape hatches are narrowed: an injected store cannot serve the coordinated surface, and the protected kinds refuse the direct faces entirely.

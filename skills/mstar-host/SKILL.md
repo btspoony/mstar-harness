@@ -57,13 +57,13 @@ On **dsh** only, read-only fan-out of **N ≥ 3** seats runs through the native 
 - **Advancing an iteration**: set the goal to **complete the entire iteration flow** (`iteration-start → per-plan cycles → iteration-close → PR delivery → PR merge-ready loop`). Do not set a sub-stage goal (e.g. "finish Phase 1 only").
 - **Advancing non-iteration work** (single plan / hotfix / one-off task): set the goal to **complete the entire per-plan flow** (`specify → clarify → plan → tasks → implement → plan QC tri + QA gate → Done`; standalone development plans continue through the delivery tail to verified merge + terminal close — `mstar-harness-core`「最小交付循环」/ `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`). Do not set a sub-stage goal (e.g. "write the plan" or "implement one task").
 
-Goal text is a session-level objective only: store.db execution authority under `{HARNESS_DIR}` and authored `{PLAN_DIR}` plans remain authoritative (status files only pre-activation), and goal completion is **not** harness Done. Mirror goal success criteria into the SSOT plan; when the goal changes, update goal text and the SSOT in the same round.
+Goal text is a session-level objective only: store.db execution authority under `{HARNESS_DIR}` and authored `{PLAN_DIR}` plans remain authoritative, and goal completion is **not** harness Done. Mirror goal success criteria into the SSOT plan; when the goal changes, update goal text and the SSOT in the same round.
 
 ## Phase-transition todo refresh (host-agnostic)
 
 At each phase transition the primary PM refreshes session todos before the next action/dispatch: close completed entries only, retain pending gates and append next-phase obligations. Project the selected workflow's complete lifecycle, not another per-row primary scope. Todos remain a projection, not state authority.
 
-`todo` entries are a projection, not SSOT: they reflect existing snapshot phase / plan states and named plan/gate evidence, and cannot authorize or invent a state transition. Store.db workflow/plan rows remain the execution authority, with authored plan artifacts kept aligned (snapshot files only pre-activation); this is freshness discipline, not a new host hook anchor, tool, or deterministic enforcement mechanism.
+`todo` entries are a projection, not SSOT: they reflect the ACTIVE workflow phase / plan states and named plan/gate evidence, and cannot authorize or invent a state transition. Store.db workflow/plan rows remain the execution authority, with authored plan artifacts kept aligned; this is freshness discipline, not a new host hook anchor, tool, or deterministic enforcement mechanism.
 
 ## Host hooks (anchor contract)
 
@@ -71,7 +71,7 @@ Shared lifecycle skills name **host-agnostic anchors** — named moments at whic
 
 | Anchor | Moment |
 |--------|--------|
-| `direction-lock` | direction lock completed and the iteration identified — before the compass/plans draft is written; the workflow is not registered yet |
+| `direction-lock` | direction locked, formal compass/plans ready, and workflow registered with coordinator seat acquired — before the Review & Edit chain |
 | `phase-1-lock` | Phase 1 completion — once the integration worktree exists and the newly created integration branch is pushed; Phase 1 commits nothing (the PM lock alone is not the moment) |
 | `phase-2-entry` | the Phase 2 execute/resume entry — after the §2.0 gates, before the per-plan loop; **not** the Phase-1-reused integration-worktree step |
 | `rescheduling-checkpoint` | each `Rescheduling checkpoint` re-evaluation |
@@ -89,7 +89,7 @@ Carrier locations — the four markers in the shared corpus (all four live under
 
 | File | Location | Anchor |
 |------|----------|--------|
-| `mstar-iteration/references/phase-1-prepare.md` | §1.2 tail, after direction lock, before §1.2.5 prototype preparation and §1.3 formal compass/plans drafts | `direction-lock` |
+| `mstar-iteration/references/phase-1-prepare.md` | §1.5, after formal compass/plans are ready, workflow registration creates its running ACTIVE lifecycle, and this session acquires the coordinator seat; before Review & Edit | `direction-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 「Integration worktree (Phase 2 entry) + control root」 checklist tail, after step 7 (integration-branch push — Phase 1 commits nothing) — the Phase 1 route reaches it through `iteration-start` §6, which carries a pointer only | `phase-1-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | immediately before the `## 2.4 Per-plan loop` heading (the Phase 2 execute/resume entry; §2.3 is the Phase-1-reused step and triggers nothing) | `phase-2-entry` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | `### Rescheduling checkpoint` | `rescheduling-checkpoint` (the five frozen reason names are handed off verbatim) |

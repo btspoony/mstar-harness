@@ -7,7 +7,7 @@
 **Precondition**: Phase 3 §3.5 exit 全 `[x]`；close commit 已 push 到 `spec_integration_branch`。
 
 1. 打印 **`## Phase 4: PR delivery`**
-2. Resolve target：ACTIVE workflow 执行行 `branch.target`（pre-activation：snapshot 字段；compass frontmatter 镜像）；缺失 → **STOP**，问用户
+2. Resolve target：ACTIVE workflow 执行行 `branch.target`（compass frontmatter 镜像）；缺失 → **STOP**，问用户
 3. 创建 PR：`spec_integration_branch` → `target_branch`
 4. PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
 5. 记录 PR URL / number（Phase 5 会话 SSOT）
@@ -24,7 +24,7 @@
 ### 5.0 Phase boundary
 
 - Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
-- **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop。产品修复在从 `spec_integration_branch` 出的独立 **fix feature worktree** 上编辑、commit；review 后在 **integration worktree**（路径取 ACTIVE workflow 执行行 `integration_worktree_path`；pre-activation：snapshot 字段）串行 merge 回 integration，再按 §5.1a push。禁止在 integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
+- **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop。产品修复在从 `spec_integration_branch` 出的独立 **fix feature worktree** 上编辑、commit；review 后在 **integration worktree**（路径取 ACTIVE workflow 执行行 `integration_worktree_path`）串行 merge 回 integration，再按 §5.1a push。禁止在 integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
 - 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = 绝对 fix feature worktree 路径；merge 回 integration 由 PM 在 **integration worktree** 执行；PM 线程不代写实现
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → **§5.1a**（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）

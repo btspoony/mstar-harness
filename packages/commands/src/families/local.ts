@@ -234,7 +234,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["harness", "scaffold"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
       input: z.object({ path: z.string().min(1).optional() }),
       effects: ["write"],
-      description: "Create the harness directory, v2 status, default project, and the canonical ignore/AGENTS files when absent.",
+      description: "Create the harness directories and default project; then run mstar store init to activate execution authority.",
       async execute(input) {
         const root = input.path === undefined ? process.cwd() : path.resolve(input.path);
         setArtifactStore(createFsStore(resolveScaffoldDirs(root).harnessDir));

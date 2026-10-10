@@ -10,24 +10,19 @@ ACTIVE writes derive the caller's current own coordinator reference, scope token
 
 ## Transports
 
-`mstar status validate` reports execution authority. ACTIVE operations use DB transactions, independent caller identity, CAS and receipts. File operations are available only before activation under the workflow coordinator envelope and row revision, using the domain writer's same-host lock/atomic replacement. File forms on an ACTIVE root refuse instead of falling back. Store upgrade remains the supported operator transition from legacy authority; never edit live store/config/credentials to change routes.
-
-| Transport | Address and concurrency context |
-|---|---|
-| ACTIVE | Own coordinator reference and acquired identity; token/operation defaults may be derived. Explicit `--session-ref`, `--expect`, `--operation`, `--harness`, `--session-id` constrain that context. |
-| File | `--session <absolute-json>` plus applicable row `--expect <revision>`; no per-row envelope. Coordinator bootstrap uses an explicitly acquired `--session-id`, never a generated identity. |
+`mstar status validate` reports execution authority; operations run on the ACTIVE store under an independently acquired caller identity, with DB transactions, CAS and receipts, and token/operation defaults derived where unambiguous. Explicit `--session-ref`, `--expect`, `--operation`, `--harness` and `--session-id` constrain that context instead. Store upgrade remains the supported operator transition from legacy file state; never edit live store/config/credentials to change authority.
 
 A reference is a lookup, not bearer authorization. Copying another reference never acquires its identity. Row scope comes from explicit `--plan` and the coordinator's selected workflow, not prepared Assignment bytes.
 
-For file `plan show`, `--harness` supplies the explicit control root and must agree with the coordinator envelope. Carry it when workspace discovery conflicts with a nonstandard harness; omission retains normal discovery and conflict refusals. It never changes the bound workflow or opens a different store. The public reader's optional fourth argument, `readPlanCoordination(sessionPath, planId, cwd, controlRoot?)`, has the same constraint.
+`--harness` supplies the explicit control root when workspace discovery conflicts with a nonstandard harness; it never changes the bound workflow or opens a different store.
 
 ## Public parameter shapes
 
 The same coordinator owns all retained plan verbs:
 
 ```text
-mstar plan bind [--execution] --workflow <id> (--coordinator | --resume <path> | --resume-ref <ref>) [--expect <token>] [--operation <id>] [--harness <path>] [--session-id <id>]
-mstar plan show --plan <id> [--session <path> | --session-ref <ref>] [--workflow <id>] [--harness <path>] [--session-id <id>]
+mstar plan bind [--execution] --workflow <id> (--coordinator | --resume-ref <ref>) [--expect <token>] [--operation <id>] [--harness <path>] [--session-id <id>]
+mstar plan show --plan <id> [--session-ref <ref>] [--workflow <id>] [--harness <path>] [--session-id <id>]
 mstar plan prepare --plan <id> [--worktree-path <absolute-path>] [--working-branch <branch>] [--qa-gate mandatory|pm-acceptance] [--findings-cleanup zero-residual|allow-residual]
 mstar plan progress --plan <id> (--progress <json> | --file <json>)
 mstar plan issue-add --plan <id> (--entries <json-array> | --file <json>)
@@ -76,8 +71,7 @@ The launcher mints one child-local coordinator identity, overwrites the identity
 
 Public recovery output exposes workflow/public session ids and receipt/replay/token/version facts, never envelope paths/body. Independent caller identity is revalidated within the transaction. A copied session id/reference or repeated launcher is not acquisition of the old identity.
 
-For an interrupted FILE integration, use `mstar workflow recover-coordinator --session <prior-envelope> --session-id <replacement-id> --operation-id <id> --reason <text> --authorization-ref <operator-authorization> --stopped <prior-id> --attestation <absolute-json>`. The attestation uses the existing `ActivationAttestation` document contract: operator authorization, installed current coordinator and an explicitly stopped/reloaded prior holder. Its stop time must be at or after the recorded claim and not in the future. Recovery atomically replaces the authenticated coordinator and removes only that predecessor's interrupted claim; rows and delivery evidence are unchanged. A bare stopped-ID list, elapsed time or unrelated historical stop never authorizes release. The engine validates the operator attestation and current binding; it does not independently observe host-process liveness.
-
+Recovery replaces the authenticated coordinator and removes only that predecessor's interrupted claim; rows and delivery evidence are unchanged. Its attestation is the operator stop proof validated against the recorded holder and claim: a bare stopped-ID list, elapsed time or unrelated historical stop never authorizes release, and the engine does not independently observe host-process liveness.
 
 ## Issue writes
 

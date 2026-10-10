@@ -23,9 +23,9 @@ Document trade-offs for **each** shortlisted candidate (2–4), then lock **one*
 
 Persistence has three ordered steps; none invents human approval:
 
-1. **Lock time — before the hook/drafts**: create the iteration package and retain the five fields below in its root **`direction-lock.md`**. This lock-time record, not the still-absent compass, satisfies the `direction-lock` hook's on-disk rationale precondition. Keep it after incorporation into formal documents.
-2. **Prototype — after the hook, before §1.3**: follow `phase-1-prepare.md` §1.2.5. Retain an appropriate **HTML, Markdown or JSON** design prototype under `prototypes/`, with format rationale, choices, assumptions and a truthful autonomous disposition. Do not require HTML or routine human confirmation. Revise this disposition when the design materially changes; if the direction changes, reopen ranking/decisions and semantically re-lock before drafts resume. Reuse the same iteration's already-executed hook/current binding; §1.2.5 distinguishes this from a new host start and owns the supported lifecycle/recovery boundary.
-3. **Compass/plans draft — §1.3**: incorporate the direction-lock record's five fields into their existing sections (`## Scope`, `## Decisions`, `## Acceptance Criteria`, `## Non-Goals`, scale cap) without re-deriving the lock. Link the retained prototype path/revision and autonomous rationale as the design baseline. Translate it into formal criteria/constraints/interfaces; it is not a spec or runnable acceptance evidence. Role selection and mandatory writer closure still apply (§1.6).
+1. **Lock rationale**: create the iteration package and retain the five fields below in its root **`direction-lock.md`**. This is the on-disk direction record; the host action itself cannot run yet because it requires a registered running workflow and this session's coordinator seat.
+2. **Prototype**: follow `phase-1-prepare.md` §1.2.5. Retain an appropriate **HTML, Markdown or JSON** design prototype under `prototypes/`, with format rationale, choices, assumptions and a truthful autonomous disposition. Do not require HTML or routine human confirmation. Revise this disposition when the design materially changes; if the direction changes, reopen ranking/decisions and semantically re-lock. Reuse the same iteration's eventual hook/current binding; §1.2.5 distinguishes this from a new host start and owns the supported lifecycle/recovery boundary.
+3. **Compass/plans and registration**: incorporate the direction-lock record's five fields into their existing sections (`## Scope`, `## Decisions`, `## Acceptance Criteria`, `## Non-Goals`, scale cap) without re-deriving the lock. Link the retained prototype path/revision and autonomous rationale as the design baseline. Translate it into formal criteria/constraints/interfaces; then register the ready iteration and acquire this session's coordinator seat. Execute `direction-lock` after those prerequisites and before Review & Edit. Role selection and mandatory writer closure still apply (§1.6).
 
 | Field | Content |
 |-------|---------|
@@ -46,7 +46,7 @@ Persistence has three ordered steps; none invents human approval:
 
 ### What counts toward the budget（HARD）
 
-Count only **business delivery plans** registered in compass / the workflow registration (ACTIVE: store execution authority; pre-activation: snapshot) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
+Count only **business delivery plans** registered in compass / the workflow registration (ACTIVE: store execution authority) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
 
 **Do not count** harness / process work as plans (and do not invent plans whose sole job is process):
 
@@ -75,7 +75,7 @@ When a free-text direction / feedback constraint is supplied by the caller:
 
 Resolve `iteration_base_branch` and `target_branch` in order（first hit wins per field）:
 
-1. Workflow `branch.base` / `branch.target` from ACTIVE execution authority (`mstar status validate`; pre-activation: snapshot fields); absent registration goes through `mstar iteration register` against current authority, never handwritten root / snapshot writes
+1. Workflow `branch.base` / `branch.target` from the ACTIVE execution authority (`mstar status validate`); absent registration goes through `mstar iteration register` against that authority, never handwritten root / snapshot writes
 2. Existing / prior iteration compass frontmatter
 3. Current git branch **only if** it is already a documented delivery, integration, or project-policy branch（not merely “whatever HEAD is”）
 4. Still missing → **STOP** — escalate; **never** substitute `main` / `master` because those names exist

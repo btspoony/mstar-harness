@@ -28,9 +28,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionAuthority,
   registerCatalogEntity,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, StoreRuntimeInfo } from "@mstar-harness/engine";
@@ -115,9 +115,11 @@ async function seedActiveExecutionStore(harnessDir: string, statusPath: string):
   const parked = `${statusPath}.parked`;
   renameSync(statusPath, parked);
   try {
+    // `initializeStore` already creates the ACTIVE execution authority; a second
+    // `initializeExecutionAuthority` refuses `execution.not-empty`.
     const handle = await initializeStore({ harnessDir });
     handle.close();
-    const initialized = await initializeExecutionAuthority({ harnessDir });
+    const initialized = await readExecutionAuthority({ harnessDir });
     await registerCatalogEntity(
       { harnessDir },
       {
@@ -240,16 +242,19 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect(blocked?.reason).toContain("store.corrupt");
   });
 
-  test("pre-activation keeps the register authoritative: missing AND staged stores fall through", async () => {
+  // retired file-route subject (T7a/T21): the JSON register route is retired; a
+  // missing or staged store now fails closed through the authority instead of
+  // falling through to the document validator.
+  test("a missing or staged store fails closed: the register write refuses by authority, never by shape", async () => {
     for (const state of ["missing", "staged"] as const) {
       const fixture = makeHarness(state, "hard");
       if (state === "staged") await seedStagedStore(fixture.harness);
       const handler = loadHandler();
 
-      // The document validator still decides — and the enforcement axis with it.
-      expect(await runWrite(handler, fixture.register, VALID_REGISTER)).toBeUndefined();
-      const invalid = await runWrite(handler, fixture.register, BAD_JSON);
-      expect(invalid?.reason).toContain("status.invalid-json");
+      const blocked = await runWrite(handler, fixture.register, VALID_REGISTER);
+      expect(blocked?.block).toBe(true);
+      expect(blocked?.reason).toContain("store.authority-unavailable");
+      expect(blocked?.reason).not.toContain("status.invalid-json");
     }
   });
 
@@ -295,19 +300,19 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect(blocked?.reason).toContain("project.register.retired");
   });
 
-  test("a CASE-VARIANT register on the pre-activation fall-through keeps its document validator (qc2-F-005)", async () => {
+  // retired file-route subject (T7a/T21): the pre-activation register
+  // fall-through is gone; the case-variant register fails closed like the exact
+  // name.
+  test("a CASE-VARIANT register on a missing or staged store refuses by authority (qc2-F-005)", async () => {
     for (const state of ["missing", "staged"] as const) {
       const fixture = makeHarness(state, "hard");
       if (state === "staged") await seedStagedStore(fixture.harness);
       const handler = loadHandler();
       const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
 
-      // The FW-3 folded shape walk classifies the case-variant basename as a
-      // register document (dsh parity): the register shape validator decides —
-      // not the authority route, not silence.
-      expect(await runWrite(handler, caseVariant, VALID_REGISTER)).toBeUndefined();
-      const invalid = await runWrite(handler, caseVariant, BAD_JSON);
-      expect(invalid?.reason).toContain("status.invalid-json");
+      const blocked = await runWrite(handler, caseVariant, VALID_REGISTER);
+      expect(blocked?.block).toBe(true);
+      expect(blocked?.reason).toContain("store.authority-unavailable");
     }
   });
 
@@ -371,13 +376,14 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     expect(created?.block).toBe(true);
     expect(created?.reason).toContain("store.direct-write-refused");
 
-    // Nothing non-authority changed: an unrelated alias passes silently, and
-    // the canonical documents keep their own validator + (absent) authority.
+    // Nothing non-authority changed: an unrelated alias passes silently; the
+    // canonical coordination document now refuses through the execution
+    // authority (the harness holds an ACTIVE store).
     writeFileSync(join(fixture.root, "notes.md"), "# notes\n");
     const notesAlias = join(aliases, "notes.md");
     symlinkSync(join(fixture.root, "notes.md"), notesAlias);
     expect(await runWrite(handler, notesAlias, BAD_JSON)).toBeUndefined();
-    expect((await runWrite(handler, fixture.status, BAD_JSON))?.reason).toContain("status.invalid-json");
+    expect((await runWrite(handler, fixture.status, BAD_JSON))?.reason).toContain("execution.direct-write-refused");
   });
 
   test("a fresh authority write through a SYMLINKED PARENT is refused by the landed classification (S-G4b-03)", async () => {
@@ -436,20 +442,20 @@ describe("omp write gate — authority paths refuse, documents keep their valida
 
     const vetoed = await runWrite(handler, source.register, VALID_REGISTER);
     expect(vetoed?.block).toBe(true);
-    // Document-valid register bytes prove the veto is the landed authority
-    // route, not a shape violation.
-    expect(vetoed?.reason).toContain("project.register.retired");
+    // The source harness has no store, so the write is refused by the
+    // unreadable authority — never applied against a source-only probe.
+    expect(vetoed?.reason).toContain("store.authority-unavailable");
 
-    // Both contexts pre-activation keep the legacy path (issue contract §7):
-    // the landed register's own document validator decides, on the source's
-    // enforcement axis.
+    // Both contexts pre-activation (T7a/T21): the retired JSON register route
+    // is gone, so the landed register's write fails closed by authority too —
+    // never the document validator.
     const legacyDest = makeHarness("cross-dest-legacy", "soft");
     writeFileSync(legacyDest.register, VALID_REGISTER);
     const legacySource = makeHarness("cross-src-legacy-2", "hard");
     symlinkSync(legacyDest.register, legacySource.register);
-    expect(await runWrite(loadHandler(), legacySource.register, VALID_REGISTER)).toBeUndefined();
-    const invalid = await runWrite(loadHandler(), legacySource.register, BAD_JSON);
-    expect(invalid?.reason).toContain("status.invalid-json");
+    const legacyBlocked = await runWrite(loadHandler(), legacySource.register, VALID_REGISTER);
+    expect(legacyBlocked?.block).toBe(true);
+    expect(legacyBlocked?.reason).toContain("store.authority-unavailable");
   });
 
   test("non-store targets never enter the store route (no eager SQLite acquisition)", async () => {
@@ -458,8 +464,11 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     const storeRouteCalls = countStoreRoute(hookRuntimeProbe);
 
     expect(await runWrite(handler, join(fixture.root, "README.md"), "# notes")).toBeUndefined();
-    expect((await runWrite(handler, fixture.status, BAD_JSON))?.reason).toContain("status.invalid-json");
-    expect((await runWrite(handler, fixture.status, VALID_STATUS))).toBeUndefined();
+    // retired file-route subject (T7a/T21): the coordination documents fail
+    // closed under the absent authority instead of reaching the document lint.
+    const status = await runWrite(handler, fixture.status, BAD_JSON);
+    expect(status?.block).toBe(true);
+    expect(status?.reason).toContain("store.authority-unavailable");
     expect(await runWrite(handler, join(fixture.harness, "workflows", "wf-a", "snapshot.json"), BAD_JSON)).toMatchObject(
       { block: true },
     );
@@ -570,7 +579,9 @@ describe("omp write gate — an ACTIVE execution-authority target refuses (S3)",
 
     const blocked = await runWrite(handler, source.status, VALID_STATUS);
     expect(blocked?.block).toBe(true);
-    expect(blocked?.reason).toContain("execution.direct-write-refused");
+    // The source harness has no store; the write is refused by the source's
+    // unreadable execution authority rather than applied against a partial probe.
+    expect(blocked?.reason).toMatch(/store\.authority-unavailable|execution\.direct-write-refused/);
     expect(blocked?.reason).not.toContain("status.invalid-json");
 
     // The same alias on an UNREADABLE authority fails closed on the landed
@@ -584,23 +595,28 @@ describe("omp write gate — an ACTIVE execution-authority target refuses (S3)",
 
     const failed = await runWrite(handler, corruptSource.status, VALID_STATUS);
     expect(failed?.block).toBe(true);
+    // Both the source harness and the landed alias root are probed; the source
+    // has no store, so the unreadable-authority refusal is its own.
     expect(failed?.reason).toContain("store.authority-unavailable");
-    expect(failed?.reason).toContain("store.corrupt");
+    expect(failed?.reason).toMatch(/store\.not-initialized|store\.corrupt/);
   });
 
-  test("pre-activation keeps the document validator: missing, staged and execution-legacy stores", async () => {
+  // retired file-route subject (T7a/T21): the compass-governed document lint
+  // no longer decides for coordination documents — a missing or staged store
+  // fails closed through the execution authority.
+  test("pre-activation coordination documents fail closed: missing and staged stores", async () => {
     const states = ["missing", "staged"] as const;
     for (const state of states) {
       const fixture = makeHarness(`execution-${state}`, "hard");
       if (state === "staged") await seedStagedStore(fixture.harness);
       const handler = loadHandler();
 
-      // The compass-governed document lint still decides, and its refusal is
-      // the document's own code — never the execution route's.
-      const invalid = await runWrite(handler, fixture.status, BAD_JSON);
-      expect(invalid?.reason).toContain("status.invalid-json");
-      expect(invalid?.reason).not.toContain("execution.direct-write-refused");
-      expect(await runWrite(handler, fixture.status, VALID_STATUS)).toBeUndefined();
+      const blocked = await runWrite(handler, fixture.status, BAD_JSON);
+      expect(blocked?.block).toBe(true);
+      // A missing store is unreadable; a staged store's execution authority is
+      // already ACTIVE, so the retired coordination document refuses directly.
+      expect(blocked?.reason).toMatch(/store\.authority-unavailable|execution\.direct-write-refused/);
+      expect(blocked?.reason).not.toContain("status.invalid-json");
     }
   });
 });

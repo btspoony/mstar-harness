@@ -118,7 +118,9 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       for (const dir of ["plans", "iterations", "knowledge", "specs", "sdd", "projects"]) {
         expect(existsSync(join(harnessDir, dir))).toBe(true);
       }
-      expect(existsSync(join(harnessDir, "status.json"))).toBe(true);
+      // ACTIVE disposition: scaffold provisions the layout only — the register
+      // lives in store.db once `mstar store init` activates it; no status.json.
+      expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
       expect(existsSync(join(harnessDir, "projects", "_default"))).toBe(true);
       expect(existsSync(join(harnessDir, "projects", "_default", "roadmap.md"))).toBe(false);
       // The issue store is the findings authority (G2a/G2b): scaffold creates no
@@ -244,7 +246,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(resultData.harnessDir).toBe(join(root, ".custom"));
       expect(resultData.skipped).toContain(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
       // Files land under the declared dir, not .mstar/.
-      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(false);
       expect(existsSync(join(root, ".custom", "projects", "_default"))).toBe(true);
       expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(false);
       expect(existsSync(join(root, ".custom", "AGENTS.md"))).toBe(true);
@@ -264,7 +266,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(resultData.harnessDir).toBe(join(root, ".mstar"));
       expect(resultData.projectDir).toBe(join(root, "process", "projects"));
       expect(resultData.created).toContain(".gitignore (canonical harness snippet)");
-      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(false);
       // _default lands under the resolved project dir, NOT {HARNESS_DIR}/projects.
       expect(existsSync(join(root, "process", "projects", "_default"))).toBe(true);
       expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(false);
@@ -284,7 +286,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(proc.exitCode).toBe(0);
       const procResult = { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
       expect(scaffoldData(procResult).harnessDir.endsWith(join(".mstar"))).toBe(true);
-      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(false);
     });
   });
 
@@ -304,7 +306,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(resultData.harnessDir).toBe(join(root, "config", ".mstar"));
       expect(resultData.skipped).toContain(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
       // Files land under the declared custom dir.
-      expect(existsSync(join(root, "config", ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, "config", ".mstar", "status.json"))).toBe(false);
       expect(existsSync(join(root, "config", ".mstar", "projects", "_default"))).toBe(true);
       expect(existsSync(join(root, "config", ".mstar", "projects", "_default", "roadmap.md"))).toBe(false);
       expect(existsSync(join(root, "config", ".mstar", "AGENTS.md"))).toBe(true);
@@ -337,8 +339,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(existsSync(join(root, "packages", "foo", ".gitignore"))).toBe(false);
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
       for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
-      // Harness files land under the repo-root .mstar/.
-      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      // Harness files land under the repo-root .mstar/; no status.json exists.
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(false);
 
       // git check-ignore confirms the fence actually ignores process artifacts.
       const check = Bun.spawnSync(["git", "check-ignore", "-v", join(root, ".mstar", "status.json")], {
@@ -351,18 +353,19 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("an existing malformed status.json is refused, never reinitialized (create-only bootstrap)", () => {
+  test("a leftover status.json is never consulted or rewritten (ACTIVE disposition)", () => {
     withRoot((root) => {
       expect(runScaffold([root]).exitCode).toBe(0);
-      // Replace the bootstrapped document with a v1-shaped one: the
-      // create-only contract validates what is on disk instead of
-      // overwriting it (spec §C4), so the bytes must survive untouched.
+      // ACTIVE disposition: the create-only status.json validation is retired
+      // — the register lives in store.db once activated, so a leftover
+      // pre-activation document is neither validated nor rewritten.
       writeFileSync(join(root, ".mstar", "status.json"), "{}\n", "utf8");
 
       const second = runScaffold([root]);
-      expect(envelope(second).status).toBe("error");
+      expect(second.exitCode).toBe(0);
+      expect(envelope(second).status).toBe("ok");
       expect(readFileSync(join(root, ".mstar", "status.json"), "utf8")).toBe("{}\n");
-      // Refusal leaves the existing state bytes unchanged.
+      // The leftover bytes survive untouched.
     });
   });
 });

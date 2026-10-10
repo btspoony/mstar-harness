@@ -31,7 +31,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore, openStore, readExecutionAuthority, type ExecutionSessionRef } from "@mstar-harness/engine";
+import { encodeExecutionSessionRef, initializeStore, openStore, readExecutionAuthority, type ExecutionSessionRef } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -122,10 +122,10 @@ interface Fixture {
 }
 function initializeFixtureStore(harness: string, cwd: string): void {
   const engineEntry = join(CLI_ROOT, "../engine/src/index.ts");
-  const script = `import { createExecutionWorkflow, initializeExecutionAuthority, initializeStore, registerCatalogEntity } from ${JSON.stringify(engineEntry)};
+  const script = `import { createExecutionWorkflow, initializeStore, readExecutionAuthority, registerCatalogEntity } from ${JSON.stringify(engineEntry)};
 const context = { harnessDir: ${JSON.stringify(harness)} };
 const store = await initializeStore(context); store.close();
-const initialized = await initializeExecutionAuthority(context);
+const initialized = await readExecutionAuthority(context);
 await registerCatalogEntity(context, { kind: "plan", id: ${JSON.stringify(PLAN_ID)}, title: ${JSON.stringify(`Plan ${PLAN_ID}`)}, rootKind: "plans", relativePath: ${JSON.stringify(`plans/${PLAN_ID}.md`)} }, { operationId: "register-plan", actor: "issue-cutover.test" });
 const caller = { sessionId: "fixture-coordinator", role: "coordinator", workflowId: ${JSON.stringify(WORKFLOW_ID)}, planId: null };
 await createExecutionWorkflow({ harnessDir: ${JSON.stringify(harness)}, caller }, {

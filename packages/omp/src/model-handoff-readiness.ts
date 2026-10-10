@@ -1,109 +1,7 @@
 /**
- * E1/E2 — explicit workflow binding and read-only Phase 1 readiness for the
- * coordinator model handoff.
- *
- * E1 (`reserveHandoffBinding`) validates the explicit first-action assertion
- * (trusted PM input) against host/Git facts and resolves **paths**, never
- * lifecycle state: it creates nothing, adopts nothing and mutates no workflow,
- * session or settings document. The workflow id is validated as a single safe
- * path component *before* any shared-state read. The required structural mode
- * selects the branch: `reserve` reads the root register only to refuse an id
- * that is already a named workflow, while `attach` revalidates the named
- * active register row and its actual own snapshot. Ownership is never inferred
- * from rows (`workflows[0]`, latest-mtime or "the unique new row" are not
- * selection rules, and a sibling active workflow is not a refusal reason).
- *
- * E2 (`inspectPhase1Readiness`) re-reads the artifacts and Git facts the PM
- * asserted and refuses on any disagreement. Trust split (spec §E2): the PM
- * asserts that the named native returns are settled, ordered and accepted and
- * that the named plan sections complete Specify/Clarify/Plan; this module
- * mechanically checks receipt role/order/uniqueness, native reference shape,
- * canonical containment and current bytes of every named file, root/snapshot/
- * compass agreement, the locked compass, the live integration checkout and the
- * pushed remote tip. It never claims to verify historical review correctness,
- * never creates workflow state and never obtains a lease.
- *
- * A refusal is reported as the frozen broad gate code the callers already
- * depend on (`Phase1RefusalCode`) **plus** a typed `Phase1Diagnostic` that
- * names the prerequisite-contract §5 subreason, the subject (workflow, and the
- * plan for a path refusal), the safe label of the identity source, the public
- * ids already in play, the canonical base/target of a plan pointer and the next
- * supported operation. A bad plan pointer is therefore never rendered as an
- * unlocked compass: the pointer keeps its own `plan-pointer-invalid` /
- * `plan-identity-mismatch` detail and only a genuinely unlocked compass
- * produces `prepare-unlocked`. Identity and path resolution reuse the shared
- * seams — `resolveRegisteredPlanFile` for every row pointer and the engine's
- * own read-only `showPrepareCoordinatorRecovery` view for the recovery verdict
- * — so readiness, registration and the guarded Prepare correction agree. The
- * diagnostics render public ids, codes and canonical paths only: never an
- * envelope path, credential, session JSON or environment payload.
- *
- * `execution_policy.push_policy` is deliberately not consulted: it is
- * accepted-but-opaque engine data and supplies no push waiver — the remote tip
- * comes from read-only `git ls-remote` output, never from a cached tracking
- * ref, and the same query is repeated in the closing re-sample so a remote
- * advanced while the checkpoint runs cannot report ready. The coordinator
- * envelope is read only for this checkpoint and is never forwarded into another
- * input, notice or report.
- *
- * Every read is bounded to artifacts derived from the bound workflow: the bound
- * snapshot/compass paths are compared with the re-derived ones *before* the root
- * register or any artifact is opened. Each named artifact is then pinned on
- * three independent identities — the logical path with its lstat kind and raw
- * symlink target, the canonical target, and the content hash of the bytes read
- * through the logical path — and all three are re-checked before success, so a
- * retargeted symlink or a rewritten file inside the checkpoint window refuses
- * (`evidence-changed`, or the artifact's containment code when it escaped its
- * allowed roots).
- *
- * Read-only by construction: files are read, Git is probed with read-only
- * commands, and nothing is written anywhere.
- *
- * ## Execution authority (plan S3/§6 dual route)
- *
- * Every artifact this module consumes on the FILE route — the root register,
- * the workflow snapshot, the coordinator envelope — is retired as a persistence
- * route while the control harness's execution authority is ACTIVE (primary spec
- * §4.3), and the coordinator envelope is precisely the old session credential
- * §5 keeps on the file route until its consumer is migrated. A **file binding**
- * (one without an adopted `executionBinding`) therefore asks the engine's route
- * (`resolveExecutionReadRoute`, plan S2) once the harness root is established
- * and, for an ACTIVE authority, refuses `execution.consumer-not-ready` before
- * any artifact is opened: no binding is reserved, no receipt is fabricated and
- * no readiness verdict is derived from retired bytes. A store that exists and
- * cannot be read throws that store's own refusal (there is no verdict to give
- * about either route then), and a harness with no store at all keeps the
- * unchanged file route — §2.1's absence is not an authority verdict.
- *
- * The 2b adoption closes that obligation without inventing a second authority:
- *
- * - **E1 ACTIVE arm.** When the host adapter supplies the §3.1 DB binding it
- *   adopted (`HandoffHostFacts.executionBinding`), the reservation is the DB's
- *   own workflow/coordinator view instead of the retired register: the binding
- *   must describe exactly this host session (workflow, role `coordinator`, null
- *   plan, positive epoch, non-empty store id) and the canonical control root,
- *   it is re-resumed against the CURRENT store (`resumeExecutionSession` — a
- *   lookup, never a bearer credential, and never an envelope fallback), and the
- *   named workflow's DB authority must name this session as its coordinator and
- *   still be a running iteration. Nothing is written; the two retired documents
- *   are never opened.
- * - **E2 ACTIVE arm.** A binding carrying `executionBinding` consumes the real
- *   DB **root / workflow / plan views** (`readExecutionAuthority`) for the
- *   register row, the lifecycle status/type, the branch anchors, the
- *   integration checkout, the coordinator seat and the registered plan rows —
- *   plus the same real Git and artifact witnesses as the file route (the
- *   compass, the registered plan documents, the Prepare evidence, the ordered
- *   specialist reports and the live integration checkout/push). No snapshot is
- *   fabricated and the retired register/snapshot/envelope are not read. The
- *   adopted reference is re-resumed, so a stale epoch, a revoked row or a
- *   replaced coordinator refuses `binding-invalid` instead of answering from a
- *   retired route.
- *
- * The route is selected by the binding's own shape, never by a guessed
- * authority: `executionBinding` present → ACTIVE arm, absent/`null` → the
- * unchanged file arm (which refuses on an ACTIVE root). A caller therefore
- * cannot smuggle a file verdict past an ACTIVE authority or a DB verdict into a
- * pre-activation harness.
+ * ACTIVE-only coordinator model-handoff binding and read-only Phase 1 readiness.
+ * The execution DB supplies lifecycle, coordinator and plan facts; Git and
+ * artifact witnesses are rechecked before a readiness receipt is returned.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -118,19 +16,13 @@ import {
   probeCheckoutRoot,
   readExecutionAuthority,
   readMainWorktree,
-  readSessionEnvelope,
-  readWorkflowSnapshot,
-  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveIterationDir,
   resolvePlanDir,
   resolveRegisteredPlanFile,
   resumeExecutionSession,
   resolveWorkflowDir,
-  showPrepareCoordinatorRecovery,
   validateCompassFrontmatter,
-  validateStatusV2,
-  WORKFLOW_SNAPSHOT_FILE,
 } from "@mstar-harness/engine";
 import type {
   ExecutionBinding,
@@ -138,16 +30,12 @@ import type {
   ExecutionPlanView,
   ExecutionRead,
   ExecutionState,
-  PrepareCoordinatorRecoveryView,
-  WorkflowSnapshot,
 } from "@mstar-harness/engine";
 // The one reviewed host-side constructor of the §3.1 binding value a durable
 // record persists (coordinator-identity.ts). E1 reuses it instead of declaring a
 // second constructor for the same value.
 import { executionBindingOf } from "./coordinator-identity";
 
-/** Root register file inside the harness dir (v2 `status.json`). */
-const STATUS_FILE = "status.json";
 /** Iteration compass file name inside `{ITERATION_DIR}/<iteration-id>/`. */
 const COMPASS_FILE = "delivery-compass.md";
 /** Valid Phase 1 reviewer order; optional product/architecture reviews precede the required writer. */
@@ -207,20 +95,8 @@ export type HandoffBinding = Readonly<{
   workflowId: string;
   controlRoot: string;
   harnessRoot: string;
-  snapshotPath: string;
   compassPath: string;
-  /**
-   * The §3.1 DB session binding this host adopted for the named workflow
-   * (§6 dual route), or `null`/absent on the pre-activation FILE route.
-   *
-   * It is the route discriminant, not a second authority: a value means the
-   * ACTIVE arm answers from the DB root/workflow/plan views and re-resumes this
-   * reference, while `null`/absent keeps the unchanged file arm (which refuses
-   * `execution.consumer-not-ready` on an ACTIVE root). The value is the
-   * engine's own `ExecutionBinding` value, copied field by field so the host
-   * never persists an engine-owned object.
-   */
-  executionBinding?: ExecutionBinding | null;
+  executionBinding: ExecutionBinding;
 }>;
 
 /**
@@ -253,10 +129,8 @@ function bindingRefusal(code: HandoffRefusalCode, message: string): HandoffBindi
 }
 
 /**
- * One DB workflow view of the authoritative read, exactly as the engine
- * projects it: the lifecycle header, its plan views and the session holding the
- * coordinator seat. Both ACTIVE arms admit against this shape and never against
- * a synthesized `WorkflowSnapshot`.
+ * One ACTIVE DB workflow view carries the authoritative lifecycle, plan views
+ * and session holding the coordinator seat.
  */
 type ActiveWorkflowView = ExecutionState["workflows"][number];
 
@@ -279,18 +153,9 @@ function isExecutionBindingValue(value: unknown): value is ExecutionBinding {
 }
 
 /**
- * The E1 ACTIVE arm (§6): adopt the DB session binding the host acquired for
- * the named workflow.
- *
- * The supplied value must describe exactly this coordinator: the canonical
- * control root, this host session, this workflow, role `coordinator`, a null
- * plan and a positive epoch. It is then re-resumed against the CURRENT store —
- * a foreign root, a stale epoch, a revoked/suspended row or a reference copied
- * from another session refuses here, and no coordinator envelope is ever
- * consulted as a fallback — and the workflow's DB authority must name this
- * session as its coordinator and still be a running iteration. Only the derived
- * paths and the validated binding are returned: nothing is written, and the
- * retired register/snapshot are never opened.
+ * Adopt the session binding for the named workflow under the ACTIVE DB
+ * authority. The binding must match this host session, canonical control root,
+ * workflow and coordinator role; it is re-resumed against the current store.
  */
 async function adoptActiveHandoffBinding(
   input: HandoffBindingInput,
@@ -385,17 +250,11 @@ async function adoptActiveHandoffBinding(
     );
   }
 
-  // Pure path derivation: the derived locations are returned for the binding's
-  // shape, but the ACTIVE arm never opens the retired snapshot or register.
-  let snapshotPath: string;
   let compassPath: string;
   try {
-    const workflowDir = resolveWorkflowDir(controlRoot, { harnessDir: harnessRoot });
-    const iterationDir = resolveIterationDir(harnessRoot);
-    snapshotPath = canonicalizeNearestExisting(join(workflowDir, workflowId, WORKFLOW_SNAPSHOT_FILE));
-    compassPath = canonicalizeNearestExisting(join(iterationDir, workflowId, COMPASS_FILE));
+    compassPath = canonicalizeNearestExisting(join(resolveIterationDir(harnessRoot), workflowId, COMPASS_FILE));
   } catch (error) {
-    return bindingRefusal("invalid-root", `cannot resolve the workflow/iteration paths: ${String(error)}`);
+    return bindingRefusal("invalid-root", `cannot resolve the iteration path: ${String(error)}`);
   }
   return {
     ok: true,
@@ -404,69 +263,23 @@ async function adoptActiveHandoffBinding(
       workflowId,
       controlRoot,
       harnessRoot,
-      snapshotPath,
       compassPath,
       executionBinding: executionBindingOf(harnessRoot, session),
     },
   };
 }
-
-/**
- * Structural route selection for the explicit first-action binding (FILE arm).
- * Pure structure: the returned paths are the *derived* locations of the named
- * workflow, never validated lifecycle ownership (adoption authority lives
- * solely in the adapter's `deriveStartAuthority`; E2 checks the live
- * artifacts against the coordinator envelope).
- *
- * - `"reserve"` — the unregistered path: the root register is read only to
- *   reject an already-named id, and existing snapshot/compass artifacts are
- *   refusals. An absent register permits the session reservation only.
- * - `"attach"` — the registered path: the named active register row and its
- *   actual own snapshot are revalidated; an existing own snapshot/compass is
- *   expected, not a refusal. Absent/mismatched registration or snapshot
- *   refuses `invalid-root`; there is no fallback into reservation.
- *
- * The mode is a structural selector derived by the adapter from the validated
- * register — never public tool input and never proof of authority. No row or
- * envelope is ever used to infer ownership.
- *
- * With `host.executionBinding` supplied, the ACTIVE arm answers instead (see
- * `adoptActiveHandoffBinding`): the DB workflow/coordinator view replaces the
- * retired register/snapshot, and `mode` — a file-register selector — is not
- * consulted. Both retirements and the route selection are decided by the
- * binding's own shape, so a caller can never pick an authority.
- */
 export async function reserveHandoffBinding(
   input: HandoffBindingInput,
   host: HandoffHostFacts,
-  mode: "reserve" | "attach",
 ): Promise<HandoffBindingResult> {
-  // Trusted PM assertions first (spec §E1): intent, role and the new-start
-  // entry are asserted, and the host facts a native task session cannot supply
-  // are checked here.
-  if (input.authority !== "coordinator") {
-    return bindingRefusal(
-      "not-coordinator",
-      `handoff start requires authority "coordinator", received ${JSON.stringify(input.authority)}`,
-    );
-  }
-  if (input.intent !== "new-iteration") {
-    return bindingRefusal(
-      "not-coordinator",
-      `handoff start requires intent "new-iteration", received ${JSON.stringify(input.intent)}`,
-    );
-  }
-  if (!HANDOFF_ENTRIES.includes(input.entry)) {
-    return bindingRefusal("not-coordinator", `handoff start requires entry one of ${HANDOFF_ENTRIES.join(" | ")}`);
+  if (input.authority !== "coordinator" || input.intent !== "new-iteration" || !HANDOFF_ENTRIES.includes(input.entry)) {
+    return bindingRefusal("not-coordinator", "handoff start requires a coordinator new-iteration entry");
   }
   if (host.taskSession === true) {
     return bindingRefusal("not-coordinator", "a native task/focused-agent session never owns a coordinator binding");
   }
-  if (!isNonEmptyString(host.sessionId)) {
-    return bindingRefusal("not-coordinator", "the host session id is missing");
-  }
+  if (!isNonEmptyString(host.sessionId)) return bindingRefusal("not-coordinator", "the host session id is missing");
 
-  // Safe ID before any shared-state read: it becomes a path segment.
   const workflowId = input.workflowId;
   if (!isSafePathComponent(workflowId)) {
     return bindingRefusal(
@@ -474,7 +287,6 @@ export async function reserveHandoffBinding(
       `workflowId must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", ".." or containing "/" or "\\") — got ${JSON.stringify(workflowId)}`,
     );
   }
-
   if (!isNonEmptyString(host.cwd) || !isAbsolute(host.cwd)) {
     return bindingRefusal("invalid-root", "the host cwd must be an absolute path");
   }
@@ -488,166 +300,23 @@ export async function reserveHandoffBinding(
   } catch {
     return bindingRefusal("invalid-root", `the host cwd is not readable: ${host.cwd}`);
   }
-  // Canonical main-checkout residency: the coordinator's own checkout root must
-  // BE the main worktree. A linked worktree (even one nested under the main
-  // checkout) and a plain subdirectory alias are refused, while a symlink alias
-  // of the main checkout resolves to the same root and passes.
   const controlRoot = main.root;
   if (probeCheckoutRoot(cwdReal) !== controlRoot) {
-    return bindingRefusal(
-      "invalid-root",
-      `the coordinator must run in the canonical main checkout ${controlRoot}; ${host.cwd} is a different checkout`,
-    );
+    return bindingRefusal("invalid-root", `the coordinator must run in the canonical main checkout ${controlRoot}; ${host.cwd} is a different checkout`);
   }
-
   let resolvedHarness: string | null;
   try {
     resolvedHarness = resolveHarnessDir(controlRoot);
   } catch {
     resolvedHarness = null;
   }
-  if (resolvedHarness === null) {
-    return bindingRefusal("invalid-root", `no harness dir resolves from the main checkout ${controlRoot}`);
-  }
+  if (resolvedHarness === null) return bindingRefusal("invalid-root", `no harness dir resolves from the main checkout ${controlRoot}`);
   const harnessRoot = canonicalizeNearestExisting(resolvedHarness);
-  if (!isDirectory(harnessRoot)) {
-    return bindingRefusal("invalid-root", `the resolved harness dir does not exist: ${harnessRoot}`);
+  if (!isDirectory(harnessRoot)) return bindingRefusal("invalid-root", `the resolved harness dir does not exist: ${harnessRoot}`);
+  if (host.executionBinding == null) {
+    return bindingRefusal("execution.consumer-not-ready", "this operation requires the ACTIVE coordinator DB binding");
   }
-  // §6 dual route. The host adapter supplies the DB binding it adopted for this
-  // workflow, so the ACTIVE arm answers from the DB workflow/coordinator view
-  // and never opens the retired register or snapshot. Without one, this binding
-  // is a FILE address (snapshot + compass + the coordinator envelope E2
-  // re-validates) and the root register it classifies against is retired while
-  // the authority is ACTIVE (primary spec §4.3) — reading those bytes would be
-  // the forbidden fallback, so that form reports not-ready instead. A store
-  // that exists and cannot be read throws that store's own refusal: this
-  // checkpoint then has no verdict to give about either route.
-  if (host.executionBinding != null) {
-    return adoptActiveHandoffBinding(input, host, { controlRoot, harnessRoot }, host.executionBinding);
-  }
-  if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") {
-    return bindingRefusal(
-      "execution.consumer-not-ready",
-      `the execution authority of ${harnessRoot} is ACTIVE, so the root register, the workflow snapshots and the ` +
-        "coordinator envelopes of this binding are retired as a route. No file binding was reserved: adopt this " +
-        "session's DB binding (the ACTIVE route) instead, and reading the retired documents would be exactly the " +
-        "fallback the execution contract forbids",
-    );
-  }
-
-  // Engine path resolvers with the explicit harness override (never a
-  // `dirname(harnessRoot)` layout assumption).
-  let snapshotPath: string;
-  let compassPath: string;
-  try {
-    const workflowDir = resolveWorkflowDir(controlRoot, { harnessDir: harnessRoot });
-    const iterationDir = resolveIterationDir(harnessRoot);
-    snapshotPath = canonicalizeNearestExisting(join(workflowDir, workflowId, WORKFLOW_SNAPSHOT_FILE));
-    compassPath = canonicalizeNearestExisting(join(iterationDir, workflowId, COMPASS_FILE));
-  } catch (error) {
-    return bindingRefusal("invalid-root", `cannot resolve the workflow/iteration paths: ${String(error)}`);
-  }
-
-  // The root register is validated and read for the mode's structural branch:
-  // `reserve` rejects an already-named id, `attach` revalidates the named row.
-  // Malformed register data refuses in both modes, and no row is ever used to
-  // infer ownership.
-  const statusPath = join(harnessRoot, STATUS_FILE);
-  if (!existsSync(statusPath)) {
-    if (mode === "attach") {
-      return bindingRefusal("invalid-root", `attach requires a registered workflow and the root register is absent: ${statusPath}`);
-    }
-  } else {
-    const gate = validateStatusV2(statusPath);
-    if (!gate.ok) {
-      return bindingRefusal(
-        "invalid-root",
-        `the root register is not a valid v2 status document: ${gate.violations[0]?.code ?? "invalid"}`,
-      );
-    }
-    let doc: unknown;
-    try {
-      doc = JSON.parse(readFileSync(statusPath, "utf8"));
-    } catch {
-      return bindingRefusal("invalid-root", `the root register is not readable: ${statusPath}`);
-    }
-    const entries = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
-    const own = entries.filter((entry) => isPlainObject(entry) && entry.id === workflowId);
-    if (mode === "reserve") {
-      if (own.length > 0) {
-        return bindingRefusal(
-          "already-bound",
-          `workflow ${workflowId} is already registered in the root register — a new start never adopts it`,
-        );
-      }
-    } else {
-      // Attach revalidates the named active register row rather than trusting
-      // the adapter's earlier classification: the row must exist and its
-      // registered directory must canonically resolve to the derived snapshot.
-      const row = own.length === 1 ? own[0]! : null;
-      const rowDir = row !== null && isNonEmptyString(row.dir) ? row.dir : null;
-      if (row === null || rowDir === null) {
-        return bindingRefusal("invalid-root", `attach requires exactly one active register row for workflow ${workflowId}`);
-      }
-      const listedSnapshot = canonicalizeNearestExisting(join(harnessRoot, rowDir, WORKFLOW_SNAPSHOT_FILE));
-      if (listedSnapshot !== snapshotPath) {
-        return bindingRefusal(
-          "invalid-root",
-          `the register row for workflow ${workflowId} does not resolve to its own snapshot: ${rowDir}`,
-        );
-      }
-    }
-  }
-
-  if (mode === "reserve") {
-    if (existsSync(snapshotPath)) {
-      return bindingRefusal("already-bound", `a workflow snapshot already exists at ${snapshotPath}`);
-    }
-    if (existsSync(compassPath)) {
-      return bindingRefusal("already-bound", `an iteration compass already exists at ${compassPath}`);
-    }
-  } else {
-    // Attach expects the workflow's own snapshot to actually exist and to name
-    // this workflow; a vanished or mismatched snapshot is never adopted. The
-    // existing own snapshot/compass is not itself a refusal — authority is
-    // decided solely by the adapter's `deriveStartAuthority`.
-    if (!existsSync(snapshotPath)) {
-      return bindingRefusal("invalid-root", `attach requires the registered workflow snapshot and it is missing: ${snapshotPath}`);
-    }
-    try {
-      const snapshot = readWorkflowSnapshot(dirname(snapshotPath)).snapshot;
-      if (snapshot.id !== workflowId) {
-        return bindingRefusal("invalid-root", `the workflow snapshot at ${snapshotPath} does not name workflow ${workflowId}`);
-      }
-      // Attachment requires an actually active iteration: a terminal or
-      // non-iteration workflow is never adopted as a structural candidate
-      // (the running-iteration check must not wait for Phase-1 readiness).
-      if (snapshot.status !== "running" || snapshot.type !== "iteration") {
-        return bindingRefusal(
-          "invalid-root",
-          `workflow ${workflowId} snapshot at ${snapshotPath} is not a running iteration (status ${snapshot.status}, type ${snapshot.type})`,
-        );
-      }
-    } catch {
-      return bindingRefusal("invalid-root", `the workflow snapshot is not readable: ${snapshotPath}`);
-    }
-  }
-
-  return {
-    ok: true,
-    binding: {
-      sessionId: host.sessionId,
-      workflowId,
-      controlRoot,
-      harnessRoot,
-      snapshotPath,
-      compassPath,
-      // The FILE arm is the pre-activation route: no DB session binding was
-      // adopted, and this explicit `null` is what keeps it distinct from the
-      // ACTIVE arm that carries one.
-      executionBinding: null,
-    },
-  };
+  return adoptActiveHandoffBinding(input, host, { controlRoot, harnessRoot }, host.executionBinding);
 }
 
 /* ------------------------------------------------------------------ E2 ---- */
@@ -661,13 +330,6 @@ export type SpecialistReceipt<Role extends string> = Readonly<{
 
 export type Phase1CompletionInput = Readonly<{
   workflowId: string;
-  /**
-   * The pre-activation FILE route's coordinator envelope (the checkpoint
-   * re-reads it and verifies it is the recorded owner's). The ACTIVE route
-   * carries the DB session binding in the `HandoffBinding` instead, so this
-   * field is not required — and is never read — there.
-   */
-  coordinatorSessionPath?: string;
   mainWorktreeBranch: string;
   reviews: readonly (
     | SpecialistReceipt<"product-manager">
@@ -709,53 +371,21 @@ const CODE_ORDER: readonly Phase1RefusalCode[] = [
   "execution.consumer-not-ready",
 ];
 
-/**
- * The identity subreasons of prerequisite contract §5. They refine the broad
- * `binding-invalid` gate rather than replacing it: an acquisition that carries
- * no id is `identity-missing`, a value that does not address the scope it was
- * checked against is `identity-mismatch`, a recorded owner whose proof this
- * session does not hold is `foreign-owner`, and the three `recovery-*` values
- * say why the narrow JSON Prepare repair is **not** currently admitted.
- */
-export type Phase1IdentityDetail =
-  | "identity-missing"
-  | "identity-mismatch"
-  | "foreign-owner"
-  | "recovery-not-prepare"
-  | "recovery-stale"
-  | "recovery-unauthorized";
+/** Safe identity subreasons refining the broad `binding-invalid` gate. */
+export type Phase1IdentityDetail = "identity-missing" | "identity-mismatch" | "foreign-owner";
 
-/**
- * The path subreasons of §5: a pointer that is not the canonical registered
- * plan file (`plan-pointer-invalid`), a pointer that resolves to a file whose
- * own declared `plan_id` disagrees (`plan-identity-mismatch`), and a compass
- * that is genuinely not locked (`prepare-unlocked`).
- */
+/** Safe plan-path and compass subreasons. */
 export type Phase1PathDetail = "plan-pointer-invalid" | "plan-identity-mismatch" | "prepare-unlocked";
 
-/**
- * Safe §4 classification of the *form* a refused plan pointer was received in
- * — the axis the shared resolver accepts (a canonical absolute path or a
- * normalized harness-relative one). It is a classification only: the pointer's
- * own value is never projected, because a stored row may hold any string at all
- * (an envelope, credential or session path included).
- */
+/** Safe pointer-form classification; the stored path value is never projected. */
 export type Phase1PointerForm = "canonical-absolute" | "harness-relative";
 
-/** Safe label of where an observed identity or pointer value came from. */
-export type Phase1DiagnosticSource =
-  | "host-session"
-  | "snapshot-coordinator"
-  | "session-envelope"
-  | "recovery-view"
-  | "plan-row"
-  | "execution-authority";
+/** Safe source label for an observed identity or plan pointer. */
+export type Phase1DiagnosticSource = "host-session" | "plan-row" | "execution-authority";
 
 /**
- * One typed refinement of a broad refusal code (§5). It carries the subject,
- * the safe source label, the public ids already in play, the canonical
- * base/target of a plan pointer and the next supported operation — never an
- * envelope path, credential, session JSON or environment payload.
+ * One typed refinement of a broad refusal code. It carries safe source labels,
+ * public ids, canonical plan paths and the next supported operation.
  */
 export type Phase1Diagnostic = Readonly<{
   /** The broad gate code this detail refines; always also present in `codes`. */
@@ -782,54 +412,14 @@ export type Phase1Diagnostic = Readonly<{
 /** The named next steps a diagnostic offers instead of a bare refusal. */
 const NEXT_BIND =
   'call `mstar_coordinator` with {operation:"bind", workflowId} from this workflow\'s coordinator session';
-const NEXT_RECOVER =
-  'call `mstar_coordinator` with {operation:"recover", …} from this session, naming the recorded holder in stoppedSessionIds';
-const NEXT_RECOVERY_VIEW =
-  'call `mstar_coordinator` with {operation:"show-recovery", workflowId} to read the current recovery verdict';
 const NEXT_ACTIVE_RECOVER =
   'call `mstar_coordinator` with {operation:"recover", workflowId, …} under the current store authority from this session';
 const NEXT_COORDINATOR_EVIDENCE =
-  "re-run this checkpoint with the workflow's recorded coordinator envelope and the ordered specialist returns";
+  "re-run this checkpoint with the ordered specialist returns and bound plan evidence";
 const NEXT_REGISTERED_PLAN =
-  "register the row through `mstar iteration register`, or repair it with the guarded Prepare plan-file correction";
+"register the plan row through `mstar iteration register` under ACTIVE execution authority";
 const NEXT_LOCK_COMPASS = "lock the reviewed delivery compass, then re-run this checkpoint";
 
-/**
- * §5 classification of one engine recovery-admission blocker into the shared
- * identity-detail vocabulary. The engine's own reason union is the input
- * (`packages/engine/src/coordination.ts`), so the readiness diagnostic and the
- * `mstar_coordinator` view never disagree about the same blocker.
- */
-export function identityDetailOfRecoveryBlocker(code: string): Phase1IdentityDetail {
-  if (code === "unauthorized") return "recovery-unauthorized";
-  if (code === "stale") return "recovery-stale";
-  if (code === "foreign-owner") return "foreign-owner";
-  return "recovery-not-prepare";
-}
-
-/** Whether the narrow JSON Prepare repair is admitted, and what to do next. */
-type RecoveryVerdict = Readonly<{ detail: Phase1IdentityDetail | null; next: string }>;
-
-/**
- * The recovery verdict of one workflow, read through the engine's own read-only
- * §3.3 view — the same view `mstar_coordinator {operation:"show-recovery"}`
- * projects. A readable, admitted verdict names the recovery operation as the
- * next step; an inadmissible lifecycle contributes its typed `recovery-*`
- * detail instead. The view is read-only and never throws past this boundary: an
- * unreadable verdict says so rather than turning into an identity verdict.
- */
-async function recoveryVerdict(controlRoot: string, harnessRoot: string, workflowId: string): Promise<RecoveryVerdict> {
-  let view: PrepareCoordinatorRecoveryView;
-  try {
-    view = await showPrepareCoordinatorRecovery({ cwd: controlRoot, harnessDir: harnessRoot, workflowId });
-  } catch {
-    return { detail: null, next: NEXT_RECOVERY_VIEW };
-  }
-  if (view.allowed) return { detail: null, next: NEXT_RECOVER };
-  const blocker = view.blockers[0];
-  if (blocker === undefined) return { detail: "recovery-not-prepare", next: NEXT_RECOVERY_VIEW };
-  return { detail: identityDetailOfRecoveryBlocker(blocker.code), next: NEXT_RECOVERY_VIEW };
-}
 
 export type Phase1Readiness =
   | { ready: true; binding: HandoffBinding; integrationHead: string; receipt: Phase1Receipt }
@@ -929,10 +519,10 @@ function gitPath(cwd: string, name: string): string | null {
   return isAbsolute(raw) ? raw : join(cwd, raw);
 }
 
-/** Id of a snapshot plan row (`id`, else the legacy `plan_id`). */
+/** Id of a registered ACTIVE plan row. */
 function rowId(row: unknown): string | null {
   if (!isPlainObject(row)) return null;
-  return isNonEmptyString(row.id) ? row.id : isNonEmptyString(row.plan_id) ? row.plan_id : null;
+  return isNonEmptyString(row.id) ? row.id : null;
 }
 
 function orderedCodes(codes: Set<Phase1RefusalCode>): readonly Phase1RefusalCode[] {
@@ -940,19 +530,9 @@ function orderedCodes(codes: Set<Phase1RefusalCode>): readonly Phase1RefusalCode
 }
 
 /**
- * The read-only Phase 1 checkpoint. Returns the fresh receipt (input, binding
- * and byte-computed artifact versions) plus the live integration HEAD only when
- * the whole conjunction holds; otherwise the frozen refusal codes. Never
- * writes, never retries, never fabricates a receipt and never consults
- * `execution_policy`.
- *
- * The binding's own shape selects the arm (§6): an adopted `executionBinding`
- * means the lifecycle facts come from the DB root/workflow/plan views, while a
- * binding without one keeps the unchanged file route (register + snapshot +
- * coordinator envelope, refusing `execution.consumer-not-ready` on an ACTIVE
- * root). The real Git and artifact witnesses — the compass, the registered plan
- * documents, the Prepare evidence, the ordered specialist reports and the live
- * integration checkout/push — are the same on both arms.
+ * The ACTIVE-only Phase 1 checkpoint. It returns a fresh receipt and live
+ * integration HEAD only when the bound DB facts and current artifact witnesses
+ * satisfy the complete readiness conjunction.
  */
 export async function inspectPhase1Readiness(
   binding: HandoffBinding,
@@ -1003,47 +583,35 @@ export async function inspectPhase1Readiness(
     return value;
   };
 
-  // --- item 1: binding identity, root entry, snapshot, compass --------------
+  // --- item 1: ACTIVE binding identity and root -----------------------------
   if (!isPlainObject(binding) || !isSafePathComponent(binding.workflowId)) {
     fail("binding-invalid");
     return verdict();
   }
-  if (!isNonEmptyString(input?.workflowId) || input.workflowId !== binding.workflowId) fail("binding-invalid");
-  // §6 dual route: the binding's own shape — an adopted DB session binding, or
-  // none — selects the arm. The FILE arm consumes the coordinator envelope path
-  // (retired under an ACTIVE authority); the ACTIVE arm carries the DB reference
-  // in the binding and must not be handed (or read) an envelope path.
-  const adopted = binding.executionBinding ?? null;
   if (!isNonEmptyString(binding.sessionId)) {
     fail("binding-invalid");
-    // The host adapter acquired no session id: nothing can be authenticated,
-    // and the engine never generates a coordinator identity. The remaining
-    // shape checks still run, so the set of broad codes is unchanged.
+    return verdict();
+  }
+  const adopted: unknown = binding.executionBinding;
+  if (
+    !isExecutionBindingValue(adopted) ||
+    adopted.session.sessionId !== binding.sessionId ||
+    adopted.session.workflowId !== binding.workflowId ||
+    adopted.session.role !== "coordinator"
+  ) {
+    fail("binding-invalid");
     diagnose({
       code: "binding-invalid",
-      detail: "identity-missing",
+      detail: "identity-mismatch",
       workflowId: binding.workflowId,
-      source: "host-session",
-      expected: binding.workflowId,
+      source: "execution-authority",
+      expected: binding.sessionId,
       next: NEXT_BIND,
     });
+    return verdict();
   }
-  if (!isNonEmptyString(binding.controlRoot) || !isAbsolute(binding.controlRoot)) fail("binding-invalid");
-  if (
-    !isNonEmptyString(binding.harnessRoot) ||
-    !isNonEmptyString(binding.snapshotPath) ||
-    !isNonEmptyString(binding.compassPath)
-  ) {
-    fail("binding-invalid");
-  }
-  if (
-    adopted === null &&
-    (!isNonEmptyString(input?.coordinatorSessionPath) || !isAbsolute(input.coordinatorSessionPath))
-  ) {
-    fail("binding-invalid");
-  }
+  if (!isNonEmptyString(binding.harnessRoot) || !isNonEmptyString(binding.compassPath)) fail("binding-invalid");
   if (!isNonEmptyString(input?.mainWorktreeBranch)) fail("branch-mismatch");
-
   let controlRoot: string | null = null;
   try {
     controlRoot = realpathSync(binding.controlRoot);
@@ -1088,223 +656,13 @@ export async function inspectPhase1Readiness(
     return verdict();
   }
   const iterationArea = join(iterationDir, binding.workflowId);
-  const expectedSnapshot = canonicalizeNearestExisting(join(workflowDir, binding.workflowId, WORKFLOW_SNAPSHOT_FILE));
   const expectedCompass = canonicalizeNearestExisting(join(iterationDir, binding.workflowId, COMPASS_FILE));
-  // Ownership before any artifact read: the bound paths must be exactly the ones
-  // that follow from the Git-derived control root and the explicitly named
-  // workflow. A binding that names any other location is refused here, before
-  // the root register, the snapshot or the compass is even opened.
-  if (adopted === null) {
-    // §5: the FILE arm below reads the root register, the snapshot, the
-    // coordinator ENVELOPE and the compass — every one of them retired as a
-    // persistence route while the control harness's execution authority is
-    // ACTIVE (primary spec §4.3). The gate reports not-ready rather than
-    // reading them: fabricating a receipt from retired bytes is what §5
-    // forbids, and the ACTIVE arm is reached by adopting the DB binding. A
-    // store that exists and cannot be read throws that store's own refusal,
-    // since this checkpoint then has no verdict to give about either route.
-    if ((await resolveExecutionReadRoute({ harnessDir: harnessRoot })) === "execution") {
-      // The engine's own authority verdict, captured separately from any
-      // identity refusal: no file-route identity check ran at all here.
-      fail("execution.consumer-not-ready");
-      return verdict();
-    }
-    if (
-      canonicalizeNearestExisting(binding.snapshotPath) !== expectedSnapshot ||
-      canonicalizeNearestExisting(binding.compassPath) !== expectedCompass
-    ) {
-      fail("binding-invalid");
-      return verdict();
-    }
-  } else if (canonicalizeNearestExisting(binding.compassPath) !== expectedCompass) {
-    // The ACTIVE arm samples the compass (a real artifact) but never the retired
-    // snapshot, so only the compass path has to follow from the derived roots.
-    fail("binding-invalid");
-    return verdict();
-  }
-
-  // From here every read is bounded to artifacts derived from that binding.
-  //
-  // The lifecycle facts the rest of the conjunction admits against, sourced by
-  // the route that answers: the FILE arm opens the register + snapshot, the
-  // ACTIVE arm reads the DB root/workflow/plan views. Both fill the same locals
-  // so every downstream check (compass, anchors, plan rows, Git) is one code
-  // path and the two routes cannot drift apart.
   let anchors: Readonly<{ base: string; integration: string }> | null = null;
   let integrationWorktree: string | null = null;
   let rows: readonly unknown[] = [];
   let compassRef: string | null = null;
-
-  if (adopted === null) {
-    const statusPath = join(harnessRoot, STATUS_FILE);
-    const statusFile = sample(statusPath, "binding-invalid", [harnessRoot]);
-    const snapshotFile = sample(binding.snapshotPath, "binding-invalid", [workflowDir]);
-    if (statusFile === null || snapshotFile === null) {
-      fail("binding-invalid");
-    } else {
-      if (!validateStatusV2(statusPath).ok) fail("binding-invalid");
-      let doc: unknown = null;
-      try {
-        doc = JSON.parse(statusFile.bytes.toString("utf8"));
-      } catch {
-        doc = null;
-      }
-      const entries = isPlainObject(doc) && Array.isArray(doc.workflows) ? doc.workflows : [];
-      const own = entries.filter((entry) => isPlainObject(entry) && entry.id === binding.workflowId);
-      const listed =
-        own.length === 1 && isNonEmptyString(own[0]!.dir)
-          ? canonicalizeNearestExisting(join(harnessRoot, own[0]!.dir, WORKFLOW_SNAPSHOT_FILE))
-          : null;
-      if (listed !== snapshotFile.real) fail("binding-invalid");
-    }
-    if (codes.size > 0 || snapshotFile === null) return verdict();
-
-    let snapshot: WorkflowSnapshot;
-    try {
-      // Read through the bound logical path, so the validated document is exactly
-      // the pinned artifact.
-      snapshot = readWorkflowSnapshot(dirname(snapshotFile.logical)).snapshot;
-    } catch {
-      fail("binding-invalid");
-      return verdict();
-    }
-    if (snapshot.id !== binding.workflowId || snapshot.type !== "iteration" || snapshot.status !== "running") {
-      fail("binding-invalid");
-    }
-
-    const coordinator = snapshot.coordination?.coordinator;
-    const recordedCoordinatorId =
-      isPlainObject(coordinator) && isNonEmptyString(coordinator.session_id) ? coordinator.session_id : null;
-    if (recordedCoordinatorId === null) {
-      // A workflow that records no coordinator has no owner to authenticate, and
-      // the §3.3 recovery replaces a recorded binding — it never creates one — so
-      // the explicit bind is the only supported next operation here.
-      fail("binding-invalid");
-      diagnose({
-        code: "binding-invalid",
-        detail: "identity-missing",
-        workflowId: binding.workflowId,
-        source: "snapshot-coordinator",
-        current: binding.sessionId,
-        next: NEXT_BIND,
-      });
-    } else if (recordedCoordinatorId !== binding.sessionId) {
-      // The workflow records an owner this host session is not. Whether that is
-      // repairable is the engine's own Prepare admission, read through the shared
-      // §3.3 view rather than guessed here.
-      fail("binding-invalid");
-      const recovery = await recoveryVerdict(controlRoot, harnessRoot, binding.workflowId);
-      diagnose({
-        code: "binding-invalid",
-        detail: "foreign-owner",
-        workflowId: binding.workflowId,
-        source: "snapshot-coordinator",
-        expected: recordedCoordinatorId,
-        current: binding.sessionId,
-        next: recovery.next,
-      });
-      if (recovery.detail !== null) {
-        // Why no recovery is currently admitted, in the shared §5 vocabulary.
-        diagnose({
-          code: "binding-invalid",
-          detail: recovery.detail,
-          workflowId: binding.workflowId,
-          source: "recovery-view",
-          expected: recordedCoordinatorId,
-          current: binding.sessionId,
-          next: NEXT_RECOVERY_VIEW,
-        });
-      }
-    }
-    const listedEnvelope =
-      isPlainObject(coordinator) && isNonEmptyString(coordinator.session_file) ? coordinator.session_file : null;
-    if (
-      listedEnvelope === null ||
-      canonicalizeNearestExisting(listedEnvelope) !== canonicalizeNearestExisting(input.coordinatorSessionPath!)
-    ) {
-      // The stored binding and the checkpoint's envelope pointer disagree. The
-      // envelope path itself is coordinator-owned transport: it is never rendered
-      // into a diagnostic.
-      fail("binding-invalid");
-      diagnose({
-        code: "binding-invalid",
-        detail: "identity-mismatch",
-        workflowId: binding.workflowId,
-        source: "snapshot-coordinator",
-        expected: recordedCoordinatorId ?? binding.workflowId,
-        current: binding.sessionId,
-        next: NEXT_COORDINATOR_EVIDENCE,
-      });
-    }
-    const envelopeFile = sample(input.coordinatorSessionPath, "binding-invalid", [harnessRoot]);
-    if (envelopeFile === null) {
-      fail("binding-invalid");
-    } else {
-      // The coordinator envelope is read for this checkpoint only; its path and
-      // contents are never forwarded into another input, notice or report.
-      try {
-        const envelope = readSessionEnvelope(input.coordinatorSessionPath!);
-        if (
-          envelope.role !== "coordinator" ||
-          envelope.session_id !== binding.sessionId ||
-          envelope.workflow_id !== binding.workflowId ||
-          canonicalizeNearestExisting(envelope.harness_root) !== harnessRoot
-        ) {
-          fail("binding-invalid");
-          diagnose({
-            code: "binding-invalid",
-            detail: "identity-mismatch",
-            workflowId: binding.workflowId,
-            source: "session-envelope",
-            expected: binding.sessionId,
-            current: envelope.session_id,
-            next: NEXT_COORDINATOR_EVIDENCE,
-          });
-        }
-      } catch {
-        fail("binding-invalid");
-        diagnose({
-          code: "binding-invalid",
-          detail: "identity-mismatch",
-          workflowId: binding.workflowId,
-          source: "session-envelope",
-          expected: binding.sessionId,
-          next: NEXT_COORDINATOR_EVIDENCE,
-        });
-      }
-    }
-
-    const snapshotAnchors = snapshot.branch;
-    anchors =
-      isPlainObject(snapshotAnchors) && isNonEmptyString(snapshotAnchors.base) && isNonEmptyString(snapshotAnchors.integration)
-        ? { base: snapshotAnchors.base, integration: snapshotAnchors.integration }
-        : null;
-    integrationWorktree = isNonEmptyString(snapshot.integration_worktree_path) ? snapshot.integration_worktree_path : null;
-    rows = Array.isArray(snapshot.plans) ? snapshot.plans : [];
-    compassRef = isNonEmptyString(snapshot.compass_ref) ? snapshot.compass_ref : null;
-  } else {
-    // --- ACTIVE arm: the DB root/workflow/plan views -------------------------
-    // No retired document is opened here: the register row, the lifecycle
-    // header, the branch anchors, the integration checkout, the coordinator
-    // seat and the registered plan rows all come from the authoritative DB
-    // read, and the adopted reference is re-resumed against the CURRENT store.
-    const session = adopted.session;
-    if (
-      !isExecutionBindingValue(binding.executionBinding) ||
-      session.workflowId !== binding.workflowId ||
-      session.role !== "coordinator"
-    ) {
-      fail("binding-invalid");
-      diagnose({
-        code: "binding-invalid",
-        detail: "identity-mismatch",
-        workflowId: binding.workflowId,
-        source: "execution-authority",
-        expected: binding.sessionId,
-        next: NEXT_BIND,
-      });
-      return verdict();
-    }
+  // The bound paths were re-derived from the Git-derived control root above.
+  const session = adopted.session;
     const identity: ExecutionIdentity = {
       source: "host",
       sessionId: binding.sessionId,
@@ -1315,9 +673,7 @@ export async function inspectPhase1Readiness(
     try {
       await resumeExecutionSession(executionContextFor(context, identity), session);
     } catch {
-      // A stale epoch, a revoked/suspended row, a foreign store or a copied
-      // reference: the adopted binding is no longer this session's, and no
-      // envelope or snapshot is consulted as a fallback.
+      // The host binding is stale or no longer belongs to this session.
       fail("binding-invalid");
       diagnose({
         code: "binding-invalid",
@@ -1335,10 +691,8 @@ export async function inspectPhase1Readiness(
     try {
       authorityRead = await readExecutionAuthority(context, { workflowId: binding.workflowId });
     } catch {
-      // The authority itself cannot serve this checkpoint. That is the frozen
-      // `execution.consumer-not-ready` verdict — the same code the FILE arm
-      // reports when an ACTIVE authority owns the root — and never a verdict
-      // derived from retired bytes.
+      // The ACTIVE authority cannot serve this checkpoint; its evidence is
+      // unavailable, never inferred from retired document bytes.
       fail("execution.consumer-not-ready");
       return verdict();
     }
@@ -1418,7 +772,6 @@ export async function inspectPhase1Readiness(
       : null;
     rows = workflow.plans.map((view) => view.plan);
     compassRef = isNonEmptyString(workflow.state.compass_ref) ? workflow.state.compass_ref : null;
-  }
 
   const compassFile = sample(binding.compassPath, "binding-invalid", [iterationDir]);
   if (compassFile === null) {
@@ -1463,9 +816,7 @@ export async function inspectPhase1Readiness(
     fail("binding-invalid");
   }
 
-  // Registered plans: compass registration and the lifecycle's plan rows agree
-  // exactly — from the DB plan views on the ACTIVE arm, from the snapshot rows
-  // on the FILE arm.
+  // Compass registration and ACTIVE lifecycle plan rows must agree exactly.
   const registered = Array.isArray(compass.plans) ? compass.plans.filter(isNonEmptyString) : [];
   const rowIds = rows.map(rowId).filter((id): id is string => id !== null);
   if (
@@ -1509,9 +860,7 @@ export async function inspectPhase1Readiness(
   if (!plansComplete) fail("prepare-not-locked");
 
   if (plansComplete) {
-    // The canonical plan root the resolver owns — the same one registration and
-    // the guarded Prepare correction resolve against, including a `.mstarc`
-    // declared or external `{PLAN_DIR}`.
+    // Resolve the registered plan path through the configured plan root.
     const planBase = canonicalizeNearestExisting(planArea);
     for (const plan of receiptPlans) {
       const row = rows.find((candidate) => rowId(candidate) === plan.planId);
@@ -1553,11 +902,8 @@ export async function inspectPhase1Readiness(
             workflowId: binding.workflowId,
             planId: plan.planId,
             source: "plan-row",
-            // §5 safe rendering: the stored row pointer is arbitrary text — it
-            // may be an envelope, credential or session path — so only its
-            // received *form* (§4's accepted axis) is projected, never the value
-            // it held. The canonical base/target name the file it should have
-            // registered.
+            // The stored pointer is arbitrary text and may include private path
+            // data, so only its received form is projected.
             received: isAbsolute(registeredFile) ? "canonical-absolute" : "harness-relative",
             base: planBase,
             target: join(planBase, `${plan.planId}.md`),

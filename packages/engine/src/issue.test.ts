@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, test } from "bun:test";
-import { initializeExecutionAuthority } from "./execution-store.js";
+import { readExecutionState } from "./execution-store.js";
 import { MIGRATIONS, initializeStore, openStore, upgradeStore, type StoreContext } from "./store-db.js";
 import { historicalStore } from "./store-migration-fixtures.js";
 import {
@@ -741,7 +741,7 @@ describe("issue dispositions, revisions, and relations", () => {
   test("ACTIVE execution authority accepts actor-only issue writes without workflow or sessions", async () => {
     const context = ctx("actor-only-active-");
     await initializeStore(context).then((handle) => handle.close());
-    const activated = await initializeExecutionAuthority(context);
+    const activated = await readExecutionState(context);
     expect(activated.data.workflows).toEqual([]);
     const store = await openStore(context, "read");
     try {
