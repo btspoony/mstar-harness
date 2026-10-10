@@ -9,7 +9,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
-  initializeExecutionAuthority,
   initializeStore,
   readExecutionAuthority,
   resolveRegisteredPlanFile,
@@ -132,7 +131,7 @@ function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
 }
 async function initStore(harness: string): Promise<void> {
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
-  await initializeExecutionAuthority({ harnessDir: harness });
+  await readExecutionAuthority({ harnessDir: harness });
 }
 
 
