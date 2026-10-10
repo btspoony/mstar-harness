@@ -192,7 +192,7 @@ async function makeActiveWorkspace(label) {
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  await initializeExecutionAuthority({ harnessDir: harness });
+  await readExecutionAuthority({ harnessDir: harness });
   return { root, harness, worktreePath: join(root, "wt-fixture"), evidencePath: join(root, "evidence.md") };
 }
 
