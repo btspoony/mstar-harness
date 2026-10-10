@@ -190,8 +190,13 @@ describe("OpenCode V2 structured-write gate", () => {
 
     await expect(
       run(event("edit", { path, oldString: "\"version\":2", newString: "$&", replaceAll: false }), testApi),
-    ).rejects.toBeInstanceOf(Tool.Error);
+    ).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[status.invalid-json]"),
+    });
     expect(inputs).toEqual([expect.stringContaining("$&")]);
+    expect(readFileSync(path, "utf8")).toBe(current);
+
   });
 
   test("non-composable edits validate the existing document and benign writes do not read or refuse", async () => {
