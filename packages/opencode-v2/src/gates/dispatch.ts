@@ -50,10 +50,22 @@ function malformedPrompt(): Tool.Error {
 function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger: StatusLogger): Effect.Effect<void, Tool.Error> {
   const input = record(event.input);
   if (input === null || typeof input.prompt !== "string") return Effect.fail(malformedPrompt());
+  if (typeof input.agent !== "string" || input.agent.trim() === "") {
+    return Effect.fail(toolError(
+      "dispatch.target-role-missing",
+      "input.agent must name the requested target role. Supply the intended target role and retry; no subagent was spawned.",
+    ));
+  }
 
   try {
     const prompt = input.prompt;
     const fields = api.parseAssignmentFields(prompt);
+    if (fields.executeAs !== undefined && fields.executeAs !== "" && input.agent !== fields.executeAs) {
+      return Effect.fail(toolError(
+        "dispatch.target-role-mismatch",
+        `input.agent target "${input.agent}" does not match Assignment Execute as "${fields.executeAs}". Align the prompt's declared Execute as role with input.agent, or correct input.agent to the intended target; no subagent was spawned.`,
+      ));
+    }
     const writable = api.isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
     const caller = typeof event.agent === "string" ? event.agent : "";
     const composed = api.composeDispatchGate(prompt, { caller, callerRequired: true, writable });

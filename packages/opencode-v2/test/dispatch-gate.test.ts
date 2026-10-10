@@ -62,7 +62,7 @@ function withEnforcement(text: string, enforcement: "hard" | "soft"): string {
 }
 
 describe("OpenCode V2 subagent dispatch gate", () => {
-  test("registers execute.before and allows valid Assignment to reach its distinct target", async () => {
+  test("allows a target whose input.agent matches the Assignment Execute as", async () => {
     const harness = await fixture();
     await harness.invoke(makeEvent("project-manager", "fullstack-dev", validAssignment()));
     expect(harness.kinds).toEqual(["execute.before"]);
@@ -127,6 +127,27 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     const harness = await fixture();
     await harness.invoke(makeEvent("project-manager", "fullstack-dev", validAssignment("fullstack-dev", "Enforcement: hard")));
     expect(harness.bodyCalls()).toBe(1);
+  });
+
+  test("refuses target/Execute as mismatch before a self-dispatch bypass", async () => {
+    const harness = await fixture();
+    const prompt = withEnforcement(validAssignment("project-manager"), "hard");
+    await expect(harness.invoke(makeEvent("fullstack-dev", "fullstack-dev", prompt))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringMatching(/input\.agent.*fullstack-dev[\s\S]*Execute as.*project-manager[\s\S]*align.*correct.*no subagent was spawned/i),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
+  test("refuses a missing input.agent target before dispatch admission", async () => {
+    const harness = await fixture();
+    const event = makeEvent("project-manager", "fullstack-dev", validAssignment());
+    event.input = { description: "dispatch", prompt: validAssignment() };
+    await expect(harness.invoke(event)).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("dispatch.target-role-missing"),
+    });
+    expect(harness.bodyCalls()).toBe(0);
   });
 
   test("hard mode refuses caller/target recursion with engine code and recovery", async () => {
