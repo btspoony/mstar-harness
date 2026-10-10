@@ -280,9 +280,17 @@ const isPermissionEffect = (value: unknown): value is PermissionRule["effect"] =
 
 // Legacy harness actions map to V2 permission actions declared at
 // https://github.com/anomalyco/opencode/blob/v2.0.26/packages/schema/src/permission.ts.
-const V2_PERMISSION_ACTION: Record<string, string> = { bash: "shell", task: "subagent" };
+// The legacy `edit` action covers BOTH V2 file-mutation tools: the V2 plugin
+// grants reviewer/QC roles `write:* = allow`, so an `edit`-only restriction
+// would leave ordinary repository files writable outside the role's declared
+// outputs.
+const V2_PERMISSION_ACTION: Record<string, string[]> = {
+  bash: ["shell"],
+  task: ["subagent"],
+  edit: ["edit", "write"],
+};
 
-const v2PermissionAction = (action: string): string => V2_PERMISSION_ACTION[action] ?? action;
+const v2PermissionActions = (action: string): string[] => V2_PERMISSION_ACTION[action] ?? [action];
 
 /** Legacy frontmatter -> V2 agent info (conversion table; §Q2 semantics above).
  * Fails closed: a permission value that is not an effect literal throws naming
@@ -305,7 +313,9 @@ export function projectAgentDefinition(raw: JsonObject): ProjectedAgent {
 
   if (typeof raw.tools === "object" && raw.tools !== null && !Array.isArray(raw.tools)) {
     for (const [action, enabled] of Object.entries(raw.tools)) {
-      rules.push({ action: v2PermissionAction(action), resource: "*", effect: enabled === true ? "allow" : "deny" });
+      for (const v2Action of v2PermissionActions(action)) {
+        rules.push({ action: v2Action, resource: "*", effect: enabled === true ? "allow" : "deny" });
+      }
     }
   }
   if (typeof raw.permission === "object" && raw.permission !== null && !Array.isArray(raw.permission)) {
@@ -321,7 +331,9 @@ export function projectAgentDefinition(raw: JsonObject): ProjectedAgent {
             `agent projection: permission.${action}.${resource} carries non-effect value ${JSON.stringify(effect)} (expected allow|deny|ask)`,
           );
         }
-        rules.push({ action: v2PermissionAction(action), resource, effect });
+        for (const v2Action of v2PermissionActions(action)) {
+          rules.push({ action: v2Action, resource, effect });
+        }
       }
     }
   }

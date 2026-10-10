@@ -293,12 +293,16 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           ? path.join(resolveProjectRoot(), "opencode.json")
           : undefined;
         const resolvedGenerations = result.generations ?? [];
+        // A dual-host config resolves to ["v1","v2"]; the V2 host in that set
+        // still cannot read legacy flat MCP rows, so the V2 shape requirement
+        // stays on whenever v2 is among the resolved generations.
         const resolvedGeneration = input.generation ?? (resolvedGenerations.length === 1 ? resolvedGenerations[0] : undefined);
+        const v2AmongResolved = resolvedGenerations.includes("v2") || input.generation === "v2";
         const mcpHealth = input.target === "dsh"
           ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
           : diagnoseMcpTarget(input.target, os.homedir(), undefined, {
             ...(projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath }),
-            ...(resolvedGeneration === "v2" ? { requireNestedV2Shape: true } : {}),
+            ...(v2AmongResolved ? { requireNestedV2Shape: true } : {}),
           });
         const errors = [...result.errors, ...mcpHealth.errors];
         const data = {

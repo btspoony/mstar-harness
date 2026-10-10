@@ -69,6 +69,22 @@ describe("frontmatter parsing", () => {
     expect(body.startsWith("\n## Morning Star Role Binding")).toBe(true);
   });
 
+  test("legacy edit restrictions expand to both V2 edit and write actions", () => {
+    const rules = projectAgentDefinition({
+      name: "qc-specialist",
+      prompt: "review only",
+      tools: { write: true },
+      permission: { edit: { "*": "deny" } },
+    }).permissions as Array<{ action: string; resource: string; effect: string }>;
+    // The projection must not leave a `write:* = allow` as the effective last
+    // rule: the legacy `edit` deny expands to both V2 file-mutation actions,
+    // and the user's (later) rules still win.
+    const lastWrite = [...rules].reverse().find((rule) => rule.action === "write");
+    expect(lastWrite?.effect).toBe("deny");
+    const lastEdit = [...rules].reverse().find((rule) => rule.action === "edit");
+    expect(lastEdit?.effect).toBe("deny");
+  });
+
   test("nested permission maps parse into objects with effect scalars", () => {
     const parsed = parseSimpleFrontmatter(extractFrontmatterAndBody(READ_ONLY_SEAT).frontmatter);
     // runtime-validated boundary: parsed frontmatter is file input, narrowed
@@ -101,6 +117,7 @@ describe("agent projection (frontmatter -> V2 agent info)", () => {
     expect(projected.permissions).toEqual([
       { action: "write", resource: "*", effect: "allow" },
       { action: "edit", resource: "*", effect: "allow" },
+      { action: "write", resource: "*", effect: "allow" },
       { action: "shell", resource: "*", effect: "allow" },
       { action: "subagent", resource: "*", effect: "allow" },
     ]);
