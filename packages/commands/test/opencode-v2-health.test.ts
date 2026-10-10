@@ -264,7 +264,7 @@ describe("OpenCode MCP doctor health", () => {
     expect(flat.status).toBe("mismatch");
     expect(flat.errors.join("\n")).toContain("legacy flat");
     expect(flat.errors.join("\n")).toContain("mstar doctor --target opencode --scope global --opencode-generation v2");
-    expect(flat.errors.join("\n")).toContain("--scope global|project");
+    expect(flat.errors.join("\n")).toContain("--opencode-generation v2 --scope global");
 
     // The same nested shape under a resolved V2 generation stays aligned.
     const nestedRoot = mkdtempSync(join(tmpdir(), "opencode-v2-mcp-gen-nested-"));
