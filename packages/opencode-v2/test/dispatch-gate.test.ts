@@ -140,6 +140,26 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     expect(harness.bodyCalls()).toBe(0);
   });
 
+  test("refuses a writable target disguised as a read-only Execute as role", async () => {
+    const harness = await fixture();
+    const prompt = withEnforcement(validAssignment("explore"), "hard");
+    await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", prompt))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringMatching(/dispatch\.target-role-mismatch[\s\S]*"fullstack-dev"[\s\S]*"explore"[\s\S]*align.*correct/i),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
+  test("refuses a read-only target disguised as a writable Execute as role", async () => {
+    const harness = await fixture();
+    const prompt = withEnforcement(validAssignment("fullstack-dev"), "hard");
+    await expect(harness.invoke(makeEvent("project-manager", "explore", prompt))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringMatching(/dispatch\.target-role-mismatch[\s\S]*"explore"[\s\S]*"fullstack-dev"[\s\S]*align.*correct/i),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
   test("refuses a missing input.agent target before dispatch admission", async () => {
     const harness = await fixture();
     const event = makeEvent("project-manager", "fullstack-dev", validAssignment());
