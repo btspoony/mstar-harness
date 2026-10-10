@@ -23,14 +23,17 @@
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "test": "bun test"
+    "build": "bun run bundle-assets && rm -rf dist && bun build src/entry.ts --target node --outfile dist/mstar.js",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
   },
   "engines": {
     "bun": ">=1.4.0",
     "node": ">=24.18.0"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.26"
+    "@opencode/plugin": "2.0.26",
+    "effect": "4.0.0-rc.112"
   },
   "publishConfig": {
     "access": "public"
