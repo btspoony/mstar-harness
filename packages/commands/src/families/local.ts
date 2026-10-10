@@ -134,6 +134,9 @@ function probeOpencodeGenerationForDoctor(): OpencodeGeneration {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: OPENCODE_VERSION_TIMEOUT_MS,
+      // A host that ignores SIGTERM must not keep the doctor waiting past
+      // the advertised bound: escalate straight to an unignorable kill.
+      killSignal: "SIGKILL",
     });
   } catch (error) {
     const mode = classifyOpencodeProbeError(error);
