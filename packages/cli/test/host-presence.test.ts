@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ensureHostPresent, HOST_PRESENCE_BINARIES, HostPresenceRefusal } from "../src/adapters/host-presence";
+import { ensureHostPresent, HOST_PRESENCE_BINARIES, HOST_PRESENCE_TIMEOUT_MS, HostPresenceRefusal } from "../src/adapters/host-presence";
 import type { ProbeCommandRunner } from "../src/types";
 
 const originalPath = process.env.PATH;
@@ -93,8 +93,16 @@ describe("shared host-presence probe (injectable runner)", () => {
     for (const target of targets) {
       await expect(ensureHostPresent(target, runner)).resolves.toBe(HOST_PRESENCE_BINARIES[target]);
     }
-    expect(calls).toEqual([["omp", "--version"], ["cursor-agent", "--version"], ["kimi", "--version"]]);
+    expect(calls.map((command) => command[command.length - 1])).toEqual(["omp", "cursor-agent", "kimi"]);
   });
+
+  test("a never-settling runner is cut off by the presence timeout", async () => {
+    const startedAt = Date.now();
+    await expect(ensureHostPresent("opencode", () => new Promise<string>(() => {}))).rejects.toBeInstanceOf(HostPresenceRefusal);
+    const elapsed = Date.now() - startedAt;
+    expect(elapsed).toBeGreaterThanOrEqual(HOST_PRESENCE_TIMEOUT_MS - 250);
+    expect(elapsed).toBeLessThan(HOST_PRESENCE_TIMEOUT_MS + 2_000);
+  }, HOST_PRESENCE_TIMEOUT_MS + 3_000);
   test("zcode is absent from the host-presence map", () => {
     expect(HOST_PRESENCE_BINARIES).not.toHaveProperty("zcode");
   });

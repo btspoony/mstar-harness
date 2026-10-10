@@ -8,6 +8,7 @@ import {
   type OpencodeProbeFailureMode,
 } from "@mstar-harness/commands";
 import type { ProbeCommandRunner } from "../types";
+import { withProbeAbort } from "./probe-timeout";
 
 export type { OpencodeGeneration };
 
@@ -57,18 +58,7 @@ function defaultRunner(command: readonly string[], opts: { timeoutMs: number }):
   return promise;
 }
 
-/** Cut off a runner seam that never settles even though it received the timeout hint. */
-function withProbeAbort(pending: Promise<string>, timeoutMs: number): Promise<string> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const abort = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(Object.assign(new Error(`\`opencode --version\` probe timed out after ${timeoutMs}ms`), { code: "ETIMEDOUT" })),
-      timeoutMs,
-    );
-  });
-  abort.catch(() => {}); // the losing branch must never surface as an unhandled rejection
-  return Promise.race([pending, abort]).finally(() => clearTimeout(timer));
-}
+/** Bounded `opencode --version` generation probe (spec Q3). */
 
 function excerpt(output: string): string {
   const line = output.trim().split(/\r?\n/, 1)[0] ?? "";
