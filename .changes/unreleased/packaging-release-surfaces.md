@@ -1,0 +1,33 @@
+---
+category: Harness
+packages: root, cli, opencode, engine, commands, dsh, omp
+---
+
+- Corrected package release surfaces, hosted-install dependency specs, CLI option decoding, installed-host MCP doctor paths, request-scoped store selection, child stdin policy, and dashboard lifecycle cleanup; aligned CI consumers with the canonical command definitions.
+- Integrated the stdio MCP server into `@mstar-harness/cli` as `mstar mcp`; host configs now launch `npx @mstar-harness/cli mcp`. The standalone MCP package, per-host bundles, and native bridges are removed.
+- **MCP health checks host configs, not per-host bundles.** `mstar doctor` MCP inspection now validates each host's real MCP configuration file and its `npx @mstar-harness/cli mcp` launch entry (server entry resolved from `command`/`args` arrays), replacing the retired `build-info.json`/`stdio.js` bundle probes, and refuses runtimes below each packaged target's native floor. `evidence.verify` reports a failed assessment as `ok` data with an `assessmentPassed` flag instead of a `refused` envelope.
+- **DSH gains its Cordis MCP client row.** The shipped dsh bundle patch inserts an `mstar-mcp` row (`@deepseek-ai/dsh-mcp-client`, stdio `npx @mstar-harness/cli mcp`, server name `mstar`) next to the plugin row; `mstar-harness doctor --target dsh` parses the profile's Cordis sources structurally (comment-proof) and reports aligned only with the bridge plugin installed. `spawnProcess` normalizes ENOENT to a deterministic `executable not found in $PATH` error, and relative dev-command args resolve against `MSTAR_CLI_PROJECT_ROOT`.
+- Documented CLI-based MCP launch paths for the six JSON-backed hosts and OpenCode's plugin-injected config, plus the DSH Cordis YAML follow-up; recorded runtime prerequisites, doctor status meanings, host/session boundaries, and separate installed-host verification.
+- Recorded the OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin and removal of the global CLI fallback.
+- Added the `consumer-v1` source/package inventory producer (`scripts/execution-consumer-manifest.ts`): per consumer (engine, CLI, DSh, OMP, OpenCode, ZCode) it records the canonical build-input closure, the generated output closure, the entrypoint, the exact runtime target and floor, the declared capability and the copied-instruction trees each package bundles from the repo-root `skills/`, `commands/`, `agents/` and `assets/` corpus — reusing the existing build layouts instead of introducing a second build system. `--write` emits the manifests; `--check` re-verifies every written manifest against the bytes on disk without writing anything.
+- The producer also publishes one per-consumer evidence document derived from the aggregate, so the handoff form cannot disagree with the operator-facing artifact.
+- Assembled-package Node regression drives the built CLI's coordinator registration, binding, ordinary source/configuration/progress and exact retry; it compares public/store facts, current consumer manifests and committed ZCode hook stdin/exit behavior. It never launches a per-row PM.
+- The regression states explicitly what it is not: no native host process, no installed binary and no TypeScript source import. Host entrypoints are covered by generated-manifest parity plus a populated OMP-shaped database fixture executed against the built engine generation.
+- A `.gitignore` that already states any harness-root rule (`.mstar` or `.agents`, including a leading slash, a negation or a partial rule) is **author-owned**: scaffold, the install fence and `doctor` make no change at all — no append, reorder, dedupe or normalization, and the file bytes stay exactly as written. Unrelated paths and a lone `.mstarc` entry do not declare, and the custom-layout skip is unchanged.
+- Added the exported `hasHarnessRootDeclaration(content)` predicate to the engine path module: a mechanical, read-only line scan that recognizes either layout's root rule, including a leading slash, a negation and a partial declaration, and introduces no glob, escaping or precedence semantics.
+- `validateGitignore` now returns `gitignore.author-declared` for a declared file before any missing-entry computation and proposes no rewrite. A missing file stays `gitignore.missing`, and an undeclared file still reports the canonical entries it lacks. The canonical-completeness success branch was retired as unreachable, because canonical content is itself a declaration.
+
+<!-- CN -->
+- 修正包发布面、托管安装依赖规格、CLI 选项类型解码、宿主已安装 MCP doctor 路径、请求级 store 选择、子进程 stdin 策略与 dashboard 生命周期清理；CI 命令清单改为读取规范命令定义。
+- 将 stdio MCP server 整合进 `@mstar-harness/cli`，以 `mstar mcp` 启动；宿主配置改为运行 `npx @mstar-harness/cli mcp`，并移除独立 MCP 包、宿主专属 bundles 和原生桥接。
+- **MCP 健康检查改为校验宿主真实配置。** `mstar doctor` 的 MCP 检查现在验证各宿主实际的 MCP 配置文件及其 `npx @mstar-harness/cli mcp` 启动项（从 `command`/`args` 数组解析服务条目），取代已删除的 `build-info.json`/`stdio.js` bundle 探测，并拒绝低于各打包目标原生最低版本的运行时。`evidence.verify` 对不合格证据改为返回 `ok` 数据并附 `assessmentPassed` 标记，而非 `refused` envelope。
+- **DSH 获得 Cordis MCP client 行。** dsh bundle patch 在插件行旁插入 `mstar-mcp` 行（`@deepseek-ai/dsh-mcp-client`，stdio `npx @mstar-harness/cli mcp`，serverName `mstar`）；`mstar-harness doctor --target dsh` 结构化解析 profile 的 Cordis 源（不受注释干扰），仅在桥接插件已安装时报 aligned。`spawnProcess` 将 ENOENT 规范为确定性的 `executable not found in $PATH` 错误；dev 命令相对路径参数按 `MSTAR_CLI_PROJECT_ROOT` 解析。
+- 补充六个 JSON 宿主与 OpenCode 插件动态配置的 CLI MCP 启动路径，并记录 DSH Cordis YAML 后续接入；说明运行时前置条件、doctor 状态含义、host/session 边界及独立的已安装宿主验证边界。
+- 记录 OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin，并说明已移除全局 CLI 回退。
+- 新增 `consumer-v1` 源/包清单生产者（`scripts/execution-consumer-manifest.ts`）：对每个消费者（engine、CLI、DSh、OMP、OpenCode、ZCode）记录规范构建输入闭包、生成输出闭包、入口点、确切的运行时 target 与下限、声明的能力，以及各包从仓库根 `skills/`、`commands/`、`agents/`、`assets/` 语料复制的指令树——复用既有构建布局，不引入第二套构建系统。`--write` 产出清单；`--check` 在不写入任何字节的前提下对照磁盘字节复核每一份清单。
+- 生产者同时发布由聚合清单派生的逐消费者证据文档，使交接形态不可能与面向操作者的制品不一致。
+- 装配包 Node 回归驱动构建 CLI 的 coordinator 注册、绑定、普通 source/configuration/progress 与精确重试，比较公开/store 事实、当前 consumer manifest 和已提交 ZCode hook 的 stdin/退出行为，不启动逐行 PM。
+- 该回归明确写出它**不是**什么：没有原生宿主进程、没有已安装二进制、不 import TypeScript 源码。宿主入口点由生成清单一致性加一个「OMP 形状的 populated 数据库夹具」在已构建引擎世代上运行来覆盖。
+- 已声明任一 harness 根规则（`.mstar` 或 `.agents`，含前导斜杠、否定或部分规则）的 `.gitignore` 属**作者所有**：scaffold、安装围栏与 `doctor` 完全不做改动——不追加、不重排、不去重、不规范化，文件字节保持作者原样。无关路径与单独出现的 `.mstarc` 条目不构成声明；自定义布局跳过行为不变。
+- 在 engine path 模块新增导出谓词 `hasHarnessRootDeclaration(content)`：机械、只读的逐行扫描，可识别两种布局的根规则（含前导斜杠、否定与部分声明），且不引入 glob、转义或优先级语义。
+- `validateGitignore` 现在对已声明文件在任何缺失条目计算之前返回 `gitignore.author-declared`，且不提出任何重写；文件缺失仍为 `gitignore.missing`，未声明文件仍报告其缺少的 canonical 条目。canonical 完整性成功分支已因不可达而退役——canonical 内容本身就是一种声明。

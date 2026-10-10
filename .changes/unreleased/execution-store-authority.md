@@ -1,0 +1,111 @@
+---
+category: Harness
+packages: root, cli, engine, commands, dsh
+---
+
+- Execution authority lives in store.db: ordinary primary-coordinator prepare/progress/complete and workflow transitions use atomic SQLite transactions, CAS and receipts; per-row PM identity/transfer/execution-lease admission is removed.
+- Registration atomically publishes catalog delta, ordinary workflow/row metadata, root membership and receipt. Catalog edits do not silently relocate registered plan pointers; no sealed Assignment is required.
+- Added the authoritative execution read route: workflow/plan state is read from the store in one read transaction, and a missing, staged, corrupt or busy authority refuses (`execution.consumer-not-ready`) instead of degrading to leftover root/snapshot JSON, newest-workflow guessing or dashboard projections. While the authority is active the retired file writes are refused at every entry boundary.
+- Replaced the staged execution migration preview/apply/activate/retire/abort protocol with the single static `mstar store upgrade --operator <name>` path: it opens or creates the store, imports recognizable stopped-workspace state and activates authority in one run, leaving skipped source bytes in place. Standalone backups freeze the file-native bodies a SQLite copy does not carry (ledgers, identity index, cursors, history chunks, selection body) together with their accepted-record identities.
+- Completion is witnessed by a sealed Git proof instead of refs alone (checkout/git/common-dir identity, `HEAD` and its refs, the index, every tracked path's content and mode, the directory listings a new untracked path changes, merge/rebase sentinels, the object inventory). It is re-read from the filesystem with no child process and no await immediately before the completion transaction, so a worktree, index, untracked or object-store change inside that window refuses without a `Done`, a receipt or a released lease.
+- Added the execution coverage substrate: a closed 18-surface inventory with a byte codec per surface, and a validator that recomputes coverage from the retained bytes — hashing every named witness and deriving each result hash from what the bytes say — so an invented result, a changed byte, a borrowed or unpinned witness, a foreign workflow identity or a mislabelled capability refuses as `execution.coverage-incomplete`.
+- An injected `ArtifactStore` (`setArtifactStore` / `--store` / `MSTAR_STORE_MODULE`) is served behind a guard that refuses the root register, a workflow snapshot and their `json` aliases while the canonical control root's authority is active; the control root is resolved from the process, never from the injector's own claim.
+- Updated `mstar-artifacts` `references/status-and-residuals.md`: the transport split (active DB authority vs pre-activation file route) is now stated where the v2 file shapes, lease fields and lockdir prose are introduced, instead of only in the later coordination section — remaining snapshot-as-SSOT references are scoped to the pre-activation transport or legacy history.
+- Canonicalize active workflow registration's catalog plan path relative to the plans root, accepting canonical absolute plan paths without changing the execution resolver input.
+- Coordinator recovery is an explicit attested bootstrap: it names the prior holder, adopts only the ownership that revocation orphaned, and never revives an old-epoch lease.
+- Source readiness does not switch installed consumers, bump version surfaces or claim live activation or release. The committed ZCode hook bundle `hooks/mstar-write-gate.mjs` is rebuilt from the current engine; installed fencing and consumer refresh remain separate operational work.
+- Kept standalone backup recovery (`store backup`, `store execution restore-preview`, `store execution restore`) and live-state export (`store execution export`) independent from upgrade.
+- Added whole-store recovery (`previewExecutionRestore` / `restoreExecutionBackup` / `exportExecutionState`): the backup carries committed WAL-visible work, restore internally checks authorized loss row identities/revisions and operation IDs and retains a fresh safety backup, and the diagnostic export is inert and credential-free. No caller-supplied CLI loss-digest flag is required.
+- CLI/session/host writes use independently acquired workflow coordinator identity with explicit plan addresses and checked or derived current transport context. No per-plan PM identity or child transfer survives.
+- Kept the file forms only in explicitly labelled pre-activation sections that also state an active authority refuses them; no active instruction tells a reader to hand-edit a snapshot or to treat a legacy envelope as the live route.
+- Made the session reference a lookup rather than a bearer credential: it names a stored row and grants nothing without the caller the engine compares inside its own transaction, and a reference, an expectation value or an operation id is never forwarded into a child assignment. Resume is not recovery — a stopped owner is replaced only by the explicit recovery verb on an active authority, or by the guarded Prepare recovery on the file route.
+- Host specifics moved to their owning host references and were sourced from the reviewed implementations; the DSh README pair was realigned on the ledger identity/dedup authority, the durable cursor and the archived display tail.
+- Added two vocabulary entries to `CONCEPTS.md`: **Consulted header set** (a label-keyed plan parser consults a closed, exactly-matched label set — never a prefix, so a descriptive sibling such as `Working branch policy` cannot alias a consulted field) and **Maintenance exclusion** (the single outermost lock an engine lifecycle operation holds so no cooperative writer in any package can append into its window; a coordination discipline, not an authority).
+- Documented the shipped coordinator identity routes in the skill corpus: the host-owned `mstar_coordinator` entry (`bind`, `show-recovery`, `recover`), the local `plan bind --coordinator --session-id` form, the `mstar workflow recover-coordinator` verb, and the registered-plan pointer forms. The corpus separates pre-activation routes from active-store DB recovery (full execution token + stop attestation) and native one-shot model handoff (`mstar-host/references/omp.md`, `mstar-use-cli/references/plan-and-workflow.md`, `mstar-use-cli/references/preconditions.md`).
+- Registered plan pointers are documented as the **canonical absolute** `{PLAN_DIR}/<plan-id>.md` — a canonical absolute or normalized harness-relative input is accepted, the repository-relative `.mstar/plans/<id>.md` spelling is refused before the first journal/snapshot/root write — and the guarded `correctPlanFiles` correction is the same-row repair, changing only `row.file` plus `updated_at` under the existing Prepare admission and current semantic/revision constraints, not obsolete byte-version inputs (`mstar-artifacts/references/status-and-residuals.md`, `mstar-iteration/references/phase-1-prepare.md`).
+- Workflow coordinator identity is explicitly acquired; public recovery output contains safe facts, never envelope paths/body. No Assignment or row identity is a binding input.
+- Documentation alignment itself changes no source behaviour, flag or refusal code and claims no installed generation, released verb availability or operational handoff.
+- Removed `status.json` from the engine `compoundRefreshScope` allow-list (its ACTIVE file-route guard refuses that path); regression coverage asserts the narrowed scope and the ACTIVE refusal through the real write port.
+- Appended the `Amendment 2026-10-06 — ACTIVE store execution authority` to the frozen plan-workflow lifecycle contract: store registration/close seams primary, file routes as pre-activation/engine-absent fallback.
+- Closed the knowledge_refs carrier decision on catalog relations (`mstar catalog link`); snapshot `plans[].metadata.knowledge_refs` labeled legacy read-only across artifacts/compound/compound-refresh.
+- Added execution-authority state and the supported upgrade entry to `status validate`; clarified route-scoped tokens and plan-file addressing.
+- `mstar store upgrade --operator <name>` is the sole default execution-state upgrade: it opens or creates the store, imports recognizable records in one run, activates authority, and returns one result with skipped items. Unknown and unresolved sources remain at their original paths; no attestation, inventory, staged manifest, coverage gate, activation barrier, or command-owned recovery point is required.
+- Removed `store safe-upgrade` and the staged execution `preview`, `apply`, `activate`, `retire`, and `abort` verbs. Standalone `store backup` remains; execution `restore-preview`, `restore`, and `export` remain as independent backup/disaster-recovery and live-state reporting utilities.
+- **Canonical store administration:** CLI and MCP store operations now accept the project's canonical control root through explicit `--harness` selection or normal project discovery. Backup verification, maintenance locks and migration/activation attestation guards remain in force; command help documents the supported target.
+- Store-upgrade migration retirement now requires current snapshot or root execution evidence; stale journal history alone no longer qualifies.
+- Added `workflow adopt-terminal` to record an adoption receipt for an already-terminal, unregistered workflow header, with a revision CAS and truthful status reporting.
+- Restrict the `mstar persist` family to `review` and `json`; engine `status` and `snapshot` kinds remain internal to the migration path, whose permanent consumer is `migrate.ts`.
+- Retire the coordinated artifact read/replace chain and its public exports. The coordinated purge-entry veto remains deferred to the T21 terminal sweep.
+- Registration replay no longer answers over a **terminal lifecycle snapshot**: during the close window (terminal snapshot on disk, root entry still present) a committed registration refuses with `catalog.registration-terminal-lifecycle`; committed reconcile replays apply the same guard. Let an in-flight close finish; if it was interrupted, run `mstar status workflow-close --workflow <workflow-id> --harness '<harness-root>'` to finish unregistering, then retry the registration. Ordinary plan-row progress replays still replay the committed receipt (#323).
+- **Dashboard views:** Workflow and iteration views now read from the execution authority on ACTIVE harnesses instead of refusing the request. Fixes #354.
+- **ACTIVE projection:** Removed an unreachable synthetic plan validator and redundant lease queries; completed plans with retained released leases remain visible without historical ownership.
+- Added the file-native workflow notes ledger (`appendWorkflowNote`): one canonical line per note, appended under the execution-maintenance exclusion and the per-workflow status lock, with the synchronous current-session assertion as the last step before the fsynced byte write. Migrated legacy lines and the inline plan notes stay byte-for-byte preserved — nothing rewrites, reorders or compacts a retained ledger, and no note becomes a DB event.
+- A note's identity is the caller's stable id: the same id with the same body replays without appending, the same id with a changed body refuses, and an id already recorded elsewhere refuses instead of picking a winner. A crash-cut partial line of the record being written is reconciled into exactly one accepted line; an unaccepted prefix that follows the record's own accepted line is healed by removing that prefix only; an unterminated tail that is not that record's partial refuses with every retained byte left in place.
+- The retained leaf's trust decision is its open: `O_NOFOLLOW` plus a re-verification of that same descriptor's device/inode **and its bytes**, so a leaf swapped for a symlink, replaced or removed between the read and the commit refuses instead of being followed, truncated or written through.
+- Durable writes complete a short write (a capacity-limited descriptor can accept fewer bytes than it was given) and refuse a write that accepts nothing, in both the ledger append and the atomic-replace helper.
+- The DSh agent-flow ledger now derives every new row's identity from verified native facts — the log's verified incarnation plus the carrying session and call id — makes the accepted-identity index the dedup authority and the cursor sidecar a per-incarnation scan bound, and keeps the append, the identity commit and the scan-bound advance inside one shared-lock critical section. Display compaction is a single transaction recorded in a transient journal (before/after tail hashes plus the exact archive range), and evicted lines are archived byte-exact into sealed history chunks before the display tail is rewritten.
+- Both agent-flow write paths take the same execution-maintenance exclusion as the engine's activation, restore and migration before their own lock, so a plugin write inside that window is refused with a bounded advisory instead of landing in a directory that is being rewritten.
+- Exported the lifecycle-branch fact type from the engine package entry point for the commands consumer.
+- Removed the retired file-route Prepare recovery suite and `lease.verify-integration` setup-verb test cases; surviving L1 lease coverage remains in `worktree check`.
+- ACTIVE iteration registration now canonicalizes compass references to harness-relative paths and refuses paths that escape the harness, including through symlinks.
+- Replaced retired recovery instructions with ACTIVE status/token reads, coordinator recovery, and an actionable failed-close/re-register route for a missing delivery kind.
+- `mstar worktree check --entry` admission is now workflow-type specific: a standalone plan workflow requires only the source/target anchors its registration records (and uses `target` for main-worktree residency), while iteration workflows keep the required base/target/integration anchors plus the integration-checkout validation. Missing-anchor refusals now give per-type, achievable recovery instructions.
+- Audit-promote CLI fixtures assert the ACTIVE execution graph (single store initialization, activated token) instead of the retired snapshot/`status.json` projections.
+- Made the status-write gate execution-authority-only and regenerated its bundled hook.
+- Removed retired lease verify-integration assertions from the MCP identity test and retained the active worktree check surface.
+- Inject acquired session identity into `milestone.assign` while preserving the optional checked session reference.
+- Removed the retired empty status template fixture and its validation case.
+
+<!-- CN -->
+- 执行权威位于 store.db：普通 primary coordinator prepare/progress/complete 与 workflow 转换使用原子 SQLite 事务、CAS 和收据；逐行 PM 身份/转交/execution lease 准入已移除。
+- 注册原子发布 catalog delta、普通 workflow/row metadata、根成员关系与收据。Catalog 编辑不静默移动登记的 plan 指针；不要求 sealed Assignment。
+- 新增权威执行读取路由：workflow/plan 状态在一个读事务内取自 store；权威缺失、处于 staged、损坏或繁忙时以 `execution.consumer-not-ready` 拒绝，而**不**降级到残留的 root/snapshot JSON、猜测最新 workflow 或看板投影。权威 active 时，已退役的文件写入在每个入口边界被拒绝。
+- 将分段执行迁移的 preview/apply/activate/retire/abort 协议替换为唯一静态 `mstar store upgrade --operator <name>` 路径：一次打开或创建 store、导入已停止工作区中可识别的状态并激活权威，让跳过的源字节留在原处。独立备份冻结 SQLite 副本不携带的文件原生正文（ledger、身份索引、游标、历史分片、选择正文）及其已接受记录身份。
+- 完成态以 **sealed Git proof** 见证（checkout/git/common-dir 身份、`HEAD` 及其 ref、index、每条 tracked 路径的内容与模式、新 untracked 文件会改变的目录条目、merge/rebase 哨兵、对象清单），并在完成事务前**仅从文件系统**重读（无子进程、无 await）：该窗口内工作树、index、untracked 或对象库的任何变化都会拒绝，不产生 `Done`、回执或租约释放。
+- 新增执行覆盖基底：18 个 surface 的闭合清单与逐 surface 字节 codec，以及**从留存字节重算**覆盖的校验器（对每个命名 witness 重新哈希、据字节内容推导 result hash）——伪造结果、字节变更、借用或未 pin 的 witness、外来 workflow 身份、错标能力，均以 `execution.coverage-incomplete` 拒绝。
+- 经 `setArtifactStore` / `--store` / `MSTAR_STORE_MODULE` 注入的 `ArtifactStore` 由门禁包装：当规范化控制根的执行权威为 active 时，其 `put`/`get`/`delete` 拒绝根 register、workflow snapshot 及二者的 `json` 别名；该控制根从进程侧解析，绝不采信注入方自述的 root。
+- 更新 `mstar-artifacts` `references/status-and-residuals.md`：transport 划分（active DB 权威 vs pre-activation 文件路线）现已在 v2 文件形状、lease 字段与 lockdir 正文的引入处说明，而非只出现在后文协调节——其余 snapshot 权威表述均限定在 pre-activation transport 或 legacy 历史。
+- 活跃 workflow 注册时将 catalog plan 路径规范为相对 plans 根目录的路径，并接受规范绝对路径；不改变执行解析器的输入形式。
+- 协调者恢复是显式的存证引导：必须命名前任持有者，只接管由撤销该持有者而孤儿化的所有权，且绝不复活旧 epoch 的租约。
+- 源码就绪不切换已安装消费方、不推进版本面，也不声称 live 激活或发布。已提交的 ZCode hook bundle `hooks/mstar-write-gate.mjs` 从当前 engine 重建；已安装隔离与消费方刷新仍属于独立运维工作。
+- 保留独立备份恢复（`store backup`、`store execution restore-preview`、`store execution restore`）与 live-state 导出（`store execution export`），不与 upgrade 路径耦合。
+- 新增全库恢复（`previewExecutionRestore` / `restoreExecutionBackup` / `exportExecutionState`）：备份包含已提交的 WAL 可见工作，恢复在内部核对已授权损失的行身份/revision 与 operation ID 并保留即时安全备份，诊断导出为惰性且不含凭据；不要求调用方提供 CLI loss-digest 标志。
+- CLI/session/host 写入使用独立获取的 workflow coordinator 身份、明确 plan 地址和显式约束或推导的当前传输 context。不再保留逐行 PM 身份或子级转交。
+- 文件形态仅保留在显式标注的 pre-activation 章节，并同处声明 active 权威会拒绝它们；不再有任何 active 指令让读者手改 snapshot 或把 legacy 信封当作现行路由。
+- 会话引用是**查找**而非持有凭据：它只命名一行已存记录，缺少引擎在自己事务内比对的调用方则不授予任何东西；引用、期望值与 operation id 绝不转发进子交接。resume ≠ recovery——已停止的持有者只能由 active 权威上的显式恢复动词替换，或在文件路由上由受守卫的 Prepare 恢复替换。
+- 宿主细节移入其归属的 host reference，并以已评审实现为准；DSh README 双语对在 ledger 身份/去重权威、持久游标与归档显示尾部上重新对齐。
+- 向 `CONCEPTS.md` 补入两个词条：**Consulted header set**（按标签解析计划时只咨询一个封闭且精确匹配的标签集合，绝不前缀匹配，因此 `Working branch policy` 这类描述性兄弟标签不会别名成被咨询字段）与 **Maintenance exclusion**（引擎生命周期操作持有的最外层单一锁，使任何包的协作写者都无法在其窗口内追加；它是协作纪律，不是权限）。
+- 在技能正文中记录已交付的 coordinator 身份路径：宿主自有入口 `mstar_coordinator`（`bind`、`show-recovery`、`recover`）、本地 `plan bind --coordinator --session-id` 形态、`mstar workflow recover-coordinator` 动词，以及注册 plan 的指针形式。正文把激活前路线与 active-store DB 恢复（完整 execution token + stop 证明）及原生一次性模型交接区分开（`mstar-host/references/omp.md`、`mstar-use-cli/references/plan-and-workflow.md`、`mstar-use-cli/references/preconditions.md`）。
+- 注册 plan 的指针记录为**规范绝对路径** `{PLAN_DIR}/<plan-id>.md`——接受规范绝对路径或规范化 harness 相对路径，仓库相对拼写 `.mstar/plans/<id>.md` 在第一条 journal／snapshot／根写入之前即被拒绝；受守卫的 `correctPlanFiles` 修正是同行修复手段，在既有 Prepare 准入与当前语义/revision 约束下只改动 `row.file` 与 `updated_at`，不再使用过时的字节版本输入（`mstar-artifacts/references/status-and-residuals.md`、`mstar-iteration/references/phase-1-prepare.md`）。
+- Workflow coordinator 身份必须明确获取；公开恢复输出只含安全事实，不含 envelope 路径/正文。Assignment 或逐行身份不构成 bind 输入。
+- 文档对齐本身不改源码行为、标志或拒绝码，也不声称已安装代次、已发布动词可用性或真实 handoff。
+- 从 engine `compoundRefreshScope` 允许列表移除 `status.json`（ACTIVE 文件路由守卫本就拒绝该路径）；回归覆盖断言收窄后的 scope，并经真实写入端口验证 ACTIVE 拒绝。
+- 向冻结的 plan-workflow lifecycle 契约追加 `Amendment 2026-10-06 — ACTIVE store execution authority`：store 注册/关闭 seam 为主，文件路由降为激活前/无引擎回退。
+- knowledge_refs 载体决策收口于 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 在 artifacts/compound/compound-refresh 三技能统一标注为 legacy 只读。
+- `status validate` 新增 execution authority 状态与受支持的升级入口；明确按路由区分的 token 和计划文件路径。
+- `mstar store upgrade --operator <name>` 是唯一默认执行状态升级路径：一次命令打开或创建 store、导入可识别记录、激活 authority，并返回包含跳过项的一行结果。未知与无法解析的源文件保留在原路径；无需 attestation、inventory、staged manifest、coverage gate、激活屏障或命令自带恢复点。
+- 删除 `store safe-upgrade` 及 staged execution 的 `preview`、`apply`、`activate`、`retire`、`abort` 动词。独立 `store backup` 保留；execution 的 `restore-preview`、`restore` 与 `export` 作为独立备份/灾难恢复及 live-state 报告工具保留。
+- **Canonical store 管理入口：** CLI 和 MCP 的 store 操作现在支持通过 `--harness` 显式选择或正常项目发现定位 canonical control root。备份校验、维护锁及迁移/激活 attestation 守卫保持生效；命令帮助明确说明支持的目标。
+- Store 升级迁移退休现在要求当前快照或根执行记录作为证据；仅有陈旧日志历史不再符合条件。
+- 新增 `workflow adopt-terminal`，为已处于终态但未注册的 workflow header 记录接管收据，并通过 revision CAS 与状态读面如实呈现。
+- 将 `mstar persist` 家族限制为 `review` 和 `json`；engine 的 `status` 与 `snapshot` kind 仍仅用于迁移路径，其永久调用方为 `migrate.ts`。
+- 退役 coordinated artifact 读取/替换链及其公共导出。coordinated purge-entry veto 仍延期至 T21 terminal sweep 处理。
+- 注册重放不再对**终态生命周期快照**作出"已注册且活跃"的应答：close 窗口内（磁盘快照已终态、root 登记仍在）已提交的注册以 `catalog.registration-terminal-lifecycle` 拒绝；已提交的 reconcile 重放也应用相同守卫。让正在执行的 close 完成；若 close 中断，则运行 `mstar status workflow-close --workflow <workflow-id> --harness '<harness-root>'` 完成注销后重试注册。普通 plan 行进度重放仍照常返回已提交回执（#323）。
+- **Dashboard 视图：** 工作流和迭代视图现在会在 ACTIVE harness 上从执行权威读取数据，不再拒绝请求。修复 #354。
+- **ACTIVE projection：**移除不可达的合成 plan 校验和冗余 lease 查询；保留 released lease 的已完成计划仍可见，且不展示历史归属。
+- 新增文件原生 workflow notes ledger（`appendWorkflowNote`）：每条 note 追加一行规范记录，位于执行维护排除与逐 workflow 状态锁之下，同步的当前会话断言是 fsync 字节写入前的最后一步。迁移过来的 legacy 行与内联 plan notes 逐字节保留——不重写、不重排、不压缩已留存 ledger，也不把任何 note 变成 DB 事件。
+- note 的身份就是调用方的稳定 id：同 id 同正文重放而不追加，同 id 正文改变则拒绝，已被别处记录的 id 也拒绝而非任选一个。被崩溃截断的「正在写入记录」的不完整行会被修复为恰好一条已接受行；跟在记录自身已接受行之后的不完整前缀只通过删除该前缀治愈；不属于该记录前缀的未终止尾部则拒绝，且所有留存字节原地保留。
+- 留存叶的可信判定**就是它的打开方式**：`O_NOFOLLOW` 加上对同一描述符的 device/inode **与字节**复核——因此读与提交之间被换成符号链接、被替换或被删除的叶会被拒绝，而不是被跟随、截断或写入。
+- 持久化写入会**写满短写**（受容量限制的描述符可能只接受少于给定长度的字节），并对「一个字节都不接受」的写入拒绝——ledger 追加与原子替换助手都如此。
+- DSh agent-flow ledger 现在从**已核验的原生事实**派生每一行的身份（日志的已核验化身 + 承载会话与 call id），把已接受身份索引作为去重权威、把游标副文件降为逐化身的扫描边界，并把追加、身份提交与扫描边界推进放在同一个共享锁临界区内。显示压缩是记录在瞬时日志中的单个事务（尾部前后哈希 + 精确归档区间），被淘汰行在显示尾部重写之前按字节原样归档进密封历史分片。
+- 两条 agent-flow 写路径在各自锁之前先取与引擎 activation/restore/migration 相同的执行维护排除，因此该窗口内的插件写入会以有界建议被拒绝，而不会落进正被重写的目录。
+- 从 engine 包入口导出了 lifecycle branch fact 类型，供 commands consumer 使用。
+- 删除了已退役的 file-route Prepare recovery suite 和 `lease.verify-integration` setup verb 测试；保留的 L1 lease 覆盖由 `worktree check` 提供。
+- ACTIVE iteration registration 现在会将 compass reference 规范化为相对于 harness 的路径，并拒绝越出 harness 的路径（包括经由符号链接越界）。
+- 将已退役的恢复指引替换为 ACTIVE 状态/令牌读取、协调者恢复，以及缺少交付类型时可执行的失败关闭并重新注册路径。
+- `mstar worktree check --entry` 的准入改为按工作流类型区分：standalone plan 工作流只要求其注册可记录的 source/target anchor（主 worktree 驻留校验使用 `target`）；iteration 工作流仍要求 base/target/integration anchor 与集成检出校验。缺失 anchor 的拒绝文案按类型给出可执行的恢复指引。
+- audit-promote CLI 测试改为断言 ACTIVE 执行图（单次 store 初始化 + 读取已激活 token），不再断言已退役的 snapshot / `status.json` 投影。
+- 将状态写入门禁切换为仅使用执行权限路由，并重新生成打包钩子。
+- 从 MCP 身份测试中移除了已退役的 lease verify-integration 断言，并保留现行 worktree check 接口。
+- 为 `milestone.assign` 注入已获取的会话身份，同时保留可选的会话引用校验约束。
+- 移除了已退役的空状态模板夹具及其验证用例。
