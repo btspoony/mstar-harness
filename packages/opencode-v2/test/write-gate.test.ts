@@ -38,6 +38,16 @@ async function run(
   }));
 }
 
+
+async function expectAuthorityRefusal(promise: Promise<unknown>, code: string) {
+  const error = await promise.catch((caught) => caught);
+  expect(error).toBeInstanceOf(Tool.Error);
+  expect((error as Tool.Error).message).toContain(`[${code}]`);
+  expect((error as Tool.Error).message).toContain("mstar issue");
+  expect((error as Tool.Error).message).toContain("mstar catalog");
+  expect((error as Tool.Error).message).toContain("mstar store upgrade/migrate");
+  expect((error as Tool.Error).message).toContain("project maintainer");
+}
 function makeBody(onAllowed: () => void = () => {}) {
   let calls = 0;
   return {
@@ -55,48 +65,62 @@ function makeBody(onAllowed: () => void = () => {}) {
 }
 
 describe("OpenCode V2 structured-write gate", () => {
-  test("refuses direct store authority writes in both enforcement modes before body execution", async () => {
+  test("refuses store.db and WAL/SHM sidecars with unchanged bytes in both enforcement modes", async () => {
     for (const mode of ["hard", "soft"] as const) {
       const { harnessDir } = harness(mode);
-      const db = join(harnessDir, "store.db");
-      const original = "protected bytes";
-      writeFileSync(db, original);
-      const body = makeBody(() => writeFileSync(db, "replacement"));
+      for (const name of ["store.db", "store.db-wal", "store.db-shm"]) {
+        const target = join(harnessDir, name);
+        const original = `${name} protected bytes`;
+        writeFileSync(target, original);
+        const body = makeBody(() => writeFileSync(target, "unauthorized"));
 
-      await expect(body.run(event("write", { path: db, content: "replacement" }))).rejects.toMatchObject({
-        _tag: "Tool.Error",
-        message: expect.stringContaining("[store.direct-write-refused]"),
-      });
-      expect(body.calls()).toBe(0);
-      expect(readFileSync(db, "utf8")).toBe(original);
+        await expectAuthorityRefusal(
+          body.run(event("write", { path: target, content: "unauthorized" })),
+          "store.direct-write-refused",
+        );
+        expect(body.calls()).toBe(0);
+        expect(readFileSync(target, "utf8")).toBe(original);
+      }
     }
   });
 
-  test("classifies case-variant store and retired register authority names", async () => {
-    const { harnessDir } = harness("soft");
+  test("classifies case-variant store sidecars and retired registers in both modes", async () => {
     const api = await loadWriteGateApi();
     expect(api).not.toBeNull();
     const activeApi = {
       ...api!,
       withStoreRead: async () => ({}),
     } as WriteGateEngineApi;
-    const body = makeBody();
 
-    await expect(body.run(event("write", { path: join(harnessDir, "Store.db"), content: "x" }))).rejects.toMatchObject({
-      _tag: "Tool.Error",
-      message: expect.stringContaining("[store.direct-write-refused]"),
-    });
-    await expect(body.run(event("write", { path: join(harnessDir, "Store.db-wal"), content: "x" }))).rejects.toMatchObject({
-      _tag: "Tool.Error",
-      message: expect.stringContaining("[store.direct-write-refused]"),
-    });
-    await expect(body.run(event("write", { path: join(harnessDir, "projects", "_default", "RESIDUALS.json"), content: "{}" }), activeApi)).rejects.toMatchObject({
-      _tag: "Tool.Error",
-      message: expect.stringContaining("[project.register.retired]"),
-    });
+    for (const mode of ["hard", "soft"] as const) {
+      const { harnessDir } = harness(mode);
+      for (const name of ["Store.db", "Store.db-wal", "Store.db-shm"]) {
+        const target = join(harnessDir, name);
+        const original = `${name} case-folded bytes`;
+        writeFileSync(target, original);
+        const body = makeBody(() => writeFileSync(target, "unauthorized"));
+        await expectAuthorityRefusal(
+          body.run(event("write", { path: target, content: "unauthorized" })),
+          "store.direct-write-refused",
+        );
+        expect(body.calls()).toBe(0);
+        expect(readFileSync(target, "utf8")).toBe(original);
+      }
+
+      const register = join(harnessDir, "projects", "_default", "RESIDUALS.json");
+      const registerBytes = "retired register bytes";
+      writeFileSync(register, registerBytes);
+      const registerBody = makeBody(() => writeFileSync(register, "unauthorized"));
+      await expectAuthorityRefusal(
+        registerBody.run(event("write", { path: register, content: "unauthorized" }), activeApi),
+        "project.register.retired",
+      );
+      expect(registerBody.calls()).toBe(0);
+      expect(readFileSync(register, "utf8")).toBe(registerBytes);
+    }
   });
 
-  test("refuses ACTIVE execution documents in both enforcement modes without mutating them", async () => {
+  test("refuses ACTIVE status and snapshot targets with unchanged bytes in both enforcement modes", async () => {
     const api = await loadWriteGateApi();
     expect(api).not.toBeNull();
     const activeApi = {
@@ -106,17 +130,24 @@ describe("OpenCode V2 structured-write gate", () => {
 
     for (const mode of ["hard", "soft"] as const) {
       const { harnessDir } = harness(mode);
-      const statusPath = join(harnessDir, "status.json");
-      const original = readFileSync(statusPath, "utf8");
-      const body = makeBody(() => writeFileSync(statusPath, "unauthorized"));
-      await expect(body.run(event("write", { path: statusPath, content: "unauthorized" }), activeApi)).rejects.toMatchObject({
-        _tag: "Tool.Error",
-        message: expect.stringContaining("[execution.direct-write-refused]"),
-      });
-      expect(body.calls()).toBe(0);
-      expect(readFileSync(statusPath, "utf8")).toBe(original);
+      const targets = [
+        join(harnessDir, "status.json"),
+        join(harnessDir, "workflows", "wf-1", "snapshot.json"),
+      ];
+      for (const target of targets) {
+        const original = `protected bytes ${target}`;
+        writeFileSync(target, original);
+        const body = makeBody(() => writeFileSync(target, "unauthorized"));
+        await expectAuthorityRefusal(
+          body.run(event("write", { path: target, content: "unauthorized" }), activeApi),
+          "execution.direct-write-refused",
+        );
+        expect(body.calls()).toBe(0);
+        expect(readFileSync(target, "utf8")).toBe(original);
+      }
     }
   });
+
 
   test("hard mode refuses invalid coordination writes; soft mode warns and proceeds", async () => {
     const hard = harness("hard");
