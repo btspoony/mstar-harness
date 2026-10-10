@@ -240,24 +240,24 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
 ## Installing the MCP tools
 
-The six JSON-backed host configs and OpenCode's plugin `config` hook launch the CLI with `npx @mstar-harness/cli mcp`; DSH's Cordis YAML launch row remains follow-up. The CLI version containing `mcp` must be published first; until then, `npx` may resolve an older release. The CLI process requires Node.js >=24.18.0.
+All seven hosts launch the CLI with `npx @mstar-harness/cli mcp`: six JSON-backed host configs (OpenCode's is injected through its plugin `config` hook rather than read as a static file) plus DSH's shipped Cordis profile row (see the dsh row below). The `npx` form executes the published bin through its Bun shebang, so it needs **Bun >=1.4.0** on PATH; the explicit `node <CLI bundle> mcp` form needs **Node >=24.18.0** ([Prerequisites](#prerequisites)).
 
 | Host | Native install | MCP configuration |
 |------|----------------|-------------------|
 | omp | `omp plugin install @mstar-harness/omp` (or `npx @mstar-harness/cli init --target omp --scope global`) | Plugin `mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 | OpenCode | Install `@mstar-harness/opencode` using the OpenCode plugin entry in `opencode.json` (see [OpenCode manual install](#opencode)). | The plugin dynamically injects the official `mcp` config from its `config` hook; `packages/opencode/mcp.json` is the matching template, not a separate static config requirement. Supported `@opencode-ai/plugin` pin: **1.4.8**. |
-| dsh | `dsh plugin --profile web add @mstar-harness/dsh` (or `npx @mstar-harness/cli init --target dsh`). The optional `dsh-llm-fallbacks` plugin is separate. | DSH uses a Cordis YAML profile row rather than a JSON MCP config. Its `npx @mstar-harness/cli mcp` row is follow-up work; there is currently no DSH MCP launch config. |
+| dsh | `dsh plugin --profile web add @mstar-harness/dsh` (or `npx @mstar-harness/cli init --target dsh`). The optional `dsh-llm-fallbacks` plugin is separate. | DSH ships a Cordis profile row (`mstar-mcp`, server name `mstar`) that launches `npx -y @mstar-harness/cli mcp` through the `@deepseek-ai/dsh-mcp-client` bridge plugin; the row is inert unless that plugin is installed in the profile (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`). |
 | Cursor | Install the Morning Star plugin (see [Cursor](#cursor)). | `.cursor-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 | Codex | `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo` (or use `init --target codex`). | `.codex-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 | Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. | `.kimi-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 | ZCode | Install **morning-star-harness** from the `mstar-local` marketplace (see [ZCode](#zcode)). | `.zcode-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 
-The host configs include a comment documenting the publication prerequisite. There is no separate MCP package, committed per-host stdio bundle, or native bridge.
+There is no separate MCP package, committed per-host stdio bundle, or native bridge.
 
 The MCP context contract is host-neutral: optional `host` selects context validated against existing supported-host definitions; it is not a role or authority grant. `sessionId` denotes the main conversation session. The interface neither requires nor provides per-call child-agent attribution; existing shared-handler workflow ownership, path, state-transition, and CAS checks remain authoritative.
 
-Use `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` to inspect the selected target (Codex also supports `--scope <global|project>`). **Aligned** means the host's MCP config launches the CLI subcommand with the expected arguments; **mismatch** means those launch settings or the Node.js runtime differ; **unavailable** means the MCP config is missing or unreadable. Doctor does not spawn the MCP server, open `store.db`, refresh an installed plugin, or prove that the host loaded it.
-OpenCode's package plugin injects the server definition at runtime; DSH's Cordis YAML launch row is not yet configured. The generic six JSON configs and the OpenCode dynamic hook use host-native shapes.
+Use `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` to inspect the selected target (Codex also supports `--scope <global|project>`). **Aligned** means the host's MCP config launches the CLI subcommand with the expected arguments; **mismatch** means those launch settings or the detected runtime (Bun / Node.js floor) differ; **unavailable** means the MCP config is missing or unreadable. Doctor does not spawn the MCP server, open `store.db`, refresh an installed plugin, or prove that the host loaded it.
+OpenCode's package plugin injects the server definition at runtime; DSH's row ships in its bundle patch and loads through the `@deepseek-ai/dsh-mcp-client` bridge plugin. The six JSON-backed configs and the OpenCode dynamic hook use host-native shapes.
 
 Development evidence is the targeted unit/component/integration evidence for the CLI server and host config. Installed-host, browser, device, and live-service verification is a separate authorized activity, not a development acceptance gate; these instructions do not claim such a run.
 
@@ -467,9 +467,9 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
    - omp: use `/skill:pm` (no session auto-load).
 
 2. **Run an iteration** (see [README — Iteration](README.md#iteration))
-   - **Deep / first iteration:** `/iteration-start` (Phase 1 grill-me → auto-continues Phase 2→5; `pause` to stop after Phase 1).
-   - **Resume interrupted iteration:** `/iteration-drive` (Phase 2→5 re-entry).
-   - **Fast autonomous loop:** `/iteration-loop` (Phase 1→5, optional `direction` + `scale`).
+   - **Deep / first iteration:** `/iteration-start` (Phase 1 grill-me → auto-continues Phase 2→6; `pause` to stop after Phase 1).
+   - **Resume interrupted iteration:** `/iteration-drive` (Phase 2→6 re-entry).
+   - **Fast autonomous loop:** `/iteration-loop` (Phase 1→6, optional `direction` + `scale`).
 
 3. **Project knowledge** — bootstrap or refresh via the `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
 
@@ -504,7 +504,7 @@ The CLI prints a version-1 JSON envelope containing `issueUrl`, the review promp
 }
 ```
 
-Redaction uses a finite pattern set; its count is distinct matched line/type findings per field, not every occurrence, and is not a guarantee that every secret was removed. See [README — Offline report draft](README.md#offline-report-draft) for the pattern categories and privacy details. These examples document the command contract, not an installed-host or live-service run.
+Redaction uses a finite pattern set; its count is distinct matched line/type findings per field, not every occurrence, and is not a guarantee that every secret was removed. See [Runtime reference — Offline report draft](docs/runtime-reference.md#offline-report-draft) for the pattern categories and privacy details. These examples document the command contract, not an installed-host or live-service run.
 
 ## Further reading
 
