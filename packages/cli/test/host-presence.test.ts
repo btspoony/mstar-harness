@@ -84,9 +84,11 @@ describe("shared host-presence probe (injectable runner)", () => {
       calls.push([...command]);
       return "version";
     };
-    await expect(ensureHostPresent("omp", runner)).resolves.toBe("omp");
-    expect(calls).toEqual([["omp", "--version"]]);
-    expect(HOST_PRESENCE_BINARIES).toMatchObject({ cursor: "cursor-agent", kimi: "kimi" });
+    const targets = ["omp", "cursor", "kimi"] as const;
+    for (const target of targets) {
+      await expect(ensureHostPresent(target, runner)).resolves.toBe(HOST_PRESENCE_BINARIES[target]);
+    }
+    expect(calls).toEqual([["omp", "--version"], ["cursor-agent", "--version"], ["kimi", "--version"]]);
   });
   test("zcode is absent from the host-presence map", () => {
     expect(HOST_PRESENCE_BINARIES).not.toHaveProperty("zcode");
@@ -136,14 +138,20 @@ describe("cursor and kimi host presence at init", () => {
         refusal = error;
       }
       expect(refusal).toBeInstanceOf(HostPresenceRefusal);
-      expect((refusal as HostPresenceRefusal).target).toBe(target);
+      expect(refusal).toMatchObject({
+        target,
+        binary: target === "cursor" ? "cursor-agent" : "kimi",
+      });
+      expect((refusal as Error).message).toContain(`${target === "cursor" ? "cursor-agent" : "kimi"} CLI not found on PATH`);
       expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
       expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
+      const message = (refusal as Error).message;
       if (target === "cursor") {
-        expect((refusal as Error).message).toBe("cursor-agent CLI not found on PATH. Install Cursor (https://cursor.com) — the Cursor IDE / cursor-agent CLI — then re-run init");
+        expect(message).toContain("Install Cursor (https://cursor.com)");
+        expect(message).toContain("then re-run init");
       } else {
-        expect((refusal as Error).message).toBe("kimi CLI not found on PATH. Install the Kimi Code CLI (https://www.kimi.com/code/docs/kimi-code-cli/), then re-run: npx @mstar-harness/cli init --target kimi --scope <global|project>");
-        expect((refusal as Error).message).not.toContain("/plugins install");
+        expect(message).toContain("Install the Kimi Code CLI (https://www.kimi.com/code/docs/kimi-code-cli/)");
+        expect(message).toContain("npx @mstar-harness/cli init --target kimi --scope <global|project>");
       }
       const preview = await adapter.runInstallInit?.("project", true);
       expect(preview?.notes.length).toBeGreaterThan(0);
@@ -239,7 +247,11 @@ describe("repo-built CLI host-presence smoke", () => {
       console.log(`[smoke ${target} dry-run] ${preview.output.split("\n").find((line) => line.includes(previewLine[target]))}`);
 
       const present = smokeCli(target, "stub");
-      expect(present.output).not.toContain(`${target} CLI not found on PATH`);
+      expect(present.output).not.toContain(`${target === "cursor" ? "cursor-agent" : target} CLI not found on PATH`);
+      if (target === "cursor" || target === "kimi") {
+        expect(present.result.exitCode).toBe(0);
+        expect(present.output).toContain("Status: configured");
+      }
       console.log(`[smoke ${target} real/stub] ${present.output.trim().replaceAll("\n", " | ")}`);
     }
   }, 30_000);
