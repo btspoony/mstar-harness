@@ -115,21 +115,22 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 }
 
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
-async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void): Promise<void> {
+async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
   const harness = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: harness, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture source"], { cwd: harness, stdio: "ignore" });
   // Contract §4: the row pointers are resolved against `{PLAN_DIR}` and the
   // declaration is read, so the fixture owns the registered plan markdown.
   mkdirSync(join(harness, "plans"), { recursive: true });
-  for (const id of ["20260918-plan-alpha", "20260918-plan-beta"]) {
+  for (const id of ["20260918-plan-alpha", "20260918-plan-beta", "20260918-plan-gamma"]) {
     writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
   }
   // Contract §3: registration goes through the catalog journal, which requires
   // an initialized ACTIVE store — the fixture provisions one.
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  expect(existsSync(join(harness, "store.db"))).toBe(true);
   try {
-    fn(harness, {
+    await fn(harness, {
       root: join(harness, "status.json"),
       snapshot: join(harness, "workflows", WORKFLOW_ID, "snapshot.json"),
     });
@@ -234,29 +235,28 @@ describe("mstar iteration register", () => {
       expect(session.workflowId).toBe(WORKFLOW_ID);
     });
   });
-  test("a distinct operation cannot register an already-registered workflow id", async () => {
+  test("an exact retry replays the same ACTIVE registration without changing state", async () => {
     await setupHarness(async (harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
       const before = await registeredState(harness);
 
-      const duplicate = runCli(registerArgs(harness));
-      expect(duplicate.exitCode).toBe(1);
-      expect(message(duplicate)).toContain("[catalog.registration-conflict]");
+      const retry = runCli(registerArgs(harness));
+      expect(retry.exitCode).toBe(0);
+      expect(envelope(retry)).toMatchObject({ command: "iteration.register", status: "ok", code: "iteration.register.ok" });
       expect(await registeredState(harness)).toEqual(before);
     });
   });
 
-  test("a distinct-operation retry after losing the root entry refuses without restoring bytes", async () => {
+  test("a distinct registration intent refuses an occupied ACTIVE workflow identity", async () => {
     await setupHarness(async (harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
       const before = await registeredState(harness);
 
-      // ACTIVE disposition: the root register lives in the store, so a
-      // distinct operation against the same workflow id cannot lose it by
-      // editing bytes — the conflict refusal still leaves the store untouched.
+      // The workflow identity is create-only: a distinct plan set cannot
+      // replace its ACTIVE registration or alter the stored state.
       const distinct = runCli(registerArgs(harness, ["--row", row("20260918-plan-gamma")]));
       expect(distinct.exitCode).toBe(1);
-      expect(message(distinct)).toContain("[catalog.registration-conflict]");
+      expect(message(distinct)).toContain("[execution.not-empty]");
       expect(await registeredState(harness)).toEqual(before);
     });
   });
