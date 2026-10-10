@@ -88,7 +88,7 @@ afterEach(() => {
   delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
 });
 
-describe("execution-route — the ACTIVE store is the only read authority", () => {
+describe("execution-route \u2014 the ACTIVE store is the only read authority", () => {
   test("an ACTIVE store answers the route, the verdict and the source read from the DB", async () => {
     const fx = tracked(workspace("exec-route-active-"));
     await activeStore(fx);
@@ -116,7 +116,7 @@ describe("execution-route — the ACTIVE store is the only read authority", () =
   });
 });
 
-describe("execution-route — every non-ACTIVE store is a typed refusal with recovery", () => {
+describe("execution-route \u2014 every non-ACTIVE store is a typed refusal with recovery", () => {
   test("an ABSENT store refuses store.not-initialized with BOTH bootstrap recovery paths", async () => {
     const fx = tracked(workspace("exec-route-absent-"));
     // No store file at all: the retired file route must never answer with
@@ -198,7 +198,7 @@ describe("execution-route — every non-ACTIVE store is a typed refusal with rec
   });
 });
 
-describe("execution-route — the migration importer entry points stay reachable", () => {
+describe("execution-route \u2014 the migration importer entry points stay reachable", () => {
   test("a staged store is upgraded in place and then answers the ACTIVE route", async () => {
     const fx = tracked(workspace("exec-route-migrate-"));
     await activeStore(fx);
