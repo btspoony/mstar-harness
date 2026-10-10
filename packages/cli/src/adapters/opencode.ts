@@ -29,7 +29,7 @@ const UNRESOLVED_GENERATION_ANNOTATION =
 /**
  * V2 MCP server entry mirroring `packages/opencode/mcp.json`'s `morning-star`
  * row (`["npx","@mstar-harness/cli","mcp"]`). The V2 schema (tag v2.0.26
- * `Mcp.LocalConfig`) has no `enabled` key — `disabled` absent means enabled,
+ * `Mcp.LocalConfig`) has no `enabled` key \u2014 `disabled` absent means enabled,
  * so the V2 translation carries `type` + `command` only.
  */
 const MORNING_STAR_MCP_SERVER = { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] };
@@ -98,7 +98,7 @@ function applyV1Init(config: Record<string, unknown>, assignments: Record<string
 /**
  * Owned-slot dedupe for the plural `plugins` array: every harness slot (V2
  * npm string/object forms, V1 npm string/object forms, legacy git entries) is
- * removed and the single canonical V2 entry appended — the V2 equivalent of
+ * removed and the single canonical V2 entry appended \u2014 the V2 equivalent of
  * the V1 pass's dedupe. Unrelated entries keep their positions and shapes
  * byte-faithfully (objects by reference).
  */
@@ -156,7 +156,7 @@ function mergeV2McpServer(config: Record<string, unknown>) {
 /**
  * `$schema` pin rule (spec Q3): opencode v2.0.26 publishes no V2 `$schema` id
  * (`OPENCODE_V2_CONFIG_SCHEMA` is null by the contracted fallback), so the V2
- * pass preserves any existing `$schema` and never invents one — deliberately
+ * pass preserves any existing `$schema` and never invents one \u2014 deliberately
  * no write here.
  */
 function applyV2Init(config: Record<string, unknown>, assignments: Record<string, string>) {
@@ -195,7 +195,7 @@ async function resolveInitGeneration(
   if (opts.dryRun === true) {
     // D15: under --dry-run neither probe runs. The preview generation comes
     // from the config-marker consistency guard, else the preview proceeds
-    // non-refusing with the exact unresolved annotation — no silent default.
+    // non-refusing with the exact unresolved annotation \u2014 no silent default.
     const markers = detectOpencodeGeneration(config);
     if (markers === null) {
       return { generation: null, sourceLine: `Generation: ${UNRESOLVED_GENERATION_ANNOTATION}`, warning: null };
@@ -208,7 +208,7 @@ async function resolveInitGeneration(
   }
   // Real install without the flag: the generation probe decides (the
   // host-presence gate has already run); probe failure is a typed refusal
-  // naming the failure mode and the flag recovery — never a guess.
+  // naming the failure mode and the flag recovery \u2014 never a guess.
   const generation = await probeOpencodeGeneration(opts.probeRunner);
   return {
     generation,
@@ -220,7 +220,7 @@ async function resolveInitGeneration(
 export const opencodeAdapter: AgentAdapter = {
   target: "opencode",
   mode: "config",
-  // No getAvailableModels — default init never calls `opencode models` (that command can hang with no feedback).
+  // No getAvailableModels \u2014 default init never calls `opencode models` (that command can hang with no feedback).
   resolveConfigPath: (scope, outputPath) => resolveOpencodeConfigPath(scope, outputPath),
   mutateConfigForInit: async (config, assignments, opts = {}) => {
     // D14: resolve the executable's PATH entry before generation logic or any
@@ -246,7 +246,7 @@ export const opencodeAdapter: AgentAdapter = {
     const generation = opts.generation ?? detectOpencodeGeneration(config);
     if (generation === "v2") return validateOpencodeConfigV2(config);
     if (generation === "v1") return validateOpencodeConfig(config);
-    return []; // unresolved preview — nothing was selected, nothing to validate
+    return []; // unresolved preview \u2014 nothing was selected, nothing to validate
   },
   getDoctorWarnings: (config) => getOpencodeDoctorWarnings(config, ALL_ROLES),
   printPostSetupSummary: (config) => {
@@ -276,8 +276,8 @@ function printV1Summary(tag: SummaryTag) {
 }
 
 function printV2Summary(tag: SummaryTag) {
-  console.log(tag("v2", "Schema: preserved as-is (opencode v2.0.26 publishes no V2 $schema id — existing value kept, none invented)"));
+  console.log(tag("v2", "Schema: preserved as-is (opencode v2.0.26 publishes no V2 $schema id \u2014 existing value kept, none invented)"));
   console.log(tag("v2", `Plugin: ${OPENCODE_V2_PLUGIN} (ensured in \`plugins\`; owned slots deduped)`));
-  console.log(tag("v2", `MCP: mcp.servers["morning-star"] → ["npx", "@mstar-harness/cli", "mcp"] (non-destructive merge)`));
+  console.log(tag("v2", `MCP: mcp.servers["morning-star"] \u2192 ["npx", "@mstar-harness/cli", "mcp"] (non-destructive merge)`));
   console.log(tag("v2", "Role models: left to OpenCode defaults (set agents.<role>.model in opencode.json only if you want overrides)"));
 }
