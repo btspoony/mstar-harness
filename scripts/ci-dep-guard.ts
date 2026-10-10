@@ -1,12 +1,10 @@
 #!/usr/bin/env bun
 /**
- * ci-dep-guard.ts — roadmap §8.7 item 5 : the
- * `@mstar-harness/opencode` dep tree must never contain `commander` or
- * `inquirer` — including the scoped `@inquirer/*` family (`@inquirer/prompts`,
- * `@inquirer/core`, `@inquirer/type` — the roadmap names exactly
- * `commander` + `@inquirer/prompts` as the anti-pattern).
- *
- * Reads `npm ls --workspace @mstar-harness/opencode --omit=dev` output on
+ * `@mstar-harness/opencode` and `@mstar-harness/opencode-v2` dep trees must
+ * never contain `commander` or `inquirer` — including the scoped `@inquirer/*`
+ * family (`@inquirer/prompts`, `@inquirer/core`, `@inquirer/type` — the roadmap
+ * names exactly `commander` + `@inquirer/prompts` as the anti-pattern).
+ * Reads either package's `npm ls --workspace <name> --omit=dev` output on
  * stdin and exits 1 when a forbidden package appears. `--omit=dev` prunes
  * the engine devDependency edge (`workspace:*` — npm ls cannot validate
  * workspace: edges against a bun-installed tree), leaving the runtime dep
@@ -19,11 +17,11 @@
  *   `-js` is none of those);
  * - `commanderjs` / `inquirer-core` style bare tokens do NOT false-positive.
  *
- * Single source of truth for the CI step: the workflow pipes the npm ls
- * output here (`bun run ci:dep-guard`), and `scripts/ci-dep-guard.test.ts`
+ * Single source of truth for the CI step: the workflow pipes npm ls output
+ * here (`bun run ci:dep-guard -- <package-name>`), and the test file
  * guards the pattern semantics with positive + negative samples.
- */
 
+ */
 const FORBIDDEN_DEP_RE = /(^|\s)@?(commander|inquirer)([@/\s]|$)/;
 
 /** Lines of `npm ls` output that reference a forbidden package. */
@@ -48,13 +46,14 @@ function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  const packageName = process.argv[2] ?? "@mstar-harness/opencode";
   const hits = findForbiddenDeps(await readStdin());
   if (hits.length > 0) {
-    console.error("@mstar-harness/opencode dep tree must not contain commander or inquirer (roadmap §8.7 item 5):");
+    console.error(`${packageName} dep tree must not contain commander or inquirer:`);
     for (const hit of hits) console.error(`  ${hit}`);
     process.exit(1);
   }
-  console.log("OK — opencode dep tree has no commander/inquirer");
+  console.log(`OK — ${packageName} dep tree has no commander/inquirer`);
 }
 
 if (import.meta.main) {

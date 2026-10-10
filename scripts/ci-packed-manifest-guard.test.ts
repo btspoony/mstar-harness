@@ -2,7 +2,7 @@
  * scripts/ci-packed-manifest-guard.ts — `workspace:` spec scan semantics.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findWorkspaceSpecs } from "./ci-packed-manifest-guard.ts";
@@ -55,8 +55,8 @@ interface GuardRun {
   stderr: string;
 }
 
-function runGuard(cwd: string): GuardRun {
-  const proc = Bun.spawnSync([process.execPath, GUARD_PATH], {
+function runGuard(cwd: string, ...args: string[]): GuardRun {
+  const proc = Bun.spawnSync([process.execPath, GUARD_PATH, ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
@@ -92,12 +92,6 @@ describe("guard process boundary (exit codes)", () => {
         dependencies: { "@mstar-harness/engine": "workspace:*" },
       });
       const result = runGuard(cwd);
-      // Raw violations fail fast: the guard prints its own banner and exits 1
-      // before `bun pm pack` runs, so these assertions pin the guard's own
-      // rejection path (a regression to pack-throws-first would lose the
-      // banner and surface pack's error instead).
-      // Fail closed: a spawn timeout yields `exitCode: null`, which must not
-      // satisfy this assertion.
       expect(result.exitCode).not.toBeNull();
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("workspace: protocol is unresolvable");
@@ -106,6 +100,27 @@ describe("guard process boundary (exit codes)", () => {
     60_000,
   );
 
+  test(
+    "checks the selected package manifest instead of only the root manifest",
+    () => {
+      const cwd = mkdtempSync(join(tmpdir(), "packed-manifest-guard-fixture-"));
+      fixtureDir = cwd;
+      const packageDir = join(cwd, "packages", "opencode-v2");
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(join(cwd, "package.json"), JSON.stringify({ name: "clean-root" }));
+      writeFileSync(
+        join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "@mstar-harness/opencode-v2",
+          dependencies: { "@mstar-harness/engine": "workspace:*" },
+        }),
+      );
+      const result = runGuard(cwd, "packages/opencode-v2/package.json");
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('dependencies["@mstar-harness/engine"] = "workspace:*"');
+    },
+    60_000,
+  );
   test(
     "exits 0 when the root manifest ships semver-only specs",
     () => {
