@@ -33,6 +33,7 @@ function hostFixture() {
   const skills: Record<string, { id: string; name: string; path: string; content: string }> = {};
   const sessionHooks: Record<string, (event: ContextEvent) => Effect.Effect<void>> = {};
   const toolHooks: Array<{ kind: string; handler: ToolHook }> = [];
+  const registrations: Array<{ dispose: Effect.Effect<void> }> = [];
   const prompts: Array<Record<string, unknown>> = [];
   const context = {
     agent: { transform: (edit: (editor: { update: (id: string, update: (current: Record<string, unknown>) => void) => void }) => void) =>
@@ -46,22 +47,41 @@ function hostFixture() {
     skill: { transform: (edit: (editor: { add: (skill: (typeof skills)[string]) => void }) => void) =>
       Effect.sync(() => edit({ add: (skill) => { skills[skill.id] = skill; } })) },
     session: {
-      hook: (kind: string, handler: (event: ContextEvent) => Effect.Effect<void>) => {
-        sessionHooks[kind] = handler;
-        return Effect.succeed({ dispose: Effect.void });
-      },
+      hook: (kind: string, handler: (event: ContextEvent) => Effect.Effect<void>) =>
+        Effect.sync(() => {
+          sessionHooks[kind] = handler;
+          const registration = {
+            dispose: Effect.sync(() => {
+              if (sessionHooks[kind] === handler) delete sessionHooks[kind];
+            }),
+          };
+          registrations.push(registration);
+          return registration;
+        }),
       prompt: (input: Record<string, unknown>) => Effect.sync(() => { prompts.push(input); }),
     },
-    tool: { hook: (kind: string, handler: ToolHook) => {
-      toolHooks.push({ kind, handler });
-      return Effect.succeed({ dispose: Effect.void });
-    } },
+    tool: { hook: (kind: string, handler: ToolHook) =>
+      Effect.sync(() => {
+        const entry = { kind, handler };
+        toolHooks.push(entry);
+        const registration = {
+          dispose: Effect.sync(() => {
+            const index = toolHooks.indexOf(entry);
+            if (index >= 0) toolHooks.splice(index, 1);
+          }),
+        };
+        registrations.push(registration);
+        return registration;
+      }) },
   } as unknown as Context;
-  return { context, agents, commands, skills, sessionHooks, toolHooks, prompts };
+  return { context, agents, commands, skills, sessionHooks, toolHooks, prompts, registrations };
 }
 
-async function setup(context: Context) {
-  await Effect.runPromise(Effect.scoped(plugin.effect(context)));
+async function setup(fixture: ReturnType<typeof hostFixture>) {
+  for (const registration of fixture.registrations.splice(0)) {
+    await Effect.runPromise(registration.dispose);
+  }
+  await Effect.runPromise(Effect.scoped(plugin.effect(fixture.context)));
 }
 
 const validAssignment = [
@@ -86,31 +106,44 @@ const dispatchEvent = (caller: string, target: string, prompt: unknown, id = "ca
 describe("built OpenCode V2 package integration", () => {
   test("registers PM primary seat and spawnable leaf role", async () => {
     const fixture = hostFixture();
-    await setup(fixture.context);
+    await setup(fixture);
     expect(plugin.id).toBe("morning-star-harness");
     expect(fixture.agents["project-manager"]).toMatchObject({ mode: "primary" });
     expect(fixture.agents["fullstack-dev"]).toMatchObject({ mode: "subagent" });
   });
 
-  test("registers /pm command with its template and agent binding", async () => {
+  test("registers the PM entry skill and routes /pm to project-manager", async () => {
     const fixture = hostFixture();
-    await setup(fixture.context);
-    const command = fixture.commands.pm;
+    await setup(fixture);
+    const skill = fixture.skills.pm;
+    expect(skill).toBeDefined();
+    if (!skill) return;
+    expect(skill.path).toContain("/packages/opencode-v2/harness-skills/pm/SKILL.md");
+    expect(skill.content).toContain("PM entry shim — force project-manager orchestration");
+    expect(skill.content).toContain("Host ships a **`/pm`** command or exposes this **`pm`** skill | → **`project-manager`**");
+  });
+
+  test("registers a bundled command with its template through the built entry", async () => {
+    const fixture = hostFixture();
+    await setup(fixture);
+    const command = fixture.commands["codebase-audit"];
     expect(command).toBeDefined();
     if (!command) return;
     await Effect.runPromise(command.execute({
       sessionID: "session-1",
-      prompt: { text: "coordinate this", files: [], agents: [], skills: [] },
+      prompt: { text: "audit this repository", files: [], agents: [], skills: [] },
       delivery: "default",
     }));
-    expect(fixture.prompts).toHaveLength(1);
-    expect(fixture.prompts[0]).toMatchObject({ text: expect.stringContaining("coordinate this") });
-    expect(fixture.prompts[0]?.agent).toBe("project-manager");
+    const text = fixture.prompts[0]?.text;
+    expect(typeof text).toBe("string");
+    if (typeof text !== "string") return;
+    expect(text).toContain("# Audit Codebase");
+    expect(text).toContain("audit this repository");
   });
 
   test("resolves nested role references from the package-local skill", async () => {
     const fixture = hostFixture();
-    await setup(fixture.context);
+    await setup(fixture);
     const skill = fixture.skills["mstar-roles"];
     expect(skill).toBeDefined();
     if (!skill) return;
@@ -121,7 +154,7 @@ describe("built OpenCode V2 package integration", () => {
 
   test("registers bootstrap alongside editors and injects it once", async () => {
     const fixture = hostFixture();
-    await setup(fixture.context);
+    await setup(fixture);
     const event: ContextEvent = { messages: [message("user")], system: [] };
     await Effect.runPromise(fixture.sessionHooks.context!(event));
     await Effect.runPromise(fixture.sessionHooks.context!(event));
@@ -141,7 +174,7 @@ describe("built OpenCode V2 package integration", () => {
       writeFileSync(join(root, ".mstar", "status.json"), JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] }));
       writeFileSync(join(root, ".mstar", "store.db"), "fixture");
       process.chdir(root);
-      await setup(fixture.context);
+      await setup(fixture);
       const [dispatchGate, writeGate] = fixture.toolHooks.map(({ handler }) => handler);
       expect(dispatchGate).toBeDefined();
       expect(writeGate).toBeDefined();
@@ -173,7 +206,7 @@ describe("built OpenCode V2 package integration", () => {
 
   test("replaying setup converges assets and hook registrations", async () => {
     const fixture = hostFixture();
-    await setup(fixture.context);
+    await setup(fixture);
     const first = {
       agentIds: Object.keys(fixture.agents).sort(),
       commandNames: Object.keys(fixture.commands).sort(),
@@ -181,7 +214,7 @@ describe("built OpenCode V2 package integration", () => {
       sessionHookNames: Object.keys(fixture.sessionHooks).sort(),
       toolHookCount: fixture.toolHooks.length,
     };
-    await setup(fixture.context);
+    await setup(fixture);
     expect({
       agentIds: Object.keys(fixture.agents).sort(),
       commandNames: Object.keys(fixture.commands).sort(),
