@@ -1222,6 +1222,16 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     return env;
   }
 
+  function runDoctorCli(args: string[], pathValue: string, home: string, projectRoot: string): { exitCode: number | null; stdout: string; stderr: string } {
+    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+      cwd: projectRoot,
+      env: cliEnv(pathValue, projectRoot, home),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  }
+
   function runInit(args: string[], pathValue: string, projectRoot: string, home = tmpdir()): { exitCode: number | null; stdout: string; stderr: string } {
     const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "init", ...args], {
       cwd: projectRoot,
@@ -1306,6 +1316,46 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     // The incompatible config is preserved byte-for-byte: nothing migrated,
     // nothing added.
     expect(readFileSync(join(root, "opencode.json"), "utf8")).toBe(original);
+  });
+
+  test("the scope-split recovery is real for doctor: the other scope's config validates clean while this file keeps the flat row", () => {
+    const projectRoot = tempProject();
+    // Project config: legacy flat row (v2 doctor flags it as a mismatch).
+    writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify({
+      "mcp": { "context7": { "type": "remote", "url": "https://mcp.context7.com/mcp" } },
+    }, null, 2), "utf8");
+    // Global config (HOME fixture): nested V2 shape, no flat rows.
+    const home = tempProject();
+    // Global scope resolves the host config under ~/.config/opencode/.
+    const globalConfigDir = join(home, ".config", "opencode");
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, "opencode.json"), JSON.stringify({
+      "plugins": ["@mstar-harness/opencode-v2@latest"],
+      "mcp": { "servers": { "morning-star": { "type": "local", "command": ["npx", "@mstar-harness/cli", "mcp"] } } },
+    }, null, 2), "utf8");
+    const binDir = stubOpencode("opencode v2.0.24");
+
+    const flatProject = runDoctorCli(
+      ["doctor", "--target", "opencode", "--scope", "project", "--opencode-generation", "v2"],
+      `${binDir}:${ISOLATED_PATH}`,
+      home,
+      projectRoot,
+    );
+    expect(flatProject.exitCode).not.toBe(0);
+    expect(`${flatProject.stdout}\n${flatProject.stderr}`).toContain("legacy flat");
+
+    const globalDoctor = runDoctorCli(
+      ["doctor", "--target", "opencode", "--scope", "global", "--opencode-generation", "v2"],
+      `${binDir}:${ISOLATED_PATH}`,
+      home,
+      projectRoot,
+    );
+    const globalOut = `${globalDoctor.stdout}\n${globalDoctor.stderr}`;
+    expect(globalDoctor.exitCode).toBe(0);
+    // The global file (nested shape, no flat rows) validates aligned under a
+    // resolved v2 generation while the project file keeps its flat row.
+    expect(globalOut).toContain('"status":"ok"');
+    expect(globalOut).toContain('MCP config aligned for opencode');
   });
 
   test("the scope-split recovery is real: the same flat row does not block a global-scope v2 init", () => {

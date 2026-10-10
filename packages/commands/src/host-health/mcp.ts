@@ -380,10 +380,7 @@ export function diagnoseMcpTarget(
             ? mcpConfig!.servers
             : mcpConfig;
       if (legacyFlatBlocked) {
-        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery: separate the generations across scopes (project and global doctor
-resolve to different config files) or move those servers under \`mcp.servers\` manually
-\u2014 \`init --opencode-generation v2\` refuses to write mixed configs, so rerunning it
-against this file will not fix it.`);
+        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI): run the V2 checks against the other scope's config file (\`mstar doctor --target opencode --scope global|project\` resolves to a different file), or run \`mstar init --target opencode --opencode-generation v2 --scope <other>\` there (init refuses to write mixed configs in this file by design).`);
       } else {
         const serverRecord = record(servers);
         if (serverRecord === null) {
