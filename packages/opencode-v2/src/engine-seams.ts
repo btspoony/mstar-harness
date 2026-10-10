@@ -26,11 +26,27 @@ export type DispatchGateApi = Pick<
   | "resolveHarnessDir"
   | "resolveRepoEnforcement"
 >;
+export type WriteGateApi = Pick<
+  EngineModule,
+  | "applyEnforcement"
+  | "harnessDocKindOfTarget"
+  | "queryIssueFlow"
+  | "resolveExecutionReadRoute"
+  | "resolveHarnessDir"
+  | "resolveProjectDir"
+  | "resolveRepoEnforcement"
+  | "resolveWorkflowDir"
+  | "validateStatusWriteDoc"
+  | "withStoreRead"
+>;
+
 
 let validatorsPromise: Promise<CoordinationValidators | null> | undefined;
 let directoryResolversPromise: Promise<DirectoryResolvers | null> | undefined;
 let activeStoreApiPromise: Promise<ActiveStoreApi | null> | undefined;
 let dispatchGateApiPromise: Promise<DispatchGateApi | null> | undefined;
+let writeGateApiPromise: Promise<WriteGateApi | null> | undefined;
+
 
 export function loadCoordinationValidators(): Promise<CoordinationValidators | null> {
   validatorsPromise ??= import("@mstar-harness/engine").then((engine) => {
@@ -100,4 +116,33 @@ export function loadDispatchGateApi(): Promise<DispatchGateApi | null> {
     };
   }).catch(() => null);
   return dispatchGateApiPromise;
+}
+export function loadWriteGateApi(): Promise<WriteGateApi | null> {
+  writeGateApiPromise ??= import("@mstar-harness/engine").then((engine) => {
+    if (
+      typeof engine.applyEnforcement !== "function" ||
+      typeof engine.harnessDocKindOfTarget !== "function" ||
+      typeof engine.queryIssueFlow !== "function" ||
+      typeof engine.resolveExecutionReadRoute !== "function" ||
+      typeof engine.resolveHarnessDir !== "function" ||
+      typeof engine.resolveProjectDir !== "function" ||
+      typeof engine.resolveRepoEnforcement !== "function" ||
+      typeof engine.resolveWorkflowDir !== "function" ||
+      typeof engine.validateStatusWriteDoc !== "function" ||
+      typeof engine.withStoreRead !== "function"
+    ) return null;
+    return {
+      applyEnforcement: engine.applyEnforcement,
+      harnessDocKindOfTarget: engine.harnessDocKindOfTarget,
+      queryIssueFlow: engine.queryIssueFlow,
+      resolveExecutionReadRoute: engine.resolveExecutionReadRoute,
+      resolveHarnessDir: engine.resolveHarnessDir,
+      resolveProjectDir: engine.resolveProjectDir,
+      resolveRepoEnforcement: engine.resolveRepoEnforcement,
+      resolveWorkflowDir: engine.resolveWorkflowDir,
+      validateStatusWriteDoc: engine.validateStatusWriteDoc,
+      withStoreRead: engine.withStoreRead,
+    };
+  }).catch(() => null);
+  return writeGateApiPromise;
 }
