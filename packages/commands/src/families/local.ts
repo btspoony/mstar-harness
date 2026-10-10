@@ -339,9 +339,18 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
                 "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeVersion + ".",
               );
             }
-          } catch {
+          } catch (probeError) {
+            const caught = probeError as { code?: string; killed?: boolean; signal?: string; message?: string };
+            // Distinguish the recovery facts: ENOENT means install Node; a
+            // killed/hung probe means the wrapper is wedged and the operator
+            // should fix PATH; anything else is an unprobeable environment.
+            const cause = caught.code === "ENOENT"
+              ? "no node executable was found on PATH"
+              : caught.killed === true || caught.signal !== undefined
+                ? "the node --version probe did not complete within the bounded window (a PATH wrapper may be wedged)"
+                : "the node --version probe failed (" + (caught.message ?? "unknown") + ")";
             pluginRuntimeErrors.push(
-              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); no node executable was found.",
+              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); " + cause + ".",
             );
           }
         }
