@@ -121,8 +121,10 @@ describe("built OpenCode V2 package integration", () => {
     const source = readFileSync(skill.path, "utf8");
     const description = source.match(/^description:\s*"?(.+?)"?$/m)?.[1];
     expect(description).toBeDefined();
-    expect(description?.toLowerCase()).toContain("entry shim");
-    expect(description?.toLowerCase()).toContain("project-manager");
+    const route = description?.match(/\bproject-manager\b/i)?.[0];
+    expect(route).toBeDefined();
+    if (!route) return;
+    expect(fixture.agents[route]).toMatchObject({ mode: "primary" });
   });
 
   test("registers a bundled command with its template through the built entry", async () => {
