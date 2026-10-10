@@ -259,7 +259,7 @@ describe("repo-built CLI host-presence smoke", () => {
       expect(refused.result.exitCode).not.toBe(0);
       expect(refused.output).toContain(installLine[target]);
       if (target === "cursor") {
-        expect(refused.output).toContain("Install Cursor");
+        expect(refused.output).toContain("curl https://cursor.com/install -fsS | bash");
         expect(refused.output).toContain("cursor-agent CLI");
         expect(refused.output).toContain("re-run init");
       }
