@@ -33,7 +33,7 @@ import {
   readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
-import type { ExecutionCaller, ExecutionContext, CaptureInput } from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext, ExecutionToken, CaptureInput } from '@mstar-harness/engine'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
@@ -890,7 +890,7 @@ export function v2ResidualEntry(id: string, overrides: Record<string, unknown> =
  * @param workflowId - the active workflow id (default `wf-1`).
  * @param plans - optional plan rows in the workflow's ACTIVE projection.
  */
-const activeExecutionTokens = new Map<string, string>()
+const activeExecutionTokens = new Map<string, ExecutionToken>()
 
 export async function seedActiveWorkflow(
   harnessDir: string,
@@ -902,7 +902,7 @@ export async function seedActiveWorkflow(
   selectedWorkflowId: string | null = workflowId,
 ): Promise<void> {
   await mkdir(harnessDir, { recursive: true })
-  let expected = activeExecutionTokens.get(harnessDir)
+  let expected: ExecutionToken | undefined = activeExecutionTokens.get(harnessDir)
   if (expected === undefined) {
     if (!existsSync(join(harnessDir, 'store.db'))) {
       const store = await initializeStore({ harnessDir })
@@ -916,7 +916,7 @@ export async function seedActiveWorkflow(
   const sourcePlans = plans.length > 0 ? plans : Array.isArray(overrides.plans) ? overrides.plans : []
   const planRows = sourcePlans
     .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value))
-    .map((row) => ({
+    .map((row): Record<string, unknown> => ({
       ...row,
       title: typeof row.title === 'string' ? row.title : String(row.id ?? 'plan'),
       file: typeof row.file === 'string' ? row.file : `plans/${String(row.id ?? 'plan')}.md`,

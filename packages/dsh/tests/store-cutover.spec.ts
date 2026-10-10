@@ -220,7 +220,12 @@ async function seedPendingRegistration(harnessDir: string, operationId: string):
   await mkdir(join(harnessDir, 'plans'), { recursive: true })
   await writeFile(join(harnessDir, 'plans', 'plan-a.md'), '# Store cutover plan\n\n**plan_id:** plan-a\n')
   setArtifactStore(createFsStore(harnessDir))
-  await expect(registerShippedCatalogExecution({ harnessDir }, planRegistration(harnessDir, operationId))).rejects.toThrow(
+  await expect(
+    registerShippedCatalogExecution(
+      { harnessDir, caller: { sessionId: 'seed-conflict', role: 'coordinator', workflowId: 'wf-store' } },
+      planRegistration(harnessDir, operationId),
+    ),
+  ).rejects.toThrow(
     /catalog\.duplicate/,
   )
 }
