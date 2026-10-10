@@ -813,7 +813,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { opencodeAdapter } from "../src/adapters/opencode";
 import { HOST_PRESENCE_BINARIES, ensureHostPresent, HostPresenceRefusal } from "../src/adapters/host-presence";
 import { OpencodeVersionProbeRefusal, probeOpencodeGeneration } from "../src/adapters/opencode-version-probe";
-import type { ProbeCommandRunner } from "../src/types";
+import type { MutateConfigForInitOptions, ProbeCommandRunner } from "../src/types";
 
 const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
 const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";
@@ -821,6 +821,11 @@ const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";
 const runnerMissing: ProbeCommandRunner = async () => {
   throw Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" });
 };
+const runnerFailed: ProbeCommandRunner = async () => {
+  throw Object.assign(new Error("opencode --version exited with status 1"), { code: 1 });
+};
+
+const runnerPresent: ProbeCommandRunner = async () => "/resolved/opencode";
 
 const runnerTimedOut: ProbeCommandRunner = async () => {
   throw Object.assign(new Error("spawn opencode ETIMEDOUT"), { killed: true, signal: "SIGTERM" });
@@ -934,13 +939,15 @@ describe("host-presence helper", () => {
 });
 
 describe("opencode adapter — generation selection", () => {
-  const mutate = opencodeAdapter.mutateConfigForInit!.bind(opencodeAdapter);
+  const mutateAdapter = opencodeAdapter.mutateConfigForInit!.bind(opencodeAdapter);
+  const mutate = (config: Record<string, unknown>, assignments: Record<string, string>, opts: MutateConfigForInitOptions = {}) =>
+    mutateAdapter(config, assignments, { presenceRunner: runnerPresent, ...opts });
 
   test("REAL install with a missing opencode binary refuses with the install command before any generation logic (flag present and absent)", async () => {
     for (const generation of [undefined, "v2"] as const) {
       let refused = false;
       try {
-        await mutate({}, {}, { dryRun: false, generation, probeRunner: runnerMissing });
+        await mutate({}, {}, { dryRun: false, generation, presenceRunner: runnerMissing, probeRunner: runnerMissing });
         expect.unreachable();
       } catch (error) {
         refused = true;
@@ -959,6 +966,17 @@ describe("opencode adapter — generation selection", () => {
       expect(logSpy.mock.calls.map((call) => call.join(" ")).some((line) => line.includes("Generation: v2") && line.includes("probe"))).toBe(true);
     } finally {
       logSpy.mockRestore();
+    }
+  });
+
+  test("a present opencode with a failing --version reaches generation refusal and names the flag recovery", async () => {
+    try {
+      await mutate({}, {}, { dryRun: false, presenceRunner: runnerPresent, probeRunner: runnerFailed });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpencodeVersionProbeRefusal);
+      expect(errorMessage(error)).toContain("--opencode-generation <v1|v2>");
+      expect(errorMessage(error)).not.toContain("CLI not found on PATH");
     }
   });
 
