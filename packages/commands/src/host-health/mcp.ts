@@ -360,9 +360,10 @@ export function diagnoseMcpTarget(
       const mixedMcpShapes = target === "opencode"
         && mcpConfig !== null
         && Object.keys(mcpConfig).some((key) => key !== "timeout" && key !== "servers");
-      if (mixedMcpShapes) {
+            if (mixedMcpShapes) {
         const flatRows = Object.keys(mcpConfig!).filter((key) => key !== "timeout" && key !== "servers");
-        errors.push(`MCP config ${relativeConfig} mixes legacy flat MCP rows (${flatRows.map((row) => \`mcp.\${row}\`).join(", ")}) with the V2 \`mcp.servers\` shape; OpenCode V2 rejects the mixed config. Move the rows into one dialect (or separate the generations across scopes).`);
+        const flatList = flatRows.map((row) => `mcp.${row}`).join(", ");
+        errors.push(`MCP config ${relativeConfig} mixes legacy flat MCP rows (${flatList}) with the V2 ` + "`mcp.servers`" + ' shape; OpenCode V2 rejects the mixed config. Move the rows into one dialect (or separate the generations across scopes).');
       }
       // A resolved V2 generation must see the nested V2 shape: OpenCode V2
       // decodes the server only from `mcp.servers`, so a legacy flat
