@@ -65,15 +65,12 @@ function ensureConfigSchema(config: Record<string, unknown>) {
 function updatePluginList(config: Record<string, unknown>) {
   const next = ensureObject(config);
   const existing = Array.isArray(next.plugin) ? next.plugin : [];
-  const result: string[] = [];
+  const result: unknown[] = [];
   for (const item of existing) {
-    if (typeof item !== "string") continue;
-    const plugin = item.trim();
-    if (!plugin) continue;
-    if (isAnyMstarHarnessOpencodeSlot(plugin)) continue;
-    if (!result.includes(plugin)) result.push(plugin);
+    if (typeof item === "string" && isAnyMstarHarnessOpencodeSlot(item.trim())) continue;
+    result.push(item);
   }
-  if (!result.includes(MSTAR_OPENCODE_PLUGIN)) result.push(MSTAR_OPENCODE_PLUGIN);
+  result.push(MSTAR_OPENCODE_PLUGIN);
   next.plugin = result;
   return next;
 }

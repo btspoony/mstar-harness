@@ -1068,6 +1068,31 @@ describe("opencode adapter — generation selection", () => {
     expect(recordValue(servers, "other-server")).toEqual({ type: "local", command: ["other"] });
     expect(recordValue(recordValue(once, "agents"), "custom-role")).toEqual({ model: "custom-model", extra: 1 });
   });
+  test("V1 init preserves unrelated plugin values and ordering exactly", async () => {
+    const existing = {
+      plugin: [
+        " unrelated ",
+        "repeat",
+        "repeat",
+        { package: "@some/pkg", options: { enabled: true } },
+        "@mstar-harness/opencode@0.8.0",
+        "tail ",
+      ],
+    };
+    const updated = await mutate(structuredClone(existing), {}, {
+      dryRun: false,
+      generation: "v1",
+      probeRunner: runnerV1,
+    });
+    expect(updated.plugin).toEqual([
+      " unrelated ",
+      "repeat",
+      "repeat",
+      { package: "@some/pkg", options: { enabled: true } },
+      "tail ",
+      "@mstar-harness/opencode@latest",
+    ]);
+  });
 
   test("the other generation's keys are never touched (plugin/agent vs plugins/agents)", async () => {
     const v1Config = {
