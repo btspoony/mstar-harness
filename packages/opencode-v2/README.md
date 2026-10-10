@@ -36,7 +36,7 @@ See [`INSTALL.md`](./INSTALL.md) for the full setup flow and the installer's wri
 - Without the flag, a real install probes the host binary (`opencode --version`, bounded timeout) and maps the parsed major: **≥ 2 → v2**, 1.x → v1.
 - Probe failure — binary missing, timeout, or output not in the `opencode vMAJOR.MINOR.PATCH` form — **refuses the real install** (and the doctor run) with the failure mode and the `--opencode-generation` recovery. There is no silent v1 fallback.
 - Under `--dry-run` no probe runs: the preview uses the explicit flag or the config markers, else it stays non-refusing with an explicit `generation: unresolved` annotation.
-- Config markers (plural `plugins` holding an owned V2 slot vs singular `plugin` holding an owned V1 slot) are a **consistency guard only**: a disagreement with the resolved generation warns; it never selects.
+- Config markers are a **consistency guard only**: an array-valued plural `plugins` key (any entries, including an empty array) marks V2, while a singular `plugin` array holding an owned V1 slot marks V1. A disagreement with the resolved generation warns; it never selects.
 
 ## What you get
 

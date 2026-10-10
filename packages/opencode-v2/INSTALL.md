@@ -78,6 +78,7 @@ npx @mstar-harness/cli doctor --target opencode --opencode-generation v2
   - **`harness-commands/`** — copy of repo `commands/`.
 - It does **not** read `<cwd>/skills` or `<cwd>/agents`, so OpenCode's `process.cwd()` (your app project root) does not affect harness resolution.
 - Bootstrap prompt entry is injected once with `<IMPORTANT_FOR_HARNESS>` on the first user message; `system` content is never touched.
+- **Capability boundary:** the runtime gates claim exactly `write` / `edit` / `subagent` coverage — `patch`, `shell`, and Code Mode (`execute`/`opencode`/`browser`) are explicit non-claims. **Installed-host behavior is unverified**: the packaged artifact is smoke-tested under Node, but no OpenCode 2.x host run is claimed (see [`README.md`](./README.md)).
 
 ## Monorepo / git checkout of this repository
 
