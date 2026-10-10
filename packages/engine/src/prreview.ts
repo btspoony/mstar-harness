@@ -142,6 +142,17 @@ function prScoreDeduction(counts: {
 }
 
 /**
+ * Human-readable summary of the locked schedule for violation fix hints.
+ * Derived from the deduction constants above so the hint can never drift
+ * from the schedule it describes.
+ */
+const PR_SCORE_SCHEDULE_HINT =
+  `the locked diminishing schedule (must-fix ${MUST_FIX_FIRST} then ${MUST_FIX_EACH_ADDITIONAL} each; ` +
+  `should-fix max(${SHOULD_FIX_FIRST}-${SHOULD_FIX_STEP}*(n-1), ${SHOULD_FIX_MIN}); ` +
+  `nit ${NIT_FIRST} then ${NIT_EACH_ADDITIONAL} each, cap ${NIT_CAP}; ` +
+  `unverified ${UNVERIFIED_EACH} each, cap ${UNVERIFIED_CAP}; floor 0)`;
+
+/**
  * Compute the PR-review tally, score, band and verdict from accepted
  * findings, leftover unmet ACs and unverified residuals (pr-review.md
  * § Tally and derived score).
@@ -833,7 +844,7 @@ export function validatePrReviewReport(text: string): GateResult {
           "high",
           "prreview.report.score-mismatch",
           `score_pct ${declared} does not match the recompute from tally (${recompute.scorePct})`,
-          "recompute via computePrTally: the locked diminishing schedule (must-fix 45 then 15 each; should-fix max(12-3*(n-1), 2); nit 2 then 1 each, cap 8; unverified 5 each, cap 15; floor 0)",
+          `recompute via computePrTally: ${PR_SCORE_SCHEDULE_HINT}`,
         ));
       }
     }
