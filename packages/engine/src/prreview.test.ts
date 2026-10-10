@@ -34,7 +34,7 @@ const BAND_ENVELOPE: MstarReviewV1 = {
   findings: [],
 };
 
-describe("MstarReviewV1 envelope tally — band is optional (legacy) but accepted when present", () => {
+describe("MstarReviewV1 envelope tally: band is optional (legacy) but accepted when present", () => {
   test("band-less legacy envelope validates", () => {
     expect(validateMstarReviewV1(LEGACY_ENVELOPE).ok).toBe(true);
   });
