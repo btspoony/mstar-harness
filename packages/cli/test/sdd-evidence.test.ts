@@ -68,8 +68,12 @@ import {
   collectEvidenceInputs,
 } from "../src/sdd-evidence";
 import {
+  createExecutionWorkflow,
   evidenceInputDigest,
+  initializeStore,
+  readExecutionState,
   readHarnessVersion,
+  registerCatalogEntity,
   validateSddEvidenceRecord,
   verifySddEvidence,
   type EvidenceCaptureRequest,
@@ -186,7 +190,7 @@ function buildRequest(f: EvidenceFixture, overrides: Partial<EvidenceCaptureRequ
   return { ...base, ...overrides };
 }
 
-function evidenceFixture(root: string): EvidenceFixture {
+async function evidenceFixture(root: string): Promise<EvidenceFixture> {
   const primary = join(root, "primary");
   mkdirSync(primary);
   git(["init", "-q"], primary);
@@ -368,6 +372,35 @@ function evidenceFixture(root: string): EvidenceFixture {
   };
   f.request = buildRequest(f);
   writeFileSync(f.requestFile, JSON.stringify(f.request, null, 2));
+  // The SDD evidence capture resolves its dispatched context through the
+  // ACTIVE execution authority (issue #428): seed the store with one
+  // registered workflow whose plan row is Todo/no-scope, so resolution runs
+  // through the same branch-alignment arm production uses.
+  const storeContext = { harnessDir };
+  (await initializeStore(storeContext)).close();
+  await registerCatalogEntity(
+    storeContext,
+    { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` },
+    { operationId: "catalog-plan", actor: "sdd-evidence.test" },
+  );
+  await createExecutionWorkflow(
+    { harnessDir, caller: { sessionId: "creator-plan", role: "coordinator", workflowId: "wf-plan" } },
+    {
+      entry: { id: "wf-plan", type: "plan", started_at: "2026-01-01T00:00:00.000Z", dir: "workflows/wf-plan" },
+      snapshot: {
+        schema_version: 1,
+        id: "wf-plan",
+        type: "plan",
+        status: "running",
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+        delivery_kind: "development",
+        plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+      },
+      expected: (await readExecutionState(storeContext)).token,
+      operationId: "seed-wf-plan",
+    },
+  );
   return f;
 }
 
@@ -540,7 +573,7 @@ describe("capture — one execution, durable facts", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-capture-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const result = await captureDirect(f, counterArgv(f), { env: { NODE_ENV: undefined } });
         expect(result.exitCode).toBe(0);
         const record = result.record;
@@ -627,7 +660,7 @@ describe("capture — one execution, durable facts", () => {
   test("every explicit retry uses a new run id and increments the counter again", async () => {
     const root = tmpRoot("mstar-sdd-ev-retry-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const first = await captureDirect(f, counterArgv(f));
       const second = await captureDirect(f, counterArgv(f));
       expect(first.runDir).not.toBe(second.runDir);
@@ -651,7 +684,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-exit7-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const result = await captureDirect(f, [process.execPath, f.children.exit7]);
         expect(result.exitCode).toBe(7);
         expect(result.record.outcome).toEqual({ kind: "exit", code: 7 });
@@ -674,7 +707,7 @@ describe("capture — outcomes", () => {
   test("missing executable keeps spawn-error ENOENT with logs and unknown tool (exit 127)", async () => {
     const root = tmpRoot("mstar-sdd-ev-enoent-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, ["definitely-not-a-real-binary-xyz"]);
       expect(result.exitCode).toBe(127);
       expect(result.record.outcome).toEqual({ kind: "spawn-error", code: "ENOENT" });
@@ -693,7 +726,7 @@ describe("capture — outcomes", () => {
   test("PATH-bound overflow without a resolved path retains spawn-error ERESOLUTIONLIMIT (exit 1)", async () => {
     const root = tmpRoot("mstar-sdd-ev-reslim-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const gitPath = execFileSync("which", ["git"]).toString().trim();
       const paddedPath = [dirname(gitPath), ...Array.from({ length: 300 }, () => "/nonexistent-evidence-xyz")].join(":");
       const result = await captureDirect(f, ["no-such-tool-evidence-xyz"], { env: { PATH: paddedPath } });
@@ -710,7 +743,7 @@ describe("capture — outcomes", () => {
   test("permission failure retains spawn-error EACCES with a hashed tool (exit 1)", async () => {
     const root = tmpRoot("mstar-sdd-ev-eacces-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, ["./nonexec.sh"]);
       expect(result.exitCode).toBe(1);
       expect(result.record.outcome).toEqual({ kind: "spawn-error", code: "EACCES" });
@@ -727,7 +760,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-symtool-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // The only PATH instance of the tool is a symlink (the default
         // Homebrew/nvm/volta layout): resolution must fingerprint the bytes
         // that actually execute, or the record would claim "not found on
@@ -775,7 +808,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-timeout-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const started = Date.now();
         const result = await captureDirect(f, [process.execPath, f.children.ignoreTerm], { timeoutMs: 700 });
         const elapsed = Date.now() - started;
@@ -796,7 +829,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-sigint-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const marker = join(root, "interrupt-started.txt");
         const proc = Bun.spawn(
           [process.execPath, "run", SRC_ENTRY, "sdd", "evidence", "capture", "--request", f.requestFile, "--", process.execPath, f.children.interruptible],
@@ -827,7 +860,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-drain-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const started = Date.now();
         const result = await captureDirect(f, [process.execPath, f.children.descendant]);
         const elapsed = Date.now() - started;
@@ -849,7 +882,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-escdrain-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const started = Date.now();
         const result = await captureDirect(f, [process.execPath, f.children.escaper], { timeoutMs: 700 });
         const elapsed = Date.now() - started;
@@ -875,7 +908,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-cap-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Capture the CLI's forwarded bytes without flooding the test runner's
         // terminal sink; production forwarding and log caps still run intact.
         const result = runCli(
@@ -911,7 +944,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-caperr-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Sabotage the capture log fds (in-process lane) as soon as the run
         // dir appears: closing them turns every subsequent stream chunk into
         // a capture.log-write-error, overflowing the 256-message bound.
@@ -979,7 +1012,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-markerpin-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Same log-fd sabotage as the overflow test, but the child leaves a
         // detached grandchild holding the pipes: after >255 arrival-order
         // log-write errors, settle pushes capture.drain-incomplete LAST —
@@ -1050,7 +1083,7 @@ describe("capture — outcomes", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-final-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         let thrown: Error | null = null;
         try {
           await captureDirect(f, [process.execPath, f.children.finalizeFail, f.evidenceDir]);
@@ -1078,10 +1111,10 @@ describe("capture — outcomes", () => {
 // ---------------------------------------------------------------------------
 
 describe("capture — usage and gate refusals launch no child", () => {
-  test("usage errors exit 2 before creating an attempt", () => {
+  test("usage errors exit 2 before creating an attempt", async () => {
     const root = tmpRoot("mstar-sdd-ev-usage-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const captureArgs = (requestFile: string, cwd: string, argv: string[] = counterArgv(f)) =>
         runCli(["sdd", "evidence", "capture", "--request", requestFile, "--", ...argv], { cwd });
 
@@ -1160,7 +1193,7 @@ describe("capture — usage and gate refusals launch no child", () => {
   test("id predicates agree with the engine schema in both directions (spaced ids are never refused)", async () => {
     const root = tmpRoot("mstar-sdd-ev-idagree-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       // The engine record predicate accepts any trimmed id without path
       // separators or relative components; the CLI usage gate must accept
       // exactly the same set, so this capture self-validates at finalize.
@@ -1174,10 +1207,10 @@ describe("capture — usage and gate refusals launch no child", () => {
     }
   }, 30000);
 
-  test("wrong observed cwd is refused before the child (exit 1, nothing created)", () => {
+  test("wrong observed cwd is refused before the child (exit 1, nothing created)", async () => {
     const root = tmpRoot("mstar-sdd-ev-cwd-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = runCli(["sdd", "evidence", "capture", "--request", f.requestFile, "--", ...counterArgv(f)], { cwd: f.control });
       expect(String(envelopeOf(result).message)).toContain("outside the feature worktree");
       expect(existsSync(f.evidenceDir)).toBe(false);
@@ -1187,10 +1220,10 @@ describe("capture — usage and gate refusals launch no child", () => {
     }
   }, 30000);
 
-  test("wrong feature branch is refused before the child (exit 1, nothing created)", () => {
+  test("wrong feature branch is refused before the child (exit 1, nothing created)", async () => {
     const root = tmpRoot("mstar-sdd-ev-branch-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       git(["checkout", "-q", "-b", "feature/detour"], f.feature);
       const result = runCli(["sdd", "evidence", "capture", "--request", f.requestFile, "--", ...counterArgv(f)], { cwd: f.feature });
       expect(String(envelopeOf(result).message)).toContain("branch");
@@ -1201,10 +1234,10 @@ describe("capture — usage and gate refusals launch no child", () => {
     }
   }, 30000);
 
-  test("mismatched context declaration is refused (exit 2)", () => {
+  test("mismatched context declaration is refused (exit 2)", async () => {
     const root = tmpRoot("mstar-sdd-ev-ctx-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const wrong = join(root, "wrong-context.json");
       writeFileSync(wrong, JSON.stringify({ ...f.request, context: { ...f.request.context, planId: "other-plan" } }));
       const result = runCli(["sdd", "evidence", "capture", "--request", wrong, "--", ...counterArgv(f)], { cwd: f.feature });
@@ -1218,7 +1251,7 @@ describe("capture — usage and gate refusals launch no child", () => {
   test("capture writes only under the canonical control SDD dir", async () => {
     const root = tmpRoot("mstar-sdd-ev-canonical-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
       const relative = listFilesRecursive(f.sddDir).map((p) => p.slice(f.sddDir.length + 1)).sort();
       expect(relative).toEqual([
@@ -1236,7 +1269,7 @@ describe("capture — usage and gate refusals launch no child", () => {
   test("no environment dump: only selected keys (with null absence) are fingerprinted", async () => {
     const root = tmpRoot("mstar-sdd-ev-env-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const sentinel = "MSTAR_EVIDENCE_SENTINEL_SECRET";
       const result = await captureDirect(f, counterArgv(f), { env: { [sentinel]: "do-not-dump", NODE_ENV: undefined } });
       const raw = readFileSync(join(result.runDir, "record.json"), "utf8");
@@ -1281,7 +1314,7 @@ describe("verify — artifact integrity is read-only and code-exact", () => {
   test("altered log content stays provenance while a symlinked log fails its type code; missing log fails the missing code", async () => {
     const root = tmpRoot("mstar-sdd-ev-damage-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
 
       // Altered stdout.log content no longer gates integrity: the recorded
@@ -1315,7 +1348,7 @@ describe("verify — artifact integrity is read-only and code-exact", () => {
   test("verify never mutates the fixture, Git state, bundle or counter (read-only)", async () => {
     const root = tmpRoot("mstar-sdd-ev-readonly-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
       const snapshotState = () => ({
         counter: readFileSync(f.counterPath, "utf8"),
@@ -1353,7 +1386,7 @@ describe("verify — target applicability", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-cand-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Selected env must be identical on both lanes (capture + verify):
         // pin NODE_ENV explicitly instead of relying on the runner's value.
         const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
@@ -1377,7 +1410,7 @@ describe("verify — target applicability", () => {
   test("expected-head mismatch is uncertain with the explicit reason (exit 1)", async () => {
     const root = tmpRoot("mstar-sdd-ev-head-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
       const wrongHead = "0".repeat(40);
       const target = targetFileFor(root, f.feature, wrongHead);
@@ -1394,7 +1427,7 @@ describe("verify — target applicability", () => {
   test("identical bytes in a different repository are uncertain with $repository disclosure", async () => {
     const root = tmpRoot("mstar-sdd-ev-repo-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
       // Second repo with identical declared-input bytes.
       const other = join(root, "other-repo");
@@ -1430,7 +1463,7 @@ describe("verify — target applicability", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-changed-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Selected env must be identical on the capture and verify lanes:
         // pin NODE_ENV explicitly instead of relying on the runner's value
         // (an inherited NODE_ENV would otherwise be an environment difference).
@@ -1478,7 +1511,7 @@ describe("verify — target applicability", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-missingroot-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const request = buildRequest(f, {
           inputs: [...DECLARED_INPUTS, { path: "ghost", kind: "directory", purpose: "fixture" }],
         });
@@ -1517,7 +1550,7 @@ describe("verify — target applicability", () => {
   test("unknown coverage declaration is a noncandidate even with equal inputs", async () => {
     const root = tmpRoot("mstar-sdd-ev-unknown-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const request = buildRequest(f, { coverage: { ...f.request.coverage, declaration: "unknown" } });
       const result = await captureDirect(f, counterArgv(f), { request, env: { NODE_ENV: undefined } });
       const target = targetFileFor(root, f.feature, f.head);
@@ -1534,7 +1567,7 @@ describe("verify — target applicability", () => {
   test("unreadable declared input hashes are unknowns and never produce a candidate", async () => {
     const root = tmpRoot("mstar-sdd-ev-unreadable-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const unreadable = join(f.feature, "deps", "lib.js");
       chmodSync(unreadable, 0o000);
       let result: Awaited<ReturnType<typeof captureDirect>> | null = null;
@@ -1564,7 +1597,7 @@ describe("verify — target applicability", () => {
   test("verify usage errors exit 2; record IO failures emit a structured non-success assessment", async () => {
     const root = tmpRoot("mstar-sdd-ev-usage2-");
     try {
-      const f = evidenceFixture(root);
+      const f = await evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
 
       const missingArgs = runCli(["sdd", "evidence", "verify", "--sdd-dir", f.sddDir, "--plan", PLAN_ID], { cwd: f.control });
@@ -1607,7 +1640,7 @@ describe("verify — canonical sdd-dir containment", () => {
     async () => {
       const root = tmpRoot("mstar-sdd-ev-relocate-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Selected env must be identical on both lanes (capture + verify).
         const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
         const result = await captureDirect(f, counterArgv(f), { env });
@@ -1647,7 +1680,7 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
     async () => {
       const root = tmpRoot("mstar-sdd-ev-integrated-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         // Selected env must be identical on both lanes (capture + verify).
         const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
 
@@ -1950,7 +1983,7 @@ describe("v1 ceilings — engine schema validation ties the CLI constants", () =
     async () => {
       const root = tmpRoot("mstar-sdd-ev-tie-");
       try {
-        const f = evidenceFixture(root);
+        const f = await evidenceFixture(root);
         const result = await captureDirect(f, counterArgv(f), { env: { NODE_ENV: undefined } });
         expect(result.exitCode).toBe(0);
         const template = result.record;

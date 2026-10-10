@@ -2183,7 +2183,9 @@ export function recordDispatch(input: {
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
-  /** The carrying session's selection hint — decides WHICH active lifecycle the row lands in. */
+  /** ACTIVE execution graph target resolved by the asynchronous host gate. */
+  resolvedWorkflowDir?: string
+  /** The carrying-session hint is used by standalone legacy test callers. */
   hint?: SessionHint
 }): void {
   try {
@@ -2192,8 +2194,11 @@ export function recordDispatch(input: {
     // one-time warn — never a root v1 write, never a terminal snapshot
     // write, never a sibling session's lifecycle (compass v3.0.0 § Catalog
     // selection rule).
-    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir, input.hint)
-    if (workflowDir === null) return
+    const workflowDir = input.resolvedWorkflowDir
+    if (workflowDir === undefined || workflowDir === null) {
+      log('warn', 'agent-flow dispatch record refused — the ACTIVE workflow target was omitted; resolve it from the ACTIVE execution workflow source before recording')
+      return
+    }
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)
     const planId = planIdOf(header)
@@ -2305,7 +2310,7 @@ export function recordSettle(input: {
   role?: string
   planId?: string
   taskId?: string
-  /** The carrying session's selection hint — consulted ONLY when no `workflowDir` is pinned. */
+  /** Selection hint retained for identity context; never resolves a write target here. */
   hint?: SessionHint
   childId?: string
   taskRef?: string
@@ -2313,8 +2318,11 @@ export function recordSettle(input: {
   callId?: string
 }): void {
   try {
-    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
-    if (workflowDir === null) return
+    const workflowDir = input.workflowDir
+    if (workflowDir === undefined || workflowDir === '') {
+      log('warn', 'settle record refused — cause: no gate-resolved ACTIVE workflow directory; recovery: retry through the gate after ACTIVE workflow authority is available')
+      return
+    }
     const childId = optionalLedgerId(input.childId)
     const taskRef = optionalLedgerId(input.taskRef)
     const event: AgentFlowEvent = {
@@ -2387,7 +2395,7 @@ export function recordWorkflowEvent(input: {
   event: AgentFlowWorkflowEvent
   /** The verified source position this event was read from (required — it is the record identity). */
   source: AgentFlowEventSource
-  /** The carrying session's selection hint — consulted ONLY when no `workflowDir` is pinned. */
+  /** Selection hint retained for identity context; never resolves a write target here. */
   hint?: SessionHint
   /** Cursor-cap eviction hint: `true` for a session that is no longer live (optional). */
   isEvictable?: (sessionId: string) => boolean
@@ -2397,8 +2405,11 @@ export function recordWorkflowEvent(input: {
       log('warn', `workflow record refused — invalid source position (sessionId/streamId/seq are required for a stable event id); the row stays eligible`)
       return false
     }
-    const workflowDir = input.workflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
-    if (workflowDir === null) return false
+    const workflowDir = input.workflowDir
+    if (workflowDir === undefined || workflowDir === '') {
+      log('warn', 'workflow record refused — cause: no gate-resolved ACTIVE workflow directory; recovery: retry the scan after ACTIVE workflow authority is available')
+      return false
+    }
     const eventId = workflowEventId(input.event, input.source)
     const line = ledgerLineOf(input.event, { eventId, source: input.source })
     const digest = digestOfLedgerLine(line)
@@ -2529,6 +2540,8 @@ export interface WorkflowVerdictInput {
    * skipped rather than attributed to an arbitrary lifecycle.
    */
   hint?: SessionHint
+  /** ACTIVE workflow directory already resolved by the async gate read. */
+  resolvedWorkflowDir?: string
 }
 
 /**
@@ -2554,8 +2567,11 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
     // v3 write path: the ACTIVE workflow dir BOUND to this session. No bound
     // lifecycle → skipped with a one-time warn (never a root v1 write, never
     // a terminal snapshot write, never a sibling session's lifecycle).
-    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir, input.hint)
-    if (workflowDir === null) return
+    const workflowDir = input.resolvedWorkflowDir
+    if (workflowDir === undefined || workflowDir === '') {
+      log('warn', 'workflow verdict record refused — cause: no gate-resolved ACTIVE workflow directory; recovery: retry the gated call after ACTIVE workflow authority is available')
+      return
+    }
     const agent = input.exec !== undefined ? agentOfExec(input.exec) : undefined
     const callId = input.exec !== undefined ? callIdOf(input.exec) : undefined
     const event: AgentFlowEvent = {

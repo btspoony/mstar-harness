@@ -36,7 +36,6 @@ import {
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, type CaptureInput } from "../src/issue.js";
 import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
-import { initializeExecutionAuthority } from "../src/execution-store.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -164,7 +163,7 @@ async function seededWorkflow(
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   for (const planId of planIds) await registerPlan(context, planId);
   const coordinatorCaller = trustedCaller(COORDINATOR_ID);
   const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
@@ -462,7 +461,7 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
 
   test("refuses a revoked, foreign-epoch or foreign-store reference, and reads no session file", async () => {
     const fixture = await seededWorkflow("boundary-reference");
-    const { context, epoch, planTokens, coordinator, coordinatorCaller } = fixture;
+    const { context, planTokens, coordinator, coordinatorCaller } = fixture;
     const before = footprint(context);
     let ran = 0;
     const attempt = (session: ExecutionSessionRef): Promise<unknown> =>
@@ -475,7 +474,6 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
         },
       );
 
-    await expect(attempt({ ...coordinator, epoch: epoch - 1 })).rejects.toMatchObject({ code: "store.stale-epoch" });
     await expect(attempt({ ...coordinator, storeId: "00000000-0000-4000-8000-000000000000" })).rejects.toMatchObject({
       code: "execution.scope-mismatch",
     });
@@ -488,6 +486,15 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
       db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ?").run(WORKFLOW_ID);
     });
     await expect(attempt(coordinator)).rejects.toMatchObject({ code: "execution.session-unavailable" });
+
+    // A superseded authority generation is stale, not absent: the live epoch
+    // advances past the epoch the session was bound in (a fresh ACTIVE store
+    // is at epoch 1, so the stale generation is produced by advancing the live
+    // store, never by presenting epoch 0).
+    withRaw(context, (db) => {
+      db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    });
+    await expect(attempt(coordinator)).rejects.toMatchObject({ code: "store.stale-epoch" });
 
     expect(ran).toBe(0);
     expect(footprint(context)).toEqual(before);

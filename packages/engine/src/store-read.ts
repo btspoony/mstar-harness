@@ -37,6 +37,7 @@ import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
@@ -479,63 +480,40 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
 // ---------------------------------------------------------------------------
 
 /**
- * Which route answers an execution-SOURCE read for this control harness: the
- * execution DB authority (`readExecutionAuthority`) or the pre-activation
- * file route. This is the reader-facing sibling of `assertExecutionFileReadAllowed`
- * (§4.3) — the same discrimination, expressed as a route instead of a refusal —
- * and it is the ONE place a consumer decides between them.
- *
- * The two arms are the whole verdict set of §2.1/§5:
- *
- * - `execution` — the store records an ACTIVE execution authority. Only the DB
- *   adapter may serve the read.
- * - `files` — a store that predates migration 4 (`execution_meta` absent), a
- *   `legacy`/`staged` authority, or no store file at all. Those keep the
- *   unchanged file-authoritative route; §2.1 makes absence an explicit
- *   non-verdict, never a fresh-workspace guess.
- *
- * Everything else is a REFUSAL and never degrades into `files`: a corrupt,
- * drifted, busy or unreadable store, an unsupported runtime, or a store file
- * that cannot be opened. Serving leftover JSON because the authority could not
- * be established is exactly the fallback §5 forbids.
+ * Which route answers an execution-SOURCE read for this control harness. There
+ * is exactly ONE: the execution DB authority. The pre-activation file route is
+ * retired (issue #428), so this type is the single-member acknowledgement of
+ * that route and exists only to name the reader-facing decision.
  */
-export type ExecutionReadRoute = "execution" | "files";
+export type ExecutionReadRoute = "execution";
 
 /**
- * §5 the CURRENT authority verdict of one control root: the route plus the
- * durable authority generation it was read at. This is the ONE place a
- * consumer decides between the two authorities (`resolveExecutionReadRoute` is
- * its route-only view), and the value a commit boundary re-resolves before an
- * effect lands (A26: authority activation/epoch changed during the call).
+ * §5 the CURRENT authority verdict of one control root: the ACTIVE execution
+ * authority plus the durable authority generation it was read at. This is the
+ * ONE place a consumer establishes the authority, and the value a commit
+ * boundary re-resolves before an effect lands (A26: authority
+ * activation/epoch changed during the call).
  *
- * The verdict set is the whole discrimination of §2.1/§5:
- *
- * - `execution` — the store records an ACTIVE execution authority; the handle
- *   names the store id and ``epoch`` that answered.
- * - `files` — no store file at all, a store that predates migration 4, or a
- *   `legacy`/`staged` authority: those keep the supported pre-activation route,
- *   and absence stays an explicit non-verdict rather than a fresh-workspace
- *   guess.
- *
- * A store that exists and cannot be read (corrupt, drifted, busy, unsupported
- * runtime) REFUSES through its own frozen `store.*` code instead of answering
- * `files`: serving leftover JSON because the authority could not be
- * established is the fallback §5 forbids, and an unreadable store is a typed
- * capability report, not a missing caller field.
+ * There is no second arm (the pre-activation file route is retired). A store
+ * that is ABSENT refuses `store.not-initialized` with the two-path bootstrap
+ * recovery, and a store that EXISTS but records a non-active authority refuses
+ * `execution.not-active` naming `mstar store upgrade`. Serving leftover JSON
+ * because the authority could not be established is exactly the fallback §5
+ * forbids.
  */
 export async function resolveCurrentAuthority(context: StoreContext): Promise<AuthorityVerdict> {
-  let handle: StoreHandle;
+  const handle = await openStore(context, "read");
   try {
-    handle = await openStore(context, "read");
-  } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") return { route: "files", handle: null };
-    throw error;
-  }
-  try {
-    const active = handle.execution !== null && handle.execution.authorityState === "active";
-    return active
-      ? { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } }
-      : { route: "files", handle: null };
+    if (handle.execution === null || handle.execution.authorityState !== "active") {
+      throw new ExecutionError(
+        "execution.not-active",
+        `The control harness at ${context.harnessDir} records no ACTIVE execution authority ` +
+          `(recorded state: ${handle.execution === null ? "absent \u2014 the schema predates the execution domain" : handle.execution.authorityState}). ` +
+          "The pre-activation file route is retired, so there is no second authority to fall back to: run " +
+          "`mstar store upgrade --operator <name>` to import historical file state and activate the authority, then retry.",
+      );
+    }
+    return { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } };
   } finally {
     handle.close();
   }
@@ -545,33 +523,30 @@ export async function resolveCurrentAuthority(context: StoreContext): Promise<Au
  * §5 resolve the route of one execution-source read. Opening the store is the
  * whole probe: the execution metadata is read with the schema and identity the
  * same reader `readExecutionAuthority` uses, so no consumer re-implements a
- * floor, a schema check or an authority-state rule.
+ * floor, a schema check or an authority-state rule — and the retired file
+ * route is never a fallback.
  */
 export async function resolveExecutionReadRoute(context: StoreContext): Promise<ExecutionReadRoute> {
   return (await resolveCurrentAuthority(context)).route;
 }
 
 /**
- * §5 one source read, routed: an ACTIVE authority answers with the typed DB
- * DTO, the pre-activation route answers with `files` and leaves the caller's
- * unchanged file reader in place. The address is validated before the route is
- * probed, so a malformed selection can never be answered by a route verdict.
+ * §5 one source read, served by the ACTIVE authority. The address is validated
+ * before the route is probed, so a malformed selection can never be answered by
+ * a route verdict.
  *
  * `execution` is not a hint: the adapter re-asserts the active authority inside
- * its own read transaction, so a route that changed between the probe and the
- * read refuses instead of serving a staged store.
+ * its own read transaction, so an authority that changed between the probe and
+ * the read refuses instead of serving a staged store.
  */
-export type ExecutionSourceRead =
-  | { route: "execution"; read: ExecutionRead<ExecutionState | ExecutionPlanView> }
-  | { route: "files" };
+export type ExecutionSourceRead = { route: "execution"; read: ExecutionRead<ExecutionState | ExecutionPlanView> };
 
 export async function readExecutionSource(
   context: StoreContext,
   selection: ExecutionReadSelection = {},
 ): Promise<ExecutionSourceRead> {
   const addressed = assertExecutionSelection(selection);
-  const route = await resolveExecutionReadRoute(context);
-  if (route === "files") return { route: "files" };
+  await resolveExecutionReadRoute(context);
   return { route: "execution", read: await readExecutionAuthority(context, addressed) };
 }
 

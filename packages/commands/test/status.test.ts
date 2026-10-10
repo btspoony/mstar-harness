@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "bun:test";
-import { MIGRATIONS, encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
+import { MIGRATIONS, encodeExecutionSessionRef, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
@@ -34,7 +34,7 @@ describe("status command family", () => {
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
   });
 
-  test("surfaces the engine refusal code for an invalid workflow without rewriting it", async () => {
+  test("the retired file-close inputs are refused by name, without touching the planted snapshot", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-close-"));
     try {
       const workflowDir = path.join(dir, "workflows", "closed-flow");
@@ -42,14 +42,19 @@ describe("status command family", () => {
       const snapshotPath = path.join(workflowDir, "snapshot.json");
       writeFileSync(snapshotPath, JSON.stringify({ schema_version: 1, id: "closed-flow", type: "plan", status: "invalid", started_at: "2026-01-01", updated_at: "2026-01-01", plans: [] }));
       const before = readFileSync(snapshotPath, "utf8");
-      const result = await statusDefinition("status.workflow-close").execute({ workflow: "closed-flow", harness: dir }, context(dir));
-      expect(result).toMatchObject({ status: "refused", code: "workflow.snapshot.invalid-status", exitCode: 1 });
+      // `--ended-at` belongs to the retired FILE close route: the named refusal
+      // states the ACTIVE route instead of silently answering from a fallback.
+      const result = await statusDefinition("status.workflow-close").execute({ workflow: "closed-flow", harness: dir, endedAt: "2026-01-01T00:00:00.000Z" }, { ...context(dir), sessionId: "close-session" });
+      expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      if (result.status === "ok") throw new Error("expected a usage refusal");
+      expect(String(result.message)).toContain("ACTIVE execution authority only");
+      expect(String(result.message)).toContain("--ended-at");
       expect(readFileSync(snapshotPath, "utf8")).toBe(before);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-  test("status close sparse intent derives the date and composes terminal cleanup", async () => {
+  test("a store-less control root refuses the close and names the ACTIVE bootstrap", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-close-sparse-"));
     try {
       const workflow = "wf-sparse";
@@ -76,9 +81,16 @@ describe("status command family", () => {
         },
         plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
       }));
-      const result = await statusDefinition("status.workflow-close").execute({ workflow, harness: dir }, context(dir));
-      expect(result).toMatchObject({ status: "ok", data: { snapshot: { status: "completed" }, unregistered: true } });
-      expect(JSON.parse(readFileSync(path.join(dir, "status.json"), "utf8")).workflows).toEqual([]);
+      // No ACTIVE store exists here, and the FILE close route is retired: the
+      // refusal names the cause and the supported bootstrap instead of
+      // completing a file write.
+      const result = await statusDefinition("status.workflow-close").execute({ workflow, harness: dir }, { ...context(dir), sessionId: "close-session" });
+      expect(result).toMatchObject({ status: "refused", code: "store.not-initialized", exitCode: 1 });
+      if (result.status !== "refused") throw new Error("expected a refusal");
+      expect(String(result.details?.recovery ?? result.details?.helpRoute ?? "")).toContain("mstar store init");
+      // Nothing was written: the planted register and snapshot stand untouched.
+      expect(JSON.parse(readFileSync(path.join(dir, "status.json"), "utf8")).workflows).toHaveLength(1);
+      expect(JSON.parse(readFileSync(path.join(workflowDir, "snapshot.json"), "utf8")).status).toBe("running");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -89,8 +101,10 @@ describe("status command family", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-close-details-"));
     try {
       const store = await initializeStore({ harnessDir: dir });
+      // `initializeStore` activates the execution authority (issue #428), so the
+      // generation a session ref must match is read back instead of re-created.
+      const authority = { storeId: store.storeId, epoch: store.epoch };
       store.close();
-      const authority = await initializeExecutionAuthority({ harnessDir: dir });
       const sessionRef = encodeExecutionSessionRef({
         storeId: authority.storeId,
         epoch: authority.epoch + 1,
@@ -154,11 +168,10 @@ describe("status command family", () => {
   test("a status engine refusal appends help and recovery without rewriting the engine line", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-refusal-shape-"));
     try {
-      const workflowDir = path.join(dir, "workflows", "closed-flow");
-      mkdirSync(workflowDir, { recursive: true });
-      writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: "closed-flow", type: "plan", status: "invalid", started_at: "2026-01-01", updated_at: "2026-01-01", plans: [] }));
-      const result = await statusDefinition("status.workflow-close").execute({ workflow: "closed-flow", harness: dir }, context(dir));
-      expect(result).toMatchObject({ status: "refused", code: "workflow.snapshot.invalid-status", exitCode: 1 });
+      // A harness root with no ACTIVE store: the engine's own typed cause is
+      // forwarded verbatim and the refusal keeps the shared help/recovery shape.
+      const result = await statusDefinition("status.workflow-close").execute({ workflow: "closed-flow", harness: dir }, { ...context(dir), sessionId: "close-session" });
+      expect(result).toMatchObject({ status: "refused", code: "store.not-initialized", exitCode: 1 });
       if (result.status === "ok") throw new Error("expected a refusal");
       expect(result.message.split("\n")[0]).not.toContain("Help:");
       expect(result.message).toContain("Help: mstar status workflow-close --help");
@@ -187,8 +200,7 @@ describe("status command family", () => {
       insert.run(supportedMax + 2, "from-an-even-newer-build", "e".repeat(64), "2026-09-18T00:00:00.000Z");
       store.close();
 
-      const target = path.join(harnessDir, "status.json");
-      const result = await statusDefinition("status.validate").execute({ path: target }, context(dir));
+      const result = await statusDefinition("status.validate").execute({}, { ...context(dir), controlRoot: harnessDir });
       expect(result).toMatchObject({ status: "refused", code: "store.schema-unsupported", exitCode: 1 });
       if (result.status === "ok") throw new Error("expected the store refusal");
       if (result.status !== "refused") throw new Error("expected the store refusal");

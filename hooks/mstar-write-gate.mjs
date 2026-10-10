@@ -4,68 +4,60 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync as readFileSync2, readlinkSync, realpathSync, statSync as statSync3, writeSync } from "node:fs";
-import { basename as basename3, dirname as dirname11, isAbsolute as isAbsolute3, join as join6, relative as relative6, resolve as resolve5 } from "node:path";
+import { readFileSync, readlinkSync, realpathSync, statSync as statSync5, writeSync } from "node:fs";
+import { basename as basename3, dirname as dirname8, isAbsolute as isAbsolute3, join as join6, relative as relative5, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
-import { dirname as dirname3, join as join3, sep } from "node:path";
-import { readFileSync as readFileSync3, statSync } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
-import { mkdirSync as mkdirSync2, rmdirSync, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { basename as basename4, isAbsolute as isAbsolute5, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
-import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname6, isAbsolute as isAbsolute6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
-import { existsSync as existsSync10, mkdirSync as mkdirSync5, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
-import { execFileSync as execFileSync2 } from "node:child_process";
-import { basename as basename6, dirname as dirname7, isAbsolute as isAbsolute7, join as join14, relative as relative3, resolve as resolve9 } from "node:path";
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync12, realpathSync as realpathSync5 } from "node:fs";
-import { createHash as createHash6 } from "node:crypto";
+import { dirname as dirname3, join as join3, sep } from "node:path";
+import { readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { basename as basename2, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync as readdirSync2, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname6, isAbsolute as isAbsolute4, join as join7, resolve as resolve6, sep as sep3 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
 import {
   copyFileSync,
-  existsSync as existsSync13,
+  existsSync as existsSync8,
   lstatSync as lstatSync3,
-  mkdirSync as mkdirSync6,
-  readFileSync as readFileSync13,
-  readdirSync as readdirSync9,
-  realpathSync as realpathSync6,
+  mkdirSync as mkdirSync4,
+  readFileSync as readFileSync8,
+  readdirSync as readdirSync6,
+  realpathSync as realpathSync4,
   renameSync as renameSync2,
-  rmSync as rmSync2,
-  statSync as statSync5,
+  rmSync,
+  statSync as statSync3,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename9, dirname as dirname8, join as join18, relative as relative4, resolve as resolve13, sep as sep9 } from "node:path";
-import {
-  existsSync as existsSync14,
-  lstatSync as lstatSync4,
-  mkdirSync as mkdirSync7,
-  readFileSync as readFileSync14,
-  readdirSync as readdirSync10,
-  statSync as statSync6,
-  unlinkSync as unlinkSync5,
-  writeFileSync as writeFileSync5
-} from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute10, join as join19, relative as relative5, resolve as resolve14, sep as sep10 } from "node:path";
+import { basename as basename6, dirname as dirname7, join as join11, relative as relative2, resolve as resolve9, sep as sep6 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { existsSync as existsSync10, mkdirSync as mkdirSync5, readdirSync as readdirSync9, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve10 } from "node:path";
+import { basename as basename8, isAbsolute as isAbsolute7, join as join16, relative as relative4, resolve as resolve11, sep as sep8 } from "node:path";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync14, realpathSync as realpathSync6 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync14, readdirSync as readdirSync10, statSync as statSync6 } from "node:fs";
+import { dirname as dirname10, isAbsolute as isAbsolute10, join as join19, resolve as resolve14, sep as sep10 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { setTimeout as sleep2 } from "node:timers/promises";
-import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync6 } from "node:fs";
-import { dirname as dirname10, join as join20, resolve as resolve15 } from "node:path";
+import { closeSync, existsSync as existsSync16, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync5 } from "node:fs";
+import { join as join20, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname14, join as join23, relative as relative7, resolve as resolve17 } from "node:path";
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+import { basename as basename12, dirname as dirname14, join as join22, relative as relative7, resolve as resolve17 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
-import { readFileSync as readFileSync20 } from "node:fs";
-import { join as join30 } from "node:path";
+import { readFileSync as readFileSync21 } from "node:fs";
+import { join as join29 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -114,42 +106,17 @@ var __export = (target, all) => {
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require2 = /* @__PURE__ */ createRequire2(import.meta.url);
-function readJson(filePath) {
-  if (!existsSync(filePath))
-    return {};
-  const content = readFileSync(filePath, "utf8").trim();
-  if (!content)
-    return {};
-  try {
-    return JSON.parse(content);
-  } catch (error) {
-    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
-  }
-}
-function writeJson(filePath, value) {
-  const parent = dirname(filePath);
-  mkdirSync(parent, { recursive: true });
-  const tmp = join(parent, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
-`, "utf8");
-    renameSync(tmp, filePath);
-  } catch (error) {
-    try {
-      unlinkSync(tmp);
-    } catch {}
-    throw error;
-  }
-}
-var SEVERITY_ORDER;
-var init_core = __esm(() => {
-  SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
-});
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
+}
+function assertExactKeys(value, allowed, what) {
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    throw new CoordinationError("coordination.forbidden-field", "Payload contains unexpected keys. See the allowed and unexpected key lists; inspect registered state with mstar status validate.", { what, unexpected: extra, allowed: [...allowed] });
+  }
 }
 function invalid(code, message) {
   return { ok: false, severity: "high", code, message };
@@ -387,7 +354,6 @@ function validateSnapshotCoordination(value, what = "coordination") {
   }
   return violations;
 }
-var COORDINATION_ERROR_CODES;
 var CoordinationError;
 var writeAuthorizations;
 var PLAN_PROGRESS_STATUSES;
@@ -395,59 +361,6 @@ var SHA256_HEX;
 var GIT_SHA;
 var HASH_RE;
 var init_coordination_write = __esm(() => {
-  COORDINATION_ERROR_CODES = [
-    "plan.prepare.working-branch-control",
-    "plan.prepare.control-branch-unresolved",
-    "coordination.harness-not-found",
-    "coordination.workflow-not-found",
-    "coordination.plan-not-found",
-    "coordination.scope-mismatch",
-    "coordination.path-mismatch",
-    "coordination.session-not-found",
-    "coordination.session-role",
-    "coordination.invalid-session-id",
-    "coordination.identity-missing",
-    "coordination.identity-mismatch",
-    "coordination.version-conflict",
-    "coordination.invalid-transition",
-    "coordination.prepare-status",
-    "coordination.progress-phase",
-    "coordination.progress-transition",
-    "coordination.plan-status",
-    "coordination.workflow-not-running",
-    "coordination.merge-lease-foreign",
-    "coordination.merge-lease-stopped-owner",
-    "coordination.findings-open",
-    "coordination.completion-frozen",
-    "coordination.invalid-input",
-    "coordination.forbidden-field",
-    "coordination.not-in-git",
-    "coordination.git-unavailable",
-    "coordination.git-proof",
-    "coordination.integration-unresolved",
-    "coordination.integration-diverged",
-    "coordination.local-store-required",
-    "coordination.direct-write-refused",
-    "coordination.scoped-writer-required",
-    "coordination.unknown-operation",
-    "coordination.store",
-    "coordination.prepare-amendment.stale",
-    "coordination.prepare-amendment.invalid-patch",
-    "coordination.prepare-amendment.not-prepare",
-    "coordination.prepare-amendment.execution-started",
-    "coordination.prepare-amendment.duplicate-plan",
-    "coordination.prepare-amendment.invalid-plan",
-    "coordination.prepare-amendment.compass-mismatch",
-    "coordination.prepare-amendment.invalid-worktree",
-    "coordination.identity-recovery.invalid-request",
-    "coordination.identity-recovery.stale",
-    "coordination.identity-recovery.not-prepare",
-    "coordination.identity-recovery.execution-started",
-    "coordination.identity-recovery.foreign-owner",
-    "coordination.identity-recovery.unauthorized",
-    "coordination.identity-recovery.operation-conflict",
-    "coordination.root-register-unwritable"
-  ];
   CoordinationError = class CoordinationError2 extends Error {
     code;
     details;
@@ -464,31 +377,102 @@ var init_coordination_write = __esm(() => {
   GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   HASH_RE = /^sha256:[0-9a-f]{64}$/;
 });
-var PLAN_OPERATION_SEMANTICS;
-var WORKFLOW_OPERATION_SEMANTICS;
-var init_recovery_intent = __esm(() => {
-  init_coordination_write();
-  PLAN_OPERATION_SEMANTICS = {
-    prepare: ["planId", "operation.kind", "operation.config"],
-    progress: ["planId", "operation.kind", "operation.progress"],
-    "residual-add": ["planId", "operation.kind", "operation.entries"],
-    "residual-close": [
-      "planId",
-      "operation.kind",
-      "operation.issueId",
-      "operation.disposition",
-      "operation.evidence",
-      "operation.expectedIssueRevision"
-    ],
-    complete: ["planId", "operation.kind", "operation.evidence", "operation.integration"]
-  };
-  WORKFLOW_OPERATION_SEMANTICS = {
-    phase: ["workflowId", "operation.kind", "operation.phase", "operation.compassPath"],
-    lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
-    "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
-    "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
-    delivery: ["workflowId", "operation.kind", "operation.delivery"]
-  };
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function violation(severity, code, message, fix) {
+  return { ok: false, severity, code, message, fix };
+}
+function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function isValidClaimedAt(value) {
+  return typeof value === "string" && (RFC3339_Z_RE.test(value) || DATE_ONLY_RE.test(value));
+}
+function validateIntegrationMergeLease(lease) {
+  const violations = [];
+  if (!isPlainObject2(lease)) {
+    return {
+      ok: false,
+      violations: [
+        violation("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
+      ]
+    };
+  }
+  validateNonEmptyString(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
+  if (lease.claimed_at === undefined) {
+    violations.push(violation("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
+  } else if (!isValidClaimedAt(lease.claimed_at)) {
+    violations.push(violation("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
+  }
+  validateNonEmptyString(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
+  validateNonEmptyString(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
+  validateNonEmptyString(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
+  if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
+    violations.push(violation("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
+  }
+  return { ok: violations.length === 0, violations };
+}
+async function withStatusWriteLock(statusPath, fn, opts = {}) {
+  const lockDir = join2(dirname2(resolve2(statusPath)), STATUS_WRITE_LOCKDIR);
+  const held = heldLockDirs.getStore();
+  if (held !== undefined && held.has(lockDir)) {
+    throw new Error(`${lockDir} is already held by this process in this async context — withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`);
+  }
+  const timeoutMs = opts.timeoutMs ?? 30000;
+  const pollMs = opts.pollMs ?? 25;
+  const deadline = Date.now() + timeoutMs;
+  let acquired = null;
+  for (;; ) {
+    try {
+      mkdirSync(lockDir);
+      const st = statSync(lockDir);
+      acquired = { dev: st.dev, ino: st.ino };
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        throw error;
+      if (Date.now() >= deadline) {
+        throw new Error(`${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock). ` + `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`);
+      }
+      await sleep(pollMs);
+    }
+  }
+  try {
+    writeFileSync(join2(lockDir, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
+  } catch {}
+  const owns = held ?? new Set;
+  owns.add(lockDir);
+  try {
+    return await heldLockDirs.run(owns, fn);
+  } finally {
+    owns.delete(lockDir);
+    try {
+      const current = statSync(lockDir);
+      if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
+        try {
+          unlinkSync(join2(lockDir, LOCKDIR_HOLDER_PID));
+        } catch {}
+        rmdirSync(lockDir);
+      }
+    } catch {}
+  }
+}
+var DATE_PART;
+var RFC3339_Z_RE;
+var DATE_ONLY_RE;
+var STATUS_WRITE_LOCKDIR = ".status-write.lockdir";
+var LOCKDIR_HOLDER_PID = "holder.pid";
+var heldLockDirs;
+var init_lease = __esm(() => {
+  DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
+  RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
+  DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
+  heldLockDirs = new AsyncLocalStorage2;
 });
 function catalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
@@ -602,7 +586,7 @@ function parseMstarc(text) {
 }
 function isFile(file) {
   try {
-    return statSync(file).isFile();
+    return statSync2(file).isFile();
   } catch {
     return false;
   }
@@ -628,7 +612,7 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync2(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
@@ -10608,102 +10592,36 @@ var init_micromark_extension_gfm = __esm(() => {
   init_dev19();
   init_dev20();
 });
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function violation(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function isValidClaimedAt(value) {
-  return typeof value === "string" && (RFC3339_Z_RE.test(value) || DATE_ONLY_RE.test(value));
-}
-function validateIntegrationMergeLease(lease) {
-  const violations = [];
-  if (!isPlainObject2(lease)) {
-    return {
-      ok: false,
-      violations: [
-        violation("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
-      ]
-    };
-  }
-  validateNonEmptyString(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
-  if (lease.claimed_at === undefined) {
-    violations.push(violation("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
-  } else if (!isValidClaimedAt(lease.claimed_at)) {
-    violations.push(violation("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
-  }
-  validateNonEmptyString(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
-  validateNonEmptyString(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
-  validateNonEmptyString(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
-  if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
-    violations.push(violation("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
-  }
-  return { ok: violations.length === 0, violations };
-}
-async function withStatusWriteLock(statusPath, fn, opts = {}) {
-  const lockDir = join5(dirname5(resolve4(statusPath)), STATUS_WRITE_LOCKDIR);
-  const held = heldLockDirs.getStore();
-  if (held !== undefined && held.has(lockDir)) {
-    throw new Error(`${lockDir} is already held by this process in this async context — withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`);
-  }
-  const timeoutMs = opts.timeoutMs ?? 30000;
-  const pollMs = opts.pollMs ?? 25;
-  const deadline = Date.now() + timeoutMs;
-  let acquired = null;
-  for (;; ) {
-    try {
-      mkdirSync2(lockDir);
-      const st = statSync2(lockDir);
-      acquired = { dev: st.dev, ino: st.ino };
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST")
-        throw error;
-      if (Date.now() >= deadline) {
-        throw new Error(`${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock). ` + `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`);
-      }
-      await sleep(pollMs);
-    }
-  }
+function readJson(filePath) {
+  if (!existsSync3(filePath))
+    return {};
+  const content3 = readFileSync3(filePath, "utf8").trim();
+  if (!content3)
+    return {};
   try {
-    writeFileSync2(join5(lockDir, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
-  } catch {}
-  const owns = held ?? new Set;
-  owns.add(lockDir);
+    return JSON.parse(content3);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
+function writeJson(filePath, value) {
+  const parent = dirname5(filePath);
+  mkdirSync2(parent, { recursive: true });
+  const tmp = join5(parent, `.${basename2(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   try {
-    return await heldLockDirs.run(owns, fn);
-  } finally {
-    owns.delete(lockDir);
+    writeFileSync2(tmp, `${JSON.stringify(value, null, 2)}
+`, "utf8");
+    renameSync(tmp, filePath);
+  } catch (error) {
     try {
-      const current = statSync2(lockDir);
-      if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
-        try {
-          unlinkSync2(join5(lockDir, LOCKDIR_HOLDER_PID));
-        } catch {}
-        rmdirSync(lockDir);
-      }
+      unlinkSync2(tmp);
     } catch {}
+    throw error;
   }
 }
-var DATE_PART;
-var RFC3339_Z_RE;
-var DATE_ONLY_RE;
-var STATUS_WRITE_LOCKDIR = ".status-write.lockdir";
-var LOCKDIR_HOLDER_PID = "holder.pid";
-var heldLockDirs;
-var init_lease = __esm(() => {
-  DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
-  RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
-  DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
-  heldLockDirs = new AsyncLocalStorage2;
+var SEVERITY_ORDER;
+var init_core = __esm(() => {
+  SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 });
 var PLAN_SHAPED_KEY_RE;
 var fsStoreInstances;
@@ -10713,7 +10631,6 @@ var init_store = __esm(() => {
   init_coordination_write();
   init_coordination();
   init_path();
-  init_store_db();
   PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
   fsStoreInstances = new WeakSet;
   URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -10764,27 +10681,6 @@ var init_dispatch = __esm(() => {
   ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
   ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
 });
-var PlanPathError;
-var PLAN_CONSULTED_HEADERS;
-var init_plan_path = __esm(() => {
-  init_coordination_write();
-  init_path();
-  PlanPathError = class PlanPathError2 extends Error {
-    code;
-    details;
-    constructor(code2, message, details = {}) {
-      super(message);
-      this.name = "PlanPathError";
-      this.code = code2;
-      this.details = details;
-    }
-  };
-  PLAN_CONSULTED_HEADERS = {
-    plan_id: true,
-    "main worktree branch": true,
-    "working branch": true
-  };
-});
 var WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA;
 var STATUS_V2_PAYLOAD_SCHEMA;
 var init_persist_payload_schemas = __esm(() => {
@@ -10804,238 +10700,6 @@ var init_persist_payload_schemas = __esm(() => {
     workflows: { required: true, type: "array", description: "Active workflow entries." }
   };
 });
-function isStandaloneDevelopmentWorkflow(snapshot) {
-  return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
-}
-function isStandaloneReportOnlyWorkflow(snapshot) {
-  return snapshot.type === "plan" && snapshot.delivery_kind === "verification/report-only" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
-}
-function rowValidationRoute(snapshot, row) {
-  if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
-    return "standalone-development";
-  }
-  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
-    return "standalone-report-only";
-  }
-  return "integration";
-}
-function violation3(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function validateWorktreePathValue(violations, value, field) {
-  if (typeof value !== "string" || value.trim() === "" || !isAbsolute5(value)) {
-    violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
-  }
-}
-function deliveryEvidenceViolations(value, what) {
-  const violations = [];
-  const invalid3 = (message) => {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
-  };
-  if (!isPlainObject(value)) {
-    invalid3("must be an object");
-    return violations;
-  }
-  const members = ["compound", "pr", "merge", "completion"];
-  const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
-  if (unknownMembers.length > 0)
-    invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
-  const compound = value.compound;
-  if (compound !== undefined) {
-    if (!isPlainObject(compound))
-      invalid3("compound must be an object");
-    else {
-      const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
-      if (unknown.length > 0)
-        invalid3(`compound has unknown key(s) ${unknown.join(", ")}`);
-      if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
-        invalid3(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
-      } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid3("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
-      } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid3("compound.reason must be a non-empty string when given");
-      }
-    }
-  }
-  const stringMembers = {
-    pr: ["repo", "head", "target"],
-    merge: ["provider", "evidence"],
-    completion: ["policy", "evidence"]
-  };
-  for (const member of ["pr", "merge", "completion"]) {
-    const block = value[member];
-    if (block === undefined)
-      continue;
-    if (!isPlainObject(block)) {
-      invalid3(`${member} must be an object`);
-      continue;
-    }
-    const fields = stringMembers[member];
-    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
-    if (unknown.length > 0)
-      invalid3(`${member} has unknown key(s) ${unknown.join(", ")}`);
-    for (const field of fields) {
-      if (typeof block[field] !== "string" || block[field].trim() === "") {
-        invalid3(`${member}.${field} must be a non-empty string`);
-      }
-    }
-  }
-  return violations;
-}
-function validateWorkflowSnapshot(doc) {
-  const violations = [];
-  if (!isPlainObject(doc)) {
-    return {
-      ok: false,
-      violations: [violation3("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
-    };
-  }
-  if (doc.schema_version === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
-  } else if (doc.schema_version !== 1) {
-    violations.push(violation3("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
-  }
-  if (doc.version !== undefined) {
-    violations.push(violation3("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
-  }
-  validateNonEmptyString2(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
-  if (doc.type === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-type", "missing required field: type"));
-  } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
-  }
-  if (doc.status === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-status", "missing required field: status"));
-  } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
-  }
-  validateNonEmptyString2(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
-  validateNonEmptyString2(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
-  if (doc.ended_at !== undefined) {
-    validateNonEmptyString2(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
-  }
-  if (doc.phase !== undefined && typeof doc.phase !== "string") {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
-  }
-  if (doc.plans === undefined) {
-    violations.push(violation3("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
-  } else if (!Array.isArray(doc.plans)) {
-    violations.push(violation3("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
-  } else {
-    const snapshotDoc = doc;
-    for (const row of doc.plans) {
-      violations.push(...validatePlanRow(row).violations);
-      if (isPlainObject(row) && row.coordination !== undefined) {
-        const planRow = row;
-        const route = rowValidationRoute(snapshotDoc, planRow);
-        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
-      }
-    }
-  }
-  if (doc.coordination !== undefined) {
-    violations.push(...validateSnapshotCoordination(doc.coordination));
-  }
-  if (doc.execution_policy !== undefined) {
-    if (!isPlainObject(doc.execution_policy)) {
-      violations.push(violation3("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
-    }
-  }
-  if (doc.integration_merge_lease !== undefined) {
-    violations.push(...validateIntegrationMergeLease(doc.integration_merge_lease).violations);
-  }
-  if (doc.branch !== undefined) {
-    if (!isPlainObject(doc.branch)) {
-      violations.push(violation3("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
-    } else {
-      for (const key of ["base", "source", "integration", "target"]) {
-        if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
-          violations.push(violation3("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
-        }
-      }
-    }
-  }
-  const legacyWorktreePath = doc.control_worktree_path;
-  const canonicalWorktreePath = doc.integration_worktree_path;
-  if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
-    violations.push(violation3("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
-  } else {
-    if (canonicalWorktreePath !== undefined) {
-      validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
-    }
-    if (legacyWorktreePath !== undefined) {
-      violations.push(violation3("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
-      validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
-    }
-  }
-  if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
-    violations.push(violation3("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
-  }
-  if (doc.compass_ref !== undefined) {
-    validateNonEmptyString2(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
-  }
-  if (doc.delivery_kind !== undefined) {
-    if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
-      violations.push(violation3("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
-    }
-  }
-  if (doc.project !== undefined) {
-    validateNonEmptyString2(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
-  }
-  if (doc.completion_policy !== undefined) {
-    validateNonEmptyString2(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
-  }
-  if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
-  }
-  const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
-  if (terminal) {
-    if (doc.ended_at === undefined) {
-      violations.push(violation3("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
-    }
-    if (doc.integration_merge_lease !== undefined) {
-      violations.push(violation3("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
-var WORKFLOW_LIFECYCLE_STATUSES;
-var WORKFLOW_TERMINAL_STATUSES;
-var WORKFLOW_LIFECYCLE_TYPES;
-var WORKFLOW_DELIVERY_KINDS;
-var WORKFLOW_COMPOUND_OUTCOMES;
-var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
-var WorkflowSnapshotValidationError;
-var init_workflow = __esm(() => {
-  init_core();
-  init_coordination_write();
-  init_lease();
-  init_path();
-  init_plan_path();
-  init_status();
-  init_store();
-  init_store_db();
-  init_persist_payload_schemas();
-  WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
-  WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
-  WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
-  WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
-  WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
-  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
-    violations;
-    constructor(message, violations) {
-      super(message);
-      this.violations = violations;
-    }
-  };
-});
 function rowPlanIds(row) {
   if (!isPlainObject(row))
     return [];
@@ -11049,95 +10713,95 @@ function rowPlanIds(row) {
 function rowPlanId(row) {
   return rowPlanIds(row)[0];
 }
-function violation4(severity, code2, message, fix) {
+function violation3(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
-function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validatePlanRow(row) {
   const violations = [];
   if (!isPlainObject(row)) {
-    return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
+    return { ok: false, violations: [violation3("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
   const { id, plan_id: planId, title, file, status, metadata } = row;
   if (id === undefined && planId === undefined) {
-    violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+    violations.push(violation3("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
     if (id !== undefined) {
-      validateNonEmptyString3(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
+      validateNonEmptyString2(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
     }
     if (planId !== undefined) {
-      validateNonEmptyString3(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
+      validateNonEmptyString2(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
     }
     if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation4("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+      violations.push(violation3("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
     }
   }
-  validateNonEmptyString3(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
-  validateNonEmptyString3(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
+  validateNonEmptyString2(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
+  validateNonEmptyString2(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
   if (status === undefined) {
-    violations.push(violation4("high", "status.plan-row.missing-status", "missing required field: status"));
+    violations.push(violation3("high", "status.plan-row.missing-status", "missing required field: status"));
   } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+    violations.push(violation3("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
   }
   if (metadata !== undefined && !isPlainObject(metadata)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+    violations.push(violation3("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
   }
   return { ok: violations.length === 0, violations };
 }
 function validateResidual(entry) {
   const violations = [];
   if (!isPlainObject(entry)) {
-    return { ok: false, violations: [violation4("high", "status.residual.invalid", "residual entry must be an object")] };
+    return { ok: false, violations: [violation3("high", "status.residual.invalid", "residual entry must be an object")] };
   }
   const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
-  validateNonEmptyString3(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
-  validateNonEmptyString3(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
-  validateNonEmptyString3(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
-  validateNonEmptyString3(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
-  validateNonEmptyString3(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
+  validateNonEmptyString2(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
+  validateNonEmptyString2(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
+  validateNonEmptyString2(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
+  validateNonEmptyString2(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
+  validateNonEmptyString2(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
   if (severity === undefined) {
-    violations.push(violation4("high", "status.residual.missing-severity", "missing required field: severity"));
+    violations.push(violation3("high", "status.residual.missing-severity", "missing required field: severity"));
   } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
-    violations.push(violation4("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
+    violations.push(violation3("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
   } else if (severity === "warning") {
-    violations.push(violation4("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
+    violations.push(violation3("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
   }
   if (decision === undefined) {
-    violations.push(violation4("high", "status.residual.missing-decision", "missing required field: decision"));
+    violations.push(violation3("high", "status.residual.missing-decision", "missing required field: decision"));
   } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
-    violations.push(violation4("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
+    violations.push(violation3("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
   }
   if (target === undefined) {
-    violations.push(violation4("high", "status.residual.missing-target", "missing required field: target"));
+    violations.push(violation3("high", "status.residual.missing-target", "missing required field: target"));
   } else if (typeof target !== "string" && target !== null) {
-    violations.push(violation4("medium", "status.residual.invalid-target", "target must be a string or null"));
+    violations.push(violation3("medium", "status.residual.invalid-target", "target must be a string or null"));
   }
   if (tracking === undefined) {
-    violations.push(violation4("high", "status.residual.missing-tracking", "missing required field: tracking"));
+    violations.push(violation3("high", "status.residual.missing-tracking", "missing required field: tracking"));
   } else if (typeof tracking !== "string" && tracking !== null) {
-    violations.push(violation4("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
+    violations.push(violation3("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
   }
   if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
-    violations.push(violation4("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
+    violations.push(violation3("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
   }
   if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
-    violations.push(violation4("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+    violations.push(violation3("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
   }
   if (lifecycle !== undefined) {
     if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
-      violations.push(violation4("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
+      violations.push(violation3("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
     } else if (lifecycle !== "open") {
       if (closed_at === undefined) {
-        violations.push(violation4("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
+        violations.push(violation3("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
       }
       if (entry.closure_note === undefined) {
-        violations.push(violation4("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
+        violations.push(violation3("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
       }
     }
   }
@@ -11155,22 +10819,22 @@ function validateWorkflowEntry(entry) {
   if (!isPlainObject(entry)) {
     return {
       ok: false,
-      violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
+      violations: [violation3("high", "status.workflow.invalid", "workflow entry must be an object")]
     };
   }
-  validateNonEmptyString3(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
+  validateNonEmptyString2(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
   if (entry.type === undefined) {
-    violations.push(violation4("high", "status.workflow.missing-type", "missing required field: type"));
+    violations.push(violation3("high", "status.workflow.missing-type", "missing required field: type"));
   } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation4("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+    violations.push(violation3("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
   }
-  validateNonEmptyString3(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
+  validateNonEmptyString2(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
   if (entry.dir === undefined) {
-    violations.push(violation4("high", "status.workflow.missing-dir", "missing required field: dir"));
+    violations.push(violation3("high", "status.workflow.missing-dir", "missing required field: dir"));
   } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation4("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+    violations.push(violation3("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
   } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation4("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+    violations.push(violation3("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -11180,24 +10844,24 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname6(resolve7(docOrPath));
+      harnessDir = dirname6(resolve6(docOrPath));
     } catch (error) {
       return {
         ok: false,
-        violations: [violation4("high", "status.invalid-json", error.message)]
+        violations: [violation3("high", "status.invalid-json", error.message)]
       };
     }
   } else {
     doc = docOrPath;
   }
   if (!isPlainObject(doc)) {
-    return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
+    return { ok: false, violations: [violation3("high", "status.invalid-doc", "status document must be an object")] };
   }
   if (doc.version !== 2) {
     return {
       ok: false,
       violations: [
-        violation4("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
+        violation3("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
       ]
     };
   }
@@ -11205,7 +10869,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation4("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation3("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
       ]
     };
   }
@@ -11213,27 +10877,27 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation4("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation3("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
       ]
     };
   }
   const violations = [];
   if (doc.updated_at === undefined) {
-    violations.push(violation4("high", "status.missing-updated-at", "missing required field: updated_at"));
+    violations.push(violation3("high", "status.missing-updated-at", "missing required field: updated_at"));
   } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
-    violations.push(violation4("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+    violations.push(violation3("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
   if (doc.workflows === undefined) {
-    violations.push(violation4("high", "status.missing-workflows", "missing required field: workflows"));
+    violations.push(violation3("high", "status.missing-workflows", "missing required field: workflows"));
   } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation4("high", "status.invalid-workflows", "workflows must be an array"));
+    violations.push(violation3("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
     const seen = new Set;
     for (const entry of doc.workflows) {
       violations.push(...validateWorkflowEntry(entry).violations);
       if (isPlainObject(entry) && typeof entry.id === "string") {
         if (seen.has(entry.id)) {
-          violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+          violations.push(violation3("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
         }
         seen.add(entry.id);
       }
@@ -11247,35 +10911,35 @@ function validateStatusV2(docOrPath, opts = {}) {
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join9(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join9(harnessDir, relSnapshot);
+      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join7(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
         physical = realpathSync3(snapshotPath);
       } catch {
-        violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        violations.push(violation3("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep5}`)) {
-        violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
+        violations.push(violation3("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
       let snapshot;
       try {
         snapshot = readJson(snapshotPath);
       } catch (error) {
-        violations.push(violation4("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        violations.push(violation3("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
         continue;
       }
       if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation4("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+        violations.push(violation3("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
       }
       if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation4("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+        violations.push(violation3("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
       }
       if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation4("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+        violations.push(violation3("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
       }
     }
   }
@@ -11283,23 +10947,23 @@ function validateStatusV2(docOrPath, opts = {}) {
 }
 function resolveCompassEnforcement(harnessDir) {
   const iterationsDir = resolveIterationDir(harnessDir);
-  if (!existsSync7(iterationsDir))
+  if (!existsSync5(iterationsDir))
     return { hard: false, source: "none" };
   let entries;
   try {
-    entries = readdirSync3(iterationsDir, { withFileTypes: true });
+    entries = readdirSync2(iterationsDir, { withFileTypes: true });
   } catch {
     return { hard: false, source: "none" };
   }
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join9(iterationsDir, entry.name, "delivery-compass.md");
-    if (!existsSync7(compassPath))
+    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
+    if (!existsSync5(compassPath))
       continue;
     let content3;
     try {
-      content3 = readFileSync6(compassPath, "utf8");
+      content3 = readFileSync4(compassPath, "utf8");
     } catch {
       continue;
     }
@@ -11314,7 +10978,7 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve7(harnessDir);
+  const dir = resolve6(harnessDir);
   const rc = loadMstarc(dir, dirname6(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
@@ -11340,7 +11004,6 @@ var init_status = __esm(() => {
   init_lease();
   init_coordination_write();
   init_store();
-  init_store_db();
   init_dispatch();
   init_mstarc();
   init_workflow();
@@ -11422,7 +11085,7 @@ function validateCompassShape(doc) {
     }
   };
 }
-function violation5(severity, code2, message, fix) {
+function violation4(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function isPlainObject3(value) {
@@ -11433,7 +11096,7 @@ function validateCompassFrontmatter(doc) {
     return {
       ok: false,
       violations: [
-        violation5("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
+        violation4("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
       ]
     };
   }
@@ -11443,17 +11106,17 @@ function validateCompassFrontmatter(doc) {
       ok: false,
       violations: parsed.issues.map((issue) => {
         const field = issue.path.join(".") || "(root)";
-        return violation5("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
+        return violation4("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
       })
     };
   }
   const violations = [];
   const { status, end_date } = parsed.data;
   if (status === "completed" && end_date === undefined) {
-    violations.push(violation5("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
+    violations.push(violation4("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
   }
   if (status !== "completed" && end_date !== undefined) {
-    violations.push(violation5("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
+    violations.push(violation4("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -11538,14 +11201,14 @@ var init_iteration = __esm(() => {
     document: "catalog.discovery.missing-document"
   };
 });
-function violation6(severity, code2, message) {
+function violation5(severity, code2, message) {
   return { ok: false, severity, code: code2, message };
 }
-function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation6("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation5("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation5("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function frontmatterEnd(content3) {
@@ -11587,38 +11250,38 @@ function validateRoadmapContent(content3, sourceLabel) {
     doc = parseCompassFrontmatterText(content3, sourceLabel);
   } catch (err) {
     const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
-    return { ok: false, violations: [violation6("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
+    return { ok: false, violations: [violation5("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
   }
-  validateNonEmptyString4(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
-  validateNonEmptyString4(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
+  validateNonEmptyString3(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
+  validateNonEmptyString3(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
   if (doc.status === undefined) {
-    violations.push(violation6("high", "project.roadmap.missing-status", "missing required field: status"));
+    violations.push(violation5("high", "project.roadmap.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
-    violations.push(violation6("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation5("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
   if (doc.created_at === undefined) {
-    violations.push(violation6("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
+    violations.push(violation5("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
   } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
-    violations.push(violation6("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
+    violations.push(violation5("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
   }
   if (doc.milestones !== undefined && doc.milestones !== null) {
     if (!Array.isArray(doc.milestones)) {
-      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
+      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
     } else if (doc.milestones.some((item) => typeof item !== "string" || item.trim() === "")) {
-      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
+      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
     }
   }
   if (doc.residuals_ref !== undefined && doc.residuals_ref !== null && (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "")) {
-    violations.push(violation6("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
+    violations.push(violation5("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
   }
   const warnings = [];
   const end = frontmatterEnd(content3);
   const body = content3.slice(end);
   if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(violation6("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
+    warnings.push(violation5("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
   }
   if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(violation6("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
+    warnings.push(violation5("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
   }
   return { ok: violations.length === 0, violations, warnings };
 }
@@ -11707,12 +11370,6 @@ var AUDIT_SEVERITY_ORDER;
 var DEFAULT_IGNORABLE_RE;
 var LONE_SURROGATE_RE;
 var init_audit = __esm(() => {
-  init_lease();
-  init_coordination_write();
-  init_path();
-  init_store();
-  init_status();
-  init_workflow();
   AUDIT_PRIORITIES = ["P1", "P2", "P3"];
   AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
   AUDIT_RISKS = ["LOW", "MED", "HIGH"];
@@ -11799,577 +11456,41 @@ var init_audit = __esm(() => {
   DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
   LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 });
-function assertIssueProvenanceSchema(db) {
-  const schema = db.prepare("select max(version) as version from schema_version").get();
-  if ((schema?.version ?? 0) < MIGRATIONS.length) {
-    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
-  }
+function unresolvedRecovery(input) {
+  return {
+    outcome: "unresolved",
+    target: input.target,
+    applied: [],
+    unresolved: [...input.unresolved],
+    resolvedFrom: [...input.resolvedFrom ?? []],
+    warnings: [...input.warnings ?? []],
+    commitState: "none"
+  };
 }
-var KINDS;
-var SEVERITIES;
-var ISSUE_KIND_VALUES;
-var SEVERITY_VALUES;
-var ISSUE_PAYLOAD_SCHEMAS;
-var IssueError;
-var DISPOSITIONS;
-var RELATIONS2;
-var PROVENANCE_KINDS;
-var TERMINAL;
-var ENVELOPE_SEATS;
-var init_issue = __esm(() => {
-  init_audit();
-  init_coordination();
-  init_path();
-  init_store_db();
-  init_workflow();
-  KINDS = {
-    bug: true,
-    risk: true,
-    improvement: true,
-    request: true,
-    decision: true,
-    "review-obligation": true
-  };
-  SEVERITIES = {
-    critical: true,
-    high: true,
-    medium: true,
-    low: true,
-    info: true
-  };
-  ISSUE_KIND_VALUES = Object.keys(KINDS);
-  SEVERITY_VALUES = Object.keys(SEVERITIES);
-  ISSUE_PAYLOAD_SCHEMAS = {
-    CaptureInput: {
-      projectId: { required: true, type: "string", description: "Project identifier" },
-      title: { required: true, type: "string", description: "Finding title" },
-      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
-      severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
-      impact: { required: true, type: "string", description: "User or system impact" },
-      acceptance: { required: true, type: "string", description: "Acceptance condition" },
-      owner: { required: false, type: "string", description: "Optional owner" },
-      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-      sourceKind: { required: true, type: "string", description: "Source category" },
-      location: { required: true, type: "string", description: "Source location" },
-      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-      evidence: { required: true, type: "string[]", description: "Evidence strings" },
-      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-    },
-    OccurrenceInput: {
-      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-      sourceKind: { required: true, type: "string", description: "Source category" },
-      location: { required: true, type: "string", description: "Source location" },
-      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-      evidence: { required: true, type: "string[]", description: "Evidence strings" },
-      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-    },
-    IssueTriage: {
-      reason: { required: true, type: "string", description: "Reason for triage change" },
-      kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-      severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
-      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
-      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
-      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
-    },
-    ClosureEvidence: {
-      reason: { required: true, type: "string", description: "Reason for closure" },
-      references: {
-        required: false,
-        requiredWhen: ["resolved"],
-        type: "string[]",
-        description: "Acceptance evidence references; required for resolved closure",
-        minItems: 1
-      },
-      scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
-      canonicalIssueId: {
-        required: false,
-        requiredWhen: ["duplicate", "superseded"],
-        type: "string",
-        description: "Canonical issue for duplicate/superseded; required for those dispositions"
-      },
-      alignmentRef: {
-        required: false,
-        requiredWhen: ["resolved", "waived"],
-        type: "string",
-        description: "Authority alignment reference; required for resolved/waived closure"
-      }
-    },
-    IssueReopen: {
-      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
-    },
-    IssueLink: {
-      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
-      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
-      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
-      target: { required: false, type: "string", description: "Provenance target; required with kind" }
-    },
-    PlanProgress: {
-      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
-      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
-      evidence_paths: {
-        required: true,
-        type: "string[]",
-        description: "Canonical absolute artifact paths for this plan",
-        itemsNonblank: true
-      },
-      track_branches: {
-        required: false,
-        type: "string[]",
-        description: "Reported L2 track branches",
-        itemsNonblank: true
-      }
-    }
-  };
-  IssueError = class IssueError2 extends Error {
-    code;
-    details = {};
-    constructor(code2, message) {
-      super(`[${code2}] ${message}`);
-      this.name = "IssueError";
-      this.code = code2;
-    }
-  };
-  DISPOSITIONS = {
-    open: true,
-    resolved: true,
-    waived: true,
-    duplicate: true,
-    superseded: true
-  };
-  RELATIONS2 = {
-    related: true,
-    blocks: true,
-    "duplicate-of": true,
-    "superseded-by": true
-  };
-  PROVENANCE_KINDS = {
-    plan: true,
-    iteration: true,
-    pr: true,
-    report: true
-  };
-  TERMINAL = {
-    resolved: true,
-    waived: true,
-    duplicate: true,
-    superseded: true
-  };
-  ENVELOPE_SEATS = {
-    coordinator: "project-manager"
-  };
-});
-function violation8(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function validateNonEmptyString5(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation8("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation8("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function validateProjectRegister(doc) {
-  const violations = [];
-  if (!isPlainObject(doc)) {
-    return {
-      ok: false,
-      violations: [violation8("high", "project.register.invalid", "project register must be an object")]
-    };
-  }
-  if (doc.entries === undefined) {
-    violations.push(violation8("high", "project.register.missing-entries", "missing required field: entries"));
-  } else if (!isPlainObject(doc.entries)) {
-    violations.push(violation8("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
-  } else {
-    for (const [key, entries] of Object.entries(doc.entries)) {
-      if (key.trim() === "") {
-        violations.push(violation8("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
-      }
-      if (!Array.isArray(entries)) {
-        violations.push(violation8("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
-        continue;
-      }
-      for (const entry of entries) {
-        violations.push(...validateResidual(entry).violations);
-        if (!isPlainObject(entry))
-          continue;
-        validateNonEmptyString5(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
-        if (entry.registered_at === undefined) {
-          violations.push(violation8("high", "project.register.missing-registered-at", "missing required field: registered_at"));
-        } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
-          violations.push(violation8("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
-        }
-        if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
-          violations.push(violation8("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
-        }
-        if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
-          violations.push(violation8("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
-        }
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-var DATE_RE4;
-var init_project = __esm(() => {
-  init_roadmap_content();
+var PLAN_OPERATION_SEMANTICS;
+var WORKFLOW_OPERATION_SEMANTICS;
+var init_recovery_intent = __esm(() => {
   init_coordination_write();
-  init_store_db();
-  init_issue();
-  init_status();
-  DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
-});
-function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve9(startDir);
-  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
-  if (explicit)
-    return resolve9(start, explicit);
-  const boundary = resolve9(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
-  const rc = loadMstarc(start, boundary);
-  if (rc !== null && rc.config.harnessDir)
-    return resolve9(rc.dir, rc.config.harnessDir);
-  let dir = start;
-  for (;; ) {
-    if (!isAtOrBelow2(dir, boundary))
-      return null;
-    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
-      if (isDirectory(candidate))
-        return candidate;
-    }
-    if (dir === boundary)
-      return null;
-    const parent = dirname7(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
-  }
-}
-function defaultWorkspaceRoot(startDir) {
-  try {
-    const cdup = execFileSync2("git", ["rev-parse", "--show-cdup"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-    if (!cdup)
-      return startDir;
-    let boundary = startDir;
-    for (const segment of cdup.split(/[\\/]/)) {
-      if (segment && segment !== ".")
-        boundary = dirname7(boundary);
-    }
-    return resolve9(boundary);
-  } catch {}
-  return startDir;
-}
-function isAtOrBelow2(dir, root) {
-  const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
-}
-function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve9(harnessDir);
-  const rc = loadMstarc(dir, dirname7(dir));
-  const declared = rc?.config[key];
-  return declared ? resolve9(rc.dir, declared) : null;
-}
-function resolveSpecsDir(harnessDir, opts = {}) {
-  const declared = mstarcDirOverride(harnessDir, "specsDir");
-  if (declared !== null) {
-    if (opts.create !== false)
-      mkdirSync5(declared, { recursive: true });
-    return declared;
-  }
-  const harness = resolve9(harnessDir);
-  const repoRoot = dirname7(harness);
-  const candidates = [
-    join14(harness, "specs"),
-    join14(repoRoot, "docs", "specs"),
-    join14(repoRoot, "specs"),
-    join14(harness, "designs"),
-    join14(repoRoot, "designs")
-  ];
-  for (const candidate of candidates) {
-    if (isDirectory(candidate) && hasFiles(candidate))
-      return candidate;
-  }
-  const fallback = join14(harness, "specs");
-  if (opts.create !== false)
-    mkdirSync5(fallback, { recursive: true });
-  return fallback;
-}
-function resolvePlanDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "planDir");
-  if (declared !== null)
-    return declared;
-  const dir = resolve9(harnessDir);
-  const name = basename6(dir);
-  if (name === ".plans" || name === "plans")
-    return dir;
-  return join14(dir, "plans");
-}
-function resolveIterationDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "iterationDir");
-  if (declared !== null)
-    return declared;
-  return join14(resolve9(harnessDir), "iterations");
-}
-function resolveKnowledgeDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
-  if (declared !== null)
-    return declared;
-  return join14(resolve9(harnessDir), "knowledge");
-}
-function resolveHarnessSubdir(startDir, opts, key, fallback) {
-  const harness = resolveHarnessDir(startDir, opts);
-  if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve9(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
-  }
-  const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join14(resolve9(harness), fallback);
-}
-function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
-  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
-}
-function resolveProjectDir(startDir = process.cwd(), opts = {}) {
-  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
-}
-function isDirectory(dir) {
-  try {
-    return statSync4(dir).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function hasFiles(dir) {
-  try {
-    for (const entry of readdirSync7(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (hasFiles(join14(dir, entry.name)))
-          return true;
-      } else if (entry.isFile()) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-var EMPTY_STATUS_TEMPLATE;
-var SCAFFOLD_DIRS;
-var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
-`;
-var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-`;
-var GITIGNORE_PROCESS_ENTRIES;
-var GITIGNORE_PROCESS_ENTRIES_AGENTS;
-var HARNESS_ROOT_DECLARATION;
-var init_path = __esm(() => {
-  init_catalog();
-  init_mstarc();
-  init_project();
-  init_status();
-  init_lease();
-  init_store();
-  init_store_db();
-  init_coordination_write();
-  EMPTY_STATUS_TEMPLATE = {
-    version: 2,
-    updated_at: "1970-01-01",
-    workflows: []
+  PLAN_OPERATION_SEMANTICS = {
+    prepare: ["planId", "operation.kind", "operation.config"],
+    progress: ["planId", "operation.kind", "operation.progress"],
+    "residual-add": ["planId", "operation.kind", "operation.entries"],
+    "residual-close": [
+      "planId",
+      "operation.kind",
+      "operation.issueId",
+      "operation.disposition",
+      "operation.evidence",
+      "operation.expectedIssueRevision"
+    ],
+    complete: ["planId", "operation.kind", "operation.evidence", "operation.integration"]
   };
-  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"];
-  GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
-`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
-  GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
-`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
-  HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
-});
-var init_session_identity = __esm(() => {
-  init_coordination_write();
-  init_path();
-});
-function storedCoordinationViolations(block, input) {
-  return validateRowCoordination({ ...block, revision: input.revision }, input.what, input.route);
-}
-var IMPLEMENTED_OPERATIONS;
-var OPERATION_NAMES;
-var NON_COMPLETION_OPERATIONS;
-var PROGRESS_TRANSITIONS;
-var init_coordination_transitions = __esm(() => {
-  init_coordination_write();
-  init_workflow();
-  init_project();
-  init_path();
-  IMPLEMENTED_OPERATIONS = {
-    prepare: true,
-    progress: true,
-    "residual-add": true,
-    "residual-close": true,
-    complete: true
-  };
-  OPERATION_NAMES = Object.keys(IMPLEMENTED_OPERATIONS);
-  NON_COMPLETION_OPERATIONS = OPERATION_NAMES.filter((operation) => operation !== "complete");
-  PROGRESS_TRANSITIONS = {
-    Todo: ["InProgress", "Blocked"],
-    InProgress: ["InProgress", "Blocked", "InReview"],
-    Blocked: ["Blocked", "InProgress"],
-    InReview: ["InReview", "InProgress", "Blocked"]
-  };
-});
-var CatalogRegistrationError;
-var ENTITY_KINDS2;
-var ROOT_KINDS2;
-var DOCUMENT_KINDS2;
-var RELATIONS3;
-var init_catalog_registration = __esm(() => {
-  init_audit();
-  init_catalog();
-  init_coordination_write();
-  init_lease();
-  init_path();
-  init_plan_path();
-  init_store_db();
-  init_status();
-  init_workflow();
-  CatalogRegistrationError = class CatalogRegistrationError2 extends Error {
-    code;
-    constructor(code2, message) {
-      super(`[${code2}] ${message}`);
-      this.name = "CatalogRegistrationError";
-      this.code = code2;
-    }
-  };
-  ENTITY_KINDS2 = {
-    project: true,
-    iteration: true,
-    plan: true,
-    document: true
-  };
-  ROOT_KINDS2 = {
-    repository: true,
-    harness: true,
-    plans: true,
-    iterations: true,
-    specs: true,
-    knowledge: true,
-    projects: true
-  };
-  DOCUMENT_KINDS2 = {
-    spec: true,
-    knowledge: true,
-    guide: true,
-    compass: true,
-    plan: true,
-    roadmap: true,
-    review: true,
-    other: true
-  };
-  RELATIONS3 = {
-    "belongs-to": true,
-    documents: true,
-    "spec-ref": true,
-    "knowledge-ref": true,
-    "derived-from": true,
-    supersedes: true
-  };
-});
-function gitProbeTimeoutMs() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
-}
-function parseMainWorktree(out) {
-  const tokens = out.split("\x00");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1)
-    return null;
-  const rawPath = tokens[first].slice("worktree ".length);
-  if (rawPath.trim() === "")
-    return null;
-  let branch = null;
-  let detached = false;
-  for (let i = first + 1;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("worktree "))
-      break;
-    if (token === "bare")
-      return null;
-    if (token === "detached")
-      detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "")
-        return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached)
-    branch = "";
-  if (branch === null)
-    return null;
-  try {
-    return { root: realpathSync5(rawPath), branch };
-  } catch {
-    return null;
-  }
-}
-function readMainWorktree(cwd) {
-  const start = cwd ?? process.cwd();
-  try {
-    const stdout = execFileSync3("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
-    });
-    return parseMainWorktree(stdout);
-  } catch {
-    return null;
-  }
-}
-var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
-var QC_ALIGNMENT_FIELDS;
-var init_worktree = __esm(() => {
-  QC_ALIGNMENT_FIELDS = [
-    { key: "planId", label: "plan_id" },
-    { key: "reviewRange", label: "Review range" },
-    { key: "diffBasis", label: "Diff basis" }
-  ];
-});
-var MSTAR_REVIEW_V1_PAYLOAD_SCHEMA;
-var init_qcreview_schema = __esm(() => {
-  MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
-    schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
-    verdict: { required: true, type: "string", description: "Harness PR verdict." },
-    summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
-    findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
-    tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated; optional band: mergeable | good | pass | fail (absent = legacy-valid)." },
-    target: { required: false, type: "object", description: "Optional target identity." }
+  WORKFLOW_OPERATION_SEMANTICS = {
+    phase: ["workflowId", "operation.kind", "operation.phase", "operation.compassPath"],
+    lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
+    "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
+    "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
+    delivery: ["workflowId", "operation.kind", "operation.delivery"]
   };
 });
 function resolveRelativePath(raw, label) {
@@ -12458,23 +11579,23 @@ function indexRowIdentity(family, cells, owner) {
   const resolved = resolveRelativePath(family === "package-documents" && owner !== null ? `${owner}/${trimmed}` : trimmed, "index row path");
   return resolved.ok ? resolved.relativePath : null;
 }
-var ENTITY_KINDS3;
-var ROOT_KINDS3;
-var DOCUMENT_KINDS3;
+var ENTITY_KINDS2;
+var ROOT_KINDS2;
+var DOCUMENT_KINDS2;
 var LIFECYCLES2;
-var RELATIONS4;
+var RELATIONS2;
 var ORDINARY_FILES;
 var CatalogImportError;
 var init_catalog_import = __esm(() => {
   init_catalog();
   init_iteration();
-  ENTITY_KINDS3 = {
+  ENTITY_KINDS2 = {
     project: true,
     iteration: true,
     plan: true,
     document: true
   };
-  ROOT_KINDS3 = {
+  ROOT_KINDS2 = {
     repository: true,
     harness: true,
     plans: true,
@@ -12483,7 +11604,7 @@ var init_catalog_import = __esm(() => {
     knowledge: true,
     projects: true
   };
-  DOCUMENT_KINDS3 = {
+  DOCUMENT_KINDS2 = {
     spec: true,
     knowledge: true,
     guide: true,
@@ -12494,7 +11615,7 @@ var init_catalog_import = __esm(() => {
     other: true
   };
   LIFECYCLES2 = { active: true, archived: true, superseded: true };
-  RELATIONS4 = {
+  RELATIONS2 = {
     "belongs-to": true,
     documents: true,
     "spec-ref": true,
@@ -12520,7 +11641,7 @@ __export(exports_store_activation, {
   AGENT_FLOW_COMPACTION_JOURNAL: () => AGENT_FLOW_COMPACTION_JOURNAL,
   BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
   CONSUMER_KINDS: () => CONSUMER_KINDS,
-  DISPOSITIONS: () => DISPOSITIONS2,
+  DISPOSITIONS: () => DISPOSITIONS,
   RETAINED_BODY_PROTOCOL_VERSION: () => RETAINED_BODY_PROTOCOL_VERSION,
   SESSION_STATES: () => SESSION_STATES,
   StoreActivationError: () => StoreActivationError,
@@ -12543,12 +11664,12 @@ __export(exports_store_activation, {
   validateActivationAttestation: () => validateActivationAttestation,
   withExecutionMaintenanceLock: () => withExecutionMaintenanceLock
 });
-function sha256Bytes3(bytes) {
-  return createHash6("sha256").update(bytes).digest("hex");
+function sha256Bytes2(bytes) {
+  return createHash4("sha256").update(bytes).digest("hex");
 }
 function readIfExists(path2) {
   try {
-    return readFileSync13(path2);
+    return readFileSync8(path2);
   } catch {
     return;
   }
@@ -12558,13 +11679,13 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync6(dirname8(path2), { recursive: true });
-  const tmp = join18(dirname8(path2), `.${basename9(path2)}.${process.pid}.tmp`);
+  mkdirSync4(dirname7(path2), { recursive: true });
+  const tmp = join11(dirname7(path2), `.${basename6(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync4(tmp, text4, "utf8");
     renameSync2(tmp, path2);
   } finally {
-    rmSync2(tmp, { force: true });
+    rmSync(tmp, { force: true });
   }
 }
 function readMetaRow(db) {
@@ -12636,16 +11757,16 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve13(value);
+  let current = resolve9(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join18(realpathSync6(current), ...[...trailing].reverse());
+      return join11(realpathSync4(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname8(current);
+      const parent = dirname7(current);
       if (parent === current)
-        return resolve13(value);
-      trailing.push(basename9(current));
+        return resolve9(value);
+      trailing.push(basename6(current));
       current = parent;
     }
   }
@@ -12655,7 +11776,7 @@ function isPathWithin(root, candidate) {
   const child = canonicalPath(candidate);
   if (child === parent)
     return true;
-  return child.startsWith(parent.endsWith(sep9) ? parent : `${parent}${sep9}`);
+  return child.startsWith(parent.endsWith(sep6) ? parent : `${parent}${sep6}`);
 }
 function refuseUnlessSameGeneration(live, expected, what) {
   if (live.storeId !== expected.storeId) {
@@ -12678,8 +11799,8 @@ async function assertAuthorityCurrent(context, handle) {
   refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
 }
 async function withExecutionMaintenanceLock(context, fn) {
-  const key = join18(canonicalPath(dirname8(storeDbPath(context))), ".execution-maintenance", "execution-migration");
-  mkdirSync6(dirname8(key), { recursive: true });
+  const key = join11(canonicalPath(dirname7(storeDbPath(context))), ".execution-maintenance", "execution-migration");
+  mkdirSync4(dirname7(key), { recursive: true });
   return withStatusWriteLock(key, fn, { timeoutMs: executionMaintenanceLockWaitMs() });
 }
 function executionMaintenanceLockWaitMs() {
@@ -12691,7 +11812,7 @@ function executionMaintenanceLockWaitMs() {
   return 30000;
 }
 function retainedInventoryDigest(inventory) {
-  return sha256Bytes3(Buffer.from(JSON.stringify({
+  return sha256Bytes2(Buffer.from(JSON.stringify({
     version: inventory.version,
     protocol: inventory.protocol,
     storeId: inventory.storeId,
@@ -12707,14 +11828,14 @@ function retainedInventoryDigest(inventory) {
   }), "utf8"));
 }
 function retainedBodyPath(root, absolute, what) {
-  const segments = relative4(root, absolute).split(sep9).filter((segment) => segment !== "");
+  const segments = relative2(root, absolute).split(sep6).filter((segment) => segment !== "");
   if (segments.length === 0 || segments.includes("..")) {
     throw new StoreActivationError("store.activation-stale", `${what} lives at ${absolute}, outside the control root ${root}; a recovery point freezes exactly the retained bodies it protects, so a body outside the root refuses the freeze instead of being copied by guesswork.`);
   }
   return segments.join("/");
 }
 function checkpointRetainedBody(root, relativeBodyPath, selection) {
-  const absolute = join18(root, ...relativeBodyPath.split("/"));
+  const absolute = join11(root, ...relativeBodyPath.split("/"));
   let info;
   try {
     info = lstatSync3(absolute);
@@ -12724,65 +11845,65 @@ function checkpointRetainedBody(root, relativeBodyPath, selection) {
   if (info.isSymbolicLink() || !info.isFile()) {
     throw new StoreActivationError("store.activation-stale", `the retained body ${relativeBodyPath} is not a regular file (a symlink or a non-file is not a retained accepted body); the inventory cannot be frozen over it.`);
   }
-  const bytes = readFileSync13(absolute);
+  const bytes = readFileSync8(absolute);
   const records = [];
   let start = 0;
   for (let index2 = 0;index2 < bytes.length; index2 += 1) {
     if (bytes[index2] !== 10)
       continue;
-    records.push(sha256Bytes3(bytes.subarray(start, index2)));
+    records.push(sha256Bytes2(bytes.subarray(start, index2)));
     start = index2 + 1;
   }
   return {
     path: relativeBodyPath,
-    sha256: sha256Bytes3(bytes),
+    sha256: sha256Bytes2(bytes),
     records,
-    partial: start < bytes.length ? sha256Bytes3(bytes.subarray(start)) : null,
+    partial: start < bytes.length ? sha256Bytes2(bytes.subarray(start)) : null,
     selection
   };
 }
 function readRetainedBodyCheckpoints(context) {
-  const root = canonicalPath(dirname8(storeDbPath(context)));
+  const root = canonicalPath(dirname7(storeDbPath(context)));
   const paths = [];
-  if (existsSync13(join18(root, ...ENGINE_STATUS_BODY.split("/")))) {
+  if (existsSync8(join11(root, ...ENGINE_STATUS_BODY.split("/")))) {
     paths.push({ path: ENGINE_STATUS_BODY, selection: true });
   }
   const workflowsDir = resolveWorkflowDir(root, { harnessDir: root });
   let entries = [];
   try {
-    entries = readdirSync9(workflowsDir, { withFileTypes: true });
+    entries = readdirSync6(workflowsDir, { withFileTypes: true });
   } catch {
     entries = [];
   }
   const unfinished = [];
   const workflowEntries = entries.filter((candidate) => {
     if (candidate.isSymbolicLink()) {
-      throw new StoreActivationError("store.activation-stale", `${join18(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so the live retained set cannot be enumerated through it. Nothing was frozen.`);
+      throw new StoreActivationError("store.activation-stale", `${join11(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so the live retained set cannot be enumerated through it. Nothing was frozen.`);
     }
     return candidate.isDirectory();
   });
   for (const entry of workflowEntries.sort((a, b) => a.name < b.name ? -1 : 1)) {
-    const dir = join18(workflowsDir, entry.name);
+    const dir = join11(workflowsDir, entry.name);
     const prefix = retainedBodyPath(root, dir, `the workflow body dir of ${entry.name}`);
-    if (existsSync13(join18(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
+    if (existsSync8(join11(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
       unfinished.push(`${prefix}/${AGENT_FLOW_COMPACTION_JOURNAL}`);
       continue;
     }
     for (const file of RETAINED_WORKFLOW_BODIES) {
-      const absolute = join18(dir, file);
-      if (existsSync13(absolute))
+      const absolute = join11(dir, file);
+      if (existsSync8(absolute))
         paths.push({ path: retainedBodyPath(root, absolute, `the retained body ${file}`), selection: false });
     }
-    const historyDir = join18(dir, AGENT_FLOW_HISTORY_DIR);
+    const historyDir = join11(dir, AGENT_FLOW_HISTORY_DIR);
     let chunks = [];
     try {
-      chunks = readdirSync9(historyDir, { withFileTypes: true });
+      chunks = readdirSync6(historyDir, { withFileTypes: true });
     } catch {
       chunks = [];
     }
     for (const chunk of chunks.filter((candidate) => AGENT_FLOW_HISTORY_CHUNK.test(candidate.name)).sort((a, b) => a.name < b.name ? -1 : 1)) {
-      const absolute = join18(historyDir, chunk.name);
-      if (existsSync13(absolute))
+      const absolute = join11(historyDir, chunk.name);
+      if (existsSync8(absolute))
         paths.push({ path: retainedBodyPath(root, absolute, `the history chunk ${chunk.name}`), selection: false });
     }
   }
@@ -12813,60 +11934,60 @@ function writeRetainedInventory(backupPath, inventory) {
 `);
 }
 function requireRetainedInventory(value, what) {
-  const invalid4 = (detail) => new StoreActivationError("store.activation-stale", `${what} ${detail}`);
+  const invalid3 = (detail) => new StoreActivationError("store.activation-stale", `${what} ${detail}`);
   if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw invalid4("is not an object");
+    throw invalid3("is not an object");
   const raw = value;
   if (raw.version !== RETAINED_BODY_PROTOCOL_VERSION) {
-    throw invalid4(`declares version ${JSON.stringify(raw.version)}, not this protocol's ${RETAINED_BODY_PROTOCOL_VERSION}; a retained-body inventory of another generation is refused by name rather than decoded as if it described this one`);
+    throw invalid3(`declares version ${JSON.stringify(raw.version)}, not this protocol's ${RETAINED_BODY_PROTOCOL_VERSION}; a retained-body inventory of another generation is refused by name rather than decoded as if it described this one`);
   }
   if (raw.protocol !== "retained-body-inventory-v1")
-    throw invalid4(`declares protocol ${JSON.stringify(raw.protocol)}`);
+    throw invalid3(`declares protocol ${JSON.stringify(raw.protocol)}`);
   const storeId = raw.storeId;
   if (typeof storeId !== "string" || storeId.trim() === "")
-    throw invalid4("carries no storeId");
+    throw invalid3("carries no storeId");
   const digest = raw.digest;
   if (typeof digest !== "string" || digest.trim() === "")
-    throw invalid4("carries no digest");
+    throw invalid3("carries no digest");
   const epoch = raw.epoch;
   if (typeof epoch !== "number" || !Number.isSafeInteger(epoch))
-    throw invalid4(`carries epoch ${JSON.stringify(epoch)}`);
+    throw invalid3(`carries epoch ${JSON.stringify(epoch)}`);
   const revision = raw.revision;
   if (typeof revision !== "number" || !Number.isSafeInteger(revision))
-    throw invalid4(`carries revision ${JSON.stringify(revision)}`);
+    throw invalid3(`carries revision ${JSON.stringify(revision)}`);
   if (!Array.isArray(raw.bodies))
-    throw invalid4("carries no bodies array");
+    throw invalid3("carries no bodies array");
   const recorded = raw.bodies;
   const bodies = [];
   for (const [index2, candidate] of recorded.entries()) {
     if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate))
-      throw invalid4(`body ${index2} is not an object`);
+      throw invalid3(`body ${index2} is not an object`);
     const body = candidate;
     const path2 = body.path;
     if (typeof path2 !== "string" || path2.trim() === "")
-      throw invalid4(`body ${index2} carries no path`);
-    const sha2563 = body.sha256;
-    if (typeof sha2563 !== "string" || !/^[0-9a-f]{64}$/.test(sha2563))
-      throw invalid4(`body ${index2} carries no byte digest`);
+      throw invalid3(`body ${index2} carries no path`);
+    const sha2562 = body.sha256;
+    if (typeof sha2562 !== "string" || !/^[0-9a-f]{64}$/.test(sha2562))
+      throw invalid3(`body ${index2} carries no byte digest`);
     if (!Array.isArray(body.records))
-      throw invalid4(`body ${index2} carries a malformed accepted-record list`);
+      throw invalid3(`body ${index2} carries a malformed accepted-record list`);
     const records = [];
     for (const record of body.records) {
       if (typeof record !== "string" || !/^[0-9a-f]{64}$/.test(record))
-        throw invalid4(`body ${index2} carries a malformed accepted-record list`);
+        throw invalid3(`body ${index2} carries a malformed accepted-record list`);
       records.push(record);
     }
     let partial = null;
     if (body.partial !== null) {
       const value2 = body.partial;
       if (typeof value2 !== "string" || !/^[0-9a-f]{64}$/.test(value2))
-        throw invalid4(`body ${index2} carries a malformed partial-record digest`);
+        throw invalid3(`body ${index2} carries a malformed partial-record digest`);
       partial = value2;
     }
     const selection = body.selection;
     if (typeof selection !== "boolean")
-      throw invalid4(`body ${index2} carries no selection flag`);
-    bodies.push({ path: path2, sha256: sha2563, records, partial, selection });
+      throw invalid3(`body ${index2} carries no selection flag`);
+    bodies.push({ path: path2, sha256: sha2562, records, partial, selection });
   }
   const inventory = {
     version: RETAINED_BODY_PROTOCOL_VERSION,
@@ -12942,7 +12063,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join18(dirname8(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join11(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -12956,12 +12077,12 @@ async function takeVerifiedBackup(context, options) {
     const execution = liveExecutionMeta(handle.execution);
     let walPending = false;
     try {
-      walPending = statSync5(`${dbPath}-wal`).size > 0;
+      walPending = statSync3(`${dbPath}-wal`).size > 0;
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve13(options.out);
-    if (existsSync13(targetPath)) {
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve9(options.out);
+    if (existsSync8(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a recorded recovery point.`);
       }
@@ -12989,22 +12110,22 @@ async function takeVerifiedBackup(context, options) {
         backupPath: targetPath,
         ...existing,
         walPending,
-        bytes: statSync5(targetPath).size,
+        bytes: statSync3(targetPath).size,
         takenAt: new Date().toISOString(),
         retained: recorded
       };
     }
-    mkdirSync6(dirname8(targetPath), { recursive: true });
+    mkdirSync4(dirname7(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
     let verified;
     try {
       verified = await inspectBackupCopy(targetPath);
     } catch (error) {
-      rmSync2(targetPath, { force: true });
+      rmSync(targetPath, { force: true });
       throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} could not be reopened for verification (${error.message}); the unverified copy was removed. Nothing was activated.`);
     }
     if (verified.storeId !== meta.storeId || verified.epoch !== meta.epoch || verified.revision !== meta.revision || verified.catalogRevision !== meta.catalogRevision || verified.authorityState !== meta.authorityState || verified.schemaVersion !== schemaVersion || !sameExecution(verified.execution, execution) || !sameCounts(verified.counts, counts)) {
-      rmSync2(targetPath, { force: true });
+      rmSync(targetPath, { force: true });
       throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} does not match the source store (identity, schema or row counts); the unverified copy was removed. Nothing was activated.`);
     }
     writeRetainedInventory(targetPath, retained);
@@ -13013,7 +12134,7 @@ async function takeVerifiedBackup(context, options) {
       backupPath: targetPath,
       ...verified,
       walPending,
-      bytes: statSync5(targetPath).size,
+      bytes: statSync3(targetPath).size,
       takenAt: new Date().toISOString(),
       retained
     };
@@ -13025,8 +12146,8 @@ async function backupStoreUnderExclusion(context, options = {}) {
   return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
 }
 async function backupStore(context, options = {}) {
-  const root = canonicalPath(dirname8(storeDbPath(context)));
-  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join18(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
+  const root = canonicalPath(dirname7(storeDbPath(context)));
+  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join11(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
 }
 async function assertBackupDescribesStore(context, receipt, reviewed) {
   const stale = (detail) => {
@@ -13035,7 +12156,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and apply the manifest that names it.");
   }
-  const controlRoot = dirname8(storeDbPath(context));
+  const controlRoot = dirname7(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration recovery point must live inside the root it protects.`);
   }
@@ -13127,8 +12248,8 @@ function validateActivationAttestation(value) {
       activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a compatible consumer. Upgrade/reload it or exclude it explicitly.`);
     }
     const disposition = consumer.disposition;
-    if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS2, disposition)) {
-      activationBlocked(`${what}.disposition must be one of ${Object.keys(DISPOSITIONS2).join(", ")}; a consumer left running/unattested ` + `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`);
+    if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS, disposition)) {
+      activationBlocked(`${what}.disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}; a consumer left running/unattested ` + `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`);
     }
     if (typeof consumer.current !== "boolean")
       attestationRefusal(`${what}.current must be a boolean`);
@@ -13174,7 +12295,7 @@ function currentRegisterSources(context) {
   const projectsRoot = catalogRootDir(context, "projects");
   let entries;
   try {
-    entries = readdirSync9(projectsRoot, { withFileTypes: true });
+    entries = readdirSync6(projectsRoot, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -13182,7 +12303,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join18(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join11(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -13207,7 +12328,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join18(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join11(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -13220,7 +12341,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve13(manifest.controlRoot) !== resolve13(context.harnessDir)) {
+    if (resolve9(manifest.controlRoot) !== resolve9(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -13285,7 +12406,7 @@ function findActivationRow(rows, applyReceiptId) {
   return;
 }
 function activationHashOf(parts) {
-  return sha256Bytes3(Buffer.from(`activation\x00${JSON.stringify(parts)}`, "utf8"));
+  return sha256Bytes2(Buffer.from(`activation\x00${JSON.stringify(parts)}`, "utf8"));
 }
 function findRetirementRow(rows, activationReceiptId, live) {
   for (const row of [...rows].reverse()) {
@@ -13343,7 +12464,7 @@ async function activateStore(context, receipt, attestation) {
     throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
   }
   const validated = validateActivationAttestation(attestation);
-  const attestationHash = sha256Bytes3(Buffer.from(`attestation\x00${JSON.stringify(validated)}`, "utf8"));
+  const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(validated)}`, "utf8"));
   const inspection = await openStore(context, "write");
   let meta;
   let manifest;
@@ -13369,7 +12490,7 @@ async function activateStore(context, receipt, attestation) {
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve13(manifest.controlRoot) !== resolve13(context.harnessDir)) {
+    if (resolve9(manifest.controlRoot) !== resolve9(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -13486,14 +12607,14 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join18(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join11(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join18(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join11(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync6(dirname8(item.archivePath), { recursive: true });
-    rmSync2(item.archivePath, { force: true });
+    mkdirSync4(dirname7(item.archivePath), { recursive: true });
+    rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
     writeLedger(ledgerPath, ledger);
@@ -13538,7 +12659,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item) {
-  const livePath = join18(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join11(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. Nothing was retired.`);
@@ -13564,12 +12685,12 @@ function retireSection(context, ledgerPath, ledger, item) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync6(dirname8(item.archivePath), { recursive: true });
-  rmSync2(item.archivePath, { force: true });
+  mkdirSync4(dirname7(item.archivePath), { recursive: true });
+  rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
   item.removedLines = dropped.size;
-  item.expectedLiveSha256 = sha256Bytes3(Buffer.from(excised, "utf8"));
+  item.expectedLiveSha256 = sha256Bytes2(Buffer.from(excised, "utf8"));
   writeLedger(ledgerPath, ledger);
   writeTextAtomic(livePath, excised);
   item.state = "verified";
@@ -13615,9 +12736,9 @@ async function retireStoreSources(context, activationReceipt) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join18(dirname8(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join18(archiveDir, "ledger.json");
-    const retirementHash = sha256Bytes3(Buffer.from(`retirement\x00${JSON.stringify({
+    const archiveDir = join11(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join11(archiveDir, "ledger.json");
+    const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
       storeId: meta.storeId,
@@ -13661,7 +12782,7 @@ async function retireStoreSources(context, activationReceipt) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join18(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join11(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -13676,7 +12797,7 @@ async function retireStoreSources(context, activationReceipt) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join18(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join11(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -13688,7 +12809,7 @@ async function retireStoreSources(context, activationReceipt) {
       item.family = section.family;
       item.reviewedRows = section.rows;
     }
-    mkdirSync6(archiveDir, { recursive: true });
+    mkdirSync4(archiveDir, { recursive: true });
     writeLedger(ledgerPath, ledger);
     let completed = 0;
     for (const item of ledger.registers) {
@@ -13710,7 +12831,7 @@ async function retireStoreSources(context, activationReceipt) {
       project: item.project,
       relativePath: item.relativePath,
       sha256: item.sha256,
-      bytes: statSync5(item.archivePath).size,
+      bytes: statSync3(item.archivePath).size,
       archivedPath: item.archivePath
     }));
     const retiredSections = ledger.sections.map((item) => ({
@@ -13737,7 +12858,7 @@ async function retireStoreSources(context, activationReceipt) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join18(archiveDir, "MARKER.md"),
+        markerPath: join11(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -13768,7 +12889,7 @@ async function retireStoreSources(context, activationReceipt) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join18(archiveDir, "MARKER.md"),
+      markerPath: join11(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -13791,7 +12912,7 @@ var AGENT_FLOW_HISTORY_CHUNK;
 var AGENT_FLOW_COMPACTION_JOURNAL = "agent-flow-compaction.json";
 var ENGINE_STATUS_BODY = "snapshots/engine-status.json";
 var CONSUMER_KINDS;
-var DISPOSITIONS2;
+var DISPOSITIONS;
 var SESSION_STATES;
 var RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at";
 var init_store_activation = __esm(() => {
@@ -13819,7 +12940,7 @@ var init_store_activation = __esm(() => {
   ];
   AGENT_FLOW_HISTORY_CHUNK = /^chunk-\d{6}\.jsonl$/;
   CONSUMER_KINDS = { cli: true, "host-plugin": true, hook: true, coordinator: true };
-  DISPOSITIONS2 = {
+  DISPOSITIONS = {
     reloaded: true,
     upgraded: true,
     "excluded:not-this-control-root": true,
@@ -13827,6 +12948,1643 @@ var init_store_activation = __esm(() => {
     "excluded:superseded-binary": true
   };
   SESSION_STATES = { stopped: true, reloaded: true };
+});
+function canonicalRefusal(detail) {
+  return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
+}
+function canonicalString(value) {
+  for (let index2 = 0;index2 < value.length; index2++) {
+    const code2 = value.charCodeAt(index2);
+    if (code2 >= 55296 && code2 <= 56319) {
+      const next = value.charCodeAt(index2 + 1);
+      if (!(next >= 56320 && next <= 57343))
+        throw canonicalRefusal("a string carrying an unpaired high surrogate");
+      index2++;
+    } else if (code2 >= 56320 && code2 <= 57343) {
+      throw canonicalRefusal("a string carrying an unpaired low surrogate");
+    }
+  }
+  return JSON.stringify(value);
+}
+function canonicalNumber(value) {
+  if (!Number.isFinite(value))
+    throw canonicalRefusal(`the non-finite number ${String(value)}`);
+  if (Number.isInteger(value) && !Number.isSafeInteger(value))
+    throw canonicalRefusal(`the unsafe integer ${value}`);
+  return String(value);
+}
+function canonicalArray(value, ancestors) {
+  if (ancestors.has(value))
+    throw canonicalRefusal("a cyclic structure");
+  ancestors.add(value);
+  const parts = [];
+  for (let index2 = 0;index2 < value.length; index2++)
+    parts.push(canonical(value[index2], ancestors));
+  ancestors.delete(value);
+  return `[${parts.join(",")}]`;
+}
+function canonicalObject(value, ancestors) {
+  if (ancestors.has(value))
+    throw canonicalRefusal("a cyclic structure");
+  ancestors.add(value);
+  const record = value;
+  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key], ancestors)}`);
+  ancestors.delete(value);
+  return `{${parts.join(",")}}`;
+}
+function canonical(value, ancestors) {
+  if (value === null)
+    return "null";
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "string":
+      return canonicalString(value);
+    case "number":
+      return canonicalNumber(value);
+    case "object":
+      break;
+    default:
+      throw canonicalRefusal(`an unsupported ${typeof value} value`);
+  }
+  if (Array.isArray(value))
+    return canonicalArray(value, ancestors);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw canonicalRefusal("an object whose prototype is neither Object.prototype nor null");
+  }
+  return canonicalObject(value, ancestors);
+}
+function serializeExecutionValue(value) {
+  return `${canonical(value, new Set)}
+`;
+}
+function isExecutionKind(value) {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(KIND_KEY_LENGTHS, value);
+}
+function tokenRefusal(detail) {
+  return new ExecutionError("execution.token-invalid", detail);
+}
+function canonicalIntegerText(value, what) {
+  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value <= 0) {
+    throw tokenRefusal(`${what} must be a positive safe integer — got ${String(value)}`);
+  }
+  return String(value);
+}
+function assertKeyShape(kind, key) {
+  const expected = KIND_KEY_LENGTHS[kind];
+  if (key.length !== expected) {
+    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) — got ${key.length}`);
+  }
+  for (const part of key) {
+    if (!isNonEmptyString(part))
+      throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
+  }
+  if (kind === "session" && key[1] !== "coordinator") {
+    throw tokenRefusal(`a session token key carries role coordinator as its second part — got ${JSON.stringify(key[1])}`);
+  }
+}
+function encodeTokenKey(key) {
+  return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
+}
+function executionToken(kind, storeId, epoch, key, revision) {
+  if (!isExecutionKind(kind))
+    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
+  if (!STORE_UUID_RE.test(storeId))
+    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  assertKeyShape(kind, key);
+  const epochText = canonicalIntegerText(epoch, "the epoch");
+  const revisionText = canonicalIntegerText(revision, "the revision");
+  return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
+}
+function authorityEpochRefusal(input) {
+  const problem = {
+    component: "authority",
+    path: "epoch",
+    code: "store.stale-epoch",
+    sourcesTried: [input.source, "store_meta.authority_epoch, read in this transaction"],
+    currentFacts: [
+      `${input.source} carries epoch ${input.presentedEpoch}`,
+      `the store's current authority epoch is ${input.currentEpoch}`
+    ],
+    needed: `re-resolve the current authority generation and re-acquire your own identity at epoch ${input.currentEpoch} (resume or rebind the session row of that epoch), then retry against the current token`,
+    withheldEffect: `only the addressed effect: nothing was written, no revision advanced and no receipt was replayed from epoch ${input.presentedEpoch}`,
+    availableWork: [
+      `read the current state at epoch ${input.currentEpoch}`,
+      `resume or rebind your own execution session at epoch ${input.currentEpoch}`,
+      "retry the operation with the token and reference of the current epoch"
+    ]
+  };
+  return new ExecutionError("store.stale-epoch", input.detail, {
+    component: problem.component,
+    path: problem.path,
+    current_epoch: input.currentEpoch,
+    presented_epoch: input.presentedEpoch,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    recoveryFacts: unresolvedRecovery({
+      target: input.target ?? {},
+      unresolved: [problem],
+      resolvedFrom: [{ path: "epoch", source: input.source }]
+    })
+  });
+}
+function assertAuthorityGeneration(tx, input) {
+  if (input.referenceStoreId !== tx.storeId) {
+    throw new ExecutionError("execution.scope-mismatch", `the session reference belongs to store ${input.referenceStoreId}, not to ${tx.storeId}`);
+  }
+  if (input.referenceEpoch !== tx.epoch) {
+    throw authorityEpochRefusal({
+      source: "the session reference",
+      presentedEpoch: input.referenceEpoch,
+      currentEpoch: tx.epoch,
+      target: input.target,
+      detail: `the session reference carries epoch ${input.referenceEpoch}; the current epoch is ${tx.epoch}. Rebind the session and retry.`
+    });
+  }
+}
+function corrupt(detail) {
+  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
+}
+function readStoreIdentity(db) {
+  const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
+  if (!row || typeof row.store_id !== "string" || typeof row.authority_epoch !== "number") {
+    throw corrupt("store_meta is missing or malformed");
+  }
+  return { storeId: row.store_id, epoch: row.authority_epoch };
+}
+function readExecutionMetaRow(db) {
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw corrupt("execution_meta is missing or malformed");
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
+function storedJsonObject(text4, what) {
+  if (typeof text4 !== "string")
+    throw corrupt(`${what} is not a JSON string`);
+  let parsed;
+  try {
+    parsed = JSON.parse(text4);
+  } catch (error) {
+    throw corrupt(`${what} is not valid JSON (${error.message})`);
+  }
+  if (!isPlainObject(parsed))
+    throw corrupt(`${what} is not a JSON object`);
+  return parsed;
+}
+function storedRevision(value, what) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw corrupt(`${what} is not a positive safe integer`);
+  }
+  return value;
+}
+function storedText(value, what) {
+  if (typeof value !== "string")
+    throw corrupt(`${what} is not a string`);
+  return value;
+}
+function validationRefusal(what, violations) {
+  return corrupt(`${what} does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`);
+}
+function readFrozenInput(json, what) {
+  if (json === null || json === undefined)
+    return null;
+  const pin = storedJsonObject(json, what);
+  if (!isNonEmptyString(pin.store_id) || !STORE_UUID_RE.test(pin.store_id) || typeof pin.entity_revision !== "number" || !Number.isSafeInteger(pin.entity_revision) || pin.entity_revision <= 0 || !isNonEmptyString(pin.document_hash) || !isNonEmptyString(pin.relation_hash)) {
+    throw corrupt(`${what} is not a complete catalog execution pin`);
+  }
+  const keys = Object.keys(pin);
+  if (keys.length !== 4) {
+    throw corrupt(`${what} carries fields beyond the catalog execution pin contract`);
+  }
+  return {
+    store_id: pin.store_id,
+    entity_revision: pin.entity_revision,
+    document_hash: pin.document_hash,
+    relation_hash: pin.relation_hash
+  };
+}
+function sessionRef(store, workflowId, row) {
+  if (row.role !== "coordinator")
+    throw corrupt(`execution_sessions(${workflowId}) carries a non-coordinator role`);
+  if (!isNonEmptyString(row.session_id))
+    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
+  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
+  }
+  return {
+    storeId: store.storeId,
+    epoch: row.epoch,
+    workflowId,
+    role: "coordinator",
+    sessionId: row.session_id
+  };
+}
+function readIntegrationLease(json, what) {
+  const lease = storedJsonObject(json, what);
+  const validation = validateIntegrationMergeLease(lease);
+  if (!validation.ok)
+    throw validationRefusal(what, validation.violations);
+  return lease;
+}
+function readIntegrationLeaseRow(db, workflowId) {
+  const row = db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
+  if (row === undefined)
+    return null;
+  const what = `execution_integration_leases(${workflowId}).lease_json`;
+  const lease = readIntegrationLease(row.lease_json, what);
+  const status = lease.status;
+  if (status !== undefined && status !== "held" && status !== "released") {
+    throw corrupt(`${what} carries status ${JSON.stringify(status)}, which is neither held nor released`);
+  }
+  return {
+    lease,
+    status: status === "released" ? "released" : "held",
+    revision: storedRevision(row.revision, `execution_integration_leases(${workflowId}).revision`),
+    ownerEpoch: storedRevision(row.owner_epoch, `execution_integration_leases(${workflowId}).owner_epoch`)
+  };
+}
+function readWorkflowView(db, store, workflowId) {
+  const workflowRow = db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (!workflowRow) {
+    throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
+  }
+  const revision = storedRevision(workflowRow.revision, `execution_workflows(${workflowId}).revision`);
+  const state = storedJsonObject(workflowRow.state_json, `execution_workflows(${workflowId}).state_json`);
+  if (state.id !== workflowId) {
+    throw corrupt(`execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`);
+  }
+  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
+    throw corrupt(`execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by execution_plans/execution_integration_leases/execution_sessions`);
+  }
+  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+  if (!workflowValidation.ok) {
+    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
+  }
+  const sessions = db.prepare("select role, session_id, epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator'").all(workflowId);
+  const activeSessions = sessions.filter((entry) => entry.state === "active");
+  const inputs = db.prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?").all(workflowId);
+  const integrationRow = readIntegrationLeaseRow(db, workflowId);
+  const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
+  const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
+  const planRows = db.prepare("select plan_id, revision, ordinal, state_json, coordination_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId);
+  const planTokens = {};
+  const plans = [];
+  const planIds = planRows.map((entry) => storedText(entry.plan_id, `execution_plans(${workflowId}).plan_id`));
+  const routeSnapshot = {
+    ...state,
+    plans: planIds.map((planId) => ({ id: planId }))
+  };
+  for (const row of planRows) {
+    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+    const planRevision = storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
+    const planState = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+    const storedCoordination = storedJsonObject(row.coordination_json, `execution_plans(${workflowId},${planId}).coordination_json`);
+    if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json, not by the row state`);
+    }
+    if (planState.id !== planId) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
+    }
+    const planValidation = validatePlanRow(planState);
+    if (!planValidation.ok) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
+    }
+    if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the revision column and in execution_sessions; the DB authority stores neither`);
+    }
+    const coordinationViolations = storedCoordinationViolations(storedCoordination, {
+      revision: planRevision,
+      route: rowValidationRoute(routeSnapshot, planState),
+      what: `execution_plans(${workflowId},${planId}).coordination_json`
+    });
+    if (coordinationViolations.length > 0) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
+    }
+    const hasCoordination = Object.keys(storedCoordination).length > 0;
+    const inputRow = inputs.find((entry) => entry.plan_id === planId);
+    const projectedCoordination = { revision: planRevision, ...storedCoordination };
+    planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
+    plans.push({
+      workflow: state,
+      plan: planState,
+      coordination: hasCoordination ? projectedCoordination : null,
+      integrationLease,
+      frozenInput: inputRow ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`) : null
+    });
+  }
+  return {
+    workflowToken: executionToken("workflow", store.storeId, store.epoch, [workflowId], revision),
+    planTokens,
+    state,
+    plans,
+    coordinator: coordinatorRow ? sessionRef(store, workflowId, coordinatorRow) : null,
+    integrationLease
+  };
+}
+function readExecutionGraph(db, store, meta) {
+  const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
+  const entries = [];
+  const workflows = [];
+  const registeredIds = new Set;
+  for (const row of registry) {
+    const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
+    const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
+    const validation = validateWorkflowEntry(entry);
+    if (!validation.ok)
+      throw validationRefusal(`execution_registry(${workflowId}).entry_json`, validation.violations);
+    if (entry.id !== workflowId) {
+      throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
+    }
+    registeredIds.add(workflowId);
+    entries.push(entry);
+    workflows.push(readWorkflowView(db, store, workflowId));
+  }
+  const terminalUnregistered = [];
+  const terminalAdoptions = [];
+  const headers = db.prepare("select workflow_id, revision, state_json from execution_workflows order by rowid").all();
+  for (const row of headers) {
+    const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+    if (registeredIds.has(id))
+      continue;
+    const state = storedJsonObject(row.state_json, `execution_workflows(${id}).state_json`);
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed")
+      continue;
+    const revision = storedRevision(row.revision, `execution_workflows(${id}).revision`);
+    if (isNonEmptyString(state.lifecycle_adopted_at) && isNonEmptyString(state.adopt_reason) && isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
+      terminalAdoptions.push({
+        id,
+        status: state.status,
+        revision,
+        lifecycle_adopted_at: state.lifecycle_adopted_at,
+        adopt_reason: state.adopt_reason,
+        actor_session_id: state.adoption_actor_session_id,
+        operation_id: state.adoption_operation_id
+      });
+    } else {
+      terminalUnregistered.push({ id, status: state.status, revision });
+    }
+  }
+  return {
+    root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries },
+    workflows,
+    ...terminalUnregistered.length === 0 ? {} : { terminalUnregistered },
+    ...terminalAdoptions.length === 0 ? {} : { terminalAdoptions }
+  };
+}
+async function withExecutionReadTransaction(context, body) {
+  const handle = await openStore(context, "read");
+  try {
+    if (handle.execution === null) {
+      throw new ExecutionError("execution.not-active", "this store predates the execution schema, so it has no execution authority. Upgrade the store and initialize the execution domain before reading execution state.");
+    }
+    const db = handle.db;
+    db.exec("begin");
+    try {
+      const meta = readExecutionMetaRow(db);
+      if (meta.authorityState !== "active") {
+        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. A staged store is inspectable only through migration diagnostics.`);
+      }
+      const store = readStoreIdentity(db);
+      const result = body({ db, storeId: store.storeId, epoch: store.epoch, execution: meta });
+      db.exec("commit");
+      return result;
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+  } finally {
+    handle.close();
+  }
+}
+async function readExecutionState(context) {
+  return withExecutionReadTransaction(context, (tx) => ({
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
+    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch
+  }));
+}
+function invalidInput(detail) {
+  return new CoordinationError("coordination.invalid-input", detail);
+}
+function storedSessionState(value, what) {
+  if (!EXECUTION_SESSION_STATES.includes(value)) {
+    throw corrupt(`${what} is ${JSON.stringify(value)}, which is not a session state`);
+  }
+  return value;
+}
+function readSessionRows(db, store, workflowId) {
+  const rows = db.prepare("select role, session_id, epoch, revision, state from execution_sessions where workflow_id = ? and role = 'coordinator'").all(workflowId);
+  return rows.map((row) => {
+    const ref = sessionRef(store, workflowId, row);
+    return {
+      ref,
+      revision: storedRevision(row.revision, `execution_sessions(${workflowId},${ref.sessionId}).revision`),
+      state: storedSessionState(row.state, `execution_sessions(${workflowId},${ref.sessionId}).state`)
+    };
+  });
+}
+function sessionRefusalDetails(input) {
+  return {
+    component: input.problem.component,
+    path: input.problem.path,
+    ...input.facts,
+    sources_tried: input.problem.sourcesTried,
+    current_facts: input.problem.currentFacts,
+    available_work: input.problem.availableWork,
+    recoveryFacts: unresolvedRecovery({ target: input.target ?? {}, unresolved: [input.problem] })
+  };
+}
+function coordinatorRecoveryWork(input) {
+  const live = input.rows.find((row) => row.state === "active" && row.ref.epoch === input.epoch);
+  if (live !== undefined) {
+    return [
+      `recovering over this row by naming it is refused while workflow ${JSON.stringify(input.workflowId)} holds the ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at epoch ${input.epoch}: recoverExecutionCoordinator replaces only the holder it names, and a normal bind never revives this ${input.rowState} row (epoch ${input.rowEpoch}) — run the addressed effect through ` + `${JSON.stringify(live.ref.sessionId)}'s own live reference, or recover over that holder: the recovery names ${JSON.stringify(live.ref.sessionId)} as the prior holder and carries a valid operator attestation with its ` + `stopped/reloaded entry — the attestation is the stop evidence, and no change to the holder's row is ` + `needed first`
+    ];
+  }
+  return [
+    `recovery is the coordinator recovery transition recoverExecutionCoordinator: it takes the workflow token of the current epoch, an operation id and a non-empty reason, names ${JSON.stringify(input.sessionId)} ` + `as the prior holder it replaces and carries a valid operator attestation — exactly one installed ` + `current-coordinator consumer plus an entry naming that holder stopped/reloaded — and it reactivates ` + `this ${input.rowState} row (epoch ${input.rowEpoch}) at the current epoch; a normal bind never revives it`
+  ];
+}
+function liveSession(tx, address) {
+  const store = { storeId: tx.storeId, epoch: tx.epoch };
+  const rows = readSessionRows(tx.db, store, address.workflowId);
+  const mine = rows.find((row) => row.ref.sessionId === address.sessionId);
+  if (mine === undefined || mine.state !== "active" || mine.ref.epoch !== tx.epoch) {
+    const problem = {
+      component: "session",
+      path: "session",
+      code: "execution.session-unavailable",
+      sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(address.workflowId)}, read in this transaction`],
+      currentFacts: [
+        `the reference names coordinator session ${JSON.stringify(address.sessionId)} of workflow ${JSON.stringify(address.workflowId)}`,
+        mine === undefined ? `the store holds no coordinator session row for ${JSON.stringify(address.sessionId)} at the current epoch ${tx.epoch}` : `session ${JSON.stringify(address.sessionId)}'s row is ${mine.state} in epoch ${mine.ref.epoch}, while the store's current authority epoch is ${tx.epoch}`
+      ],
+      needed: `a session reference the store holds ACTIVE for the coordinator of workflow ${JSON.stringify(address.workflowId)} at the current epoch ${tx.epoch}`,
+      withheldEffect: "only the addressed effect: authority was withheld, so nothing was written, no revision advanced and no receipt was committed under this operation",
+      availableWork: [
+        `present the session reference of a binding the store holds ACTIVE for the coordinator of workflow ${JSON.stringify(address.workflowId)} at epoch ${tx.epoch}`,
+        ...mine === undefined ? ["bind the coordinator session first — the bind verb takes the workflow, the full execution token and an operation id"] : coordinatorRecoveryWork({
+          rows,
+          workflowId: address.workflowId,
+          epoch: tx.epoch,
+          sessionId: address.sessionId,
+          rowState: mine.state,
+          rowEpoch: mine.ref.epoch
+        }),
+        "retry the operation with the reference and token of the current epoch"
+      ]
+    };
+    throw new ExecutionError("execution.session-unavailable", `workflow ${address.workflowId} holds no ACTIVE coordinator session ${address.sessionId} in epoch ${tx.epoch}${mine === undefined ? "" : ` (its row is ${mine.state} in epoch ${mine.ref.epoch})`}. An execution session reference authorizes only the binding the store records at the current epoch; a legacy session envelope is never consulted.`, sessionRefusalDetails({
+      problem,
+      target: { workflowId: address.workflowId },
+      facts: {
+        session_id: address.sessionId,
+        workflow_id: address.workflowId,
+        role: address.role,
+        current_epoch: tx.epoch,
+        ...mine === undefined ? {} : { row_state: mine.state, row_epoch: mine.ref.epoch }
+      }
+    }));
+  }
+  return mine;
+}
+function assertReferenceAuthority(tx, referenceStoreId, referenceEpoch, target) {
+  assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...target === undefined ? {} : { target } });
+}
+async function readExecutionSession(context, session) {
+  if (!isPlainObject(session) || !isNonEmptyString(session.storeId) || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) {
+    throw invalidInput("Invalid execution session reference: provide a store id and positive safe-integer epoch. Inspect workflow authority with mstar status validate.");
+  }
+  if (session.workflowId !== context.caller.workflowId || session.role !== context.caller.role || session.sessionId !== context.caller.sessionId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not independently match the supplied execution session reference. Inspect workflow authority with mstar status validate.");
+  }
+  return withExecutionReadTransaction(context, (tx) => {
+    assertReferenceAuthority(tx, session.storeId, session.epoch);
+    const live = liveSession(tx, {
+      workflowId: session.workflowId,
+      role: "coordinator",
+      sessionId: session.sessionId
+    });
+    return {
+      data: live.ref,
+      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
+      storeId: tx.storeId,
+      epoch: tx.epoch
+    };
+  });
+}
+function ownSessionAddress(caller) {
+  if (!isPlainObject(caller) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(caller.workflowId)) {
+    throw invalidInput("Coordinator session reconstruction requires workflowId and sessionId from the trusted caller. Inspect workflow authority with mstar status validate.");
+  }
+  if (caller.role !== "coordinator") {
+    throw invalidInput("Invalid execution session role: expected coordinator. Inspect workflow authority with mstar status validate.");
+  }
+  return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId };
+}
+function unresolvedOwnSession(address, rows) {
+  const holder = rows.find((row) => row.state === "active");
+  const code2 = holder === undefined ? "coordination.session-not-found" : "coordination.identity-mismatch";
+  const currentFacts = [
+    `the trusted caller is coordinator session ${address.sessionId} of workflow ${address.workflowId}`,
+    holder === undefined ? `workflow ${address.workflowId} records no coordinator session ${address.sessionId} and holds no ACTIVE coordinator session` : `workflow ${address.workflowId} holds the ACTIVE coordinator session ${holder.ref.sessionId} (epoch ${holder.ref.epoch})`
+  ];
+  const problem = {
+    component: "session",
+    path: "session",
+    code: code2,
+    sourcesTried: [
+      `execution_sessions rows of workflow ${address.workflowId} for role coordinator`,
+      "the trusted caller identity (workflow, role, session)"
+    ],
+    currentFacts,
+    needed: holder === undefined ? `a binding this identity can resume: bind coordinator session ${address.sessionId} to workflow ${address.workflowId}` : `the stop/recovery decision for the live coordinator ${holder.ref.sessionId}: the named coordinator recovery with stop evidence for that holder`,
+    withheldEffect: `only this identity's own session binding and reference — no row was written, and the coordinator scope of ` + `workflow ${address.workflowId} is never taken over by another name here`,
+    availableWork: [
+      `read the state of workflow ${address.workflowId} and every plan row it holds`,
+      ...holder === undefined ? ["establish an authorized coordinator binding for the caller identity"] : [
+        "continue the active holder's own binding from that holder's identity",
+        "complete the registered coordinator-recovery flow after the holder stop is attested"
+      ]
+    ]
+  };
+  throw new CoordinationError(code2, "The caller has no usable coordinator session binding. Inspect workflow state with mstar status validate.", {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: address.workflowId,
+    role: address.role,
+    session_id: address.sessionId,
+    ...holder === undefined ? {} : { holder: holder.ref.sessionId },
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recoveryFacts: unresolvedRecovery({
+      target: { workflowId: address.workflowId },
+      unresolved: [problem],
+      resolvedFrom: [
+        { path: "workflowId", source: "caller.identity" },
+        { path: "role", source: "caller.identity" },
+        { path: "sessionId", source: "caller.identity" }
+      ]
+    })
+  });
+}
+async function readOwnExecutionSession(context) {
+  const address = ownSessionAddress(context?.caller);
+  return withExecutionReadTransaction(context, (tx) => {
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const rows = readSessionRows(tx.db, store, address.workflowId);
+    if (rows.every((row) => row.ref.sessionId !== address.sessionId))
+      unresolvedOwnSession(address, rows);
+    const live = liveSession(tx, address);
+    return {
+      data: live.ref,
+      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
+      storeId: tx.storeId,
+      epoch: tx.epoch
+    };
+  });
+}
+var ExecutionError;
+var KIND_KEY_LENGTHS;
+var TOKEN_PREFIX = "exec-v1";
+var STORE_UUID_RE;
+var DECIMAL_RE;
+var BASE64URL_RE;
+var TOKEN_KEY_DECODER;
+var ownedTransactions;
+var OPERATION_ID_RE;
+var EXECUTION_SESSION_STATES;
+var init_execution_store = __esm(() => {
+  init_coordination();
+  init_coordination_write();
+  init_coordination_transitions();
+  init_lease();
+  init_path();
+  init_recovery_intent();
+  init_status();
+  init_store_activation();
+  init_store_db();
+  init_workflow();
+  ExecutionError = class ExecutionError2 extends Error {
+    code;
+    details;
+    constructor(code2, message, details) {
+      super(`[${code2}] ${message}`);
+      this.name = "ExecutionError";
+      this.code = code2;
+      this.details = details;
+    }
+  };
+  KIND_KEY_LENGTHS = {
+    root: 0,
+    workflow: 1,
+    plan: 2,
+    session: 3,
+    "integration-lease": 1,
+    input: 2
+  };
+  STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
+  BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+  TOKEN_KEY_DECODER = new TextDecoder("utf-8", { fatal: true });
+  ownedTransactions = new AsyncLocalStorage3;
+  OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+  EXECUTION_SESSION_STATES = ["active", "suspended", "revoked"];
+});
+function assertSafeSessionId(value, what = "session id") {
+  if (!isNonEmptyString(value)) {
+    throw new CoordinationError("coordination.invalid-session-id", "Invalid public session id: provide one safe path component using [A-Za-z0-9._-], at most 128 characters. Inspect coordinator identity with mstar status validate.", { form: typeof value, field: what });
+  }
+  if (value.length > SESSION_ID_MAX_LENGTH) {
+    throw new CoordinationError("coordination.invalid-session-id", "Invalid public session id: the value exceeds 128 characters and is not echoed. Inspect coordinator identity with mstar status validate.", { length: value.length, max_length: SESSION_ID_MAX_LENGTH, field: what });
+  }
+  try {
+    assertSafePathComponent(value, what);
+  } catch {
+    throw new CoordinationError("coordination.invalid-session-id", `${what} is not a safe path component — a single safe path component ([A-Za-z0-9._-]+) of at most ` + `${SESSION_ID_MAX_LENGTH} characters, not "", ".", ".." or a value containing "/" or "\\"; the rejected value is not echoed in this diagnostic`, { length: value.length });
+  }
+  return value;
+}
+function isRole(value) {
+  return value === "coordinator";
+}
+function isSource(value) {
+  return value === "host" || value === "local";
+}
+function validateExecutionIdentity(identity, scope, options = {}) {
+  if (!isPlainObject(identity)) {
+    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
+  }
+  const value = identity;
+  assertExactKeys(value, ["source", "sessionId", "workflowId", "role"], "execution identity");
+  if (!isSource(value.source)) {
+    const missing = value.source === undefined || value.source === null;
+    throw new CoordinationError(missing ? "coordination.identity-missing" : "coordination.identity-mismatch", missing ? "the execution identity carries no provenance source — an adapter states `host` or `local`, and it is never inferred" : `the execution identity source ${JSON.stringify(value.source)} is not \`host\` or \`local\``, { source: value.source });
+  }
+  if (!isNonEmptyString(value.workflowId)) {
+    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide a workflow id. Inspect registered workflows with mstar status validate.", { workflow_id: value.workflowId });
+  }
+  if (!isNonEmptyString(value.sessionId)) {
+    if (!(options.allowUnsetSessionId === true && typeof value.sessionId === "string")) {
+      throw new CoordinationError("coordination.identity-missing", "the execution identity carries no session id — an identity is acquired explicitly and is never generated; " + "supply a native or local id (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call)", { workflow_id: value.workflowId });
+    }
+  }
+  if (isNonEmptyString(value.sessionId))
+    assertSafeSessionId(value.sessionId);
+  if (!isRole(value.role)) {
+    throw new CoordinationError("coordination.identity-mismatch", "Invalid execution identity role; expected coordinator. Inspect the recorded identity with mstar status validate.", { expected: "coordinator", actual: value.role });
+  }
+  const role = value.role;
+  if (value.workflowId !== scope.workflowId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution identity does not address the expected workflow. Inspect the recorded identity with mstar status validate.", { expected: scope.workflowId, actual: value.workflowId });
+  }
+  if (role !== scope.role) {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution identity role does not match the expected seat. Inspect the recorded identity with mstar status validate.", { expected: scope.role, actual: role });
+  }
+}
+var SESSION_ID_MAX_LENGTH = 128;
+var init_session_identity = __esm(() => {
+  init_coordination_write();
+  init_path();
+});
+var exports_execution_session = {};
+__export(exports_execution_session, {
+  assertExecutionSessionCurrent: () => assertExecutionSessionCurrent,
+  createLocalExecutionIdentity: () => createLocalExecutionIdentity,
+  decodeExecutionSessionRef: () => decodeExecutionSessionRef,
+  encodeExecutionSessionRef: () => encodeExecutionSessionRef,
+  executionContextFor: () => executionContextFor,
+  resumeExecutionSession: () => resumeExecutionSession
+});
+function scopeOf(scope) {
+  return { workflowId: scope.workflowId, role: scope.role };
+}
+function assertRefShape(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference must be an object");
+  }
+  const record = value;
+  const keys = Object.keys(record).sort();
+  if (keys.length !== SESSION_KEYS.length || keys.some((key, index2) => key !== [...SESSION_KEYS].sort()[index2])) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has unknown or missing fields");
+  }
+  if (typeof record.storeId !== "string" || record.storeId.length === 0 || typeof record.workflowId !== "string" || record.workflowId.length === 0) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has empty identity fields");
+  }
+  if (typeof record.epoch !== "number" || !Number.isSafeInteger(record.epoch) || record.epoch <= 0) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid epoch");
+  }
+  if (record.role !== "coordinator") {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has an unknown role");
+  }
+  assertSafeSessionId(record.sessionId, "execution session reference session id");
+}
+function createLocalExecutionIdentity(scope) {
+  const identity = { source: "local", sessionId: randomUUID3(), ...scope };
+  validateExecutionIdentity(identity, scopeOf(scope));
+  assertSafeSessionId(identity.sessionId);
+  return identity;
+}
+function executionContextFor(context, identity, options = {}) {
+  const caller = {
+    sessionId: isNonEmptyString(identity.sessionId) ? identity.sessionId : "",
+    workflowId: identity.workflowId,
+    role: identity.role
+  };
+  validateExecutionIdentity({ ...identity, sessionId: caller.sessionId }, scopeOf(identity), options);
+  if (caller.sessionId !== "")
+    assertSafeSessionId(caller.sessionId);
+  return {
+    ...context,
+    caller
+  };
+}
+function encodeExecutionSessionRef(ref) {
+  assertRefShape(ref);
+  const bytes = serializeExecutionValue(ref);
+  return `${SESSION_WIRE_PREFIX}${Buffer.from(bytes, "utf8").toString("base64url")}`;
+}
+function decodeExecutionSessionRef(wire) {
+  if (typeof wire !== "string" || !wire.startsWith(SESSION_WIRE_PREFIX)) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid wire prefix");
+  }
+  let text4;
+  try {
+    const encoded = wire.slice(SESSION_WIRE_PREFIX.length);
+    if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1)
+      throw new Error("invalid base64url");
+    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - encoded.length % 4) % 4);
+    const bytes = Buffer.from(padded, "base64");
+    text4 = SESSION_DECODER.decode(bytes);
+  } catch {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid UTF-8 base64url");
+  }
+  let value;
+  try {
+    value = JSON.parse(text4);
+  } catch {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid JSON");
+  }
+  assertRefShape(value);
+  return value;
+}
+async function resumeExecutionSession(context, ref) {
+  if (ref === undefined || ref === null)
+    return readOwnExecutionSession(context);
+  assertRefShape(ref);
+  if (context.caller.sessionId !== ref.sessionId || context.caller.workflowId !== ref.workflowId || context.caller.role !== ref.role) {
+    throw new ExecutionError("execution.scope-mismatch", "the independently acquired caller does not match the session reference");
+  }
+  return readExecutionSession(context, ref);
+}
+function assertExecutionSessionCurrent(context, session) {
+  assertRefShape(session);
+  if (context.caller.sessionId !== session.sessionId || context.caller.workflowId !== session.workflowId || context.caller.role !== session.role) {
+    throw new ExecutionError("execution.scope-mismatch", "the current caller does not match the execution session");
+  }
+  withExecutionReadGuard(context, (db, authority) => {
+    if (authority.storeId !== session.storeId || authority.epoch !== session.epoch) {
+      throw new ExecutionError("store.stale-epoch", "the execution session reference is not current");
+    }
+    const row = db.prepare("select epoch, state from execution_sessions where workflow_id = ? and role = ? and session_id = ?").get(session.workflowId, session.role, session.sessionId);
+    if (row?.state !== "active" || row.epoch !== session.epoch) {
+      throw new ExecutionError("execution.session-unavailable", "the execution session is not the active current binding");
+    }
+  });
+}
+var SESSION_WIRE_PREFIX = "exec-session-v1:";
+var SESSION_DECODER;
+var SESSION_KEYS;
+var init_execution_session = __esm(() => {
+  init_coordination_write();
+  init_execution_store();
+  init_store_db();
+  init_session_identity();
+  SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
+  SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId"];
+});
+function assertIssueProvenanceSchema(db) {
+  const schema = db.prepare("select max(version) as version from schema_version").get();
+  if ((schema?.version ?? 0) < MIGRATIONS.length) {
+    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
+  }
+}
+var KINDS;
+var SEVERITIES;
+var ISSUE_KIND_VALUES;
+var SEVERITY_VALUES;
+var ISSUE_PAYLOAD_SCHEMAS;
+var IssueError;
+var DISPOSITIONS2;
+var RELATIONS3;
+var PROVENANCE_KINDS;
+var TERMINAL;
+var init_issue = __esm(() => {
+  init_audit();
+  init_store_db();
+  KINDS = {
+    bug: true,
+    risk: true,
+    improvement: true,
+    request: true,
+    decision: true,
+    "review-obligation": true
+  };
+  SEVERITIES = {
+    critical: true,
+    high: true,
+    medium: true,
+    low: true,
+    info: true
+  };
+  ISSUE_KIND_VALUES = Object.keys(KINDS);
+  SEVERITY_VALUES = Object.keys(SEVERITIES);
+  ISSUE_PAYLOAD_SCHEMAS = {
+    CaptureInput: {
+      projectId: { required: true, type: "string", description: "Project identifier" },
+      title: { required: true, type: "string", description: "Finding title" },
+      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
+      severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
+      impact: { required: true, type: "string", description: "User or system impact" },
+      acceptance: { required: true, type: "string", description: "Acceptance condition" },
+      owner: { required: false, type: "string", description: "Optional owner" },
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    OccurrenceInput: {
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    IssueTriage: {
+      reason: { required: true, type: "string", description: "Reason for triage change" },
+      kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
+      severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
+      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
+      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
+      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
+    },
+    ClosureEvidence: {
+      reason: { required: true, type: "string", description: "Reason for closure" },
+      references: {
+        required: false,
+        requiredWhen: ["resolved"],
+        type: "string[]",
+        description: "Acceptance evidence references; required for resolved closure",
+        minItems: 1
+      },
+      scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
+      canonicalIssueId: {
+        required: false,
+        requiredWhen: ["duplicate", "superseded"],
+        type: "string",
+        description: "Canonical issue for duplicate/superseded; required for those dispositions"
+      },
+      alignmentRef: {
+        required: false,
+        requiredWhen: ["resolved", "waived"],
+        type: "string",
+        description: "Authority alignment reference; required for resolved/waived closure"
+      }
+    },
+    IssueReopen: {
+      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
+    },
+    IssueLink: {
+      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
+      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
+      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
+      target: { required: false, type: "string", description: "Provenance target; required with kind" }
+    },
+    PlanProgress: {
+      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
+      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
+      evidence_paths: {
+        required: true,
+        type: "string[]",
+        description: "Canonical absolute artifact paths for this plan",
+        itemsNonblank: true
+      },
+      track_branches: {
+        required: false,
+        type: "string[]",
+        description: "Reported L2 track branches",
+        itemsNonblank: true
+      }
+    }
+  };
+  IssueError = class IssueError2 extends Error {
+    code;
+    details = {};
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "IssueError";
+      this.code = code2;
+    }
+  };
+  DISPOSITIONS2 = {
+    open: true,
+    resolved: true,
+    waived: true,
+    duplicate: true,
+    superseded: true
+  };
+  RELATIONS3 = {
+    related: true,
+    blocks: true,
+    "duplicate-of": true,
+    "superseded-by": true
+  };
+  PROVENANCE_KINDS = {
+    plan: true,
+    iteration: true,
+    pr: true,
+    report: true
+  };
+  TERMINAL = {
+    resolved: true,
+    waived: true,
+    duplicate: true,
+    superseded: true
+  };
+});
+function violation7(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validateProjectRegister(doc) {
+  const violations = [];
+  if (!isPlainObject(doc)) {
+    return {
+      ok: false,
+      violations: [violation7("high", "project.register.invalid", "project register must be an object")]
+    };
+  }
+  if (doc.entries === undefined) {
+    violations.push(violation7("high", "project.register.missing-entries", "missing required field: entries"));
+  } else if (!isPlainObject(doc.entries)) {
+    violations.push(violation7("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
+  } else {
+    for (const [key, entries] of Object.entries(doc.entries)) {
+      if (key.trim() === "") {
+        violations.push(violation7("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
+      }
+      if (!Array.isArray(entries)) {
+        violations.push(violation7("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
+        continue;
+      }
+      for (const entry of entries) {
+        violations.push(...validateResidual(entry).violations);
+        if (!isPlainObject(entry))
+          continue;
+        validateNonEmptyString4(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
+        if (entry.registered_at === undefined) {
+          violations.push(violation7("high", "project.register.missing-registered-at", "missing required field: registered_at"));
+        } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
+          violations.push(violation7("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
+        }
+        if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
+          violations.push(violation7("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
+        }
+        if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
+          violations.push(violation7("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
+        }
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+var DATE_RE4;
+var init_project = __esm(() => {
+  init_roadmap_content();
+  init_coordination_write();
+  init_store_db();
+  init_issue();
+  init_status();
+  DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+});
+function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
+  const start = resolve10(startDir);
+  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
+  if (explicit)
+    return resolve10(start, explicit);
+  const boundary = resolve10(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+  const rc = loadMstarc(start, boundary);
+  if (rc !== null && rc.config.harnessDir)
+    return resolve10(rc.dir, rc.config.harnessDir);
+  let dir = start;
+  for (;; ) {
+    if (!isAtOrBelow2(dir, boundary))
+      return null;
+    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
+      if (isDirectory(candidate))
+        return candidate;
+    }
+    if (dir === boundary)
+      return null;
+    const parent = dirname9(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function defaultWorkspaceRoot(startDir) {
+  try {
+    const cdup = execFileSync2("git", ["rev-parse", "--show-cdup"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (!cdup)
+      return startDir;
+    let boundary = startDir;
+    for (const segment of cdup.split(/[\\/]/)) {
+      if (segment && segment !== ".")
+        boundary = dirname9(boundary);
+    }
+    return resolve10(boundary);
+  } catch {}
+  return startDir;
+}
+function isAtOrBelow2(dir, root) {
+  const rel = relative3(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute5(rel);
+}
+function mstarcDirOverride(harnessDir, key) {
+  const dir = resolve10(harnessDir);
+  const rc = loadMstarc(dir, dirname9(dir));
+  const declared = rc?.config[key];
+  return declared ? resolve10(rc.dir, declared) : null;
+}
+function resolveSpecsDir(harnessDir, opts = {}) {
+  const declared = mstarcDirOverride(harnessDir, "specsDir");
+  if (declared !== null) {
+    if (opts.create !== false)
+      mkdirSync5(declared, { recursive: true });
+    return declared;
+  }
+  const harness = resolve10(harnessDir);
+  const repoRoot = dirname9(harness);
+  const candidates = [
+    join14(harness, "specs"),
+    join14(repoRoot, "docs", "specs"),
+    join14(repoRoot, "specs"),
+    join14(harness, "designs"),
+    join14(repoRoot, "designs")
+  ];
+  for (const candidate of candidates) {
+    if (isDirectory(candidate) && hasFiles(candidate))
+      return candidate;
+  }
+  const fallback = join14(harness, "specs");
+  if (opts.create !== false)
+    mkdirSync5(fallback, { recursive: true });
+  return fallback;
+}
+function resolvePlanDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "planDir");
+  if (declared !== null)
+    return declared;
+  const dir = resolve10(harnessDir);
+  const name = basename7(dir);
+  if (name === ".plans" || name === "plans")
+    return dir;
+  return join14(dir, "plans");
+}
+function assertSafePathComponent(value, what) {
+  if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error(`${what} must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") — got ${JSON.stringify(value)}`);
+  }
+}
+function resolveIterationDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "iterationDir");
+  if (declared !== null)
+    return declared;
+  return join14(resolve10(harnessDir), "iterations");
+}
+function resolveKnowledgeDir(harnessDir) {
+  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
+  if (declared !== null)
+    return declared;
+  return join14(resolve10(harnessDir), "knowledge");
+}
+function resolveHarnessSubdir(startDir, opts, key, fallback) {
+  const harness = resolveHarnessDir(startDir, opts);
+  if (harness === null) {
+    throw new Error(`harness dir not found from ${resolve10(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+  }
+  const declared = mstarcDirOverride(harness, key);
+  return declared !== null ? declared : join14(resolve10(harness), fallback);
+}
+function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
+  return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
+}
+function resolveProjectDir(startDir = process.cwd(), opts = {}) {
+  return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
+}
+function isDirectory(dir) {
+  try {
+    return statSync4(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function hasFiles(dir) {
+  try {
+    for (const entry of readdirSync9(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (hasFiles(join14(dir, entry.name)))
+          return true;
+      } else if (entry.isFile()) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+var SCAFFOLD_DIRS;
+var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
+# Principle: process stays local; results are shared with the team.
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
+`;
+var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
+`;
+var GITIGNORE_PROCESS_ENTRIES;
+var GITIGNORE_PROCESS_ENTRIES_AGENTS;
+var HARNESS_ROOT_DECLARATION;
+var init_path = __esm(() => {
+  init_catalog();
+  init_mstarc();
+  init_project();
+  init_store_db();
+  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"];
+  GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
+`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
+  GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
+`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
+  HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+});
+var PlanPathError;
+var PLAN_CONSULTED_HEADERS;
+var init_plan_path = __esm(() => {
+  init_coordination_write();
+  init_path();
+  PlanPathError = class PlanPathError2 extends Error {
+    code;
+    details;
+    constructor(code2, message, details = {}) {
+      super(message);
+      this.name = "PlanPathError";
+      this.code = code2;
+      this.details = details;
+    }
+  };
+  PLAN_CONSULTED_HEADERS = {
+    plan_id: true,
+    "main worktree branch": true,
+    "working branch": true
+  };
+});
+function isStandaloneDevelopmentWorkflow(snapshot) {
+  return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
+}
+function isStandaloneReportOnlyWorkflow(snapshot) {
+  return snapshot.type === "plan" && snapshot.delivery_kind === "verification/report-only" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
+}
+function rowValidationRoute(snapshot, row) {
+  if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-development";
+  }
+  if (isStandaloneReportOnlyWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
+    return "standalone-report-only";
+  }
+  return "integration";
+}
+function violation8(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString5(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation8("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation8("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validateWorktreePathValue(violations, value, field) {
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute7(value)) {
+    violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
+  }
+}
+function deliveryEvidenceViolations(value, what) {
+  const violations = [];
+  const invalid3 = (message) => {
+    violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
+  };
+  if (!isPlainObject(value)) {
+    invalid3("must be an object");
+    return violations;
+  }
+  const members = ["compound", "pr", "merge", "completion"];
+  const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
+  if (unknownMembers.length > 0)
+    invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+  const compound = value.compound;
+  if (compound !== undefined) {
+    if (!isPlainObject(compound))
+      invalid3("compound must be an object");
+    else {
+      const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
+      if (unknown.length > 0)
+        invalid3(`compound has unknown key(s) ${unknown.join(", ")}`);
+      if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
+        invalid3(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
+      } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid3("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
+      } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
+        invalid3("compound.reason must be a non-empty string when given");
+      }
+    }
+  }
+  const stringMembers = {
+    pr: ["repo", "head", "target"],
+    merge: ["provider", "evidence"],
+    completion: ["policy", "evidence"]
+  };
+  for (const member of ["pr", "merge", "completion"]) {
+    const block = value[member];
+    if (block === undefined)
+      continue;
+    if (!isPlainObject(block)) {
+      invalid3(`${member} must be an object`);
+      continue;
+    }
+    const fields = stringMembers[member];
+    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
+    if (unknown.length > 0)
+      invalid3(`${member} has unknown key(s) ${unknown.join(", ")}`);
+    for (const field of fields) {
+      if (typeof block[field] !== "string" || block[field].trim() === "") {
+        invalid3(`${member}.${field} must be a non-empty string`);
+      }
+    }
+  }
+  return violations;
+}
+function validateWorkflowSnapshot(doc) {
+  const violations = [];
+  if (!isPlainObject(doc)) {
+    return {
+      ok: false,
+      violations: [violation8("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
+    };
+  }
+  if (doc.schema_version === undefined) {
+    violations.push(violation8("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
+  } else if (doc.schema_version !== 1) {
+    violations.push(violation8("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
+  }
+  if (doc.version !== undefined) {
+    violations.push(violation8("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
+  }
+  validateNonEmptyString5(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
+  if (doc.type === undefined) {
+    violations.push(violation8("high", "workflow.snapshot.missing-type", "missing required field: type"));
+  } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
+    violations.push(violation8("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
+  }
+  if (doc.status === undefined) {
+    violations.push(violation8("high", "workflow.snapshot.missing-status", "missing required field: status"));
+  } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
+    violations.push(violation8("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+  }
+  validateNonEmptyString5(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
+  validateNonEmptyString5(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
+  if (doc.ended_at !== undefined) {
+    validateNonEmptyString5(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
+  }
+  if (doc.phase !== undefined && typeof doc.phase !== "string") {
+    violations.push(violation8("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
+  }
+  if (doc.plans === undefined) {
+    violations.push(violation8("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
+  } else if (!Array.isArray(doc.plans)) {
+    violations.push(violation8("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
+  } else {
+    const snapshotDoc = doc;
+    for (const row of doc.plans) {
+      violations.push(...validatePlanRow(row).violations);
+      if (isPlainObject(row) && row.coordination !== undefined) {
+        const planRow = row;
+        const route = rowValidationRoute(snapshotDoc, planRow);
+        violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
+      }
+    }
+  }
+  if (doc.coordination !== undefined) {
+    violations.push(...validateSnapshotCoordination(doc.coordination));
+  }
+  if (doc.execution_policy !== undefined) {
+    if (!isPlainObject(doc.execution_policy)) {
+      violations.push(violation8("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
+    }
+  }
+  if (doc.integration_merge_lease !== undefined) {
+    violations.push(...validateIntegrationMergeLease(doc.integration_merge_lease).violations);
+  }
+  if (doc.branch !== undefined) {
+    if (!isPlainObject(doc.branch)) {
+      violations.push(violation8("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
+    } else {
+      for (const key of ["base", "source", "integration", "target"]) {
+        if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
+          violations.push(violation8("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
+        }
+      }
+    }
+  }
+  const legacyWorktreePath = doc.control_worktree_path;
+  const canonicalWorktreePath = doc.integration_worktree_path;
+  if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
+    violations.push(violation8("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
+  } else {
+    if (canonicalWorktreePath !== undefined) {
+      validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
+    }
+    if (legacyWorktreePath !== undefined) {
+      violations.push(violation8("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
+      validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
+    }
+  }
+  if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
+    violations.push(violation8("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
+  }
+  if (doc.compass_ref !== undefined) {
+    validateNonEmptyString5(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
+  }
+  if (doc.delivery_kind !== undefined) {
+    if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
+      violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
+    }
+  }
+  if (doc.project !== undefined) {
+    validateNonEmptyString5(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
+  }
+  if (doc.completion_policy !== undefined) {
+    validateNonEmptyString5(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
+  }
+  if (doc.delivery !== undefined) {
+    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
+  }
+  const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
+  if (terminal) {
+    if (doc.ended_at === undefined) {
+      violations.push(violation8("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
+    }
+    if (doc.integration_merge_lease !== undefined) {
+      violations.push(violation8("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
+var WORKFLOW_LIFECYCLE_STATUSES;
+var WORKFLOW_TERMINAL_STATUSES;
+var WORKFLOW_LIFECYCLE_TYPES;
+var WORKFLOW_DELIVERY_KINDS;
+var WORKFLOW_COMPOUND_OUTCOMES;
+var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
+var WorkflowSnapshotValidationError;
+var init_workflow = __esm(() => {
+  init_coordination_write();
+  init_lease();
+  init_path();
+  init_plan_path();
+  init_status();
+  init_store();
+  init_persist_payload_schemas();
+  WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
+  WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
+  WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
+  WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
+  WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
+  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
+    violations;
+    constructor(message, violations) {
+      super(message);
+      this.violations = violations;
+    }
+  };
+});
+function storedCoordinationViolations(block, input) {
+  return validateRowCoordination({ ...block, revision: input.revision }, input.what, input.route);
+}
+var IMPLEMENTED_OPERATIONS;
+var OPERATION_NAMES;
+var NON_COMPLETION_OPERATIONS;
+var PROGRESS_TRANSITIONS;
+var init_coordination_transitions = __esm(() => {
+  init_coordination_write();
+  init_workflow();
+  init_project();
+  init_path();
+  IMPLEMENTED_OPERATIONS = {
+    prepare: true,
+    progress: true,
+    "residual-add": true,
+    "residual-close": true,
+    complete: true
+  };
+  OPERATION_NAMES = Object.keys(IMPLEMENTED_OPERATIONS);
+  NON_COMPLETION_OPERATIONS = OPERATION_NAMES.filter((operation) => operation !== "complete");
+  PROGRESS_TRANSITIONS = {
+    Todo: ["InProgress", "Blocked"],
+    InProgress: ["InProgress", "Blocked", "InReview"],
+    Blocked: ["Blocked", "InProgress"],
+    InReview: ["InReview", "InProgress", "Blocked"]
+  };
+});
+var CatalogRegistrationError;
+var ENTITY_KINDS3;
+var ROOT_KINDS3;
+var DOCUMENT_KINDS3;
+var RELATIONS4;
+var init_catalog_registration = __esm(() => {
+  init_audit();
+  init_catalog();
+  init_coordination_write();
+  init_path();
+  init_plan_path();
+  init_store_db();
+  init_status();
+  init_workflow();
+  CatalogRegistrationError = class CatalogRegistrationError2 extends Error {
+    code;
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "CatalogRegistrationError";
+      this.code = code2;
+    }
+  };
+  ENTITY_KINDS3 = {
+    project: true,
+    iteration: true,
+    plan: true,
+    document: true
+  };
+  ROOT_KINDS3 = {
+    repository: true,
+    harness: true,
+    plans: true,
+    iterations: true,
+    specs: true,
+    knowledge: true,
+    projects: true
+  };
+  DOCUMENT_KINDS3 = {
+    spec: true,
+    knowledge: true,
+    guide: true,
+    compass: true,
+    plan: true,
+    roadmap: true,
+    review: true,
+    other: true
+  };
+  RELATIONS4 = {
+    "belongs-to": true,
+    documents: true,
+    "spec-ref": true,
+    "knowledge-ref": true,
+    "derived-from": true,
+    supersedes: true
+  };
+});
+function gitProbeTimeoutMs() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+function parseMainWorktree(out) {
+  const tokens = out.split("\x00");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1)
+    return null;
+  const rawPath = tokens[first].slice("worktree ".length);
+  if (rawPath.trim() === "")
+    return null;
+  let branch = null;
+  let detached = false;
+  for (let i = first + 1;i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("worktree "))
+      break;
+    if (token === "bare")
+      return null;
+    if (token === "detached")
+      detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      if (ref === "")
+        return null;
+      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached)
+    branch = "";
+  if (branch === null)
+    return null;
+  try {
+    return { root: realpathSync6(rawPath), branch };
+  } catch {
+    return null;
+  }
+}
+function readMainWorktree(cwd) {
+  const start = cwd ?? process.cwd();
+  try {
+    const stdout = execFileSync3("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return parseMainWorktree(stdout);
+  } catch {
+    return null;
+  }
+}
+var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var QC_ALIGNMENT_FIELDS;
+var init_worktree = __esm(() => {
+  init_lease();
+  QC_ALIGNMENT_FIELDS = [
+    { key: "planId", label: "plan_id" },
+    { key: "reviewRange", label: "Review range" },
+    { key: "diffBasis", label: "Diff basis" }
+  ];
+});
+var MSTAR_REVIEW_V1_PAYLOAD_SCHEMA;
+var init_qcreview_schema = __esm(() => {
+  MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
+    schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
+    verdict: { required: true, type: "string", description: "Harness PR verdict." },
+    summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
+    findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
+    tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated; optional band: mergeable | good | pass | fail (absent = legacy-valid)." },
+    target: { required: false, type: "object", description: "Optional target identity." }
+  };
 });
 function errorCode(error) {
   if (error !== null && typeof error === "object" && "code" in error) {
@@ -13857,7 +14615,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
     if (linked) {
       throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join19(dir, ".git") });
     }
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -13865,55 +14623,33 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   return resolveHarnessDir(start);
 }
 var PERSIST_PAYLOAD_CONTRACTS;
-var ENVELOPE_KEYS;
 var EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
 var ExecutionPinConflictError;
 var FROZEN_ROW_FIELDS;
 var FROZEN_METADATA_FIELDS;
-var PROTECTED_SOURCE_BRANCHES;
 var GIT_OBJECT_ID;
 var UNFINISHED_GIT_OPERATIONS;
-var PREPARE_PATCH_KEYS;
-var PREPARE_APPEND_KEYS;
-var PREPARE_CORRECTION_KEYS;
-var PREPARE_APPEND_METADATA_KEYS;
-var PREPARE_APPEND_AUTHORITY_METADATA_KEYS;
 var PLAN_PARALLELISM_VALUES;
-var AMENDMENT_MINIMUM;
-var RECOVERY_INPUT_KEYS;
 var init_coordination = __esm(() => {
-  init_core();
   init_coordination_write();
-  init_recovery_intent();
-  init_session_identity();
   init_coordination_transitions();
-  init_lease();
   init_path();
-  init_project();
   init_catalog_registration();
   init_catalog();
-  init_plan_path();
-  init_iteration();
   init_status();
-  init_store();
   init_store_db();
-  init_issue();
   init_worktree();
   init_workflow();
   init_qcreview_schema();
-  init_persist_payload_schemas();
   PERSIST_PAYLOAD_CONTRACTS = {
-    status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
-    snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
     review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
     json: {
       schema: null,
       validation: "parse-only",
       reason: "Arbitrary JSON has no declared domain shape.",
-      alternative: "Use status, snapshot, or review for governed artifacts."
+      alternative: "Use review for governed artifacts."
     }
   };
-  ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "harness_root"];
   ExecutionPinConflictError = class ExecutionPinConflictError2 extends Error {
     code = EXECUTION_PIN_CONFLICT_CODE;
     details;
@@ -13925,7 +14661,6 @@ var init_coordination = __esm(() => {
   };
   FROZEN_ROW_FIELDS = ["id", "plan_id", "title", "file"];
   FROZEN_METADATA_FIELDS = ["primary_spec", "spec_refs", "iteration_compass", "iteration_refs"];
-  PROTECTED_SOURCE_BRANCHES = { main: true, master: true, develop: true, dev: true };
   GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   UNFINISHED_GIT_OPERATIONS = [
     ["MERGE_HEAD", "merge"],
@@ -13934,48 +14669,7 @@ var init_coordination = __esm(() => {
     ["rebase-merge", "rebase"],
     ["rebase-apply", "rebase"]
   ];
-  PREPARE_PATCH_KEYS = [
-    "mainWorktreeBranch",
-    "appendPlans",
-    "correctPlanFiles",
-    "integrationWorktreePath",
-    "planParallelism"
-  ];
-  PREPARE_APPEND_KEYS = ["id", "title", "file", "metadata"];
-  PREPARE_CORRECTION_KEYS = ["id", "expectedFile", "file"];
-  PREPARE_APPEND_METADATA_KEYS = [
-    "primary_spec",
-    "spec_refs",
-    "iteration_compass",
-    "iteration_refs",
-    "working_branch",
-    "spec_integration_branch",
-    "merge_target"
-  ];
-  PREPARE_APPEND_AUTHORITY_METADATA_KEYS = ["catalog_pin"];
   PLAN_PARALLELISM_VALUES = ["serial", "parallel"];
-  AMENDMENT_MINIMUM = {
-    "coordination.prepare-amendment.duplicate-plan": "a plan id this workflow does not already hold, or the removal of that entry from the patch",
-    "coordination.prepare-amendment.invalid-plan": "an addressed existing unstarted row named by that plan's own registered file",
-    "coordination.prepare-amendment.invalid-patch": "a patch whose addressed fields are well formed",
-    "coordination.prepare-amendment.compass-mismatch": "an addressed plan, checkout or branch the reviewed compass declares",
-    "coordination.prepare-amendment.execution-started": "the addressed fact's own execution state settled, or that entry removed from the patch",
-    "coordination.prepare-amendment.invalid-worktree": "an existing distinct checkout of this repository on branch.integration",
-    "coordination.not-in-git": "a readable main worktree of the caller's checkout, or a patch whose components read no checkout fact",
-    "coordination.scope-mismatch": "a call from the main worktree of the branch the patch declares"
-  };
-  RECOVERY_INPUT_KEYS = [
-    "cwd",
-    "harnessDir",
-    "identity",
-    "priorSessionPath",
-    "priorSessionId",
-    "operationId",
-    "reason",
-    "authorizationRef",
-    "stoppedSessionIds",
-    "attestation"
-  ];
 });
 function parsedInstant(value) {
   if (typeof value !== "string" || value === "")
@@ -14018,6 +14712,17 @@ async function loadSqliteDriver() {
   } catch (error) {
     assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
     throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
+  }
+}
+function loadSqliteDriverSync() {
+  try {
+    const mod = requireDriver("node:sqlite");
+    if (typeof mod.DatabaseSync !== "function")
+      throw new Error("DatabaseSync is missing");
+    return mod;
+  } catch (error) {
+    assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
+    throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module synchronously: ${error.message}`);
   }
 }
 function storeDbPath(context) {
@@ -14119,7 +14824,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync15(`${dbPath}-wal`))
+  if (existsSync16(`${dbPath}-wal`))
     return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
@@ -14450,6 +15155,12 @@ function readExecutionMeta(db, schemaVersion) {
     activatedAt: row.activated_at ?? null
   };
 }
+function isOpenLevelFailure(error) {
+  const err = error;
+  if (err?.errcode === 14 || err?.errcode === 10)
+    return true;
+  return /unable to open database file|disk I\/O error/i.test(String(err?.message ?? ""));
+}
 function isRawCantOpen(error) {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
@@ -14458,14 +15169,90 @@ function isTransientReadOpenFailure(error, dbPath) {
     return false;
   if (!isRawCantOpen(error))
     return false;
-  return existsSync15(dbPath);
+  return existsSync16(dbPath);
+}
+function dropProbeConnection() {
+  const current = probeConnection;
+  probeConnection = null;
+  if (current === null)
+    return;
+  try {
+    current.db.close();
+  } catch {}
+}
+function probeConnectionFor(dbPath) {
+  let dev;
+  let ino;
+  try {
+    const stats = statSync7(dbPath);
+    dev = stats.dev;
+    ino = stats.ino;
+  } catch {
+    dropProbeConnection();
+    return null;
+  }
+  const cached = probeConnection;
+  if (cached !== null && cached.dbPath === dbPath && cached.dev === dev && cached.ino === ino)
+    return cached.db;
+  dropProbeConnection();
+  const db = openConnection(dbPath, "read", loadSqliteDriverSync().DatabaseSync);
+  probeConnection = { dbPath, dev, ino, db };
+  return db;
+}
+function probeExecutionAuthority(dbPath) {
+  assertAbsentOrRegularStoreFile(dbPath);
+  if (!existsSync16(dbPath)) {
+    dropProbeConnection();
+    return { kind: "absent", dbPath };
+  }
+  assertStoreRuntimeSupported();
+  let db;
+  try {
+    db = probeConnectionFor(dbPath);
+  } catch (error) {
+    dropProbeConnection();
+    if (isOpenLevelFailure(error) || isBusyError(error))
+      return { kind: "unreadable", dbPath, error };
+    return refuseOpenFailure(error, dbPath);
+  }
+  if (db === null)
+    return { kind: "absent", dbPath };
+  try {
+    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+    readStoreMeta(db);
+    const state = readExecutionMeta(db, schemaVersion)?.authorityState ?? null;
+    return state === "active" ? { kind: "active", dbPath } : { kind: "not-active", dbPath, state };
+  } catch (error) {
+    dropProbeConnection();
+    if (isOpenLevelFailure(error) || isBusyError(error))
+      return { kind: "unreadable", dbPath, error };
+    return refuseOpenFailure(error, dbPath);
+  }
+}
+function withExecutionReadGuard(context, body) {
+  const probe = probeExecutionAuthority(storeDbPath(context));
+  if (probe.kind === "unreadable")
+    refuseOpenFailure(probe.error, probe.dbPath);
+  if (probe.kind !== "active") {
+    throw new StoreError("execution.consumer-not-ready", "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.");
+  }
+  const db = probeConnectionFor(probe.dbPath);
+  if (db === null) {
+    throw new StoreError("store.not-initialized", "The execution store disappeared before the read-only assertion.");
+  }
+  const store = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
+  const execution = db.prepare("select authority_state from execution_meta where id = 1").get();
+  if (store === undefined || typeof store.store_id !== "string" || typeof store.authority_epoch !== "number" || execution?.authority_state !== "active") {
+    throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
+  }
+  return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
 }
 async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
-    throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. For a genuinely empty workspace, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to create and activate the selected store (or "mstar store init" with the same --harness when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`);
+  if (!existsSync16(dbPath)) {
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -14974,6 +15761,7 @@ var EXECUTION_TABLE_NAMES;
 var EXECUTION_MIGRATION;
 var READ_OPEN_ATTEMPTS = 5;
 var READ_OPEN_BACKOFF_MS = 5;
+var probeConnection = null;
 var init_store_db = __esm(() => {
   init_coordination();
   StoreError = class StoreError2 extends Error {
@@ -15091,14 +15879,10 @@ var INPUT_ENTRIES_CAP = 1e4;
 var MAX_RETAINED_ENTRIES = INPUT_ENTRIES_CAP / 2;
 init_dispatch();
 init_worktree();
-init_core();
-init_path();
-init_store_db();
-init_workflow();
 init_path();
 init_mstarc();
-init_core();
 init_workflow();
+init_execution_store();
 init_worktree();
 init_recovery_intent();
 class SddScriptError extends Error {
@@ -15121,7 +15905,7 @@ var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync9(join23(dir, name));
+    statSync9(join22(dir, name));
     return true;
   } catch {
     return false;
@@ -15153,7 +15937,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve17(targetPath);
-  const name = basename13(resolved);
+  const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -15166,8 +15950,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join23(harnessDir2, "workflows");
-      projectDir = join23(harnessDir2, "projects");
+      workflowDir = join22(harnessDir2, "workflows");
+      projectDir = join22(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -15200,7 +15984,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename13(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -15228,7 +16012,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename13(filePath)} content must be a JSON object`
+          message: `${basename12(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -15312,445 +16096,36 @@ init_store();
 init_workflow();
 init_session_identity();
 init_coordination();
-init_coordination();
-init_store_db();
-init_workflow();
-init_coordination();
 init_coordination_write();
-init_lease();
-init_status();
-init_workflow();
-init_coordination();
-init_coordination_write();
-init_coordination_transitions();
-init_lease();
 init_path();
-init_recovery_intent();
-init_status();
-init_store_activation();
+init_coordination();
 init_store_db();
 init_workflow();
-
-class ExecutionError extends Error {
-  code;
-  details;
-  constructor(code2, message, details) {
-    super(`[${code2}] ${message}`);
-    this.name = "ExecutionError";
-    this.code = code2;
-    this.details = details;
-  }
-}
-function canonicalRefusal(detail) {
-  return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
-}
-function canonicalString(value) {
-  for (let index2 = 0;index2 < value.length; index2++) {
-    const code2 = value.charCodeAt(index2);
-    if (code2 >= 55296 && code2 <= 56319) {
-      const next = value.charCodeAt(index2 + 1);
-      if (!(next >= 56320 && next <= 57343))
-        throw canonicalRefusal("a string carrying an unpaired high surrogate");
-      index2++;
-    } else if (code2 >= 56320 && code2 <= 57343) {
-      throw canonicalRefusal("a string carrying an unpaired low surrogate");
-    }
-  }
-  return JSON.stringify(value);
-}
-function canonicalNumber(value) {
-  if (!Number.isFinite(value))
-    throw canonicalRefusal(`the non-finite number ${String(value)}`);
-  if (Number.isInteger(value) && !Number.isSafeInteger(value))
-    throw canonicalRefusal(`the unsafe integer ${value}`);
-  return String(value);
-}
-function canonicalArray(value, ancestors) {
-  if (ancestors.has(value))
-    throw canonicalRefusal("a cyclic structure");
-  ancestors.add(value);
-  const parts = [];
-  for (let index2 = 0;index2 < value.length; index2++)
-    parts.push(canonical(value[index2], ancestors));
-  ancestors.delete(value);
-  return `[${parts.join(",")}]`;
-}
-function canonicalObject(value, ancestors) {
-  if (ancestors.has(value))
-    throw canonicalRefusal("a cyclic structure");
-  ancestors.add(value);
-  const record = value;
-  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key], ancestors)}`);
-  ancestors.delete(value);
-  return `{${parts.join(",")}}`;
-}
-function canonical(value, ancestors) {
-  if (value === null)
-    return "null";
-  switch (typeof value) {
-    case "boolean":
-      return value ? "true" : "false";
-    case "string":
-      return canonicalString(value);
-    case "number":
-      return canonicalNumber(value);
-    case "object":
-      break;
-    default:
-      throw canonicalRefusal(`an unsupported ${typeof value} value`);
-  }
-  if (Array.isArray(value))
-    return canonicalArray(value, ancestors);
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    throw canonicalRefusal("an object whose prototype is neither Object.prototype nor null");
-  }
-  return canonicalObject(value, ancestors);
-}
-function serializeExecutionValue(value) {
-  return `${canonical(value, new Set)}
-`;
-}
-var KIND_KEY_LENGTHS = {
-  root: 0,
-  workflow: 1,
-  plan: 2,
-  session: 3,
-  "integration-lease": 1,
-  input: 2
-};
-function isExecutionKind(value) {
-  return typeof value === "string" && Object.prototype.hasOwnProperty.call(KIND_KEY_LENGTHS, value);
-}
-var TOKEN_PREFIX = "exec-v1";
-var STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-var TOKEN_KEY_DECODER = new TextDecoder("utf-8", { fatal: true });
-function tokenRefusal(detail) {
-  return new ExecutionError("execution.token-invalid", detail);
-}
-function canonicalIntegerText(value, what) {
-  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value <= 0) {
-    throw tokenRefusal(`${what} must be a positive safe integer — got ${String(value)}`);
-  }
-  return String(value);
-}
-function assertKeyShape(kind, key) {
-  const expected = KIND_KEY_LENGTHS[kind];
-  if (key.length !== expected) {
-    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) — got ${key.length}`);
-  }
-  for (const part of key) {
-    if (!isNonEmptyString(part))
-      throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
-  }
-  if (kind === "session" && key[1] !== "coordinator") {
-    throw tokenRefusal(`a session token key carries role coordinator as its second part — got ${JSON.stringify(key[1])}`);
-  }
-}
-function encodeTokenKey(key) {
-  return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
-}
-function executionToken(kind, storeId, epoch, key, revision) {
-  if (!isExecutionKind(kind))
-    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
-  if (!STORE_UUID_RE.test(storeId))
-    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
-  assertKeyShape(kind, key);
-  const epochText = canonicalIntegerText(epoch, "the epoch");
-  const revisionText = canonicalIntegerText(revision, "the revision");
-  return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
-}
-function corrupt(detail) {
-  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
-}
-function readStoreIdentity(db) {
-  const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
-  if (!row || typeof row.store_id !== "string" || typeof row.authority_epoch !== "number") {
-    throw corrupt("store_meta is missing or malformed");
-  }
-  return { storeId: row.store_id, epoch: row.authority_epoch };
-}
-function readExecutionMetaRow(db) {
-  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
-  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw corrupt("execution_meta is missing or malformed");
-  }
-  return {
-    protocolVersion: row.protocol_version,
-    authorityState: row.authority_state,
-    revision: row.revision,
-    rootUpdatedAt: row.root_updated_at,
-    manifestId: row.manifest_id ?? null,
-    activatedAt: row.activated_at ?? null
-  };
-}
-function storedJsonObject(text4, what) {
-  if (typeof text4 !== "string")
-    throw corrupt(`${what} is not a JSON string`);
-  let parsed;
-  try {
-    parsed = JSON.parse(text4);
-  } catch (error) {
-    throw corrupt(`${what} is not valid JSON (${error.message})`);
-  }
-  if (!isPlainObject(parsed))
-    throw corrupt(`${what} is not a JSON object`);
-  return parsed;
-}
-function storedRevision(value, what) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw corrupt(`${what} is not a positive safe integer`);
-  }
-  return value;
-}
-function storedText(value, what) {
-  if (typeof value !== "string")
-    throw corrupt(`${what} is not a string`);
-  return value;
-}
-function validationRefusal(what, violations) {
-  return corrupt(`${what} does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`);
-}
-function readFrozenInput(json, what) {
-  if (json === null || json === undefined)
-    return null;
-  const pin = storedJsonObject(json, what);
-  if (!isNonEmptyString(pin.store_id) || !STORE_UUID_RE.test(pin.store_id) || typeof pin.entity_revision !== "number" || !Number.isSafeInteger(pin.entity_revision) || pin.entity_revision <= 0 || !isNonEmptyString(pin.document_hash) || !isNonEmptyString(pin.relation_hash)) {
-    throw corrupt(`${what} is not a complete catalog execution pin`);
-  }
-  const keys = Object.keys(pin);
-  if (keys.length !== 4) {
-    throw corrupt(`${what} carries fields beyond the catalog execution pin contract`);
-  }
-  return {
-    store_id: pin.store_id,
-    entity_revision: pin.entity_revision,
-    document_hash: pin.document_hash,
-    relation_hash: pin.relation_hash
-  };
-}
-function sessionRef(store, workflowId, row) {
-  if (row.role !== "coordinator")
-    throw corrupt(`execution_sessions(${workflowId}) carries a non-coordinator role`);
-  if (!isNonEmptyString(row.session_id))
-    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
-  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
-    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
-  }
-  return {
-    storeId: store.storeId,
-    epoch: row.epoch,
-    workflowId,
-    role: "coordinator",
-    sessionId: row.session_id
-  };
-}
-function readIntegrationLease(json, what) {
-  const lease = storedJsonObject(json, what);
-  const validation = validateIntegrationMergeLease(lease);
-  if (!validation.ok)
-    throw validationRefusal(what, validation.violations);
-  return lease;
-}
-function readIntegrationLeaseRow(db, workflowId) {
-  const row = db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
-  if (row === undefined)
-    return null;
-  const what = `execution_integration_leases(${workflowId}).lease_json`;
-  const lease = readIntegrationLease(row.lease_json, what);
-  const status = lease.status;
-  if (status !== undefined && status !== "held" && status !== "released") {
-    throw corrupt(`${what} carries status ${JSON.stringify(status)}, which is neither held nor released`);
-  }
-  return {
-    lease,
-    status: status === "released" ? "released" : "held",
-    revision: storedRevision(row.revision, `execution_integration_leases(${workflowId}).revision`),
-    ownerEpoch: storedRevision(row.owner_epoch, `execution_integration_leases(${workflowId}).owner_epoch`)
-  };
-}
-function readWorkflowView(db, store, workflowId) {
-  const workflowRow = db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
-  if (!workflowRow) {
-    throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
-  }
-  const revision = storedRevision(workflowRow.revision, `execution_workflows(${workflowId}).revision`);
-  const state = storedJsonObject(workflowRow.state_json, `execution_workflows(${workflowId}).state_json`);
-  if (state.id !== workflowId) {
-    throw corrupt(`execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`);
-  }
-  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
-    throw corrupt(`execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by execution_plans/execution_integration_leases/execution_sessions`);
-  }
-  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
-  if (!workflowValidation.ok) {
-    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
-  }
-  const sessions = db.prepare("select role, session_id, epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator'").all(workflowId);
-  const activeSessions = sessions.filter((entry) => entry.state === "active");
-  const inputs = db.prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?").all(workflowId);
-  const integrationRow = readIntegrationLeaseRow(db, workflowId);
-  const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
-  const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
-  const planRows = db.prepare("select plan_id, revision, ordinal, state_json, coordination_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId);
-  const planTokens = {};
-  const plans = [];
-  const planIds = planRows.map((entry) => storedText(entry.plan_id, `execution_plans(${workflowId}).plan_id`));
-  const routeSnapshot = {
-    ...state,
-    plans: planIds.map((planId) => ({ id: planId }))
-  };
-  for (const row of planRows) {
-    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
-    const planRevision = storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
-    const planState = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
-    const storedCoordination = storedJsonObject(row.coordination_json, `execution_plans(${workflowId},${planId}).coordination_json`);
-    if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json, not by the row state`);
-    }
-    if (planState.id !== planId) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
-    }
-    const planValidation = validatePlanRow(planState);
-    if (!planValidation.ok) {
-      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
-    }
-    if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the revision column and in execution_sessions; the DB authority stores neither`);
-    }
-    const coordinationViolations = storedCoordinationViolations(storedCoordination, {
-      revision: planRevision,
-      route: rowValidationRoute(routeSnapshot, planState),
-      what: `execution_plans(${workflowId},${planId}).coordination_json`
-    });
-    if (coordinationViolations.length > 0) {
-      throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
-    }
-    const hasCoordination = Object.keys(storedCoordination).length > 0;
-    const inputRow = inputs.find((entry) => entry.plan_id === planId);
-    const projectedCoordination = { revision: planRevision, ...storedCoordination };
-    planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
-    plans.push({
-      workflow: state,
-      plan: planState,
-      coordination: hasCoordination ? projectedCoordination : null,
-      integrationLease,
-      frozenInput: inputRow ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`) : null
-    });
-  }
-  return {
-    workflowToken: executionToken("workflow", store.storeId, store.epoch, [workflowId], revision),
-    planTokens,
-    state,
-    plans,
-    coordinator: coordinatorRow ? sessionRef(store, workflowId, coordinatorRow) : null,
-    integrationLease
-  };
-}
-function readExecutionGraph(db, store, meta) {
-  const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
-  const entries = [];
-  const workflows = [];
-  const registeredIds = new Set;
-  for (const row of registry) {
-    const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
-    const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
-    const validation = validateWorkflowEntry(entry);
-    if (!validation.ok)
-      throw validationRefusal(`execution_registry(${workflowId}).entry_json`, validation.violations);
-    if (entry.id !== workflowId) {
-      throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
-    }
-    registeredIds.add(workflowId);
-    entries.push(entry);
-    workflows.push(readWorkflowView(db, store, workflowId));
-  }
-  const terminalUnregistered = [];
-  const terminalAdoptions = [];
-  const headers = db.prepare("select workflow_id, revision, state_json from execution_workflows order by rowid").all();
-  for (const row of headers) {
-    const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
-    if (registeredIds.has(id))
-      continue;
-    const state = storedJsonObject(row.state_json, `execution_workflows(${id}).state_json`);
-    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed")
-      continue;
-    const revision = storedRevision(row.revision, `execution_workflows(${id}).revision`);
-    if (isNonEmptyString(state.lifecycle_adopted_at) && isNonEmptyString(state.adopt_reason) && isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
-      terminalAdoptions.push({
-        id,
-        status: state.status,
-        revision,
-        lifecycle_adopted_at: state.lifecycle_adopted_at,
-        adopt_reason: state.adopt_reason,
-        actor_session_id: state.adoption_actor_session_id,
-        operation_id: state.adoption_operation_id
-      });
-    } else {
-      terminalUnregistered.push({ id, status: state.status, revision });
-    }
-  }
-  return {
-    root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries },
-    workflows,
-    ...terminalUnregistered.length === 0 ? {} : { terminalUnregistered },
-    ...terminalAdoptions.length === 0 ? {} : { terminalAdoptions }
-  };
-}
-var ownedTransactions = new AsyncLocalStorage3;
-async function withExecutionReadTransaction(context, body) {
-  const handle = await openStore(context, "read");
-  try {
-    if (handle.execution === null) {
-      throw new ExecutionError("execution.not-active", "this store predates the execution schema, so it has no execution authority. Upgrade the store and initialize the execution domain before reading execution state.");
-    }
-    const db = handle.db;
-    db.exec("begin");
-    try {
-      const meta = readExecutionMetaRow(db);
-      if (meta.authorityState !== "active") {
-        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. A staged store is inspectable only through migration diagnostics.`);
-      }
-      const store = readStoreIdentity(db);
-      const result = body({ db, storeId: store.storeId, epoch: store.epoch, execution: meta });
-      db.exec("commit");
-      return result;
-    } catch (error) {
-      try {
-        db.exec("rollback");
-      } catch {}
-      throw error;
-    }
-  } finally {
-    handle.close();
-  }
-}
-async function readExecutionState(context) {
-  return withExecutionReadTransaction(context, (tx) => ({
-    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
-    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
-    storeId: tx.storeId,
-    epoch: tx.epoch
-  }));
-}
+init_coordination_write();
+init_lease();
+init_status();
+init_workflow();
+init_execution_store();
 init_store_activation();
 init_coordination();
 init_coordination_write();
+init_execution_store();
 init_status();
 init_workflow();
 init_store_db();
 var UNPARSEABLE_JSON = Symbol("unparseable-json");
-init_coordination_write();
-init_store_db();
-init_session_identity();
-var SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
+init_execution_store();
+init_execution_session();
 init_catalog_registration();
 init_coordination_write();
 init_coordination();
 init_coordination_transitions();
+init_execution_store();
 init_issue();
 init_path();
+init_execution_session();
 init_coordination_write();
+init_execution_store();
 init_issue();
 init_store_db();
 
@@ -15803,10 +16178,10 @@ init_catalog();
 init_coordination_write();
 init_iteration();
 init_lease();
+init_execution_store();
 init_status();
 init_workflow();
 var PROJECTION_FORMAT_VERSION = 2;
-var PROJECTION_ROOT_FILE = "status.json";
 
 class ProjectionError extends Error {
   code;
@@ -15816,16 +16191,10 @@ class ProjectionError extends Error {
     this.code = code2;
   }
 }
-function sourceKeyOf2(kind, rootKind, relativePath) {
-  return `${kind}:${rootKind}:${relativePath}`;
-}
-function text4(value) {
-  return typeof value === "string" && value !== "" ? value : null;
-}
-function readSource(spec) {
+function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync20(spec.absolutePath, "utf8");
+    content3 = readFileSync21(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -15840,6 +16209,12 @@ function readSource(spec) {
   }
   return { state: "ok", sha256: createHash14("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
+function sourceKeyOf2(kind, rootKind, relativePath) {
+  return `${kind}:${rootKind}:${relativePath}`;
+}
+function text4(value) {
+  return typeof value === "string" && value !== "" ? value : null;
+}
 var CATALOG_ROOT_KINDS = {
   repository: true,
   harness: true,
@@ -15851,17 +16226,6 @@ var CATALOG_ROOT_KINDS = {
 };
 function asCatalogRootKind(value) {
   return typeof value === "string" && CATALOG_ROOT_KINDS[value] === true ? value : null;
-}
-function normalizeDeclaredDir(value) {
-  if (typeof value !== "string" || value === "")
-    return null;
-  const unified = value.replace(/\\/g, "/");
-  if (unified.includes("\x00") || unified.startsWith("/") || /^[A-Za-z]:/.test(unified))
-    return null;
-  const segments = unified.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (segments.length === 0 || segments.includes(".."))
-    return null;
-  return segments.join("/");
 }
 async function readCatalogInputs(context) {
   const handle = await openStore(context, "read");
@@ -15919,101 +16283,6 @@ async function readCatalogInputs(context) {
   } finally {
     handle.close();
   }
-}
-var ROOT_WORKFLOW_SOURCE_CODES = {
-  "status.workflow.snapshot-missing": true,
-  "status.workflow.snapshot-invalid": true
-};
-function readRootSource(content3, harnessDir) {
-  let doc;
-  try {
-    doc = JSON.parse(content3);
-  } catch {
-    return { entries: [], diagnostic: "invalid: status.json is not valid JSON" };
-  }
-  const gate2 = validateStatus(doc, { harnessDir });
-  const blocking = gate2.violations.filter((violation18) => ROOT_WORKFLOW_SOURCE_CODES[violation18.code] !== true);
-  if (blocking.length > 0) {
-    return { entries: [], diagnostic: `invalid: ${blocking.map((violation18) => violation18.code).join(", ")}` };
-  }
-  const entries = [];
-  for (const raw of doc.workflows) {
-    const id = text4(raw.id);
-    const dir = normalizeDeclaredDir(raw.dir);
-    if (id === null || dir === null) {
-      return {
-        entries: [],
-        diagnostic: `invalid: workflow entry ${id === null ? "(missing id)" : JSON.stringify(id)} has no usable harness-relative dir`
-      };
-    }
-    entries.push({ id, dir });
-  }
-  return { entries, diagnostic: null };
-}
-function deriveWorkflowRows(content3, declared) {
-  let doc;
-  try {
-    doc = JSON.parse(content3);
-  } catch {
-    return { diagnostic: "invalid: snapshot is not valid JSON" };
-  }
-  const gate2 = validateWorkflowSnapshot(doc);
-  const blocking = gate2.violations.filter((violation18) => violation18.code !== LEGACY_WORKTREE_PATH_CODE);
-  if (blocking.length > 0) {
-    return { diagnostic: `invalid: ${blocking.map((violation18) => violation18.code).join(", ")}` };
-  }
-  const snapshot = doc;
-  const phase = text4(snapshot.phase);
-  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  const workflows = [
-    {
-      id: snapshot.id,
-      type: snapshot.type,
-      status: snapshot.status,
-      phase,
-      startedAt: text4(snapshot.started_at),
-      endedAt: text4(snapshot.ended_at),
-      updatedAt: text4(snapshot.updated_at),
-      branchBase: text4(branch.base),
-      branchSource: text4(branch.source),
-      branchIntegration: text4(branch.integration),
-      branchTarget: text4(branch.target),
-      activeRegistration: declared
-    }
-  ];
-  const plans = [];
-  const leases = [];
-  for (const raw of Array.isArray(snapshot.plans) ? snapshot.plans : []) {
-    const row = raw;
-    const planId = rowPlanId(row);
-    if (planId === undefined)
-      continue;
-    const coordination = isPlainObject(row.coordination) ? row.coordination : {};
-    const progress = isPlainObject(coordination.progress) ? coordination.progress : {};
-    const metadata = isPlainObject(row.metadata) ? row.metadata : {};
-    const pin = isPlainObject(metadata.catalog_pin) ? metadata.catalog_pin : {};
-    plans.push({
-      workflowId: snapshot.id,
-      planId,
-      status: text4(row.status),
-      progress: text4(progress.summary),
-      phase,
-      doneAt: text4(row.done_at),
-      catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null
-    });
-  }
-  if (isPlainObject(snapshot.integration_merge_lease)) {
-    const lease = snapshot.integration_merge_lease;
-    leases.push({
-      workflowId: snapshot.id,
-      planId: text4(lease.plan_id) ?? "",
-      kind: "integration-merge",
-      holder: text4(lease.holder),
-      worktreePath: null,
-      expiresAt: text4(lease.expires_at)
-    });
-  }
-  return { workflow: workflows[0], plans, leases };
 }
 function bodyOf(content3) {
   const lines = content3.split(/\r?\n/);
@@ -16089,8 +16358,8 @@ function deriveCompass(iterationId, content3, relativePath) {
   };
 }
 async function captureProjectionSources(context) {
-  const authority = await resolveCurrentAuthority(context);
-  return authority.route === "execution" ? captureExecutionProjectionSources(context) : captureFileProjectionSources(context);
+  await resolveCurrentAuthority(context);
+  return captureExecutionProjectionSources(context);
 }
 function safeExecutionAuthorityError(error) {
   const name = error instanceof Error ? error.constructor.name : "UnknownError";
@@ -16271,8 +16540,8 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
-      const read = readSource(fspec);
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join29(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
@@ -16317,134 +16586,6 @@ async function captureExecutionProjectionSources(context) {
   } finally {
     handle.close();
   }
-}
-async function captureFileProjectionSources(context) {
-  const harness = catalogRootDir(context, "harness");
-  const inputs = await readCatalogInputs(context);
-  const sources = [];
-  const diagnostics = [];
-  const rows = { workflows: [], plans: [], leases: [], compasses: [] };
-  const record = (spec, read, state, diagnostic, options = {}) => {
-    sources.push({
-      sourceKey: spec.sourceKey,
-      kind: spec.kind,
-      rootKind: spec.rootKind,
-      relativePath: spec.relativePath,
-      sha256: read.sha256,
-      state,
-      diagnostic,
-      declared: spec.declared
-    });
-    if (options.tolerate === true)
-      return;
-    if (state === "ok" && diagnostic === null)
-      return;
-    diagnostics.push({
-      sourceKey: spec.sourceKey,
-      reason: state === "ok" ? "changed-during-read" : state,
-      message: diagnostic ?? `the declared source ${spec.relativePath} could not be read; the in-memory capture keeps its state instead of inventing rows`
-    });
-  };
-  const rootSpec = {
-    source: "file",
-    sourceKey: sourceKeyOf2("root", "harness", PROJECTION_ROOT_FILE),
-    kind: "root",
-    rootKind: "harness",
-    relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join30(harness, PROJECTION_ROOT_FILE),
-    declared: true
-  };
-  const rootRead = readSource(rootSpec);
-  let declaredEntries = [];
-  if (rootRead.state === "ok" && rootRead.content !== null) {
-    const parsed = readRootSource(rootRead.content, harness);
-    if (parsed.diagnostic !== null) {
-      record(rootSpec, rootRead, "invalid", parsed.diagnostic);
-    } else {
-      declaredEntries = parsed.entries;
-      record(rootSpec, rootRead, "ok", null);
-    }
-  } else {
-    record(rootSpec, rootRead, rootRead.state, rootRead.diagnostic);
-  }
-  const declaredIds = new Set(declaredEntries.map((entry) => entry.id));
-  const workflowSpecs = declaredEntries.map((entry) => {
-    const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
-    return {
-      source: "file",
-      sourceKey: sourceKeyOf2("workflow", "harness", relativePath),
-      kind: "workflow",
-      rootKind: "harness",
-      relativePath,
-      absolutePath: join30(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
-      declared: true
-    };
-  });
-  for (const binding2 of inputs.bindings) {
-    if (declaredIds.has(binding2.workflowId))
-      continue;
-    const root = catalogRootDir(context, binding2.rootKind);
-    const relativePath = `${binding2.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
-    workflowSpecs.push({
-      source: "file",
-      sourceKey: sourceKeyOf2("workflow", binding2.rootKind, relativePath),
-      kind: "workflow",
-      rootKind: binding2.rootKind,
-      relativePath,
-      absolutePath: join30(root, binding2.relativePath, WORKFLOW_SNAPSHOT_FILE),
-      declared: false
-    });
-  }
-  for (const spec of workflowSpecs) {
-    const read = readSource(spec);
-    if (read.state !== "ok" || read.content === null) {
-      record(spec, read, read.state, read.diagnostic, { tolerate: !spec.declared && read.state === "missing" });
-      continue;
-    }
-    const derived = deriveWorkflowRows(read.content, spec.declared);
-    if ("diagnostic" in derived) {
-      record(spec, read, "invalid", derived.diagnostic);
-      continue;
-    }
-    record(spec, read, "ok", null);
-    rows.workflows.push(derived.workflow);
-    rows.plans.push(...derived.plans);
-    rows.leases.push(...derived.leases);
-  }
-  for (const doc of inputs.compassDocs) {
-    const spec = {
-      source: "file",
-      sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath),
-      kind: "compass",
-      rootKind: doc.rootKind,
-      relativePath: doc.relativePath,
-      absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath),
-      declared: true
-    };
-    const read = readSource(spec);
-    if (read.state !== "ok" || read.content === null) {
-      record(spec, read, read.state, read.diagnostic);
-      continue;
-    }
-    const derived = deriveCompass(doc.iterationId, read.content, doc.relativePath);
-    if ("diagnostic" in derived) {
-      record(spec, read, "invalid", derived.diagnostic);
-      continue;
-    }
-    record(spec, read, "ok", null);
-    rows.compasses.push(derived);
-  }
-  sources.sort((a, b) => a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0);
-  const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
-  return {
-    formatVersion: PROJECTION_FORMAT_VERSION,
-    catalogRevision: inputs.catalogRevision,
-    sources,
-    rows,
-    diagnostics,
-    sourceSetHash,
-    blocked: diagnostics.length > 0
-  };
 }
 function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
@@ -16711,6 +16852,7 @@ async function refreshProjections(context) {
 }
 init_roadmap_content();
 init_store_db();
+init_execution_store();
 
 class StoreReadError extends Error {
   code;
@@ -16845,17 +16987,12 @@ async function withStoreRead(context, query) {
   }
 }
 async function resolveCurrentAuthority(context) {
-  let handle;
+  const handle = await openStore(context, "read");
   try {
-    handle = await openStore(context, "read");
-  } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized")
-      return { route: "files", handle: null };
-    throw error;
-  }
-  try {
-    const active = handle.execution !== null && handle.execution.authorityState === "active";
-    return active ? { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } } : { route: "files", handle: null };
+    if (handle.execution === null || handle.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `The control harness at ${context.harnessDir} records no ACTIVE execution authority (recorded state: ${handle.execution === null ? "absent — the schema predates the execution domain" : handle.execution.authorityState}). The pre-activation file route is retired, so there is no second authority to fall back to: run \`mstar store upgrade --operator <name>\` to import historical file state and activate the authority, then retry.`);
+    }
+    return { route: "execution", handle: { storeId: handle.storeId, epoch: handle.epoch } };
   } finally {
     handle.close();
   }
@@ -17500,6 +17637,7 @@ init_status();
 init_coordination_write();
 init_coordination();
 init_coordination_transitions();
+init_execution_store();
 init_iteration();
 init_path();
 init_recovery_intent();
@@ -17514,7 +17652,10 @@ init_catalog_registration();
 init_catalog();
 init_catalog_registration();
 init_coordination_write();
+init_execution_store();
 init_recovery_intent();
+init_audit();
+init_workflow();
 init_catalog_import();
 init_catalog();
 init_store_db();
@@ -17522,6 +17663,7 @@ init_issue();
 init_status();
 init_store_activation();
 init_coordination_write();
+init_execution_session();
 init_lease();
 init_path();
 init_store_db();
@@ -17529,6 +17671,7 @@ var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text
 var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
 init_coordination_write();
 init_core();
+init_execution_store();
 init_lease();
 init_store_db();
 init_store_activation();
@@ -17576,7 +17719,7 @@ async function readAuthorityRoute(harnessDir) {
 }
 function hasEntry2(dir, name) {
   try {
-    statSync3(join6(dir, name));
+    statSync5(join6(dir, name));
     return true;
   } catch {
     return false;
@@ -17592,7 +17735,7 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname11(dir));
+  const parentResolved = resolveHarnessDir(dirname8(dir));
   return parentResolved !== null && resolve5(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
@@ -17600,14 +17743,14 @@ function landedPathOf(resolved) {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve5(dirname11(resolved), readlinkSync(resolved));
+      return resolve5(dirname8(resolved), readlinkSync(resolved));
     } catch {
-      let dir = dirname11(resolved);
+      let dir = dirname8(resolved);
       for (;; ) {
         try {
-          return join6(realpathSync(dir), relative6(dir, resolved));
+          return join6(realpathSync(dir), relative5(dir, resolved));
         } catch {
-          const parent = dirname11(dir);
+          const parent = dirname8(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -17619,13 +17762,13 @@ function landedPathOf(resolved) {
 function isStoreAuthorityTarget(target) {
   if (!STORE_AUTHORITY_NAMES.includes(basename3(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname11(target));
+  return isHarnessRootDir(dirname8(target));
 }
 function caseFoldedRegisterRoot(candidate) {
   const target = resolve5(candidate);
   if (!REGISTER_BASENAME.test(basename3(target)))
     return null;
-  let dir = dirname11(target);
+  let dir = dirname8(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
@@ -17634,10 +17777,10 @@ function caseFoldedRegisterRoot(candidate) {
       } catch {
         projectDir = join6(dir, PROJECT_DIR_NAME);
       }
-      if (REGISTER_SHAPE.test(relative6(projectDir, target)))
+      if (REGISTER_SHAPE.test(relative5(projectDir, target)))
         return dir;
     }
-    const parent = dirname11(dir);
+    const parent = dirname8(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -17674,9 +17817,11 @@ function executionDirectWriteRefusal(targetPath) {
 }
 async function readExecutionWriteRoute(harnessDir) {
   try {
-    return await resolveExecutionReadRoute({ harnessDir }) === "execution" ? { kind: "active" } : { kind: "files" };
+    await resolveExecutionReadRoute({ harnessDir });
+    return { kind: "active" };
   } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code) ? { kind: "pre-activation" } : { kind: "unavailable", ...refusal };
   }
 }
 function blockAuthorityWrite(toolName, display, violations) {
@@ -17694,12 +17839,12 @@ function displaySafe(text6) {
   return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
-  const rel = relative6(harnessDir, targetPath);
+  const rel = relative5(harnessDir, targetPath);
   return displaySafe(rel && !rel.startsWith("..") && !isAbsolute3(rel) ? rel : targetPath);
 }
 function readStdinJson() {
   try {
-    const raw = readFileSync2(0, "utf8");
+    const raw = readFileSync(0, "utf8");
     if (!raw.trim())
       return {};
     const parsed = JSON.parse(raw);
@@ -17734,9 +17879,9 @@ function reconstructEditContent(tool, targetPath) {
       return;
     if (typeof newString !== "string" || newString === "")
       return;
-    if (statSync3(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
+    if (statSync5(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
       return;
-    const current = readFileSync2(targetPath, "utf8");
+    const current = readFileSync(targetPath, "utf8");
     const first = current.indexOf(oldString);
     if (first === -1)
       return;
@@ -17767,7 +17912,7 @@ try {
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname11(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname8(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }

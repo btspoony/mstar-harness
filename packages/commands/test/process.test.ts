@@ -5,6 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions, spawnProcess } from "../src/index.js";
 import { failure } from "../src/families/process.js";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  executionContextFor,
+  initializeStore,
+  mutateExecutionWorkflow,
+  readExecutionState,
+  type ExecutionToken,
+  type StoreContext,
+} from "@mstar-harness/engine";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -30,7 +40,7 @@ function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function cleanupFixture(merge = true) {
+async function cleanupFixture(merge = true) {
   const ctx = context();
   git(["init", "-q", "-b", "main"], ctx.cwd);
   git(["config", "user.name", "Process Test"], ctx.cwd);
@@ -47,14 +57,40 @@ function cleanupFixture(merge = true) {
   git(["commit", "-q", "-m", "done"], worktree);
   if (merge) git(["merge", "-q", "--ff-only", branch], ctx.cwd);
   const harness = path.join(ctx.cwd, ".mstar");
-  const workflowDir = path.join(harness, "workflows", "wf-smoke");
-  mkdirSync(workflowDir, { recursive: true });
-  writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({
-    schema_version: 1, id: "wf-smoke", type: "plan", status: "completed",
-    started_at: "2026-09-27T00:00:00.000Z", ended_at: "2026-09-27T00:00:01.000Z", updated_at: "2026-09-27T00:00:01.000Z",
-    branch: { target: "main" },
-    plans: [{ id: "plan-smoke", title: "Smoke plan", file: "plans/plan-smoke.md", status: "Done", metadata: { working_branch: branch, worktree_path: worktree } }],
-  }));
+  mkdirSync(harness, { recursive: true });
+  // Issue #428: worktree cleanup reads the ACTIVE execution store; create the
+  // store through its single producer and register the terminal workflow
+  // through the engine's public producers — the retired snapshot.json is no
+  // longer consulted.
+  const storeContext: StoreContext = { harnessDir: harness };
+  (await initializeStore(storeContext)).close();
+  const workflowId = "wf-smoke";
+  const caller = { sessionId: "coordinator-smoke", role: "coordinator" as const, workflowId, planId: null };
+  const execution = executionContextFor(storeContext, { source: "local", sessionId: caller.sessionId, role: caller.role, workflowId });
+  const created = await createExecutionWorkflow(execution, {
+    entry: { id: workflowId, type: "plan", started_at: "2026-09-27T00:00:00.000Z", dir: `workflows/${workflowId}` } as never,
+    snapshot: {
+      schema_version: 1, id: workflowId, type: "plan", status: "running",
+      started_at: "2026-09-27T00:00:00.000Z", updated_at: "2026-09-27T00:00:00.000Z",
+      branch: { target: "main" },
+      plans: [{ id: "plan-smoke", title: "Smoke plan", file: "plans/plan-smoke.md", status: "Done", metadata: { working_branch: branch, worktree_path: worktree } }],
+    } as never,
+    expected: (await readExecutionState(storeContext)).token,
+    operationId: "create-wf-smoke",
+  });
+  const data: unknown = created.data;
+  if (data === null || typeof data !== "object" || !("workflows" in data) || !Array.isArray(data.workflows)) {
+    throw new Error("createExecutionWorkflow returned no workflows array");
+  }
+  const workflowToken = (data.workflows[0] as { workflowToken: ExecutionToken }).workflowToken;
+  const bound = await bindExecutionSession(execution, { workflowId, planId: null, role: "coordinator", expected: workflowToken, operationId: "bind-wf-smoke" });
+  await mutateExecutionWorkflow(execution, {
+    operationId: "stop-wf-smoke",
+    session: bound.data,
+    expected: workflowToken,
+    workflowId,
+    operation: { kind: "lifecycle", status: "stopped", reason: "fixture terminal close" },
+  });
   return { ctx, worktree, branch };
 }
 
@@ -150,6 +186,23 @@ describe("process command family", () => {
     git(["config", "user.name", "Process Test"], control.cwd);
     git(["config", "user.email", "process@example.invalid"], control.cwd);
     mkdirSync(path.join(control.cwd, ".mstar", "plans"), { recursive: true });
+    // Issue #428: sdd exec reads the ACTIVE execution store at the control root
+    // and requires a registered RUNNING plan workflow row for the addressed plan.
+    const controlHarness = path.join(control.cwd, ".mstar");
+    const controlStore: StoreContext = { harnessDir: controlHarness };
+    (await initializeStore(controlStore)).close();
+    const smokeExecution = executionContextFor(controlStore, { source: "local", sessionId: "coordinator-smoke", role: "coordinator", workflowId: "wf-smoke" });
+    await createExecutionWorkflow(smokeExecution, {
+      entry: { id: "wf-smoke", type: "plan", started_at: "2026-09-27T00:00:00.000Z", dir: "workflows/wf-smoke" } as never,
+      snapshot: {
+        schema_version: 1, id: "wf-smoke", type: "plan", status: "running",
+        started_at: "2026-09-27T00:00:00.000Z", updated_at: "2026-09-27T00:00:00.000Z",
+        branch: { base: "main", source: "feature/smoke", target: "main" },
+        plans: [{ id: "smoke", title: "Smoke", file: "plans/smoke.md", status: "InProgress", metadata: { worktree_path: path.join(control.cwd, "feature"), working_branch: "feature/smoke" } }],
+      } as never,
+      expected: (await readExecutionState(controlStore)).token,
+      operationId: "create-wf-smoke-sdd",
+    });
     const planFile = path.join(control.cwd, ".mstar", "plans", "smoke.md");
     writeFileSync(planFile, "# Smoke\n");
     writeFileSync(path.join(control.cwd, "tracked.txt"), "base\n");
@@ -172,14 +225,14 @@ describe("process command family", () => {
     });
   });
   test("cleanup defaults to a guarded read-only dry-run", async () => {
-    const { ctx, worktree } = cleanupFixture();
+    const { ctx, worktree } = await cleanupFixture();
     const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar") }, ctx);
     expect(result).toMatchObject({ status: "ok", data: { workflow: "wf-smoke", dryRun: true } });
     expect(existsSync(worktree)).toBe(true);
   });
 
   test("owned cleanup removes only its guarded merged worktree and preserves foreign ownership", async () => {
-    const { ctx, worktree, branch } = cleanupFixture();
+    const { ctx, worktree, branch } = await cleanupFixture();
     const foreignWorktree = path.join(ctx.cwd, "worktrees", "foreign");
     mkdirSync(path.dirname(foreignWorktree), { recursive: true });
     git(["worktree", "add", "-q", "-b", "foreign/unclaimed", foreignWorktree], ctx.cwd);
@@ -191,7 +244,7 @@ describe("process command family", () => {
     expect(git(["show-ref", "--verify", "refs/heads/foreign/unclaimed"], ctx.cwd)).toBeTruthy();
   });
   test("cleanup apply preserves branch/worktree without merged evidence", async () => {
-    const { ctx, worktree, branch } = cleanupFixture(false);
+    const { ctx, worktree, branch } = await cleanupFixture(false);
     const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar"), apply: true }, ctx);
     expect(result.status).toBe("ok");
     expect(existsSync(worktree)).toBe(false);

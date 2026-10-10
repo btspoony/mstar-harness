@@ -106,11 +106,9 @@ export { STATUS_V2_PAYLOAD_SCHEMA } from "./status.js";
 
 export {
   normalizeSeverity,
-  registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
-  unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
@@ -120,16 +118,9 @@ export {
 export type { IntegrationMergeLease } from "./lease.js";
 export { validateIntegrationMergeLease, withStatusWriteLock } from "./lease.js";
 export type {
-  CloseWorkflowOptions,
-  DeclareWorkflowDeliveryKindOptions,
   DeliveryRegistrationEvidence,
-  RecordWorkflowDeliveryOptions,
-  RecordWorkflowDeliveryResult,
   RegisterIterationWorkflowOptions,
-  RegisterIterationWorkflowResult,
   RegisterPlanWorkflowOptions,
-  RegisterPlanWorkflowResult,
-  WorkflowBranchAnchors,
   WorkflowCompoundOutcome,
   WorkflowDeliveryEvidence,
   WorkflowDeliveryKind,
@@ -137,40 +128,26 @@ export type {
   WorkflowLifecycleStatus,
   WorkflowLifecycleType,
   WorkflowSnapshot,
-  WorkflowSnapshotRead,
 } from "./workflow.js";
 export {
   assertDeliveryRegistrationCoherence,
-  closeWorkflow,
   consultDeliveryEvidence,
-  declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
-  recordWorkflowDelivery,
   normalizeIterationCompassRef,
-  registerIterationWorkflow,
-  registerPlanWorkflow,
   WORKFLOW_COMPOUND_OUTCOMES,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
-  readWorkflowSnapshot,
   validateWorkflowSnapshot,
-  writeWorkflowSnapshot,
 } from "./workflow.js";
 export { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow.js";
 
-// Lifecycle-phase derivation (S3/E06a) and the terminal outcome a close records
-// (S3/E12b): the three phase labels a document's own facts derive to, the code
-// of the reader's derived-phase diagnostic, the ONE derivation the file
-// producer, the catalog journal and the derived Prepare view share, and the
-// outcome a caller names on a close. Re-exported so T03/T09 consume the sparse
-// registration intent and the derived phase instead of re-deriving either, and
-// so a transport can type the terminal outcome it passes. ADDITIVE export.
-export type { CloseWorkflowOutcome, DerivedPlanRegistration, LifecyclePhaseDerivation } from "./workflow.js";
+// Lifecycle-phase derivation and sparse registration intent are shared by migration and ACTIVE workflow operations.
+export type { DerivedPlanRegistration, LifecyclePhaseDerivation } from "./workflow.js";
 export {
   CLOSE_PHASE,
   DERIVED_PHASE_CODE,
@@ -241,6 +218,8 @@ export type {
   MainWorktreeInfo,
   QcAlignmentAssignment,
   QcSnapshotAssignment,
+  WorkflowEntryPreDispatchInput,
+  WorkflowEntryPreDispatchResult,
   WorktreeTrack,
 } from "./worktree.js";
 export {
@@ -248,6 +227,7 @@ export {
   assertControlVsFeaturePath,
   assertMainWorktreeResidency,
   assertQcAlignment,
+  workflowEntryPreDispatchCheck,
   isDistinctCheckout,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
@@ -293,7 +273,6 @@ export type {
 export {
   assertCatalogCompleteness,
   evaluatePhaseGate,
-  evaluatePostMergeClose,
   evaluatePostMergeCloseFromExecutionAuthority,
   readRegisteredWorkflowFromExecutionAuthority,
   parseCompassFrontmatter,
@@ -372,7 +351,6 @@ export type {
   AuditSeverityRank,
   AuditTraceKind,
   AuditTraceStep,
-  PromoteAuditPlansOptions,
   RedactResult,
   ScaffoldAuditPlanOptions,
   ScaffoldAuditPlanResult,
@@ -389,7 +367,6 @@ export {
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
   listAuditPlanIds,
-  promoteAuditPlans,
   scaffoldAuditPlan,
   scanSecrets,
   supplyChainChecks,
@@ -504,13 +481,14 @@ export type { QcVerdict } from "./qcreview.js";
 export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
 
+/** `status` and `snapshot` are migration-internal engine kinds, not persist CLI kinds. */
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordination.js";
 
 export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 
-export { activeLifecyclePlanId, collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "./lifecycle-branches.js";
-export type { ActiveLifecycleBranch, ActiveLifecycleScan } from "./lifecycle-branches.js";
+export { activeLifecyclePlanId, collectActiveLifecycleBranches } from "./lifecycle-branches.js";
+export type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 
 export { WorkflowSnapshotValidationError } from "./workflow.js";
 
@@ -524,40 +502,23 @@ export {
   CoordinationError,
   EXECUTION_PIN_CONFLICT_CODE,
   ExecutionPinConflictError,
-  bindPlanSession,
-  amendPrepareWorkflow,
   executionInputHash,
-  mutatePlanCoordination,
-  readCoordinatedArtifact,
   readExecutionCatalogPin,
-  readPlanCoordination,
-  recoverPrepareCoordinator,
-  replaceCoordinatedArtifact,
-  readSessionEnvelope,
-  resolvePlanScope,
   resolveProcessHarnessDir,
-  showPrepareCoordinatorRecovery,
-  showPrepareWorkflow,
 } from "./coordination.js";
 export type {
-  BindPlanSessionInput,
   CatalogExecutionPin,
   CatalogPinAbsence,
-  CoordinationRequest,
-  CoordinationResult,
   CoordinationRole,
-  CoordinationSession,
-  CoordinatedReplacement,
   ExecutionCatalogPinState,
   PlanCoordinationOperation,
-  PlanCoordinationView,
-  PlanScopeInput,
-  PrepareCoordinatorRecoveryView,
-  RecoverPrepareCoordinatorResult,
   ResidualInput,
-  ResolvedPlanScope,
-  VersionedArtifact,
 } from "./coordination.js";
+// The retired FILE route's envelope bytes: the migration importer and the
+// not-yet-cut issue-domain authorization read them as import sources, never as
+// authority. The shape + one byte-witness reader live in `coordination-envelope`.
+export { readSessionEnvelope } from "./coordination-envelope.js";
+export type { CoordinationSession } from "./coordination-envelope.js";
 export type {
   CompletionEvidence,
   CompletionRecord,
@@ -569,27 +530,12 @@ export type {
   QaGate,
   FindingsCleanupMode,
 } from "./coordination-write.js";
-// Recovery-first resolution and the file-route close: the ONE resolution path a
-// sparse caller enters (trusted root → associated target, S2/E02), the durable
-// authority verdict a DB-route caller re-asserts before it commits, and the file
-// authority's ONE close verb (S3/E11) — fulfilment, row completion, terminal
-// membership removal and the unregister composed on the route's own journals.
-// ADDITIVE export: the transports (T02/T03) call the engine's own resolution and
-// close instead of re-deriving either; the strict module-local frames, the
-// resolution builder and the crash-gap test hook stay module-scoped.
-export type { FileWorkflowCloseInput, FileWorkflowCloseResult, RootAssociation } from "./coordination.js";
-export { closeFileWorkflow, resolveIntentRoot, resolveIntentTarget } from "./coordination.js";
+export type { RootAssociation } from "./coordination.js";
+export { resolveIntentRoot, resolveIntentTarget } from "./coordination.js";
 export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, StoreDb } from "./store-db.js";
 // Issue-store boundary: lazily acquires
 // `node:sqlite` — importing this index never loads the driver or opens a DB.
 //
-// `assertExecutionFileReadAllowed` is the §4.3 paired READ guard, exported
-// ADDITIVELY (its write sibling stays module-scoped): a consumer whose source
-// read is synchronous (a gate that cannot become async) must be able to refuse
-// in place — the primary spec §4.3 contract "legacy root/snapshot authority
-// readers must call it; no overlooked source reader may return stale leftover
-// JSON as authoritative success". Re-exporting the ONE implementation is what
-// keeps a caller from writing a second, drifting authority probe.
 export {
   MIGRATION_2_SQL,
   MIGRATIONS,
@@ -597,7 +543,6 @@ export {
   MIN_NODE_VERSION,
   SCHEMA_VERSION_TABLE_SQL,
   StoreError,
-  assertExecutionFileReadAllowed,
   assertStoreRuntimeSupported,
   compareVersions,
   detectStoreRuntime,
@@ -776,7 +721,6 @@ export type {
   CatalogExecutionRequest,
   CatalogExecutionWorkflow,
   CatalogRegistrationErrorCode,
-  CatalogRegistrationState,
   PendingCatalogRegistration,
   PurgeCatalogRegistrationReceipt,
 } from "./catalog-registration.js";
@@ -784,25 +728,19 @@ export {
   CATALOG_REGISTRATION_JOURNAL_VERSION,
   CatalogRegistrationError,
   abortCatalogExecution,
-  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   readCatalogRevisions,
-  reconcileCatalogExecution,
-  registerCatalogExecution,
-  registerShippedCatalogExecution,
-  resolveCatalogRegistrationState,
   purgeCatalogRegistration,
 } from "./catalog-registration.js";
+export { registerShippedCatalogExecution } from "./execution-registration.js";
 // §7 the ACTIVE registration route: the ONE verb that publishes a reviewed
-// catalog delta together with the execution lifecycle it registers. It is the
-// DB-transport sibling of `registerCatalogExecution` and shares every reviewed
-// derivation with it (`resolveCatalogExecutionPlan`, the workflow entry, the
-// catalog domain's handle-taking verbs); what differs is the boundary — one
-// `BEGIN IMMEDIATE` transaction over the workflow header, registry membership,
-// plan rows, sealed inputs, catalog delta, binding and committed receipt, with
-// no JSON registration file and no intermediate `prepared` phase ever written.
-// ADDITIVE export: the composed admission frame stays module-scoped, and the
-// legacy journal remains the only file-route entry point.
+// catalog delta together with the execution lifecycle it registers.
+// `registerShippedCatalogExecution` (execution-registration.ts) composes onto
+// the atomic `commitExecutionRegistration`, deriving the root creation token
+// and catalog revision internally; identity is transport-resolved. The
+// journaled file-registration route and its `prepared` phase are retired —
+// recovery for legacy journals is `catalog reconcile --abort` /
+// `catalog purge-registration`, never adoption.
 export { commitExecutionRegistration } from "./execution-registration.js";
 // §5 the single source READ adapter: one read transaction, an exact
 // workflow/plan address and the token of the scope that was actually read
@@ -838,7 +776,6 @@ export type {
 } from "./projection.js";
 export {
   PROJECTION_FORMAT_VERSION,
-  PROJECTION_ROOT_FILE,
   ProjectionError,
   captureProjectionSources,
   publishProjectionCapture,

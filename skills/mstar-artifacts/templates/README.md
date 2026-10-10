@@ -1,7 +1,9 @@
 # Plan harness file templates
 
-Copy these into `{HARNESS_DIR}` when bootstrapping a project. Path symbols (`{HARNESS_DIR}`, `{PLAN_DIR}`, …) → **`mstar-conventions`**. Field semantics and residual lifecycle → **`mstar-artifacts/references/status-and-residuals.md`**. Optional rollup: `mstar status tech-debt` (read-only open-issue rollup over the issue store; see that reference).
+Templates in this directory are authored plan shapes, not execution-authority seeds. Path symbols (`{HARNESS_DIR}`, `{PLAN_DIR}`, …) → **`mstar-conventions`**. Field semantics and residual lifecycle → **`mstar-artifacts/references/status-and-residuals.md`**. Optional rollup: `mstar status tech-debt` (read-only open-issue rollup over the issue store; see that reference).
 
-| File | Copy to | Notes |
-|------|---------|--------|
-| `status.empty.json` | `{HARNESS_DIR}/status.json` | **Pre-activation bootstrap only**: v2 empty root (`version: 2`, `updated_at`, `workflows: []`); replace `updated_at` with the real date. `scaffoldHarness` retains this create-only seed. ACTIVE root/plan/lease/session authority is store.db, not root/snapshot files; their file route refuses read/write. Project residual registers are unconditionally retired migration history, never runtime-created targets. See **`mstar-artifacts` SKILL.md** + `references/status-and-residuals.md`. |
+Bootstrap is `mstar harness scaffold` then `mstar store init`. Scaffold does not write a root `status.json`. A workspace that still holds historical file state imports it with `mstar store upgrade` (`mstar migrate` first when the tree is still v1). There is no empty status template.
+
+| File | Use | Notes |
+|------|-----|--------|
+| `plan.main.md` | main plan shape under `{PLAN_DIR}` | Global Constraints and Interfaces skeleton. Not an execution-state file. |

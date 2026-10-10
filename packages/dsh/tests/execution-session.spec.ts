@@ -16,9 +16,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { CommandDefinition, CommandInvocation } from '@deepseek-ai/dsh-commands'
 import {
   bindExecutionSession,
-  createExecutionWorkflow,
   encodeExecutionSessionRef,
-  initializeExecutionAuthority,
+  createExecutionWorkflow,
+  readExecutionState,
   initializeStore,
   registerCatalogEntity,
   serializeExecutionValue,
@@ -86,7 +86,7 @@ function productionHandler(harnessDir: string): CommandDefinition['handler'] {
 async function seedNativeAuthority(harnessDir: string): Promise<string> {
   const handle = await initializeStore({ harnessDir })
   handle.close()
-  const rootToken = (await initializeExecutionAuthority({ harnessDir })).token
+  const rootToken = (await readExecutionState({ harnessDir })).token
   await registerCatalogEntity(
     { harnessDir },
     { kind: 'plan', id: PLAN_ID, title: `${PLAN_ID} title`, rootKind: 'plans', relativePath: `plans/${PLAN_ID}.md` },

@@ -1,6 +1,6 @@
 # Status v1→v2 field history (archived contract prose)
 
-> Engine-absent fallback: the full field tables displaced from `mstar-artifacts` when engine validators took over the same contract. Engine-present hosts read `mstar-artifacts/references/status-and-residuals.md` (v2) instead; this file is the historical + fallback full text.
+> Engine-absent archive: the full field tables displaced from `mstar-artifacts` when engine validators took over the same contract. Engine-present hosts read `mstar-artifacts/references/status-and-residuals.md` instead; this file is the historical full text — field history only, never an execution route (engine-absent hosts track execution state in conversation).
 
 ## v1 `{HARNESS_DIR}/status.json` — full shape (historical)
 
@@ -79,7 +79,7 @@ Closed residual entries added: `lifecycle`, `closed_at`, `closure_note`; optiona
 
 ### Removed historical per-row execution exclusion
 
-Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS. Historical fields never authorize takeover or require recreating a claim.
+Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS (engine-present mechanics → `mstar-artifacts`). Historical fields never authorize takeover or require recreating a claim.
 
 ## v1 root `metadata` standard optional fields
 
@@ -146,9 +146,11 @@ jq '.residual_findings["01-data-infrastructure"] // .metadata.residual_findings[
 jq '.entries[] | select(.id == "R1")' .mstar/archived/residuals/01-data-infrastructure.json
 ```
 
-Legacy read paths (root `residual_findings` / `metadata.residual_findings` / `archived/residuals/<plan-id>.json`) were **legacy read-only**; `mstar migrate` moved open entries into the register.
+Legacy read paths (root `residual_findings` / `metadata.residual_findings` / `archived/residuals/<plan-id>.json`) were **legacy read-only**; `mstar migrate` moved open entries into the register (itself now migration history — open findings live as `store.db` issues).
 
-## v2 destinations (where each v1 surface landed)
+## v2 file-transport destinations (historical — superseded by the ACTIVE store.db authority)
+
+The v2 file transport itself is retired: these facts now live in `{HARNESS_DIR}/store.db` (`execution_*`), and the file surfaces below are migration sources only. Engine-present field and authority details → `mstar-artifacts`. The mapping is retained as field history.
 
 | v1 surface | v2 home |
 | --- | --- |

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { CommandEnvelope } from "./types.js";
 
 export type RefusalDiagnostic = Readonly<{
@@ -25,6 +26,46 @@ export type RefusalInput = RefusalInputFields & (
   | Readonly<{ status: "usage"; exitCode: 2 }>
   | Readonly<{ status: "refused"; exitCode: number }>
 );
+
+/**
+ * The shared command-output envelope contract. It lives HERE (a leaf module
+ * that imports only `types.js`) rather than in `definitions.js` so that a
+ * family module can publish its `output` schema without importing the
+ * definition aggregator — importing `definitions.js` from a family closes an
+ * ESM cycle (definitions → family → definitions) whose evaluation order leaves
+ * the family's own top-level bindings uninitialized (TDZ). `definitions.js`
+ * re-exports this binding for every existing consumer, byte-for-byte.
+ */
+const failureEnvelopeSchema = z.object({
+  version: z.literal(1),
+  command: z.string().min(1),
+  status: z.enum(["refused", "error"]),
+  code: z.string().min(1),
+  exitCode: z.number().int().refine((code) => code !== 0),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+}).passthrough();
+
+export const commandEnvelopeSchema = z.discriminatedUnion("status", [
+  z.object({
+    version: z.literal(1),
+    command: z.string().min(1),
+    status: z.literal("ok"),
+    code: z.string().min(1),
+    exitCode: z.literal(0),
+    data: z.unknown(),
+  }).passthrough(),
+  failureEnvelopeSchema,
+  z.object({
+    version: z.literal(1),
+    command: z.string().min(1),
+    status: z.literal("usage"),
+    code: z.string().min(1),
+    exitCode: z.literal(2),
+    message: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }).passthrough(),
+]);
 
 const SUMMARY_LIMIT = 2400;
 const SUMMARY_ENTRIES = 20;

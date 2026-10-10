@@ -7,7 +7,7 @@
  * filesystem fixtures in per-test temporary workspaces: a real Git main
  * worktree with a `.mstar` control harness, a real store built by
  * `initializeStore`, a real ACTIVE execution authority built through the
- * published domain verbs (`initializeExecutionAuthority` →
+ * published domain verbs (`readExecutionState` →
  * `createExecutionWorkflow` → `bindExecutionSession`), and real `backupStore`
  * recovery points. The only injected failures are the two test-runner-gated
  * crash seams this protocol owns.
@@ -54,7 +54,6 @@ import {
 import {
   bindExecutionSession,
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
@@ -255,7 +254,7 @@ async function recoveryWorld(name: string, planIds: readonly string[] = [PLAN_1]
   const fixture = workspace(name);
   const handle = await initializeStore(fixture.context);
   handle.close();
-  const initialized = await initializeExecutionAuthority(fixture.context);
+  const initialized = await readExecutionState(fixture.context);
   for (const planId of planIds) await registerPlan(fixture.context, planId);
   const caller = callerOf(WF, COORDINATOR);
   const created = await createExecutionWorkflow(contextOf(fixture.context, caller), {
@@ -364,7 +363,6 @@ describe("execution-backup", () => {
     // instead of being checkpointed away by the last close.
     const held = await initializeStore(world.context);
     try {
-      await initializeExecutionAuthority(world.context);
       await registerPlan(world.context, PLAN_1);
       await createExecutionWorkflow(contextOf(world.context, callerOf(WF, COORDINATOR)), {
         entry: { id: WF, type: "plan", started_at: TS, dir: `workflows/${WF}` },

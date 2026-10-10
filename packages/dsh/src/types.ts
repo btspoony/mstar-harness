@@ -82,15 +82,15 @@ export interface MstarEngineStatusPayload {
   /** Repo-level hard-enforcement flag from the iteration compass. */
   readonly enforcement: EnforcementFlag
   /**
-   * Iteration phase-gate section: present when a steering compass +
-   * `status.json` resolve (the `mstar iteration gate` tool result shape).
+   * Iteration phase-gate section: present when an ACTIVE workflow and its
+   * steering compass resolve (the `mstar iteration gate` tool result shape).
    */
   readonly iteration?: MstarIterationGateView
   /**
    * Workspace-state digest section: the plan registry, open residual
    * counts, branch/policy anchors, active leases, knowledge index digest
    * and the steering compass direction one-liner. Null when the workspace
-   * has no harness dir or no `status.json` (the state lines are absent).
+   * has no harness dir or no readable workspace catalog (the state lines are absent).
    */
   readonly state: MstarHarnessState | null
 }
@@ -127,8 +127,6 @@ export interface IterationGateView {
 export interface MstarIterationGateView {
   /** Iteration id whose steering compass was evaluated. */
   readonly iterationId: string
-  /** The evaluated workflow snapshot path (`workflows/<id>/snapshot.json` — v3, the gate's first doc). */
-  readonly statusPath: string
   /** The steering `{ITERATION_DIR}/<id>/delivery-compass.md` evaluated. */
   readonly compassPath: string
   /** Cached `evaluatePhaseGate` result (tool result shape). */
@@ -151,14 +149,14 @@ export interface HarnessPlanView {
   readonly id: string
   readonly status: string
   /**
-   * The `status.json` plan row `done_at` (trimmed string). ALWAYS-present
+   * The ACTIVE plan row `done_at` (trimmed string). ALWAYS-present
    * nullable scalar: a missing/empty `done_at` projects to `null` (lossless
    * JSON — never an `undefined` property; the omit pattern is reserved for
    * optional fields like `verdict?`).
    */
   readonly doneAt: string | null
   /**
-   * The `status.json` plan row `metadata.iteration_refs` (array of iteration
+   * The ACTIVE plan row `metadata.iteration_refs` (array of iteration
    * ids the plan is registered under). ALWAYS-present array: a missing/non-array value projects
    * to `[]` — the empty default, never an omitted field (lossless JSON).
    */
@@ -289,7 +287,7 @@ export type WorkflowSelectionView =
  * plan registry, open residual counts, branch/policy anchors, active
  * leases, knowledge index digest and the steering compass direction
  * one-liner. All fields come from the same per-workspace cached build as
- * the rest of the row (one status.json / compass / knowledge-index read
+ * the rest of the row (one ACTIVE execution graph / compass / knowledge-index read
  * per cache refresh — the TTL-bounded staleness tradeoff documented on
  * `buildCatalogPayload`).
  */

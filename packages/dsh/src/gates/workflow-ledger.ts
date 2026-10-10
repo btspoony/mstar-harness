@@ -811,37 +811,13 @@ export function registerWorkflowLedger(
     // pick, or below the floor a former unbound observation persisted) are
     // intentionally excluded — never replayed, even after a pick/restart.
     if (row.seq < floor) return
-    // THE EXPLICIT ROUTE (resolver supplied): the awaited target is the ONLY
-    // selection source. A target needs the carrying workspace, so a cwd-less
-    // session records nothing here (the legacy route below still serves the
-    // pre-activation composition).
-    if (resolveTarget !== undefined) {
-      if (workspace === undefined) return
-      return consumeWithTarget(session, sid, harnessDir, workspace, row)
-    }
-    // PRE-ACTIVATION ROUTE: the ledger rows AND the durable cursor live in
-    // the ACTIVE workflow dir this session is BOUND to (`workflows/<id>/` —
-    // the shared active-set resolver; never the root file, never a terminal
-    // snapshot dir).
-    const target = resolveAgentFlowWriteTarget(harnessDir, hint)
-    const workflowDir = target.dir
-    if (workflowDir === null) {
-      // Unbound multi-active — the operator has not picked yet. Nothing is
-      // written into ANY workflow dir, but the observation must not be
-      // backfilled once the pick lands, so the row's next seq becomes this
-      // session's durable exclusion floor (queued to the end of the scan so a
-      // multi-row log costs ONE store write, not one per row). A failed floor
-      // write keeps the row eligible (attribution stays paused — never
-      // acknowledged persistence that did not happen). Other skip reasons (no
-      // active lifecycle, a broken root) are not an operator exclusion and
-      // leave the floor alone.
-      const unbound = target.selection.kind === 'error' && target.selection.code === 'workflow.selection.unbound-multi-active'
-      if (unbound && workspace !== undefined && row.seq + 1 > floor) {
-        observeExclusionFloor(harnessDir, sid, workspace, row.seq + 1)
-      }
+    // The explicit ACTIVE target is mandatory; omission is a caller error,
+    // never permission to select a write directory from the file route.
+    if (resolveTarget === undefined || workspace === undefined) {
+      log('warn', 'workflow-ledger attribution refused — the ACTIVE workflow target was omitted; resolve it with resolveExecutionLedgerTarget before recording')
       return
     }
-    recordRow(session, sid, harnessDir, row, workflowDir)
+    return consumeWithTarget(session, sid, harnessDir, workspace, row)
   }
 
   /**

@@ -18,13 +18,13 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
+  readExecutionState,
   registerCatalogEntity,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext } from "@mstar-harness/engine";
@@ -72,59 +72,53 @@ function makeHarness(
 }
 
 /**
- * REAL ACTIVE EXECUTION authority (primary spec §3/§4.3): the create-only
- * empty-execution initializer, the catalog plan row and the workflow that
- * holds it, all through the engine's own producers. The retired `status.json`
- * is parked while the initializer runs — it refuses a harness that still
- * carries live execution sources — and restored afterwards, which is exactly
- * the state a real cutover leaves behind.
+ * REAL ACTIVE EXECUTION authority (primary spec §3/§4.3): a single
+ * `initializeStore` (init creates AND activates the execution authority), then
+ * the catalog plan row and the workflow that holds it, all through the
+ * engine's own producers. The CAS parent for creation is the activated root
+ * token read back from the store — never a second initializer (init is
+ * create-only and a live authority refuses `execution.not-empty`).
  */
-async function seedActiveExecutionAuthority(harness: string, statusPath: string): Promise<void> {
-  const parked = `${statusPath}.parked`;
-  renameSync(statusPath, parked);
-  try {
-    const handle = await initializeStore({ harnessDir: harness });
-    handle.close();
-    const initialized = await initializeExecutionAuthority({ harnessDir: harness });
-    await registerCatalogEntity(
-      { harnessDir: harness },
-      {
-        kind: "plan",
-        id: PLAN_ID,
-        title: `${PLAN_ID} title`,
-        rootKind: "plans",
-        relativePath: `plans/${PLAN_ID}.md`,
-      },
-      { operationId: `register-${PLAN_ID}`, actor: "execution-authority.test" },
-    );
-    const context: ExecutionContext = {
-      harnessDir: harness,
-      caller: {
-        sessionId: `host-${WORKFLOW_ID}`,
-        role: "coordinator",
-        workflowId: WORKFLOW_ID,
-        planId: null,
-      } satisfies ExecutionCaller,
-    };
-    await createExecutionWorkflow(context, {
-      entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
-      snapshot: {
-        schema_version: 1,
-        id: WORKFLOW_ID,
-        type: "plan",
-        status: "running",
-        started_at: TS,
-        updated_at: TS,
-        plans: [{ id: PLAN_ID, title: `${PLAN_ID} title`, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
-        delivery_kind: "development",
-        branch: { source: `feature/${WORKFLOW_ID}`, target: "main" },
-      } as never,
-      expected: initialized.token,
-      operationId: `create-${WORKFLOW_ID}`,
-    });
-  } finally {
-    renameSync(parked, statusPath);
-  }
+async function seedActiveExecutionAuthority(harness: string): Promise<void> {
+  const handle = await initializeStore({ harnessDir: harness });
+  handle.close();
+  const activated = await readExecutionState({ harnessDir: harness });
+  await registerCatalogEntity(
+    { harnessDir: harness },
+    {
+      kind: "plan",
+      id: PLAN_ID,
+      title: `${PLAN_ID} title`,
+      rootKind: "plans",
+      relativePath: `plans/${PLAN_ID}.md`,
+    },
+    { operationId: `register-${PLAN_ID}`, actor: "execution-authority.test" },
+  );
+  const context: ExecutionContext = {
+    harnessDir: harness,
+    caller: {
+      sessionId: `host-${WORKFLOW_ID}`,
+      role: "coordinator",
+      workflowId: WORKFLOW_ID,
+      planId: null,
+    } satisfies ExecutionCaller,
+  };
+  await createExecutionWorkflow(context, {
+    entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
+    snapshot: {
+      schema_version: 1,
+      id: WORKFLOW_ID,
+      type: "plan",
+      status: "running",
+      started_at: TS,
+      updated_at: TS,
+      plans: [{ id: PLAN_ID, title: `${PLAN_ID} title`, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+      delivery_kind: "development",
+      branch: { source: `feature/${WORKFLOW_ID}`, target: "main" },
+    } as never,
+    expected: activated.token,
+    operationId: `create-${WORKFLOW_ID}`,
+  });
 }
 
 /** Unreadable authority through the REAL engine channel (`store.corrupt`). */
@@ -177,7 +171,7 @@ describe("execution-hook-authority \u2014 the ZCode write gate refuses retired c
   test("the retired root register and workflow snapshots are refused in hard AND soft mode", async () => {
     for (const enforcement of ["hard", "soft"] as const) {
       const fixture = makeHarness(`execution-${enforcement}`, enforcement);
-      await seedActiveExecutionAuthority(fixture.harness, fixture.statusPath);
+      await seedActiveExecutionAuthority(fixture.harness);
 
       // Document-VALID bytes prove the refusal is the execution authority's
       // route, not a shape violation — and soft mode proves it is not the
@@ -193,7 +187,7 @@ describe("execution-hook-authority \u2014 the ZCode write gate refuses retired c
 
   test("a symlink alias of a retired document is refused like the document itself", async () => {
     const fixture = makeHarness("execution-alias", "soft");
-    await seedActiveExecutionAuthority(fixture.harness, fixture.statusPath);
+    await seedActiveExecutionAuthority(fixture.harness);
     const aliasDir = mkdtempSync(join(tmpdir(), "wgate-s4-alias-"));
     roots.push(aliasDir);
     const alias = join(aliasDir, "carry-over-status.json");
@@ -204,7 +198,7 @@ describe("execution-hook-authority \u2014 the ZCode write gate refuses retired c
 
   test("an unreadable execution authority refuses fail-closed, never a silent pass", async () => {
     const fixture = makeHarness("execution-corrupt", "soft");
-    await seedActiveExecutionAuthority(fixture.harness, fixture.statusPath);
+    await seedActiveExecutionAuthority(fixture.harness);
     corruptStore(fixture.harness);
 
     const run = runGate(writeEvent(fixture.statusPath, VALID_STATUS));
@@ -243,7 +237,7 @@ describe("execution-hook-authority \u2014 the ZCode write gate refuses retired c
   test("a PRE-ACTIVATION harness's document symlinked into another harness's ACTIVE authority is refused (both roots probed)", async () => {
     // Harness B: the ACTIVE execution authority the write really lands on.
     const authority = makeHarness("execution-cross-alias", "soft");
-    await seedActiveExecutionAuthority(authority.harness, authority.statusPath);
+    await seedActiveExecutionAuthority(authority.harness);
     // Harness A: pre-activation (no store at all) whose OWN `status.json` is a
     // symlink into B's retired register. The textual classification resolves a
     // pre-activation harness, so a single-root probe would let the write
@@ -256,7 +250,7 @@ describe("execution-hook-authority \u2014 the ZCode write gate refuses retired c
 
     // An unreadable B fails closed on the same alias — never a silent pass.
     const corrupt = makeHarness("execution-cross-corrupt", "soft");
-    await seedActiveExecutionAuthority(corrupt.harness, corrupt.statusPath);
+    await seedActiveExecutionAuthority(corrupt.harness);
     const corruptSource = makeHarness("execution-cross-corrupt-source", "soft");
     rmSync(corruptSource.statusPath);
     symlinkSync(corrupt.statusPath, corruptSource.statusPath);

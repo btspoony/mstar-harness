@@ -92,7 +92,7 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 ## Skill dependencies
 
 - **`mstar-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）
-- **`mstar-artifacts`** — store.db catalog 登记与生命周期（snapshot 仅 pre-activation；project register 仅迁移历史）（README index maintenance retired）
+- **`mstar-artifacts`** — store.db catalog 登记与生命周期（snapshot 为迁移源；project register 仅迁移历史）（README index maintenance retired）
 - **`mstar-compound-refresh`** — capture 后知识维护；CONCEPTS.md 全仓 bootstrap
 
 ## NOT to do

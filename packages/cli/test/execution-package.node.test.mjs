@@ -192,7 +192,7 @@ async function makeActiveWorkspace(label) {
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  await initializeExecutionAuthority({ harnessDir: harness });
+  await readExecutionAuthority({ harnessDir: harness });
   return { root, harness, worktreePath: join(root, "wt-fixture"), evidencePath: join(root, "evidence.md") };
 }
 
@@ -713,14 +713,11 @@ test("committed ZCode hook keeps the pre-activation document gate intact", () =>
   const validStatus = JSON.stringify({ version: 2, updated_at: "2026-09-23", workflows: [] });
   writeFileSync(join(harness, "status.json"), validStatus);
 
-  // A valid coordination document still passes silently (exit 0, no output).
   const pass = runGate(writeEvent({ file_path: join(harness, "status.json"), content: validStatus }, root));
   assert.equal(pass.exitCode, 0, `expected a silent pass, got ${pass.exitCode} (stderr: ${pass.stderr})`);
   assert.equal(pass.stdout, "");
   assert.equal(pass.stderr, "");
 
-  // Under opt-in hard enforcement an invalid document still blocks, with the
-  // frozen stderr shape (header, violation line, enforcement line).
   writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
   const blocked = runGate(writeEvent({ file_path: join(harness, "status.json"), content: "{ not json" }, root));
   assert.equal(blocked.exitCode, 2);

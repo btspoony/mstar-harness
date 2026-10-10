@@ -185,10 +185,9 @@ ${text}
 `;
 }
 
-/** Root-declared workflow + catalog-linked compass/roadmap, all on disk. */
+/** Catalog-linked compass/roadmap documents on disk; the ACTIVE execution
+ * registry supplies the registry source. */
 async function seedStandard(f: Fixture): Promise<void> {
-  write(join(f.harness, "status.json"), rootDoc([{ id: "wf-a", dir: "workflows/wf-a" }]));
-  write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
   await registerCatalogEntity(
     f.context,
     { kind: "iteration", id: "iter-a", title: "Iteration A", rootKind: "iterations", relativePath: "iter-a" },
@@ -286,19 +285,21 @@ describe("projection source capture (contract \u00a75)", () => {
     expect(capture.blocked).toBe(false);
     expect(capture.diagnostics).toEqual([]);
     expect(capture.formatVersion).toBe(PROJECTION_FORMAT_VERSION);
+    // The ACTIVE source set: the execution registry plus catalog-declared
+    // compass documents. The status.json root and workflow snapshot files are
+    // retired file-route sources.
     expect(capture.sources.map((source) => source.sourceKey)).toEqual([
       "compass:iterations:iter-a/delivery-compass.md",
-      "root:harness:status.json",
-      "workflow:harness:workflows/wf-a/snapshot.json",
+      "root:harness:execution/registry",
     ]);
-    expect(capture.sources.map((source) => source.state)).toEqual(["ok", "ok", "ok"]);
+    expect(capture.sources.map((source) => source.state)).toEqual(["ok", "ok"]);
     expect(capture.sources.every((source) => /^[0-9a-f]{64}$/.test(source.sha256 ?? ""))).toBe(true);
     expect(capture.sources.every((source) => source.diagnostic === null)).toBe(true);
-    // The workflow source keeps only its root-registration shape: declared by
-    // the root register, harness-relative, never an absolute path.
-    expect(capture.sources.find((source) => source.kind === "workflow")).toMatchObject({
+    // The registry source is harness-rooted and declared, never an absolute
+    // path.
+    expect(capture.sources.find((source) => source.kind === "root")).toMatchObject({
       rootKind: "harness",
-      relativePath: "workflows/wf-a/snapshot.json",
+      relativePath: "execution/registry",
       declared: true,
     });
     expect(capture.sourceSetHash).toMatch(/^[0-9a-f]{64}$/);
@@ -378,58 +379,39 @@ describe("projection source capture (contract \u00a75)", () => {
   });
 
 
-  test("reuses the shared validators: the legacy snapshot alias is accepted, bad JSON and a bad root are not", async () => {
+  test("reuses the shared validators: a compass the domain parser refuses is classified invalid", async () => {
+    // Disposition: the retired file-route half of this case (the legacy
+    // snapshot alias, bad snapshot JSON, a v1-shaped status.json root)
+    // asserted sources that no longer exist. The live capture reuses the
+    // compass domain parser; a document it refuses is `invalid` on the named
+    // source and blocks the capture.
     const f = await fixture("validators-");
     await seedStandard(f);
-    // The canonical reader accepts `control_worktree_path` as a migration
-    // diagnostic; the projection follows that read acceptance and never
-    // depends on the alias value (it is not a projected column).
-    write(
-      join(f.harness, "workflows/wf-a/snapshot.json"),
-      JSON.stringify({
-        schema_version: 1,
-        id: "wf-a",
-        type: "plan",
-        status: "running",
-        started_at: STARTED_AT,
-        updated_at: STARTED_AT,
-        plans: [{ id: "plan-wf-a", title: "Plan", file: "/plans/wf-a.md", status: "Todo" }],
-        control_worktree_path: "/legacy/worktree",
-      }),
-    );
-    const legacy = await captureProjectionSources(f.context);
-    expect(legacy.blocked).toBe(false);
-
-    // A snapshot the validator refuses is `invalid` on that named source.
-    write(join(f.harness, "workflows/wf-a/snapshot.json"), "{ not json");
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), "{ not json");
     const broken = await captureProjectionSources(f.context);
     expect(broken.blocked).toBe(true);
-    expect(broken.sources.find((source) => source.kind === "workflow")).toMatchObject({
+    expect(broken.sources.find((source) => source.kind === "compass")).toMatchObject({
+      sourceKey: "compass:iterations:iter-a/delivery-compass.md",
       state: "invalid",
-      diagnostic: "invalid: snapshot is not valid JSON",
     });
-
-    // A v1-shaped root is refused by validateStatus, not silently projected.
-    write(join(f.harness, "status.json"), JSON.stringify({ version: 1, updated_at: "2026-09-18", plans: [] }));
-    const staleRoot = await captureProjectionSources(f.context);
-    expect(staleRoot.blocked).toBe(true);
-    expect(staleRoot.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("root:harness:status.json");
-    expect(staleRoot.diagnostics.find((diagnostic) => diagnostic.sourceKey === "root:harness:status.json")?.reason).toBe("invalid");
+    expect(broken.diagnostics).toContainEqual(
+      expect.objectContaining({ sourceKey: "compass:iterations:iter-a/delivery-compass.md", reason: "invalid" }),
+    );
   });
 
   test("missing and inaccessible declared sources are classified, not guessed", async () => {
     const f = await fixture("states-");
     await seedStandard(f);
-    // A declared snapshot that is gone is a `missing` source.
-    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-a", dir: "workflows/wf-a" }, { id: "wf-b", dir: "workflows/wf-b" }]));
+    // A declared compass document that is gone is a `missing` source.
+    rmSync(join(f.iterationsDir, "iter-a/delivery-compass.md"), { force: true });
     const capture = await captureProjectionSources(f.context);
     expect(capture.blocked).toBe(true);
-    expect(capture.sources.find((source) => source.relativePath === "workflows/wf-b/snapshot.json")).toMatchObject({
+    expect(capture.sources.find((source) => source.sourceKey === "compass:iterations:iter-a/delivery-compass.md")).toMatchObject({
       state: "missing",
       declared: true,
     });
     expect(capture.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "workflow:harness:workflows/wf-b/snapshot.json", reason: "missing" }),
+      expect.objectContaining({ sourceKey: "compass:iterations:iter-a/delivery-compass.md", reason: "missing" }),
     );
 
   });

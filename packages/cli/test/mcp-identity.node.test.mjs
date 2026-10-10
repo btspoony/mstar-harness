@@ -31,7 +31,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { initializeExecutionAuthority, initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = resolve(TEST_DIR, "..");
@@ -83,7 +83,6 @@ async function makeActiveWorkspace(label) {
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  await initializeExecutionAuthority({ harnessDir: harness });
   return { root, harness };
 }
 
@@ -193,21 +192,17 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     server.notify("notifications/initialized", {});
     const tools = await server.request("tools/list", {});
     const byName = new Map(tools.result.tools.map((tool) => [tool.name, tool]));
-    for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress", "mstar_lease_verify_integration"]) {
+    for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress", "mstar_worktree_check"]) {
       assert.ok(byName.has(name), `tools/list advertises ${name}`);
     }
-    // sessionId-capable schemas declare the parameter; the non-capable one does not.
+    // sessionId-capable schemas declare the parameter.
     for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress"]) {
       assert.ok(
         Object.hasOwn(byName.get(name).inputSchema.properties ?? {}, "sessionId"),
         `${name} declares sessionId`,
       );
     }
-    assert.equal(
-      Object.hasOwn(byName.get("mstar_lease_verify_integration").inputSchema.properties ?? {}, "sessionId"),
-      false,
-      "mstar_lease_verify_integration declares no sessionId (non-capable tool)",
-    );
+    assert.equal(byName.has("mstar_lease_verify_integration"), false, "retired lease verify-integration is not exposed; use worktree check");
 
     // --- register: NO sessionId anywhere on this call ------------------------
     const rootToken = await tokenOf(fixture.harness, {});
@@ -285,12 +280,7 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     }, "plan progress");
     assert.equal(progressed.data.data.plan.status, "InReview");
 
-    // --- lease verify integration: schema declares no sessionId; untouched ----
-    const verified = await callTool(server, "mstar_lease_verify_integration", {
-      workflow: WORKFLOW_ID,
-      harness: fixture.harness,
-    }, "lease verify-integration");
-    assert.equal(verified.data.claimed, false, "the workflow holds no integration merge claim");
+    // Integration lease facts are part of the surviving worktree check surface.
 
     // --- the authority's own coordinator truth -------------------------------
     const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: true });

@@ -86,6 +86,7 @@ import {
 import { resolveSddDir } from "./path.js";
 import { backupStore } from "./store-activation.js";
 import { initializeStore, type StoreContext } from "./store-db.js";
+import { upgradeStoreMinimal } from "./store-upgrade-minimal.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
 import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
@@ -149,7 +150,9 @@ async function activeGraph(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   handle.close();
-  const initialized = await initializeExecutionAuthority(context);
+  // `initializeStore` activates the execution authority (issue #428), so the
+  // root creation token is read back rather than re-initialized.
+  const initialized = await readExecutionState(context);
   for (const planId of [PLAN_A1, PLAN_A2, PLAN_B1]) {
     await registerCatalogEntity(
       context,
@@ -196,6 +199,9 @@ async function preExecutionStore(label: string): Promise<StoreContext> {
 async function legacyStore(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
+  // `initializeStore` creates the authority ACTIVE; record the legacy state
+  // explicitly for the case that proves a non-ACTIVE store is refused.
+  handle.db.prepare("update execution_meta set authority_state = 'legacy' where id = 1").run();
   handle.close();
   return context;
 }
@@ -342,33 +348,44 @@ describe("execution-authority-read \u2014 one exact read of the committed author
     expect((afterAll.data as ExecutionState).root.workflows).toHaveLength(2);
   });
 
-  test("route stays file-authoritative below activation and refuses a store that cannot answer", async () => {
+  test("the ACTIVE store answers; every non-ACTIVE store is a typed refusal with recovery", async () => {
     const active = await activeGraph("authority-read-route-active");
     const legacy = await legacyStore("authority-read-route-legacy");
     const preExecution = await preExecutionStore("authority-read-route-unmigrated");
     const absent = controlRoot("authority-read-route-absent");
 
+    // The ACTIVE store is the only route, and the routed source read answers
+    // the same committed DB state the adapter does.
     expect(await resolveExecutionReadRoute(active)).toBe("execution");
     const served = await readExecutionSource(active, { workflowId: WORKFLOW_A, planId: PLAN_A1 });
-    if (served.route !== "execution") throw new Error("an ACTIVE authority must answer with the DB route");
+    expect(served.route).toBe("execution");
     expect(served.read).toEqual(await readExecutionAuthority(active, { workflowId: WORKFLOW_A, planId: PLAN_A1 }));
 
-    // `legacy`, a store whose schema predates the execution tables, and a
-    // harness with no store at all keep the unchanged file route...
-    expect(await resolveExecutionReadRoute(legacy)).toBe("files");
-    expect(await readExecutionSource(legacy, { workflowId: WORKFLOW_A })).toEqual({ route: "files" });
-    expect(await resolveExecutionReadRoute(preExecution)).toBe("files");
-    expect(await resolveExecutionReadRoute(absent)).toBe("files");
-    // ...and the DB adapter itself refuses to serve them as empty state.
+    // A store that is PRESENT but not ACTIVE refuses `execution.not-active` and
+    // names the one supported recovery; the retired file route never answers.
+    for (const context of [legacy, preExecution]) {
+      const refusal = await refusalOf(() => resolveExecutionReadRoute(context));
+      expect(refusal.code).toBe("execution.not-active");
+      expect(await refusalOf(() => readExecutionSource(context, { workflowId: WORKFLOW_A }))).toMatchObject({
+        code: "execution.not-active",
+      });
+    }
+    // A store that EXISTS and cannot be read is never a file fallback either.
     expect(await refusalOf(() => readExecutionAuthority(legacy))).toEqual({ code: "execution.not-active" });
     expect(await refusalOf(() => readExecutionAuthority(preExecution))).toEqual({ code: "execution.not-active" });
+
+    // An ABSENT store refuses `store.not-initialized` with the two-path
+    // bootstrap recovery instead of serving leftover JSON.
+    const absentRefusal = await refusalOf(() => resolveExecutionReadRoute(absent));
+    expect(absentRefusal.code).toBe("store.not-initialized");
+    await expect(readExecutionSource(absent, { workflowId: WORKFLOW_A })).rejects.toThrow(/mstar store upgrade/);
+
     // A malformed address is refused before any route verdict can answer it.
-    expect(await refusalOf(() => readExecutionSource(legacy, { planId: PLAN_A1 }))).toEqual({
+    expect(await refusalOf(() => readExecutionSource(active, { planId: PLAN_A1 }))).toEqual({
       code: "coordination.invalid-input",
     });
 
-    // A store that EXISTS and cannot be read is never "files": leftover JSON is
-    // not an authority answer (§2.1/§5).
+    // A store that EXISTS and cannot be read keeps its own frozen code.
     const corrupt = await activeGraph("authority-read-route-corrupt");
     corruptStore(corrupt);
     expect(await refusalOf(() => resolveExecutionReadRoute(corrupt))).toEqual({ code: "store.corrupt" });
@@ -440,7 +457,8 @@ async function registeredStore(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   handle.close();
-  const initialized = await initializeExecutionAuthority(context);
+  // `initializeStore` activated the authority (issue #428); read its token.
+  const initialized = await readExecutionState(context);
   // The SELECTED plan document the registration proves (§4/R1): its `plan_id`
   // header is the identity authority the pointer resolves against, and its
   // heading is the title authority the declared title must state. It lives in
@@ -624,8 +642,10 @@ describe("retained evidence path checks across the authority switch", () => {
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
     writeBody(bodies.qa, QA_BODY);
 
-    // The switch: the fixture's execution authority becomes ACTIVE.
-    await initializeExecutionAuthority(context);
+    // The switch: the fixture's execution authority becomes ACTIVE. The store
+    // already exists, so the supported activation is the importer (`store
+    // upgrade`), never the empty-workspace initializer.
+    await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "retained-evidence-activate" });
     expect(await resolveExecutionReadRoute(context)).toBe("execution");
 
     // The direct completion boundary checks the plan's own configured areas.
@@ -733,7 +753,7 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
   const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   await registerCatalogEntity(
     context,
     {

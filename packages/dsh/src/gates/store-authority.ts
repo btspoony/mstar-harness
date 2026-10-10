@@ -162,26 +162,21 @@ function hasEntry(dir: string, name: string): boolean {
 }
 
 /**
- * §4.3/§5 what the control harness's EXECUTION authority says about a
- * coordination-document write. `resolveExecutionReadRoute` is the ONE place a
- * consumer decides between the DB authority and the file route; a store that
- * EXISTS and cannot be read is a refusal here too (§5: "no protected mutation"
- * while the authority cannot be established) and never a fall-through to the
- * file route. A harness with no store at all keeps the file route — absence is
- * not an authority verdict (§2.1), so the pre-activation write path is
- * unchanged.
- *
- * Not memoized: one probe per classified target, exactly like the issue-store
- * register route below (the caller's target cap bounds the cost).
+ * The ACTIVE execution authority's effect on a coordination-document write.
+ * An absent or non-active store is not an execution file route: these files
+ * are not read as execution authority. The distinct inactive state only means
+ * that this gate has no ACTIVE-authority veto to apply.
  */
 type ExecutionWriteRoute =
-  | { kind: 'files' }
   | { kind: 'active' }
   | { kind: 'unavailable'; code: string; message: string }
 
 async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
   try {
-    return (await resolveExecutionReadRoute({ harnessDir })) === 'execution' ? { kind: 'active' } : { kind: 'files' }
+    const route = await resolveExecutionReadRoute({ harnessDir })
+    return route === 'execution'
+      ? { kind: 'active' }
+      : { kind: 'unavailable', code: 'execution.not-active', message: 'the pre-activation file route is retired' }
   } catch (error) {
     return { kind: 'unavailable', ...refusalOf(error) }
   }

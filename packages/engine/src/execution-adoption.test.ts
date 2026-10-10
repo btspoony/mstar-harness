@@ -3,7 +3,7 @@ import { z } from "zod";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adoptTerminalWorkflow, initializeExecutionAuthority, readExecutionState, type ExecutionContext } from "./execution-store.js";
+import { adoptTerminalWorkflow, readExecutionState, type ExecutionContext } from "./execution-store.js";
 import type { ActivationAttestation } from "./store-activation.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
@@ -23,7 +23,7 @@ async function strandedTerminal(): Promise<StrandedFixture> {
   const context = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  const authority = await initializeExecutionAuthority(context);
+  const authority = await readExecutionState(context);
   const handle = await openStore(context, "write");
   try {
     handle.db.prepare(

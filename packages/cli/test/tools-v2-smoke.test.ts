@@ -17,6 +17,7 @@
  * - Gate 2 (#156): caller-scoped anti-recursion on task dispatches.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { initializeStore } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +41,7 @@ interface SmokeRepo {
 }
 
 /** A worktree with the fixture copied in; patched lease paths. */
-function setupRepo(): SmokeRepo {
+async function setupRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-"));
   cpSync(FIXTURE, root, { recursive: true });
   // Real git repo + linked worktree so l1PreDispatchCheck probes pass.
@@ -81,6 +82,9 @@ function setupRepo(): SmokeRepo {
   snapshotDoc.branch = { base: mainBranch, integration: integrationBranch };
   writeFileSync(snapshotPath, JSON.stringify(snapshotDoc, null, 2));
 
+  // The write gate answers from the ACTIVE execution authority: provision one
+  // in the plans-rooted harness so document validation can run.
+  await initializeStore({ harnessDir: join(root, "plans") }).then((handle) => handle.close());
   return { root, linked, harness: join(root, "plans"), snapshotPath, mstar: "" };
 }
 
@@ -92,7 +96,7 @@ function setupRepo(): SmokeRepo {
  * order (`.mstar` first) would otherwise redirect the plans-rooted smoke
  * targets to the `.mstar` root once both layouts exist in one repo.
  */
-function setupMstarRepo(): SmokeRepo {
+async function setupMstarRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-mstar-"));
   cpSync(FIXTURE, root, { recursive: true });
   renameSync(join(root, MSTAR_FIXTURE_DIR), join(root, MSTAR_REL));
@@ -101,6 +105,7 @@ function setupMstarRepo(): SmokeRepo {
   git(["config", "user.name", "Tools Smoke"], root);
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base"], root);
+  await initializeStore({ harnessDir: join(root, MSTAR_REL) }).then((handle) => handle.close());
   return { root, linked: "", harness: join(root, MSTAR_REL), snapshotPath: "", mstar: join(root, MSTAR_REL) };
 }
 
@@ -113,7 +118,7 @@ function setupMstarRepo(): SmokeRepo {
  * harness; the outer root carries the markers that make the probe return
  * the WRONG root.
  */
-function setupDoubleHarnessRepo(): SmokeRepo {
+async function setupDoubleHarnessRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-double-"));
   // Outer full-marker root.
   writeFileSync(
@@ -167,6 +172,7 @@ function setupDoubleHarnessRepo(): SmokeRepo {
   git(["config", "user.name", "Tools Smoke"], root);
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base"], root);
+  await initializeStore({ harnessDir: join(root, "inner", ".mstar") }).then((handle) => handle.close());
   return { root, linked: "", harness: join(root, "inner", ".mstar"), snapshotPath: "", mstar: "" };
 }
 
@@ -180,7 +186,7 @@ function setupDoubleHarnessRepo(): SmokeRepo {
  * tools (lease verify / iteration gate / worktree check) can assert the
  * DECLARED location is read.
  */
-function setupCustomLayoutRepo(): SmokeRepo {
+async function setupCustomLayoutRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-custom-"));
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "cw-wf", "wf-custom"), { recursive: true });
@@ -282,6 +288,7 @@ function setupCustomLayoutRepo(): SmokeRepo {
   snapshotDoc.integration_worktree_path = integration;
   snapshotDoc.branch = { base: mainBranch, integration: integrationBranch };
   writeFileSync(snapshotPath, JSON.stringify(snapshotDoc, null, 2));
+  await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
   return { root, linked, harness, snapshotPath: "", mstar: harness };
 }
 
@@ -295,8 +302,8 @@ function readFile(file: string): string {
 
 let repo: SmokeRepo | undefined;
 
-beforeAll(() => {
-  repo = setupRepo();
+beforeAll(async () => {
+  repo = await setupRepo();
 });
 
 afterAll(() => {
@@ -451,13 +458,17 @@ describe("omp hook Gate 1 (S-d)", () => {
     // the unknown result once into a named const.
     const blockedResult = blocked as { block: boolean; reason: string } | undefined;
     expect(blockedResult?.block).toBe(true);
-    expect(blockedResult?.reason).toContain("workflow.snapshot");
+    expect(blockedResult?.reason).toContain("execution.direct-write-refused");
 
     const passed = await handler!({
       toolName: "write",
       input: { path: snapshotPath, content: JSON.stringify(validDoc) },
     });
-    expect(passed).toBeUndefined();
+    const passedResult = passed as { block?: boolean; reason?: string } | undefined;
+    // ACTIVE disposition: even a schema-valid snapshot write refuses — the
+    // file route is retired entirely under an ACTIVE authority.
+    expect(passedResult?.block).toBe(true);
+    expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
     // Root status.json kind still validated with the static validator.
     const rootPath = join(root, "plans", "status.json");
@@ -466,7 +477,7 @@ describe("omp hook Gate 1 (S-d)", () => {
       input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
     });
     const rootBlockedResult = rootBlocked as { reason: string } | undefined;
-    expect(rootBlockedResult?.reason).toContain("status.migration-required");
+    expect(rootBlockedResult?.reason).toContain("execution.direct-write-refused");
   });
 
   test("2MB size guard applies to the on-disk edit path (S-d)", async () => {
@@ -484,10 +495,14 @@ describe("omp hook Gate 1 (S-d)", () => {
     const original = readFile(rootPath);
     try {
       // Oversized invalid file: without the guard the edit path would read +
-      // parse it and block (hard compass); with the guard it passes silently.
+      // parse it and block (hard compass); with the guard it passes silently
+      // on the pre-activation route. ACTIVE disposition: the retired route
+      // veto precedes the size guard, so the oversized edit refuses by route.
       writeFileSync(rootPath, "x".repeat(2 * 1024 * 1024 + 1));
       const res = await handler!({ toolName: "edit", input: { path: rootPath } });
-      expect(res).toBeUndefined();
+      const resResult = res as { block?: boolean; reason?: string } | undefined;
+      expect(resResult?.block).toBe(true);
+      expect(resResult?.reason).toContain("execution.direct-write-refused");
     } finally {
       writeFileSync(rootPath, original);
     }
@@ -504,8 +519,8 @@ describe("default .mstar root layout (W-REV-2)", () => {
   // layout: `plans/` lives INSIDE the root.
   let mstarRepo: SmokeRepo | undefined;
 
-  beforeAll(() => {
-    mstarRepo = setupMstarRepo();
+  beforeAll(async () => {
+    mstarRepo = await setupMstarRepo();
   });
 
   afterAll(() => {
@@ -534,13 +549,17 @@ describe("default .mstar root layout (W-REV-2)", () => {
     });
     const blockedResult = blocked as { block: boolean; reason: string } | undefined;
     expect(blockedResult?.block).toBe(true);
-    expect(blockedResult?.reason).toContain("workflow.snapshot");
+    expect(blockedResult?.reason).toContain("execution.direct-write-refused");
 
     const passed = await handler!({
       toolName: "write",
       input: { path: snapshotPath, content: JSON.stringify(validDoc) },
     });
-    expect(passed).toBeUndefined();
+    const passedResult = passed as { block?: boolean; reason?: string } | undefined;
+    // ACTIVE disposition: even a schema-valid snapshot write refuses — the
+    // file route is retired entirely under an ACTIVE authority.
+    expect(passedResult?.block).toBe(true);
+    expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
     // Root status.json kind still gated through the .mstar root.
     const rootPath = join(root, ".mstar", "status.json");
@@ -549,7 +568,7 @@ describe("default .mstar root layout (W-REV-2)", () => {
       input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
     });
     const rootBlockedResult = rootBlocked as { reason: string } | undefined;
-    expect(rootBlockedResult?.reason).toContain("status.migration-required");
+    expect(rootBlockedResult?.reason).toContain("execution.direct-write-refused");
 
     // Non-canonical snapshot layout stays ungated (silent pass) even on the
     // .mstar root — the fix must not over-gate.
@@ -570,8 +589,8 @@ describe("pathological double harness (W-REV-3)", () => {
   // probe root hit but rel is non-canonical, so inner docs stay gated.
   let doubleRepo: SmokeRepo | undefined;
 
-  beforeAll(() => {
-    doubleRepo = setupDoubleHarnessRepo();
+  beforeAll(async () => {
+    doubleRepo = await setupDoubleHarnessRepo();
   });
 
   afterAll(() => {
@@ -600,13 +619,17 @@ describe("pathological double harness (W-REV-3)", () => {
     });
     const blockedResult = blocked as { block: boolean; reason: string } | undefined;
     expect(blockedResult?.block).toBe(true);
-    expect(blockedResult?.reason).toContain("workflow.snapshot");
+    expect(blockedResult?.reason).toContain("execution.direct-write-refused");
 
     const passed = await handler!({
       toolName: "write",
       input: { path: snapshotPath, content: JSON.stringify(validSnapshot) },
     });
-    expect(passed).toBeUndefined();
+    const passedResult = passed as { block?: boolean; reason?: string } | undefined;
+    // ACTIVE disposition: even a schema-valid snapshot write refuses — the
+    // file route is retired entirely under an ACTIVE authority.
+    expect(passedResult?.block).toBe(true);
+    expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
     // Root status.json kind still gated through the inner sparse root
     // (file absent at classification time — the write-gate scenario).
@@ -616,7 +639,7 @@ describe("pathological double harness (W-REV-3)", () => {
       input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
     });
     const rootBlockedResult = rootBlocked as { reason: string } | undefined;
-    expect(rootBlockedResult?.reason).toContain("status.migration-required");
+    expect(rootBlockedResult?.reason).toContain("execution.direct-write-refused");
 
     // Non-canonical snapshot layout stays ungated (silent pass) — the fix
     // must not over-gate.
@@ -637,8 +660,8 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
   // resolvers in BOTH the probe and the classify.
   let customRepo: SmokeRepo | undefined;
 
-  beforeAll(() => {
-    customRepo = setupCustomLayoutRepo();
+  beforeAll(async () => {
+    customRepo = await setupCustomLayoutRepo();
   });
 
   afterAll(() => {
@@ -667,13 +690,17 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
     });
     const blockedResult = blocked as { block: boolean; reason: string } | undefined;
     expect(blockedResult?.block).toBe(true);
-    expect(blockedResult?.reason).toContain("workflow.snapshot");
+    expect(blockedResult?.reason).toContain("execution.direct-write-refused");
 
     const passed = await handler!({
       toolName: "write",
       input: { path: snapshotPath, content: JSON.stringify(validSnapshot) },
     });
-    expect(passed).toBeUndefined();
+    const passedResult = passed as { block?: boolean; reason?: string } | undefined;
+    // ACTIVE disposition: even a schema-valid snapshot write refuses — the
+    // file route is retired entirely under an ACTIVE authority.
+    expect(passedResult?.block).toBe(true);
+    expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
     // Non-canonical custom-layout path (no <id> component) stays ungated —
     // the fix must not over-gate.

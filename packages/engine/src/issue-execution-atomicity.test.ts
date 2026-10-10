@@ -40,8 +40,8 @@ import {
 import {
   bindExecutionSession,
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   readExecutionPlan,
+  readExecutionState,
   type ExecutionCaller,
   type ExecutionSessionRef,
 } from "./execution-store.js";
@@ -81,7 +81,7 @@ async function executionPlanFixture(name: string): Promise<{
   mkdirSync(harnessDir, { recursive: true });
   const context: StoreContext = { harnessDir };
   (await initializeStore(context)).close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   const workflowId = "wf-issue-batch";
   const planId = "plan-issue-batch";
   const iterationId = "iter-issue-batch";

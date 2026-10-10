@@ -19,8 +19,7 @@
  * session never borrows another lifecycle's iteration gate) AND the selected
  * snapshot carries ≥1 plan row in the `Todo` state (the Prepare window — a
  * plan registered, not yet started; the engine plan-status vocabulary,
- * `status.ts:117` — v3 relocation: the root v1 `plans[]` home is gone, the
- * probe reads `workflows/<id>/snapshot.json` rows). Otherwise the target
+ * probe reads ACTIVE execution-graph plan rows). Otherwise the target
  * is OFF. A session with NO selected lifecycle (unbound multi-active) has no
  * true target: the sync performs NO `set` rather than asserting `false` for
  * a lifecycle the session never selected.
@@ -35,19 +34,17 @@
  * (plan row appears/advances past `Todo`) re-evaluates the root's flag
  * without extra seams.
  *
- * One-way mirror: the bridge only READS harness state (`{HARNESS_DIR}` /
- * status.json stay SSOT — the same boundary as the goal bridge) and writes
+ * One-way mirror: the bridge reads the ACTIVE execution graph and writes
  * host session state (the `plan/mode` event). The planMode service absent →
  * boot unaffected + ONE debug log (optional-unit degrade); every listener
- * and interaction is try/catch-contained.
+ * interaction is try/catch-contained.
  */
 import { existsSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { parseCompassFrontmatter, readJson, WORKFLOW_SNAPSHOT_FILE } from '@mstar-harness/engine'
-import { asRecord, sessionHintOf, STATUS_FILE } from './_shared.ts'
+import { parseCompassFrontmatter } from '@mstar-harness/engine'
+import { asRecord, sessionHintOf } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
-import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 // The shared root discriminator and the `subagent/start` root walk (explicit
 // no-barrel imports — `gates/steering.ts` imports no bridge, so there is no
 // cycle).
@@ -56,17 +53,16 @@ import { isRootLikeAgent, rootAgentOf } from './steering.ts'
 // reads the SELECTED workflow snapshot's plan rows — the root v1 `plans[]`
 // home is gone. The bridge is a READ-only mirror, so the read resolver
 // (active → terminal → error) applies.
-import { resolveReadWorkflow } from './workflow-selection.ts'
-// Type-only (erased at runtime): the carrying-session hint shape.
+import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
+import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 
 /** Logger label for the planMode bridge (dsh logger naming: `<scope>/<subject>`). */
 export const PLAN_MODE_BRIDGE_LOGGER = 'mstar/plan-mode-bridge'
 
 /**
  * The Prepare-window plan status: `PLAN_STATUSES[0]` (engine
- * `packages/engine/src/status.ts:117` — the status.json plan-row
- * vocabulary; the engine validates rows against the full list).
+ * ACTIVE execution graph plan-row vocabulary; the engine validates rows against the full list).
  */
 const PLAN_STATUS_TODO = 'Todo'
 
@@ -135,31 +131,25 @@ type SelectedLifecycle =
   | { readonly kind: 'none' }
 
 /**
- * The lifecycle THIS session's plan mode mirrors: the read resolver's
- * selection (active → terminal history → error), plus the selected snapshot.
- * Missing status.json / a selection failure / an unreadable snapshot degrade
- * to `none` (advisory — the status gate already refuses invalid writes, and a
- * broken read must never force the flag on). `unbound` is the ONE state that
- * is not "off": the session has no selected lifecycle, so mirroring `false`
- * would flip plan mode on the strength of a workflow this session never
- * selected.
+ * The lifecycle THIS session's plan mode mirrors: its ACTIVE execution-graph
+ * selection and plan projection. A selection failure or unavailable ACTIVE
+ * state degrades to `none` (advisory — a broken read must never force the
+ * flag on). `unbound` is the ONE state that is not "off": this session has no
+ * selected lifecycle, so mirroring `false` would flip plan mode on the strength
+ * of a workflow the session never selected.
+ *
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param hint - the root session's carrying hint (lease / cwd / durable pick).
  */
-function selectedLifecycle(harnessDir: string, hint?: SessionHint): SelectedLifecycle {
-  if (!existsSync(join(harnessDir, STATUS_FILE))) return { kind: 'none' }
-  const selection = resolveReadWorkflow(harnessDir, hint)
-  if (selection.kind === 'error') {
-    return selection.code === 'workflow.selection.unbound-multi-active' ? { kind: 'unbound' } : { kind: 'none' }
+async function selectedLifecycle(harnessDir: string, hint?: SessionHint): Promise<SelectedLifecycle> {
+  const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+  if (source.kind === 'error') {
+    return source.selection.kind === 'error' && source.selection.code === 'workflow.selection.unbound-multi-active'
+      ? { kind: 'unbound' }
+      : { kind: 'none' }
   }
-  let doc: Record<string, unknown>
-  try {
-    doc = readJson(join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)) as Record<string, unknown>
-  } catch {
-    return { kind: 'none' }
-  }
-  if (asRecord(doc) === undefined) return { kind: 'none' }
-  return { kind: 'selected', workflowId: selection.workflowId, doc }
+  if (source.kind !== 'active') return { kind: 'none' }
+  return { kind: 'selected', workflowId: source.workflowId, doc: source.snapshot }
 }
 
 /**
@@ -218,8 +208,8 @@ function hasPrepareWindow(doc: Record<string, unknown>): boolean {
  *   fabricate `false`, which would assert a state for a workflow the session
  *   never selected.
  */
-export function planModeTarget(harnessDir: string, hint?: SessionHint): boolean | undefined {
-  const lifecycle = selectedLifecycle(harnessDir, hint)
+export async function planModeTarget(harnessDir: string, hint?: SessionHint): Promise<boolean | undefined> {
+  const lifecycle = await selectedLifecycle(harnessDir, hint)
   if (lifecycle.kind === 'unbound') return undefined
   if (lifecycle.kind === 'none') return false
   if (!selectedCompassSteers(harnessDir, lifecycle)) return false
@@ -273,17 +263,14 @@ function rootSessionHint(agent: unknown, harnessDir: string): SessionHint | unde
  * when not applicable or a contained failure occurred. Never throws — the
  * caller's listener stays contained.
  */
-export function syncPlanMode(agent: unknown, input: PlanModeSyncInput): boolean {
+export async function syncPlanMode(agent: unknown, input: PlanModeSyncInput): Promise<boolean> {
   const { resolver, planMode } = input
   if (planMode === undefined) return false
   if (!isRootLikeAgent(agent)) return false
   const harnessDir = resolver.forAgent(agent)
   if (harnessDir === null) return false
   try {
-    const target = planModeTarget(harnessDir, rootSessionHint(agent, harnessDir))
-    // Unbound: this session has no selected lifecycle, so there is no true
-    // target to mirror — set neither `false` (which would assert an OFF state
-    // for a lifecycle the session never selected) nor `true`.
+    const target = await planModeTarget(harnessDir, rootSessionHint(agent, harnessDir))
     if (target === undefined) return false
     planMode.set(agent, target)
     return true
@@ -313,9 +300,9 @@ export function registerPlanModeBridge(ctx: Context, resolver: HarnessResolver):
   if (planMode === undefined) {
     log('debug', 'planMode service absent — plan-mode bridge disabled (composition without @deepseek-ai/dsh-plan-mode)')
   }
-  const sync = (agent: unknown): void => {
+  const sync = async (agent: unknown): Promise<void> => {
     try {
-      syncPlanMode(agent, { resolver, planMode })
+      await syncPlanMode(agent, { resolver, planMode })
     } catch (error) {
       log('warn', `planMode bridge sync failed (contained — the session/decision point proceeds): ${errorMessage(error)}`)
     }

@@ -25,7 +25,7 @@ Bootstrap todos `harness-init` / `spec-register` / `mirror-plan` (emit first, in
 
 Use `mstar workflow register` to create store.db registry/workflow/plan rows and declare delivery kind; use `mstar plan prepare` for the prepared Assignment and frozen inputs. Read registration through `mstar status validate` / `mstar plan show`. Required fields and tokens follow the producer's `--help` and `mstar-artifacts`; do not hand-write JSON templates.
 
-Only pre-activation / engine-absent fallback uses root `status.json` + workflow snapshot; ACTIVE reads and writes refuse those files. Commit tracked results when applicable (`AGENTS.md`, knowledge, specs); process artifacts remain gitignored per `mstar-conventions`.
+A control root with no ACTIVE store has no execution authority: create one with `mstar harness scaffold` + `mstar store init` (or `mstar store upgrade` to import historical file state), or track the work in conversation (no-plan mode). Commit tracked results when applicable (`AGENTS.md`, knowledge, specs); process artifacts remain gitignored per `mstar-conventions`.
 
 ### `mirror-plan` minimum content
 
@@ -66,7 +66,7 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ### Bootstrap (fixed prefix — complete before implement)
 
-1. harness-init — initialize harness directories and process-artifact gitignore; empty status template is pre-activation bootstrap only
+1. harness-init — initialize harness directories and process-artifact gitignore (`mstar harness scaffold`), then create/activate the store (`mstar store init`, or `mstar store upgrade` for historical file state)
 2. spec-register — register workflow/plan rows through the authorized engine producer; spec stub if applicable
 3. mirror-plan — write .mstar/plans/<plan-id>-<short-name>.md
 

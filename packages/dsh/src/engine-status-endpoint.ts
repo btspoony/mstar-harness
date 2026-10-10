@@ -56,7 +56,7 @@ import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkflowSelectionView } from './types.ts'
 import type { HarnessResolver } from './gates/_shared.ts'
-import { resolveActiveWorkflow, resolveReadWorkflow, type SessionHint } from './gates/workflow-selection.ts'
+import { readExecutionWorkflowSource, type SessionHint } from './gates/workflow-selection.ts'
 import {
   readEngineStatusSnapshot,
   readWorkflowSessionBinding,
@@ -304,7 +304,7 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       // Current control state, computed for the SAME validated session: the
       // durable pick folded with the verified live Agent. Never the emitted
       // payload's selection — that one keeps recording the last emission.
-      binding: { selection: this.currentSelection(harnessDir, sid, entry.cwd, session.source === 'live') },
+      binding: { selection: await this.currentSelection(harnessDir, sid, entry.cwd, session.source === 'live') },
     }
   }
 
@@ -334,19 +334,13 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     // (2) The requested id must be an ACTIVE id of the freshly resolved
     // registry (validated with the automatic rungs omitted, so the check is
     // about the registry itself rather than this session's evidence).
-    const registry = resolveActiveWorkflow(harnessDir)
-    if (registry.kind === 'active') {
-      if (registry.workflowId !== wid) return unavailable('workflow-not-active')
-    } else if (registry.kind === 'error') {
-      if (registry.code !== 'workflow.selection.unbound-multi-active') {
-        return unavailable(`selection-unavailable:${registry.code}`)
-      }
-      if (!(registry.activeWorkflowIds ?? []).includes(wid)) return unavailable('workflow-not-active')
-    } else {
-      // Unreachable through {@link resolveActiveWorkflow}, which never answers
-      // the history view: refused rather than treated as a pickable set.
-      return unavailable('selection-unavailable:terminal')
-    }
+    const registry = await readExecutionWorkflowSource({ harnessDir })
+    if (registry.kind === 'unavailable') return unavailable(`selection-unavailable:${registry.code}`)
+    if (registry.kind === 'error') {
+      const selection = registry.selection
+      if (selection.kind !== 'error' || selection.code !== 'workflow.selection.unbound-multi-active' ||
+        !(selection.activeWorkflowIds ?? []).includes(wid)) return unavailable('workflow-not-active')
+    } else if (registry.workflowId !== wid) return unavailable('workflow-not-active')
 
     // (3) A higher-priority automatic binding wins: refusing the pick keeps
     // lease/cwd attribution authoritative instead of letting the panel
@@ -355,7 +349,8 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       cwd: liveCwd,
       sessionId: sid,
     }
-    const automatic = resolveActiveWorkflow(harnessDir, structural)
+    const automatic = await readExecutionWorkflowSource({ harnessDir }, structural)
+    if (automatic.kind === 'unavailable') return unavailable(`selection-unavailable:${automatic.code}`)
     if (automatic.kind === 'active' && automatic.workflowId !== wid) return unavailable('binding-conflict')
 
     // (4) Idempotent re-apply: the same stored active pick is acknowledged
@@ -390,12 +385,12 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
    * the structural hint only (the pick is unknown, never invented), and the
    * request's `sessionId` is NEVER substituted for the session identity.
    */
-  private currentSelection(
+  private async currentSelection(
     harnessDir: string,
     sessionId: string,
     cwd: string,
     live: boolean,
-  ): WorkflowSelectionView {
+  ): Promise<WorkflowSelectionView> {
     const stored = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
     const selected = stored.kind === 'ok' ? stored.binding?.selectedWorkflowId : undefined
     const hint: SessionHint = {
@@ -403,7 +398,12 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       sessionId,
       ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
     }
-    return resolveReadWorkflow(harnessDir, hint)
+    const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+    if (source.kind === 'active') return { kind: 'active', workflowId: source.workflowId, dir: source.dir }
+    if (source.kind === 'unavailable') {
+      return { kind: 'error', code: source.code, message: source.message }
+    }
+    return source.selection
   }
 
   

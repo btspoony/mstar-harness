@@ -6,6 +6,8 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+- ACTIVE L1 worktree checks now select the requested plan from either `--plan` or the positional plan id before applying multi-row ambiguity rules. Removed the retired `workflow show-prepare`, `workflow amend-prepare` and `workflow recover-coordinator` registry stubs.
+
 ## [3.11.2] - 2026-09-19
 
 ### Changed

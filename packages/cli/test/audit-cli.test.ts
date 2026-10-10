@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readJson, scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine";
+import { initializeStore, readExecutionState, readJson, scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, expectUsageDiagnostic } from "./support/cli-assertions";
 
@@ -659,198 +659,80 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
 
 // ---------------------------------------------------------------------------
 
-describe("mstar audit promote — v2 workflow registration for selected plans", () => {
-  /** Scaffold an audit dir with two plan files under a temp root and return
-   * `{ harnessDir, outDir }` (outDir under harnessDir/plans/, the documented
-   * `{PLAN_DIR}/audit-<date>/` layout).
-   *
-   * Seeds an active issue store first: promotion registers through the catalog
-   * registration journal, which publishes rows into store.db and refuses
-   * fail-closed (`store.not-initialized`) on a harness dir without one. */
-  function scaffoldFixture(dir: string): { harnessDir: string; outDir: string } {
+describe("mstar audit promote — ACTIVE workflow registration for selected plans", () => {
+  async function scaffoldFixture(dir: string): Promise<{ harnessDir: string; outDir: string; token: string }> {
     const harnessDir = join(dir, "harness");
     const outDir = join(harnessDir, "plans", "audit-2026-08-08");
-    scaffoldAuditPlan(
-      outDir,
-      [
-        {
-          title: "Fix N+1 query in order list",
-          category: "perf",
-          impact: "Every order-list render issues 1+N queries.",
-          effort: "M",
-          risk: "MED",
-          confidence: "HIGH",
-          evidence: ["src/orders.ts:42"],
-          priority: "P1",
-        },
-        {
-          title: "Rotate leaked AWS keys",
-          category: "security",
-          impact: "Credentials in git history.",
-          effort: "S",
-          risk: "HIGH",
-          confidence: "HIGH",
-          evidence: ["src/config.ts:3"],
-          priority: "P1",
-        },
-      ],
-      { date: "2026-08-08" },
-    );
-    const init = runCli(["store", "init", "--harness", harnessDir]);
-    expect(init.exitCode).toBe(0);
-    return { harnessDir, outDir };
+    mkdirSync(harnessDir, { recursive: true });
+    scaffoldAuditPlan(outDir, [
+      { title: "Fix N+1 query in order list", category: "perf", impact: "Every order-list render issues 1+N queries.", effort: "M", risk: "MED", confidence: "HIGH", evidence: ["src/orders.ts:42"], priority: "P1" },
+      { title: "Rotate leaked AWS keys", category: "security", impact: "Credentials in git history.", effort: "S", risk: "HIGH", confidence: "HIGH", evidence: ["src/config.ts:3"], priority: "P1" },
+    ], { date: "2026-08-08" });
+    const store = await initializeStore({ harnessDir });
+    store.close();
+    const token = (await readExecutionState({ harnessDir })).token;
+    return { harnessDir, outDir, token };
   }
 
-  test("selected plan → snapshot with one Todo row + status.json type plan, exit 0", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const { harnessDir, outDir } = scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ]);
+  test("selected plan registers one Todo row in ACTIVE state", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { harnessDir, outDir, token } = await scaffoldFixture(dir);
+      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
       expect(result.exitCode).toBe(0);
-      const promoted = cliEnvelope(result, "ok", "audit.promote.ok");
-      expect(promoted.data?.workflowId).toBe("audit-2026-08-08");
-
-      // snapshot has exactly the selected plan as a Todo row
-      const snapshotPath = join(harnessDir, "workflows", "audit-2026-08-08", "snapshot.json");
-      expect(existsSync(snapshotPath)).toBe(true);
-      const snapshot = readJson(snapshotPath);
-      expect(snapshot.type).toBe("plan");
-      expect(snapshot.status).toBe("running");
-      const plans = snapshot.plans as Array<Record<string, unknown>>;
-      expect(plans).toHaveLength(1);
-      expect(plans[0]).toMatchObject({
-        id: "001-fix-n-1-query-in-order-list",
-        title: "Fix N+1 query in order list",
-        file: "audit-2026-08-08/001-fix-n-1-query-in-order-list.md",
-        status: "Todo",
-      });
-
-      // root status.json registers the workflow as type: plan
-      const status = readJson(join(harnessDir, "status.json"));
-      expect(status.version).toBe(2);
-      const entry = (status.workflows as Array<Record<string, unknown>>).find(
-        (w) => w.id === "audit-2026-08-08",
-      );
-      expect(entry).toMatchObject({ type: "plan", dir: "workflows/audit-2026-08-08" });
-      expect(entry?.started_at).toBe(snapshot.started_at);
+      expect(cliEnvelope(result, "ok", "audit.promote.ok").data?.workflowId).toBe("audit-2026-08-08");
+      const active = await readExecutionState({ harnessDir });
+      expect(active.token).not.toBe(token);
+      const workflow = active.data.workflows.find(({ state }) => state.id === "audit-2026-08-08");
+      expect(workflow?.state).toMatchObject({ type: "plan", branch: { source: "feature/audit-plans", target: "main" } });
+      expect(workflow?.plans).toHaveLength(1);
+      expect(workflow?.plans[0]?.plan).toMatchObject({ id: "001-fix-n-1-query-in-order-list", title: "Fix N+1 query in order list", status: "Todo" });
     });
   });
 
-  test("missing <audit-dir> or --plans → argument error", () => {
-    const noDir = runCli(["audit", "promote",
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ]);
+  test("missing <audit-dir> or --plans → argument error", async () => {
+    const noDir = runCli(["audit", "promote", "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
     expect(noDir.exitCode).toBe(2);
     expectUsageDiagnostic(noDir, "path");
-
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const { outDir } = scaffoldFixture(dir);
-      const noPlans = runCli([
-        "audit",
-        "promote",
-        outDir,
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ]);
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { outDir } = await scaffoldFixture(dir);
+      const noPlans = runCli(["audit", "promote", outDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
       expect(noPlans.exitCode).toBe(2);
       expectUsageDiagnostic(noPlans, "--plans");
     });
   });
 
-  test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const { outDir } = scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001",
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ], { cwd: dir });
+  test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { outDir } = await scaffoldFixture(dir);
+      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"], { cwd: dir });
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused").message).toContain("harness");
     });
   });
 
-  test("--workflow override sets the workflow id", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const { harnessDir, outDir } = scaffoldFixture(dir);
-      const result = runCli([
-        "audit",
-        "promote",
-        outDir,
-        "--plans",
-        "001",
-        "--workflow",
-        "audit-2026-08-08-custom",
-        "--harness",
-        harnessDir,
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ]);
+  test("--workflow override sets the workflow id in ACTIVE state", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { harnessDir, outDir } = await scaffoldFixture(dir);
+      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--workflow", "audit-2026-08-08-custom", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "audit.promote.ok").data?.workflowId).toBe("audit-2026-08-08-custom");
-      expect(
-        existsSync(join(harnessDir, "workflows", "audit-2026-08-08-custom", "snapshot.json")),
-      ).toBe(true);
+      const active = await readExecutionState({ harnessDir });
+      expect(active.data.workflows.some(({ state }) => state.id === "audit-2026-08-08-custom")).toBe(true);
     });
   });
 
-  test("re-promote of a registered workflow id refuses without replacing its snapshot", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const { harnessDir, outDir } = scaffoldFixture(dir);
-      const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ]);
+  test("re-promote of a registered workflow id refuses without replacing its ACTIVE registration", async () => {
+    await withTempDir("mstar-slice4-cli-", async (dir) => {
+      const { harnessDir, outDir } = await scaffoldFixture(dir);
+      const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
       expect(first.exitCode).toBe(0);
-
-      const snapshotPath = join(harnessDir, "workflows", "audit-2026-08-08", "snapshot.json");
-      const before = readJson(snapshotPath);
-
-      // A new operation cannot create the same workflow id again; the
-      // registration conflict is the behavioral contract, not path wording.
-      const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir,
-        "--delivery-kind",
-        "development",
-        "--branch-source",
-        "feature/audit-plans",
-        "--branch-target",
-        "main",
-      ]);
+      const before = await readExecutionState({ harnessDir });
+      const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
       expect(second.exitCode).toBe(1);
-      cliEnvelope(second, "refused", "catalog.registration-conflict");
-
-      // First rows intact.
-      const after = readJson(snapshotPath);
-      expect(after.started_at).toBe(before.started_at);
-      const plans = after.plans as Array<Record<string, unknown>>;
-      expect(plans).toHaveLength(1);
-      expect(plans[0]).toMatchObject({ id: "001-fix-n-1-query-in-order-list", status: "Todo" });
+      cliEnvelope(second, "refused", "execution.not-empty");
+      const after = await readExecutionState({ harnessDir });
+      expect(after.data.workflows.map(({ state }) => state.id)).toEqual(before.data.workflows.map(({ state }) => state.id));
+      expect(after.data.workflows[0]?.plans.map(({ plan }) => plan.id)).toEqual(["001-fix-n-1-query-in-order-list"]);
     });
   });
 });

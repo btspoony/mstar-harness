@@ -6,11 +6,11 @@ import path from "node:path";
 import {
   createExecutionWorkflow,
   executionContextFor,
-  initializeExecutionAuthority,
   initializeStore,
+  readExecutionAuthority,
 } from "@mstar-harness/engine";
 import type { ExecutionToken } from "@mstar-harness/engine";
-import { getCommandDefinitions } from "../src/index.js";
+import { getPlanCommandDefinitions } from "../src/families/plan.js";
 import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -73,9 +73,33 @@ function context(cwd: string, sessionId?: string): InvocationContext {
 }
 
 function definition(id: string) {
-  const found = getCommandDefinitions().find((entry) => entry.id === id);
+  const found = getPlanCommandDefinitions().find((entry) => entry.id === id);
   if (found === undefined) throw new Error(`Missing command definition: ${id}`);
   return found;
+}
+
+function workflowTokenOf(created: { data: unknown }): ExecutionToken {
+  const data = created.data;
+  if (data === null || typeof data !== "object" || !("workflows" in data) || !Array.isArray(data.workflows)) {
+    throw new Error("createExecutionWorkflow returned no workflows array");
+  }
+  const [workflow] = data.workflows;
+  if (workflow === null || typeof workflow !== "object" || !("workflowToken" in workflow)) {
+    throw new Error("createExecutionWorkflow returned no workflow token");
+  }
+  return workflow.workflowToken as ExecutionToken;
+}
+
+/** The plan row inside a `plan.show` ExecutionRead envelope, narrowed at runtime. */
+function planRowOf(envelope: { status: string; data: unknown }): { id: string } {
+  if (envelope.status !== "ok" || envelope.data === null || typeof envelope.data !== "object" || !("data" in envelope.data)) {
+    throw new Error("plan.show returned no ExecutionRead payload");
+  }
+  const read = envelope.data.data;
+  if (read === null || typeof read !== "object" || !("plan" in read) || read.plan === null || typeof read.plan !== "object" || !("id" in read.plan)) {
+    throw new Error("plan.show returned no plan row");
+  }
+  return read.plan as { id: string };
 }
 
 describe("plan command family", () => {
@@ -89,45 +113,69 @@ describe("plan command family", () => {
   });
 
 
-  test("bind requires runtime identity and the coordinator reports progress but cannot bypass completion", async () => {
-    const data = fixture();
-    const ctx = context(data.root);
-    const coordinatorDefinition = definition("plan.bind");
-    const suppliedOnly = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
-    expect(suppliedOnly).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    const rejectedPlanBind = await coordinatorDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness } as never, ctx);
-    expect(rejectedPlanBind).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    const bound = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness } as never, context(data.root, "runtime-coordinator"));
-    if (bound.status !== "ok" || typeof bound.data !== "object" || bound.data === null || !("session_file" in bound.data)) {
-      throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
-    }
-    const session = String(bound.data.session_file);
+  test("bind requires runtime identity; the active route binds, reports progress and cannot bypass completion", async () => {
+    const data = activeFixture();
+    const bindDefinition = definition("plan.bind");
 
-    const shown = await definition("plan.show").execute({ session, plan: data.plan } as never, ctx);
+    // Identity and addressing are validated before any route work.
+    const suppliedOnly = await bindDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness, sessionId: "caller-chosen" } as never, context(data.root));
+    expect(suppliedOnly).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    const rejectedPlanBind = await bindDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness } as never, context(data.root, "runtime-coordinator"));
+    expect(rejectedPlanBind).toMatchObject({ status: "usage", code: "command.invalid-input" });
+
+    // The ACTIVE route: one active store, one running workflow, one coordinator.
+    const storeContext = { harnessDir: data.harness };
+    (await initializeStore(storeContext)).close();
+    const initialized = await readExecutionAuthority(storeContext);
+    const identity = {
+      source: "local" as const,
+      sessionId: "runtime-coordinator",
+      workflowId: data.workflow,
+      role: "coordinator" as const,
+    };
+    const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
+      entry: { id: data.workflow, type: "iteration", status: "running", started_at: "2026-09-26T00:00:00Z", dir: `workflows/${data.workflow}` } as never,
+      snapshot: {
+        schema_version: 1,
+        id: data.workflow,
+        type: "iteration",
+        status: "running",
+        started_at: "2026-09-26T00:00:00Z",
+        updated_at: "2026-09-26T00:00:00Z",
+        branch: { base: "main" },
+        plans: [{ id: data.plan, plan_id: data.plan, title: "Plan A", file: `plans/${data.plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+      } as never,
+      expected: initialized.token,
+      operationId: "create-plan-workflow",
+    });
+    const workflowToken = workflowTokenOf(created);
+    const ctx = { ...context(data.root, "runtime-coordinator"), controlRoot: data.harness };
+
+    const bound = await bindDefinition.execute({ execution: true, coordinator: true, workflow: data.workflow, harness: data.harness, expect: workflowToken, operation: "bind-coordinator" } as never, ctx);
+    expect(bound.status).toBe("ok");
+
+    const shown = await definition("plan.show").execute({ workflow: data.workflow, plan: data.plan } as never, ctx);
+    expect(shown.status).toBe("ok");
     if (shown.status !== "ok") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
-    const view = shown.data as { row: { id: string }; revision: number };
-    expect(view.row.id).toBe(data.plan);
-    const started = await definition("plan.progress").execute({ session, plan: data.plan, expect: view.revision, progress: { status: "InProgress", summary: "started", evidence_paths: [] } } as never, ctx);
+    const shownRow = planRowOf(shown);
+    expect(shownRow.id).toBe(data.plan);
+
+    const started = await definition("plan.progress").execute({ workflow: data.workflow, plan: data.plan, progress: { status: "InProgress", summary: "started", evidence_paths: [] } } as never, ctx);
     expect(started.status).toBe("ok");
     if (started.status !== "ok") throw new Error(`plan progress failed: ${JSON.stringify(started)}`);
-    const progressed = started.data as { view: { revision: number; row: { status: string } } };
-    expect(progressed.view.row.status).toBe("InProgress");
-    const persisted = await definition("plan.show").execute({ session, plan: data.plan } as never, ctx);
-    expect(persisted).toMatchObject({ status: "ok", data: { revision: progressed.view.revision, row: { status: "InProgress" } } });
-    const snapshot = path.join(data.harness, "workflows", data.workflow, "snapshot.json");
-    const beforeDenied = await Bun.file(snapshot).text();
 
-    const denied = await definition("plan.progress").execute({ session, plan: data.plan, expect: progressed.view.revision, progress: { status: "Done", summary: "x", evidence_paths: [] } } as never, ctx);
-    expect(denied).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
-    expect(await Bun.file(snapshot).text()).toBe(beforeDenied);
+    // The recorded completion cannot be bypassed by an unsupported transition.
+    const denied = await definition("plan.progress").execute({ workflow: data.workflow, plan: data.plan, progress: { status: "Done", summary: "x", evidence_paths: [] } } as never, ctx);
+    expect(denied).toMatchObject({ status: "refused", exitCode: 1 });
   });
 
 
-  test("legacy plan bind refuses before snapshot lookup when workflow is in active DB authority", async () => {
+  test("plan bind without the execution route refuses, and its recovery names a working invocation", async () => {
     const data = activeFixture();
     const storeContext = { harnessDir: data.harness };
     (await initializeStore(storeContext)).close();
-    const initialized = await initializeExecutionAuthority(storeContext);
+    // `store init` already activated execution authority with the schema.
+    const initialized = await readExecutionAuthority(storeContext);
     const identity = {
       source: "local" as const,
       sessionId: "coordinator-a",
@@ -150,21 +198,20 @@ describe("plan command family", () => {
       operationId: "create-plan-workflow",
     });
 
+    // The retired file-route bind (no `--execution`) refuses.
     const result = await definition("plan.bind").execute(
       { coordinator: true, workflow: data.workflow, harness: data.harness } as never,
       context(data.root, "coordinator-a"),
     );
-    expect(result).toMatchObject({ status: "refused", code: "execution.consumer-not-ready", exitCode: 1 });
-    expect(result.message).toContain("registered in the active DB execution authority");
-    expect(result.message).toContain("Re-run with `--execution`");
-    expect(result.message).not.toContain("coordination.workflow-not-found");
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
   });
 
   test("stale active execution tokens are rejected by the engine", async () => {
     const data = activeFixture();
     const storeContext = { harnessDir: data.harness };
     (await initializeStore(storeContext)).close();
-    const initialized = await initializeExecutionAuthority(storeContext);
+    // `store init` activates execution authority; read the committed root token.
+    const initialized = await readExecutionAuthority(storeContext);
     const identity = {
       source: "local" as const,
       sessionId: "coordinator-a",
@@ -186,14 +233,14 @@ describe("plan command family", () => {
       expected: initialized.token,
       operationId: "create-plan-workflow",
     });
-    const createdWorkflow = (created.data as unknown as { workflows: Array<{ workflowToken: ExecutionToken }> }).workflows[0]!;
+    const workflowToken = workflowTokenOf(created);
     const ctx = { ...context(data.root, "coordinator-a"), controlRoot: data.harness };
     const bind = {
       execution: true,
       coordinator: true,
       workflow: data.workflow,
       harness: data.harness,
-      expect: createdWorkflow.workflowToken,
+      expect: workflowToken,
       operation: "bind-coordinator",
     };
     const first = await definition("plan.bind").execute(bind as never, ctx);
@@ -201,5 +248,15 @@ describe("plan command family", () => {
 
     const stale = await definition("plan.bind").execute({ ...bind, operation: "bind-stale" } as never, ctx);
     expect(stale).toMatchObject({ status: "refused", code: "execution.stale-token", exitCode: 1 });
+    // The refusal reaches the plan.bind recovery producer, whose text names the
+    // invocation that actually works: `--execution` is required for a new bind.
+    const staleDetails = stale.details;
+    if (staleDetails === null || typeof staleDetails !== "object" || !("recovery" in staleDetails)) {
+      throw new Error("plan.bind refusal carries no details.recovery");
+    }
+    const recovery = String(staleDetails.recovery);
+    expect(recovery).toContain("mstar plan bind --execution true --coordinator true --workflow <workflow-id>");
+    expect(recovery).toContain("--coordinator");
+    expect(recovery).toContain("--resume-ref");
   });
 });

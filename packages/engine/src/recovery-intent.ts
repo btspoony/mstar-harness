@@ -179,24 +179,24 @@ export type ResolutionWarning = Readonly<{ code: string; path?: string; message:
 
 /**
  * The persistence route one resolved intent takes: the ACTIVE execution DB
- * authority, or the supported pre-activation file route. There is no third
- * answer and no fallback between them (contract § One resolver path).
+ * authority. The pre-activation file route is retired (issue #428) and is no
+ * longer a route at all — an authority that cannot be established refuses
+ * instead of falling back (contract § One resolver path).
  */
-export type AuthorityRoute = "execution" | "files";
+export type AuthorityRoute = "execution";
 
 /**
  * The current authority verdict of one trusted control root.
  *
  * `handle` is the durable authority generation (`store_meta.store_id` +
- * `authority_epoch`) of an ACTIVE execution authority — the value a caller
+ * `authority_epoch`) of the ACTIVE execution authority — the value a caller
  * re-asserts before an effect commits, so a generation that advanced mid-call
- * is refused instead of replayed blindly. It stays `null` on the file route,
- * which has no generation of its own: the only authority change that matters
- * there is that an ACTIVE authority appeared, and the route itself carries it.
+ * is refused instead of replayed blindly. There is no file route to be `null`
+ * on: the verdict only exists once an ACTIVE authority has been established.
  */
 export type AuthorityVerdict = Readonly<{
   route: AuthorityRoute;
-  handle: Readonly<{ storeId: string; epoch: number }> | null;
+  handle: Readonly<{ storeId: string; epoch: number }>;
 }>;
 
 /**

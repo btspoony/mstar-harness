@@ -45,6 +45,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 import type { WorkflowLifecycleType } from "./workflow.js";
+import { validateIntegrationMergeLease } from "./lease.js";
 
 /**
  * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
@@ -150,7 +151,7 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
         "high",
         "worktree.main.residency-switched",
         `main worktree "${main.root}" is detached (no branch checked out) \u2014 residency cannot match the recorded expectation ${JSON.stringify(expectedBranch)}`,
-        "check out the recorded main-worktree branch in the main worktree",
+        `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`,
       ),
     );
   } else if (main.branch !== expectedBranch) {
@@ -159,7 +160,7 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
         "high",
         "worktree.main.residency-switched",
         `main worktree "${main.root}" is on branch "${main.branch}", expected the recorded branch "${expectedBranch}" \u2014 residency is checked against the value recorded at lifecycle start, never re-pointed at the observed branch`,
-        "restore the recorded branch in the main worktree; re-record at lifecycle start only through the owning workflow",
+        `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`,
       ),
     );
   }
@@ -218,12 +219,94 @@ export type BranchProbeOptions = {
    * subprocess.
    */
   branchOf?: (worktreePath: string) => string | undefined;
+  /** Precomputed output of `git status --porcelain`; undefined uses git. */
+  statusOf?: (worktreePath: string) => string | undefined;
   /**
    * Git probe timeout in ms (default 10s; `MSTAR_GIT_PROBE_TIMEOUT_MS` env
    * overrides; per-call value wins). On timeout the probe fails closed into
-   * `branch-probe-failed` — never hangs, never guesses a branch.   */
+   * `branch-probe-failed` — never hangs, never guesses a branch.
+   */
   timeoutMs?: number;
 };
+
+export type WorkflowEntryPreDispatchInput = {
+  workflowId: string;
+  workflowType: WorkflowLifecycleType;
+  branch: { base?: string; source?: string; target?: string; integration?: string };
+  integrationWorktreePath?: string;
+  mainWorktree: MainWorktreeInfo | null;
+  lifecycleBranches: readonly ActiveLifecycleBranch[];
+  integrationLease?: unknown;
+};
+
+export type WorkflowEntryPreDispatchResult = GateResult & {
+  lease: { claimed: boolean; lease?: unknown };
+  scope: "engine-enforced workflow-entry facts only";
+};
+
+function probeStatus(worktreePath: string, opts: BranchProbeOptions): { status: string } | { error: string } {
+  const precomputed = opts.statusOf?.(worktreePath);
+  if (precomputed !== undefined) return { status: precomputed };
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  try {
+    return { status: execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
+  } catch (error) {
+    return { error: (error as { message?: string }).message ?? "git status probe failed" };
+  }
+}
+
+/** Engine-enforced workflow-entry subset; this does not clear the full pre-dispatch checklist. */
+export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInput, opts: BranchProbeOptions = {}): WorkflowEntryPreDispatchResult {
+  const violations: ValidationResult[] = [];
+  const { base = "", source = "", target = "", integration = "" } = input.branch;
+  const iteration = input.workflowType === "iteration";
+  const anchors = iteration
+    ? [["base", base], ["target", target], ["integration", integration]] as const
+    : [["source", source], ["target", target]] as const;
+  for (const [key, value] of anchors) {
+    if (value.trim() === "") {
+      const recovery = iteration
+        ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.`
+        : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-source <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
+      violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, recovery));
+    }
+  }
+  const expected = (iteration ? base : target).trim();
+  if (input.mainWorktree === null) {
+    violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
+  } else {
+    if (expected === "") violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, `Record a supported branch anchor when registering a replacement ${iteration ? "iteration" : "standalone plan"}, then rerun mstar worktree check --workflow <new-id> --entry.`));
+    else violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
+    const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree!.branch && entry.branch !== expected);
+    if (owner) {
+      const recovery = owner.workflowId === null
+        ? `Run mstar status validate to identify the active lifecycle owner of branch "${owner.branch}", then coordinate its supported close process before switching branches.`
+        : `Coordinate with workflow ${owner.workflowId}'s coordinator; if its lifecycle is ready to close, run mstar status workflow-close --workflow ${owner.workflowId} --reason <reason>, verify ownership is released with mstar status validate, then restore the recorded branch using git -C ${shellQuote(input.mainWorktree.root)} checkout ${shellQuote(expected)}.`;
+      violations.push(violation("high", "worktree.main.residency-switched", `main worktree branch "${owner.branch}" is owned by workflow ${owner.workflowId ?? "unknown"}`, recovery));
+    }
+  }
+  const integrationPath = input.integrationWorktreePath?.trim() ?? "";
+  if (iteration) {
+    if (integrationPath === "") {
+      violations.push(violation("high", "worktree.entry.integration-path-missing", `iteration "${input.workflowId}" has no recorded integration_worktree_path`, `Create a dedicated checkout with \`git worktree add <absolute-path> ${shellQuote(integration)}\`, then register it through \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path <absolute-path>\`.`));
+    } else if (!existsSync(integrationPath)) {
+      violations.push(violation("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, `Create the recorded checkout with \`git worktree add ${shellQuote(integrationPath)} ${shellQuote(integration)}\`, then register or verify it with \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path ${shellQuote(integrationPath)}\`.`));
+    } else {
+      const probe = probeBranch(integrationPath, opts);
+      if ("error" in probe) violations.push(violation("high", "worktree.entry.integration-branch-probe-failed", `cannot probe integration branch: ${probe.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\` and \`git -C ${shellQuote(integrationPath)} branch --show-current\`; restore the accessible recorded checkout before rerunning mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry.`));
+      else if (probe.branch !== integration) violations.push(violation("high", "worktree.entry.integration-branch-mismatch", `integration worktree is on "${probe.branch}", expected branch.integration "${integration}"`, `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(integrationPath)} checkout ${shellQuote(integration)}\` to restore recorded branch.integration.`));
+      const status = probeStatus(integrationPath, opts);
+      if ("error" in status) violations.push(violation("high", "worktree.entry.integration-status-probe-failed", `cannot inspect integration worktree status: ${status.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\`, then run \`git -C ${shellQuote(integrationPath)} status --short\` once the checkout is accessible.`));
+      else if (status.status.trim() !== "") violations.push(violation("high", "worktree.entry.integration-dirty", "integration worktree has uncommitted changes", `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; commit intended changes or explicitly restore only changes you own, then rerun mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry. Do not use git clean or reset as automatic cleanup.`));
+    }
+  }
+  const lease = input.integrationLease == null ? { claimed: false } : { claimed: true, lease: input.integrationLease };
+  if (lease.claimed) {
+    const result = validateIntegrationMergeLease(lease.lease);
+    violations.push(...result.violations);
+  }
+  return { ok: violations.length === 0, violations, lease, scope: "engine-enforced workflow-entry facts only" };
+}
 
 /**
  * QC/QA alignment fields — `plan_id` + `Review range`/`Diff basis` must be

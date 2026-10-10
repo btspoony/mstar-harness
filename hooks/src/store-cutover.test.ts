@@ -387,13 +387,15 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
     expect(run.stderr).toContain("status.invalid-json");
   });
 
-  test("active store bundle preserves status document validation", async () => {
+  test("active store bundle refuses the retired status route through the authority", async () => {
     const fixture = makeHarness("bundle-active-status", "hard");
     await seedActiveStore(fixture.harness);
     const run = runGate("node", HOOK_BUNDLE, writeEvent(join(fixture.harness, "status.json"), BAD_JSON));
     expect(run.exitCode).toBe(2);
-    expect(lines(run)[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
-    expect(lines(run)[2]).toBe(ENFORCEMENT_LINE);
+    // ACTIVE authority: the §5 execution route vetoes unconditionally — the
+    // document validator never runs (plan S4, execution-authority.test.ts).
+    expect(lines(run)[1]!.startsWith("[high] execution.direct-write-refused: ")).toBe(true);
+    expect(lines(run)[2]).toBe(AUTHORITY_LINE);
   });
 
 

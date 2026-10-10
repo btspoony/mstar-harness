@@ -14,10 +14,7 @@
  * `designs/` — 兼容读, never created by init):
  * `skills/mstar-conventions/SKILL.md` § {SPECS_DIR} 解析（找到非空目录即停）
  * + § {SPECS_DIR} 解析 Legacy.
- * - Scaffold dirs + status.json empty template:
- * `skills/mstar-conventions/SKILL.md` § 初始化 Plan 目录 +
- * `skills/mstar-artifacts/templates/status.empty.json` (embedded as a
- * constant — engine must not read skill files at runtime, roadmap §8.5).
+ * - Scaffold dirs: `skills/mstar-conventions/SKILL.md` § 初始化 Plan 目录.
  * - Canonical `.gitignore` snippet + tracked/ignored sets:
  * `skills/mstar-conventions/SKILL.md` § Git 跟踪策略.
  * - Plan-writing path gate: `skills/mstar-conventions/SKILL.md`
@@ -49,7 +46,6 @@ import {
   scaffoldHarness,
   validateGitignore,
 } from "../src/path.js";
-import { validateStatusV2 } from "../src/status.js";
 import { readJson } from "../src/core.js";
 import { initializeStore, openStore } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
@@ -57,9 +53,8 @@ import { createFsStore, setArtifactStore } from "../src/store.js";
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
 /**
- * `scaffoldHarness` writes its coordination documents through the active
- * ArtifactStore, so a scaffold test pins the store to the harness it is about
- * to create and this hook restores the default for the store-free path tests.
+ * `scaffoldHarness` uses the catalog domain to register the default project.
+ * Tests pin the filesystem store to the harness being created.
  */
 afterEach(() => {
   setArtifactStore(undefined);
@@ -819,29 +814,17 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
   });
 });
 
-describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates/status.empty.json)", () => {
-  test("creates .mstar/{plans,iterations,knowledge,specs,sdd} and a v2 status.json from the empty template", async () => {
+describe("scaffoldHarness", () => {
+  test("creates harness directories without writing status.json", async () => {
     const root = tmpRoot("path-scaffold-");
     try {
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       const harnessDir = await scaffoldHarness(root);
       expect(harnessDir).toBe(resolve(root, ".mstar"));
       expect(readdirSync(harnessDir).sort()).toEqual([
-        "iterations",
-        "knowledge",
-        "plans",
-        "projects",
-        "sdd",
-        "specs",
-        "status.json",
+        "iterations", "knowledge", "plans", "projects", "sdd", "specs",
       ]);
- // Byte-identical to skills/mstar-artifacts/templates/status.empty.json
- // (embedded constant — engine never reads skill files at runtime).
- // Ruling: the template is the v2 shape so a scaffolded
- // harness is never an un-migrated (v1) tree.
-      const statusPath = join(harnessDir, "status.json");
- // The scaffolded root validates clean under the v2 validator.
-      expect(validateStatusV2(statusPath).ok).toBe(true);
+      expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -887,22 +870,6 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
     }
   });
 
-  test("refuses to reinitialize an existing malformed status.json, leaving its bytes unchanged", async () => {
-    const root = tmpRoot("path-scaffold-idem-");
-    try {
-      setArtifactStore(createFsStore(resolve(root, ".mstar")));
-      await scaffoldHarness(root);
-      const statusPath = join(root, ".mstar", "status.json");
-      const custom = '{\n  "version": 1,\n  "updated_at": "2026-08-08",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n';
-      writeFileSync(statusPath, custom);
-      // Create-only (spec §C4): an existing document the validators reject is
-      // never silently replaced — the run fails and the bytes survive.
-      await expect(scaffoldHarness(root)).rejects.toThrow(/existing coordination document is invalid/);
-      expect(readJson(statusPath)).toEqual(JSON.parse(custom));
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   test("honors .mstarc [config] harness_dir when resolving the scaffold target", async () => {
     const root = tmpRoot("path-scaffold-mstarc-harness-");
@@ -912,7 +879,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       const harnessDir = await scaffoldHarness(root);
  // Files land under the declared dir, not the default .mstar/.
       expect(harnessDir).toBe(resolve(root, ".custom"));
-      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(false);
       expect(existsSync(join(root, ".custom", "plans"))).toBe(true);
       expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(false);
       expect(existsSync(join(root, ".mstar"))).toBe(false);
@@ -931,7 +898,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
         setArtifactStore(createFsStore(custom));
         const harnessDir = await scaffoldHarness(root);
         expect(harnessDir).toBe(custom);
-        expect(existsSync(join(custom, "status.json"))).toBe(true);
+        expect(existsSync(join(custom, "status.json"))).toBe(false);
         expect(existsSync(join(custom, "projects", "_default", "roadmap.md"))).toBe(false);
       } finally {
         if (previous === undefined) delete process.env[ENV_KEY];
@@ -952,7 +919,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
  // RESOLVED {PROJECT_DIR} (project_dir resolved against the .mstarc
  // file's directory), not {HARNESS_DIR}/projects.
       expect(harnessDir).toBe(resolve(root, ".mstar"));
-      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".mstar", "status.json"))).toBe(false);
       expect(existsSync(join(root, "process", "projects", "_default"))).toBe(true);
       expect(existsSync(join(root, "process", "projects", "_default", "roadmap.md"))).toBe(false);
       // No register is scaffolded under the resolved project dir either.
@@ -970,7 +937,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       setArtifactStore(createFsStore(resolve(root, ".custom")));
       const harnessDir = await scaffoldHarness(root);
       expect(harnessDir).toBe(resolve(root, ".custom"));
-      expect(existsSync(join(root, ".custom", "status.json"))).toBe(true);
+      expect(existsSync(join(root, ".custom", "status.json"))).toBe(false);
       expect(existsSync(join(root, "process", "projects", "_default"))).toBe(true);
       expect(existsSync(join(root, ".custom", "projects"))).toBe(false);
     } finally {
@@ -1364,56 +1331,3 @@ describe("canonicalizeNearestExisting — A3 nonexistent-leaf canonicalization",
   });
 });
 
-// ---------------------------------------------------------------------------
-// coordinated-writer — scaffoldHarness is a create-only bootstrap (spec C4)
-// ---------------------------------------------------------------------------
-
-describe("coordinated-writer — scaffoldHarness create-only bootstrap", () => {
-  test("writes status.json through the authorized context on a fresh root", async () => {
-    const root = tmpRoot("coordinated-writer-scaffold-");
-    try {
-      setArtifactStore(createFsStore(resolve(root, ".mstar")));
-      const harnessDir = await scaffoldHarness(root);
-      const statusPath = join(harnessDir, "status.json");
-      expect(existsSync(statusPath)).toBe(true);
-      expect(validateStatusV2(statusPath).ok).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("refuses an existing empty status.json and leaves its bytes unchanged", async () => {
-    const root = tmpRoot("coordinated-writer-scaffold-empty-");
-    try {
-      setArtifactStore(createFsStore(resolve(root, ".mstar")));
-      const statusPath = join(root, ".mstar", "status.json");
-      mkdirSync(dirname(statusPath), { recursive: true });
-      writeFileSync(statusPath, "{}\n", "utf8");
-
-      // The create-only contract refuses the malformed existing document.
-      await expect(scaffoldHarness(root)).rejects.toThrow(/existing coordination document is invalid/);
-      expect(existsSync(statusPath)).toBe(true);
-      // The refused document is untouched: still the malformed `{}` it was.
-      expect(readJson(statusPath)).toEqual({});
-      expect(validateStatusV2(statusPath).ok).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("leaves an existing legacy register alone instead of validating or rewriting it", async () => {
-    const root = tmpRoot("coordinated-writer-scaffold-register-");
-    try {
-      setArtifactStore(createFsStore(resolve(root, ".mstar")));
-      const registerPath = join(root, ".mstar", "projects", "_default", "residuals.json");
-      mkdirSync(dirname(registerPath), { recursive: true });
-      writeFileSync(registerPath, "{}\n", "utf8");
-
-      // The scaffold leaves the legacy register available to migration.
-      await scaffoldHarness(root);
-      expect(readJson(registerPath)).toEqual({});
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});

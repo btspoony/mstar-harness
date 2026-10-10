@@ -44,7 +44,7 @@ import {
 import {
   bindExecutionSession,
   createExecutionWorkflow,
-  initializeExecutionAuthority,
+  readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionSessionRef,
@@ -139,7 +139,7 @@ async function notesFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const handle = await initializeStore(context);
   handle.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   const caller = coordinatorCaller();
   const created = await createExecutionWorkflow(callerContext(harnessDir, caller), {
     entry: { id: WF, type: "plan", started_at: TS, dir: `workflows/${WF}` } as WorkflowEntry,
