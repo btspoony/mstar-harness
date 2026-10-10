@@ -198,7 +198,9 @@ describe("codex and dsh presence behavior remains pinned", () => {
     absentOnPath();
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
     const adapter = await import("../src/adapters/codex");
-    expect(() => adapter.codexAdapter.runInstallInit?.("project", false)).toThrow(/codex CLI not found on PATH.*Codex CLI/i);
+    expect(() => adapter.codexAdapter.runInstallInit?.("project", false)).toThrow(
+      "codex CLI not found on PATH. Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
+    );
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
     const preview = adapter.codexAdapter.runInstallInit?.("project", true);
     expect(preview?.notes.some((note) => note.includes("Would run: codex plugin marketplace add"))).toBe(true);
