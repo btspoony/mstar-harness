@@ -1043,7 +1043,7 @@ jobs:
         run: bun run cli:build
 
       - name: Test scripts
-        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/prepare-release.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/opencode-v2-smoke.test.ts scripts/prepare-release.test.ts
 
       # ZCode write-gate source tests: spawn the TS entry with synthetic
       # PreToolUse stdin fixtures (engine dist is built above).
@@ -1106,6 +1106,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Pack CLI tarball
         run: bun run cli:pack
@@ -1115,6 +1117,8 @@ jobs:
 
       - name: Pack OpenCode V2 tarball
         run: bun run opencode-v2:pack
+      - name: Smoke-test packed OpenCode V2 artifact
+        run: bun run scripts/opencode-v2-smoke.ts
 
       # Check each published surface's own manifest rather than only the root
       # manifest's workspace dependencies.
