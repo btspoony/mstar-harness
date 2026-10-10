@@ -817,6 +817,7 @@ import type { MutateConfigForInitOptions, ProbeCommandRunner } from "../src/type
 
 const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
 const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";
+const runnerPlainV1: ProbeCommandRunner = async () => "1.14.40";
 
 const runnerMissing: ProbeCommandRunner = async () => {
   throw Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" });
@@ -857,9 +858,10 @@ afterEach(() => {
 });
 
 describe("opencode version probe (injectable runner)", () => {
-  test("maps the observed `opencode vMAJOR.MINOR.PATCH` output form", async () => {
+  test("maps prefixed and plain semantic-version outputs", async () => {
     expect(await probeOpencodeGeneration(runnerV2)).toBe("v2");
     expect(await probeOpencodeGeneration(runnerV1)).toBe("v1");
+    expect(await probeOpencodeGeneration(runnerPlainV1)).toBe("v1");
   });
 
   test("unparseable output refuses naming the failure mode and the flag recovery", async () => {
