@@ -342,7 +342,12 @@ export function diagnoseMcpTarget(
     // array or scalar must read as mismatch, never fall through to aligned.
     if (!parseFailed && parsed === null) errors.push(`MCP config ${relativeConfig} is not a JSON object.`);
     if (parsed !== null) {
-      const servers = format === "mcp" ? parsed.mcp : parsed.mcpServers;
+      const mcpConfig = format === "mcp" ? record(parsed.mcp) : null;
+      const servers = format === "mcpServers"
+        ? parsed.mcpServers
+        : target === "opencode" && mcpConfig !== null && Object.hasOwn(mcpConfig, "servers")
+          ? mcpConfig.servers
+          : mcpConfig;
       const serverRecord = record(servers);
       if (serverRecord === null) {
         errors.push(`MCP config ${relativeConfig} has no valid server entries.`);

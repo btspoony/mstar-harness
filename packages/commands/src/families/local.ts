@@ -29,7 +29,6 @@ import {
   diagnoseKimiHost,
   diagnoseMcpTarget,
   diagnoseOmpHost,
-  diagnoseOpencodeHost,
   diagnoseZcodeHost,
   formatPluginVersionDoctorNote,
   parseOmpPluginList,
@@ -38,6 +37,14 @@ import {
   validateAgentPlugin,
 } from "../host-health.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import {
+  classifyOpencodeProbeError,
+  diagnoseOpencodeV2Host,
+  OPENCODE_VERSION_TIMEOUT_MS,
+  opencodeProbeFailureMessage,
+  parseOpencodeVersionOutput,
+  type OpencodeGeneration,
+} from "../host-health/opencode-v2.js";
 
 const doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"] as const;
 const hostSignals = [
@@ -112,10 +119,66 @@ function pluginRoot(explicit: string | undefined): string {
   return candidate;
 }
 
-async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project"): Promise<{ location: string; errors: string[]; notes: string[] }> {
+/**
+ * Bounded `opencode --version` probe for the doctor's generation resolution
+ * (same precedence as init: explicit flag → probe → fail-closed refusal).
+ * The parse and refusal wording are shared with the CLI's probe module via
+ * `host-health/opencode-v2`; only the subprocess boundary lives here.
+ * Failures refuse with the failure mode and the `--opencode-generation
+ * <v1|v2>` recovery — never a guess.
+ */
+function probeOpencodeGenerationForDoctor(): OpencodeGeneration {
+  let output = "";
+  try {
+    output = execFileSync("opencode", ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: OPENCODE_VERSION_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const mode = classifyOpencodeProbeError(error);
+    const stdoutField = error !== null && typeof error === "object" && "stdout" in error ? error.stdout : undefined;
+    const text = typeof stdoutField === "string" ? stdoutField : Buffer.isBuffer(stdoutField) ? stdoutField.toString("utf8") : "";
+    const detail = text.trim() === "" ? undefined : text.trim().split(/\r?\n/, 1)[0]?.slice(0, 120);
+    throw new Error(opencodeProbeFailureMessage(mode, detail));
+  }
+  const generation = parseOpencodeVersionOutput(output);
+  if (generation === null) {
+    throw new Error(opencodeProbeFailureMessage("unparseable", output.trim().split(/\r?\n/, 1)[0]?.slice(0, 120)));
+  }
+  return generation;
+}
+
+function diagnoseOpencodeTarget(root: string, generation: OpencodeGeneration | undefined): {
+  location: string;
+  errors: string[];
+  notes: string[];
+  generations?: OpencodeGeneration[];
+  generationSource?: string;
+} {
+  if (generation !== undefined) {
+    // Explicit selection scopes the doctor to one generation and skips the probe entirely.
+    const result = diagnoseOpencodeV2Host(root, [], { resolved: generation, explicitSelection: true });
+    return { location: result.location, errors: result.errors, notes: result.warnings, generations: result.generations, generationSource: result.generationSource };
+  }
+  try {
+    const probed = probeOpencodeGenerationForDoctor();
+    const result = diagnoseOpencodeV2Host(root, [], { resolved: probed });
+    return { location: result.location, errors: result.errors, notes: result.warnings, generations: result.generations, generationSource: result.generationSource };
+  } catch (error) {
+    // Probe failure is the doctor's fail-closed refusal: no generation is
+    // guessed, the message names the failure mode and the flag recovery.
+    return {
+      location: path.join(root, "opencode.json"),
+      errors: [error instanceof Error ? error.message : String(error)],
+      notes: [],
+    };
+  }
+}
+
+async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation?: OpencodeGeneration): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
   if (target === "opencode") {
-    const result = diagnoseOpencodeHost(resolveProjectRoot(), []);
-    return { location: result.location, errors: result.errors, notes: result.warnings };
+    return diagnoseOpencodeTarget(resolveProjectRoot(), generation);
   }
   if (target === "cursor") {
     const result = diagnoseCursorHost(scope);
@@ -205,17 +268,19 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           { key: "target", flags: "--target <target>", required: false, defaultValue: "opencode" },
           { key: "scope", flags: "--scope <scope>", required: false, defaultValue: "project" },
           { key: "output", flags: "--output <path>", required: false },
+          { key: "generation", flags: "--opencode-generation <generation>", required: false },
         ],
       },
       input: z.object({
         target: z.enum(doctorTargets).default("opencode"),
         scope: z.enum(["global", "project"]).default("project"),
         output: z.string().optional(),
+        generation: z.enum(["v1", "v2"]).optional(),
       }),
       effects: ["read"],
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
-        const result = await diagnose(input.target, input.scope);
+        const result = await diagnose(input.target, input.scope, input.generation);
         // Host MCP configs live under the USER's config root (~/.cursor/mcp.json,
         // ~/.codex/config.toml, ...), not inside the harness checkout; dsh composes
         // its Cordis rows under the profile dir instead.

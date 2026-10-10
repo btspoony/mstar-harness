@@ -14,6 +14,7 @@ import {
   missingHarnessProcessGitignoreEntries,
   validateLocalHarnessRepo,
 } from "./shared-install";
+import { ensureHostPresent } from "./host-presence";
 
 // The omp plugin tree is the built `packages/omp` package (repo-root
 // `hooks/`/`tools/` moved into it 2026-09-03) — link/doctor target
@@ -68,9 +69,11 @@ export function listInstalledPlugins(timeoutMs: number = OMP_LIST_TIMEOUT_MS): A
 
 
 
-function runInit(scope: Scope, dryRun: boolean) {
-  const notes = ensureLocalHarnessRepo(dryRun);
+async function runInit(scope: Scope, dryRun: boolean) {
+  const notes: string[] = [];
   const projectRoot = resolveProjectRoot();
+  if (!dryRun) await ensureHostPresent("omp");
+  notes.push(...ensureLocalHarnessRepo(dryRun));
 
   // Keep the shared checkout current so new host markers (`.omp-plugin/`) exist before link/doctor.
   if (fs.existsSync(path.join(HARNESS_REPO_PATH, ".git"))) {
@@ -90,9 +93,13 @@ function runInit(scope: Scope, dryRun: boolean) {
     }
   }
 
-  if (!ompAvailable()) {
+  if (dryRun) {
+    const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
+    const linkArgs = ["plugin", "link", ompPackagePath];
+    if (scope === "project") linkArgs.push("--scope", "project");
     notes.push(
       "omp CLI not found on PATH. Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install @mstar-harness/omp",
+      `Would run: omp ${linkArgs.join(" ")}`,
     );
   } else {
     const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
@@ -100,7 +107,7 @@ function runInit(scope: Scope, dryRun: boolean) {
     // build outputs — without a build the link succeeds with an empty plugin
     // and doctor then fails on the same tree. Build before linking; fall back
     // to the npm install when the build is impossible (e.g. no bun on PATH).
-    if (!dryRun && !fs.existsSync(path.join(ompPackagePath, "plugin.json"))) {
+    if (!fs.existsSync(path.join(ompPackagePath, "plugin.json"))) {
       try {
         runCliCommand(["bun", "install"], { cwd: HARNESS_REPO_PATH, dryRun });
         runCliCommand(["bun", "run", "engine:build"], { cwd: HARNESS_REPO_PATH, dryRun });
@@ -128,26 +135,22 @@ function runInit(scope: Scope, dryRun: boolean) {
     );
     const linkArgs = ["plugin", "link", ompPackagePath];
     if (scope === "project") linkArgs.push("--scope", "project");
-    if (dryRun) {
-      notes.push(`Would run: omp ${linkArgs.join(" ")}`);
-    } else {
+    try {
+      runOmp(linkArgs, dryRun);
+      notes.push(
+        `Linked local harness omp package into omp plugins (${scope}): omp plugin link ${ompPackagePath}${scope === "project" ? " --scope project" : ""}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notes.push(`omp plugin link failed (${message}). Falling back guidance: omp plugin install @mstar-harness/omp`);
       try {
-        runOmp(linkArgs, dryRun);
-        notes.push(
-          `Linked local harness omp package into omp plugins (${scope}): omp plugin link ${ompPackagePath}${scope === "project" ? " --scope project" : ""}`,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        notes.push(`omp plugin link failed (${message}). Falling back guidance: omp plugin install @mstar-harness/omp`);
-        try {
-          const installArgs = ["plugin", "install", "@mstar-harness/omp"];
-          if (scope === "project") installArgs.push("--scope", "project");
-          runOmp(installArgs, dryRun);
-          notes.push(`Installed @mstar-harness/omp via omp plugin install (${scope}).`);
-        } catch (installError) {
-          const installMessage = installError instanceof Error ? installError.message : String(installError);
-          notes.push(`omp plugin install also failed: ${installMessage}`);
-        }
+        const installArgs = ["plugin", "install", "@mstar-harness/omp"];
+        if (scope === "project") installArgs.push("--scope", "project");
+        runOmp(installArgs, dryRun);
+        notes.push(`Installed @mstar-harness/omp via omp plugin install (${scope}).`);
+      } catch (installError) {
+        const installMessage = installError instanceof Error ? installError.message : String(installError);
+        notes.push(`omp plugin install also failed: ${installMessage}`);
       }
     }
   }
@@ -168,10 +171,7 @@ function runInit(scope: Scope, dryRun: boolean) {
   notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
   notes.push(`Alternate install without CLI link: omp plugin install @mstar-harness/omp`);
 
-  return {
-    location: HARNESS_REPO_PATH,
-    notes,
-  };
+  return { location: HARNESS_REPO_PATH, notes };
 }
 
 /**

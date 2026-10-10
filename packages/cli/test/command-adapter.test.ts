@@ -798,3 +798,447 @@ describe("generated CLI adapter — minted identity transport", () => {
     }
   });
 });
+
+/**
+ * Opencode generation selection (plan task 3). Adapter/probe-level cases run
+ * through the injectable runner seam (no real host binary); the CLI-level
+ * wiring cases spawn the real entry with a stub/absent `opencode` on PATH.
+ * Product-behaviour assertions only: refusals name their recovery, writes
+ * stay idempotent and preserving, previews never probe.
+ */
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { opencodeAdapter } from "../src/adapters/opencode";
+import { HOST_PRESENCE_BINARIES, ensureHostPresent, HostPresenceRefusal } from "../src/adapters/host-presence";
+import { OpencodeVersionProbeRefusal, probeOpencodeGeneration } from "../src/adapters/opencode-version-probe";
+import type { ProbeCommandRunner } from "../src/types";
+
+const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
+const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";
+
+const runnerMissing: ProbeCommandRunner = async () => {
+  throw Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" });
+};
+
+const runnerTimedOut: ProbeCommandRunner = async () => {
+  throw Object.assign(new Error("spawn opencode ETIMEDOUT"), { killed: true, signal: "SIGTERM" });
+};
+
+const runnerNever: ProbeCommandRunner = () => new Promise<string>(() => {});
+
+const UNRESOLVED_ANNOTATION =
+  "generation: unresolved (no --opencode-generation flag; no config markers; probes are skipped under --dry-run)";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function recordValue(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" && key in value
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+}
+
+const tempRoots: string[] = [];
+function tempProject(): string {
+  const root = mkdtempSync(join(tmpdir(), "opencode-init-"));
+  tempRoots.push(root);
+  return root;
+}
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("opencode version probe (injectable runner)", () => {
+  test("maps the observed `opencode vMAJOR.MINOR.PATCH` output form", async () => {
+    expect(await probeOpencodeGeneration(runnerV2)).toBe("v2");
+    expect(await probeOpencodeGeneration(runnerV1)).toBe("v1");
+  });
+
+  test("unparseable output refuses naming the failure mode and the flag recovery", async () => {
+    try {
+      await probeOpencodeGeneration(async () => "hello world");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpencodeVersionProbeRefusal);
+      expect(errorMessage(error)).toContain("unparseable");
+      expect(errorMessage(error)).toContain("--opencode-generation <v1|v2>");
+    }
+  });
+
+  test("a never-settling runner is aborted by the probe timeout and names the flag recovery", async () => {
+    try {
+      await probeOpencodeGeneration(runnerNever, 50);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpencodeVersionProbeRefusal);
+      expect(errorMessage(error)).toContain("timed out");
+      expect(errorMessage(error)).toContain("--opencode-generation <v1|v2>");
+    }
+  });
+
+  test("a killed runner surfaces as a timeout refusal naming the flag recovery", async () => {
+    try {
+      await probeOpencodeGeneration(runnerTimedOut);
+      expect.unreachable();
+    } catch (error) {
+      expect(error instanceof OpencodeVersionProbeRefusal ? error.mode : undefined).toBe("timeout");
+      expect(errorMessage(error)).toContain("--opencode-generation <v1|v2>");
+    }
+  });
+
+  test("a missing binary still fails closed if the probe is ever reached without the presence gate", async () => {
+    try {
+      await probeOpencodeGeneration(runnerMissing);
+      expect.unreachable();
+    } catch (error) {
+      expect(error instanceof OpencodeVersionProbeRefusal ? error.mode : undefined).toBe("binary-missing");
+    }
+  });
+
+  test("only `--version` is ever probed — the runner never sees another opencode subcommand", async () => {
+    const commands: string[][] = [];
+    const recording: ProbeCommandRunner = async (command) => {
+      commands.push([...command]);
+      return "opencode v2.0.24";
+    };
+    await probeOpencodeGeneration(recording);
+    expect(commands).toEqual([["opencode", "--version"]]);
+  });
+});
+
+describe("host-presence helper", () => {
+  test("the binary map seeds the evidenced CLI targets; cursor/kimi land in Task 5; zcode is absent by design", () => {
+    expect(HOST_PRESENCE_BINARIES.opencode).toBe("opencode");
+    expect(HOST_PRESENCE_BINARIES.omp).toBe("omp");
+    expect(HOST_PRESENCE_BINARIES.dsh).toBe("dsh");
+    expect(HOST_PRESENCE_BINARIES.codex).toBe("codex");
+    expect(HOST_PRESENCE_BINARIES.cursor).toBeUndefined();
+    expect(HOST_PRESENCE_BINARIES.kimi).toBeUndefined();
+    expect("zcode" in HOST_PRESENCE_BINARIES).toBe(false);
+  });
+
+  test("a present binary resolves; a missing one refuses naming the target and its install command", async () => {
+    await expect(ensureHostPresent("opencode", runnerV2)).resolves.toBe("opencode");
+    try {
+      await ensureHostPresent("opencode", runnerMissing);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(HostPresenceRefusal);
+      expect(errorMessage(error)).toContain("opencode CLI not found on PATH");
+      expect(errorMessage(error)).toContain("https://opencode.ai");
+    }
+  });
+});
+
+describe("opencode adapter — generation selection", () => {
+  const mutate = opencodeAdapter.mutateConfigForInit!.bind(opencodeAdapter);
+
+  test("REAL install with a missing opencode binary refuses with the install command before any generation logic (flag present and absent)", async () => {
+    for (const generation of [undefined, "v2"] as const) {
+      let refused = false;
+      try {
+        await mutate({}, {}, { dryRun: false, generation, probeRunner: runnerMissing });
+        expect.unreachable();
+      } catch (error) {
+        refused = true;
+        expect(errorMessage(error)).toContain("opencode CLI not found on PATH");
+        expect(errorMessage(error)).toContain("https://opencode.ai");
+      }
+      expect(refused).toBe(true);
+    }
+  });
+
+  test("a present binary passes through to generation logic (probe default, no flag)", async () => {
+    const logSpy = spyOn(console, "log");
+    try {
+      const updated = await mutate({}, {}, { dryRun: false, probeRunner: runnerV2 });
+      expect(updated.plugins).toContain("@mstar-harness/opencode-v2@latest");
+      expect(logSpy.mock.calls.map((call) => call.join(" ")).some((line) => line.includes("Generation: v2") && line.includes("probe"))).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("explicit flag wins over the probe (flag v1 while the probe says v2) and marker disagreement warns only", async () => {
+    const warnSpy = spyOn(console, "warn");
+    try {
+      const existing = { plugins: ["@mstar-harness/opencode-v2@latest"] };
+      const updated = await mutate(structuredClone(existing), {}, { dryRun: false, generation: "v1", probeRunner: runnerV2 });
+      expect(updated.plugin).toContain("@mstar-harness/opencode@latest");
+      expect(updated.plugins).toEqual(["@mstar-harness/opencode-v2@latest"]);
+      expect(warnSpy.mock.calls.map((call) => call.join(" ")).some((line) => line.includes("v2") && line.includes("v1"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("dry-run with a missing binary is a pure preview: no probe invoked, no refusal, no default", async () => {
+    let calls = 0;
+    const recording: ProbeCommandRunner = async () => {
+      calls += 1;
+      throw Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" });
+    };
+    const updated = await mutate({}, {}, { dryRun: true, probeRunner: recording });
+    expect(calls).toBe(0);
+    expect(updated).toEqual({});
+  });
+
+  test("dry-run with an EMPTY config and no flag annotates every generation-dependent preview line with the exact unresolved annotation", async () => {
+    const logSpy = spyOn(console, "log");
+    try {
+      const updated = await mutate({}, {}, { dryRun: true });
+      expect(updated).toEqual({});
+      const mutationLines = logSpy.mock.calls.map((call) => call.join(" "));
+      expect(mutationLines.some((line) => line.includes(UNRESOLVED_ANNOTATION))).toBe(true);
+      const before = logSpy.mock.calls.length;
+      opencodeAdapter.printPostSetupSummary!(updated);
+      const summaryLines = logSpy.mock.calls.map((call) => call.join(" ")).slice(before);
+      expect(summaryLines.length).toBeGreaterThanOrEqual(3);
+      for (const line of summaryLines) expect(line.includes(UNRESOLVED_ANNOTATION)).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("dry-run resolves the preview generation from config markers and names the source", async () => {
+    const logSpy = spyOn(console, "log");
+    try {
+      const updated = await mutate({ plugin: ["@mstar-harness/opencode@latest"] }, {}, { dryRun: true });
+      expect(updated.plugin).toContain("@mstar-harness/opencode@latest");
+      expect(updated.plugins).toBeUndefined(); // the other generation's key is never touched, even in preview
+      const lines = logSpy.mock.calls.map((call) => call.join(" "));
+      expect(lines.some((line) => line.includes("Generation: v1") && line.includes("config markers"))).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("validateConfig follows the resolved generation; an unresolved preview validates nothing", () => {
+    expect(opencodeAdapter.validateConfig!({ plugins: ["@mstar-harness/opencode-v2@latest"] }, { generation: "v2" })).toEqual([]);
+    expect(opencodeAdapter.validateConfig!({ $schema: "https://opencode.ai/config.json", plugin: ["@mstar-harness/opencode@latest"] }, { generation: "v1" })).toEqual([]);
+    expect(opencodeAdapter.validateConfig!({}, {})).toEqual([]);
+    expect(opencodeAdapter.validateConfig!({}, { generation: "v2" }).length).toBeGreaterThan(0);
+  });
+
+  test("an invalid --opencode-generation value refuses naming the flag before any probe", async () => {
+    try {
+      await mutate({}, {}, { dryRun: true, generation: "v3" as never });
+      expect.unreachable();
+    } catch (error) {
+      expect(errorMessage(error)).toContain("--opencode-generation <v1|v2>");
+    }
+  });
+
+  test("repeat v2 init is idempotent; unrelated entries/order/object shapes and user values survive byte-faithfully", async () => {
+    const existing = {
+      plugins: [
+        "first-unrelated",
+        { package: "@some/pkg", options: { enabled: true, nested: { b: 2 } } },
+        "@mstar-harness/opencode-v2@0.9.0",
+        { package: "@mstar-harness/opencode-v2", options: { pinned: true } },
+        "last-unrelated",
+      ],
+      agents: { "custom-role": { model: "custom-model", extra: 1 } },
+      mcp: {
+        servers: {
+          "other-server": { type: "local", command: ["other"] },
+          "morning-star": { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"], custom: true },
+        },
+      },
+      $schema: "https://example.invalid/user-pinned.json",
+    };
+    const opts = { dryRun: false, generation: "v2" as const, probeRunner: runnerV2 };
+    const once = await mutate(structuredClone(existing), {}, opts);
+    const twice = await mutate(structuredClone(once), {}, opts);
+    expect(JSON.parse(JSON.stringify(twice))).toEqual(JSON.parse(JSON.stringify(once)));
+    const plugins = once.plugins as unknown[];
+    expect(plugins[0]).toBe("first-unrelated");
+    expect(plugins[1]).toEqual({ package: "@some/pkg", options: { enabled: true, nested: { b: 2 } } });
+    expect(plugins[2]).toBe("last-unrelated");
+    expect(plugins).toHaveLength(4);
+    const owned = plugins.filter((item) => JSON.stringify(item).includes("@mstar-harness/opencode-v2"));
+    expect(owned).toEqual(["@mstar-harness/opencode-v2@latest"]);
+    expect(once.$schema).toBe("https://example.invalid/user-pinned.json");
+    const servers = recordValue(recordValue(once, "mcp"), "servers");
+    const morningStar = recordValue(servers, "morning-star");
+    expect(recordValue(morningStar, "custom")).toBe(true);
+    expect(recordValue(servers, "other-server")).toEqual({ type: "local", command: ["other"] });
+    expect(recordValue(recordValue(once, "agents"), "custom-role")).toEqual({ model: "custom-model", extra: 1 });
+  });
+  test("V1 init preserves unrelated plugin values and ordering exactly", async () => {
+    const existing = {
+      plugin: [
+        " unrelated ",
+        "repeat",
+        "repeat",
+        { package: "@some/pkg", options: { enabled: true } },
+        "@mstar-harness/opencode@0.8.0",
+        "tail ",
+      ],
+    };
+    const updated = await mutate(structuredClone(existing), {}, {
+      dryRun: false,
+      generation: "v1",
+      probeRunner: runnerV1,
+    });
+    expect(updated.plugin).toEqual([
+      " unrelated ",
+      "repeat",
+      "repeat",
+      { package: "@some/pkg", options: { enabled: true } },
+      "tail ",
+      "@mstar-harness/opencode@latest",
+    ]);
+  });
+
+  test("the other generation's keys are never touched (plugin/agent vs plugins/agents)", async () => {
+    const v1Config = {
+      $schema: "https://opencode.ai/config.json",
+      plugin: ["unrelated-v1", "@mstar-harness/opencode@latest"],
+      agent: { pm: { model: "keep-me" } },
+    };
+    const updated = await mutate(structuredClone(v1Config), {}, { dryRun: false, generation: "v2", probeRunner: runnerV2 });
+    expect(updated.plugin).toEqual(v1Config.plugin);
+    expect(updated.agent).toEqual(v1Config.agent);
+    expect(updated.plugins).toContain("@mstar-harness/opencode-v2@latest");
+
+    const v2Config = { plugins: ["@mstar-harness/opencode-v2@latest"], agents: { pm: { model: "keep" } } };
+    const back = await mutate(structuredClone(v2Config), {}, { dryRun: false, generation: "v1", probeRunner: runnerV1 });
+    expect(back.plugins).toEqual(v2Config.plugins);
+    expect(back.agents).toEqual(v2Config.agents);
+    expect(back.plugin).toContain("@mstar-harness/opencode@latest");
+  });
+
+  test("plural agents.<role>.model assignments apply only when caller-supplied", async () => {
+    const assigned = await mutate({}, { "project-manager": "model-x" }, { dryRun: false, generation: "v2", probeRunner: runnerV2 });
+    expect(recordValue(recordValue(recordValue(assigned, "agents"), "project-manager"), "model")).toBe("model-x");
+    const untouched = await mutate({}, {}, { dryRun: false, generation: "v2", probeRunner: runnerV2 });
+    expect(untouched.agents).toBeUndefined();
+  });
+
+  test("a dual-host config summarizes per generation instead of degrading to the unresolved annotation", () => {
+    const logSpy = spyOn(console, "log");
+    try {
+      opencodeAdapter.printPostSetupSummary!({ plugin: ["@mstar-harness/opencode@latest"], plugins: ["@mstar-harness/opencode-v2@latest"] });
+      const lines = logSpy.mock.calls.map((call) => call.join(" "));
+      expect(lines.some((line) => line.startsWith("[v1] Schema:"))).toBe(true);
+      expect(lines.some((line) => line.startsWith("[v2] Plugin:"))).toBe(true);
+      expect(lines.some((line) => line.includes("unresolved"))).toBe(false);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)", () => {
+  const CLI_ROOT = resolve(import.meta.dir, "..");
+  const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+  const ISOLATED_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+  function cliEnv(pathValue: string, projectRoot: string, home: string): Record<string, string> {
+    const env: Record<string, string> = { PATH: pathValue, HOME: home, MSTAR_CLI_PROJECT_ROOT: projectRoot };
+    for (const [key, value] of Object.entries(process.env)) {
+      if (["MSTAR_HARNESS_DIR", "MSTAR_CONTROL_ROOT", "SDD_DIR", "MSTAR_WORKING_BRANCH", "MSTAR_CLI_PROJECT_ROOT"].includes(key)) continue;
+      if (value !== undefined) env[key] = env[key] ?? value;
+    }
+    return env;
+  }
+
+  function runInit(args: string[], pathValue: string, projectRoot: string, home = tmpdir()): { exitCode: number | null; stdout: string; stderr: string } {
+    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "init", ...args], {
+      cwd: projectRoot,
+      env: cliEnv(pathValue, projectRoot, home),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  }
+
+  function stubOpencode(versionLine: string): string {
+    const binDir = mkdtempSync(join(tmpdir(), "opencode-fake-"));
+    tempRoots.push(binDir);
+    const script = join(binDir, "opencode");
+    writeFileSync(script, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${versionLine}'; exit 0; fi\necho "unexpected opencode invocation: $*" >&2\nexit 1\n`);
+    chmodSync(script, 0o755);
+    return binDir;
+  }
+
+  test("REAL init without opencode on PATH refuses naming the install command and writes nothing (flag absent)", () => {
+    const root = tempProject();
+    const result = runInit(["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli"], ISOLATED_PATH, root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toContain("opencode CLI not found on PATH");
+    expect(output).toContain("https://opencode.ai");
+    expect(result.exitCode).not.toBe(0);
+    
+    expect(existsSync(join(root, "opencode.json"))).toBe(false);
+  });
+
+  test("REAL init without opencode on PATH refuses identically with the flag present", () => {
+    const root = tempProject();
+    const result = runInit(["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v2"], ISOLATED_PATH, root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toContain("opencode CLI not found on PATH");
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  test("REAL init with a stub opencode applies the explicit v2 write set; JSON readback passes", () => {
+    const root = tempProject();
+    const binDir = stubOpencode("opencode v2.0.24");
+    const result = runInit(
+      ["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v2"],
+      `${binDir}:${ISOLATED_PATH}`,
+      root,
+    );
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as Record<string, unknown>;
+    expect(Array.isArray(config.plugins) && config.plugins.includes("@mstar-harness/opencode-v2@latest")).toBe(true);
+    const servers = recordValue(recordValue(config, "mcp"), "servers");
+    expect(recordValue(servers, "morning-star")).toEqual({ type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] });
+    expect(config.plugin).toBeUndefined();
+  });
+
+  test("dry-run without opencode on PATH previews without probes or refusal", () => {
+    const root = tempProject();
+    const result = runInit(["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--dry-run"], ISOLATED_PATH, root);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(UNRESOLVED_ANNOTATION);
+    expect(existsSync(join(root, "opencode.json"))).toBe(false);
+  });
+
+  test("--output path rules are unchanged: relative paths stay under the project root, .. segments are refused", () => {
+    const root = tempProject();
+    const binDir = stubOpencode("opencode v2.0.24");
+    const ok = runInit(
+      ["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v2", "--output", "nested/custom.json"],
+      `${binDir}:${ISOLATED_PATH}`,
+      root,
+    );
+    expect(ok.exitCode).toBe(0);
+    expect(existsSync(join(root, "nested/custom.json"))).toBe(true);
+
+    const escape = runInit(
+      ["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v2", "--output", "../escape.json"],
+      `${binDir}:${ISOLATED_PATH}`,
+      root,
+    );
+    expect(escape.exitCode).not.toBe(0);
+    expect(`${escape.stdout}\n${escape.stderr}`).toContain('.." segments');
+  });
+
+  test("an invalid --opencode-generation value is refused at parse time", () => {
+    const root = tempProject();
+    const binDir = stubOpencode("opencode v2.0.24");
+    const result = runInit(
+      ["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v3"],
+      `${binDir}:${ISOLATED_PATH}`,
+      root,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("--opencode-generation");
+  });
+});
