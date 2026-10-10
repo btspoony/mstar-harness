@@ -261,6 +261,21 @@ describe("OpenCode MCP doctor health", () => {
       expect(diagnoseMcpTarget("opencode", root, MCP_RUNTIME).status).toBe("mismatch");
     }
   });
+  test("flat V1 server named `servers` stays flat, while malformed nested V2 remains a mismatch", () => {
+    const flatRoot = mkdtempSync(join(tmpdir(), "opencode-v1-servers-name-"));
+    roots.push(flatRoot);
+    writeMcpConfig(flatRoot, {
+      mcp: {
+        servers: { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] },
+      },
+    });
+    expect(diagnoseMcpTarget("opencode", flatRoot, MCP_RUNTIME).status).toBe("aligned");
+
+    const malformedRoot = mkdtempSync(join(tmpdir(), "opencode-v2-malformed-servers-"));
+    roots.push(malformedRoot);
+    writeMcpConfig(malformedRoot, { mcp: { servers: null } });
+    expect(diagnoseMcpTarget("opencode", malformedRoot, MCP_RUNTIME).status).toBe("mismatch");
+  });
   test("healthy V2 MCP config keeps the doctor envelope on its exit-0 path", async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "opencode-v2-doctor-project-"));
     const homeRoot = mkdtempSync(join(tmpdir(), "opencode-v2-doctor-home-"));
