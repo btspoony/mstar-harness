@@ -3,8 +3,8 @@ import { Effect } from "effect";
 import type { Context } from "@opencode/plugin/effect/plugin";
 import type { SessionContext } from "@opencode/plugin/effect/session";
 
-import { registerHooks } from "../src/hooks/mod";
-import { addBootstrapToContext, formatBootstrap } from "../src/hooks/bootstrap";
+import { registerHooks } from "./mod";
+import { addBootstrapToContext, formatBootstrap } from "./bootstrap";
 
 type ContextMessage = SessionContext["messages"][number];
 type ContextEvent = Pick<SessionContext, "messages" | "system">;

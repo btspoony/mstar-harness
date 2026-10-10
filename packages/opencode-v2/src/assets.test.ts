@@ -11,8 +11,8 @@ import {
   packageRoot,
   parseSimpleFrontmatter,
   projectAgentDefinition,
-} from "../src/assets";
-import type { CommandDefinition, PermissionRule, ProjectedAgent } from "../src/assets";
+} from "./assets";
+import type { CommandDefinition, PermissionRule, ProjectedAgent } from "./assets";
 
 const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), "opencode-v2-assets-"));
 

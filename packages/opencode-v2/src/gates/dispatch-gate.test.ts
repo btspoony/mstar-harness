@@ -4,9 +4,9 @@ import { Effect } from "effect";
 import type { Context } from "@opencode/plugin/effect/plugin";
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
 
-import { registerDispatchGate } from "../src/hooks/mod";
-import { dispatchBefore } from "../src/gates/dispatch";
-import { loadDispatchGateApi } from "../src/engine-seams";
+import { registerDispatchGate } from "../hooks/mod";
+import { dispatchBefore } from "./dispatch";
+import { loadDispatchGateApi } from "../engine-seams";
 
 type ExecuteBeforeEvent = ToolHooks["execute.before"];
 type GateCallback = (event: ExecuteBeforeEvent) => Effect.Effect<void, Tool.Error>;
