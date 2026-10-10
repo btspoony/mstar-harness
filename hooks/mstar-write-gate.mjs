@@ -17809,7 +17809,8 @@ async function readExecutionWriteRoute(harnessDir) {
     await resolveExecutionReadRoute({ harnessDir });
     return { kind: "active" };
   } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code) ? { kind: "pre-activation" } : { kind: "unavailable", ...refusal };
   }
 }
 function blockAuthorityWrite(toolName, display, violations) {

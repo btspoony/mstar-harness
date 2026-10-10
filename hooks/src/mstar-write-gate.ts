@@ -370,18 +370,26 @@ function executionDirectWriteRefusal(targetPath: string): ValidationResult {
 
 /**
  * §5 (plan S4): resolve the control harness's execution authority before
- * allowing a coordination-document write. An unreadable store fails closed;
- * no file-route fallback is supported.
+ * allowing a coordination-document write. The write is vetoed only while the
+ * authority is ACTIVE; a pre-activation harness (`store.not-initialized`,
+ * `store.not-active`) keeps the compass-governed document lint — the same
+ * exclusion list the register route mirrors (`PRE_ACTIVATION_CODES`). Any
+ * other refusal leaves the authority state UNKNOWN and fails closed; no
+ * file-route fallback is supported.
  */
 async function readExecutionWriteRoute(harnessDir: string): Promise<
   | { kind: "active" }
+  | { kind: "pre-activation" }
   | { kind: "unavailable"; code: string; message: string }
 > {
   try {
     await resolveExecutionReadRoute({ harnessDir });
     return { kind: "active" };
   } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "pre-activation" }
+      : { kind: "unavailable", ...refusal };
   }
 }
 
@@ -571,6 +579,9 @@ try {
           authorityUnavailableRefusal(executionRoute, "the harness's execution authority", "coordination-document write"),
         ]);
       }
+      // `pre-activation`: no store, or a staged one — the compass-governed
+      // document lint below decides (issue contract §7, mirrored from the
+      // register route's `legacy` disposition).
     }
     // A case-variant register basename (FW-3) bypasses both exact-case
     // classifications and is classified by the folded shape walk instead.
