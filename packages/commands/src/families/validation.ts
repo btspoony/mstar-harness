@@ -251,6 +251,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness }, "Rerun mstar worktree check --workflow <id> --plan <plan-id> with a workflow id registered in the execution authority.");
         if (input.entry) {
           const gate = workflowEntryPreDispatchCheck({
+            workflowType: registered.state.type,
             workflowId: workflow,
             branch: registered.state.branch ?? {},
             integrationWorktreePath: typeof registered.state.integration_worktree_path === "string" ? registered.state.integration_worktree_path : undefined,
