@@ -90,6 +90,18 @@ function workflowTokenOf(created: { data: unknown }): ExecutionToken {
   return workflow.workflowToken as ExecutionToken;
 }
 
+/** The plan row inside a `plan.show` ExecutionRead envelope, narrowed at runtime. */
+function planRowOf(envelope: { status: string; data: unknown }): { id: string } {
+  if (envelope.status !== "ok" || envelope.data === null || typeof envelope.data !== "object" || !("data" in envelope.data)) {
+    throw new Error("plan.show returned no ExecutionRead payload");
+  }
+  const read = envelope.data.data;
+  if (read === null || typeof read !== "object" || !("plan" in read) || read.plan === null || typeof read.plan !== "object" || !("id" in read.plan)) {
+    throw new Error("plan.show returned no plan row");
+  }
+  return read.plan as { id: string };
+}
+
 describe("plan command family", () => {
 
 
@@ -145,7 +157,8 @@ describe("plan command family", () => {
     const shown = await definition("plan.show").execute({ workflow: data.workflow, plan: data.plan } as never, ctx);
     expect(shown.status).toBe("ok");
     if (shown.status !== "ok") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
-    expect((shown.data as { row: { id: string } }).row.id).toBe(data.plan);
+    const shownRow = planRowOf(shown);
+    expect(shownRow.id).toBe(data.plan);
 
     const started = await definition("plan.progress").execute({ workflow: data.workflow, plan: data.plan, progress: { status: "InProgress", summary: "started", evidence_paths: [] } } as never, ctx);
     expect(started.status).toBe("ok");
@@ -242,7 +255,7 @@ describe("plan command family", () => {
       throw new Error("plan.bind refusal carries no details.recovery");
     }
     const recovery = String(staleDetails.recovery);
-    expect(recovery).toContain("mstar plan bind --execution --workflow");
+    expect(recovery).toContain("mstar plan bind --execution true --coordinator true --workflow <workflow-id>");
     expect(recovery).toContain("--coordinator");
     expect(recovery).toContain("--resume-ref");
   });

@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema } from "../envelope.js";
 import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -96,7 +96,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
    recovery: id === "plan.bind"
-        ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution --workflow <workflow-id> --coordinator, or mstar plan bind --resume-ref <session-ref>."
+        ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
         : id === "plan.show"
           ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
           : id === "plan.prepare"
