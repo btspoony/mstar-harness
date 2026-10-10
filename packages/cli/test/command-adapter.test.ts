@@ -915,8 +915,8 @@ describe("host-presence helper", () => {
     expect(HOST_PRESENCE_BINARIES.omp).toBe("omp");
     expect(HOST_PRESENCE_BINARIES.dsh).toBe("dsh");
     expect(HOST_PRESENCE_BINARIES.codex).toBe("codex");
-    expect(HOST_PRESENCE_BINARIES.cursor).toBeUndefined();
-    expect(HOST_PRESENCE_BINARIES.kimi).toBeUndefined();
+    expect(HOST_PRESENCE_BINARIES.cursor).toBe("cursor-agent");
+    expect(HOST_PRESENCE_BINARIES.kimi).toBe("kimi");
     expect("zcode" in HOST_PRESENCE_BINARIES).toBe(false);
   });
 
