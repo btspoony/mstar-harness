@@ -344,6 +344,7 @@ export async function leaseGateViolations(
   writable: boolean | undefined,
   prompt: string,
   hint?: SessionHint,
+  activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null || writable === false) return []
   const header = assignmentHeaderRegion(prompt)
@@ -353,7 +354,7 @@ export async function leaseGateViolations(
   if (planId === undefined || planId === '') return []
   let source: ExecutionWorkflowSourceRead
   try {
-    source = await readExecutionWorkflowSource({ harnessDir }, hint)
+    source = activeSource ?? await readExecutionWorkflowSource({ harnessDir }, hint)
   } catch {
     return [leaseViolation('lease.dispatch.unverifiable', 'the ACTIVE execution workflow could not be read; STOP before writable dispatch', 'restore the ACTIVE store authority, then rerun the dispatch')]
   }
@@ -378,8 +379,9 @@ export async function leaseGateViolations(
     const worktree = assignmentHeaderValue(header, 'Worktree path')
     const wt = worktree === undefined ? undefined : firstToken(worktree)
     if (isNaValue(wt) || resolve(wt) !== resolve(rowWorktreePath)) violations.push(leaseViolation('lease.dispatch.worktree-mismatch', 'Assignment Worktree path does not match the ACTIVE plan row scope', 'set the absolute Worktree path to the row metadata worktree_path'))
-    const branch = parseAssignmentBranchForms(header).workingBranch
-    if (branch === undefined || branch !== rowWorkingBranch) violations.push(leaseViolation('lease.dispatch.branch-mismatch', 'Assignment Working branch does not match the ACTIVE plan row scope', 'set Working branch to the row metadata working_branch'))
+    const forms = parseAssignmentBranchForms(header)
+    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch
+    if (branch !== undefined && branch !== rowWorkingBranch) violations.push(leaseViolation('lease.dispatch.branch-mismatch', 'Assignment Working branch does not match the ACTIVE plan row scope', 'set Working branch to the row metadata working_branch'))
   }
   return violations
 }
@@ -493,9 +495,9 @@ interface ActiveSnapshotRead {
   unreadable: boolean
 }
 
-async function activeSnapshotRows(harnessDir: string, hint?: SessionHint): Promise<ActiveSnapshotRead> {
+async function activeSnapshotRows(harnessDir: string, hint?: SessionHint, activeSource?: ExecutionWorkflowSourceRead): Promise<ActiveSnapshotRead> {
   try {
-    const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+    const source = activeSource ?? await readExecutionWorkflowSource({ harnessDir }, hint)
     if (source.kind === 'error' && source.selection.kind === 'error' && source.selection.code === 'workflow.selection.no-active') {
       return { rows: null, snapshot: null, workflowId: null, unreadable: false }
     }
@@ -537,11 +539,16 @@ async function activeSnapshotRows(harnessDir: string, hint?: SessionHint): Promi
  * @param hint - the carrying session's selection hint (which lifecycle's
  *   snapshot carries the L1 metadata to compare against).
  */
-async function worktreeL1Violations(harnessDir: string | null, header: string, hint?: SessionHint): Promise<ValidationResult[]> {
+async function worktreeL1Violations(
+  harnessDir: string | null,
+  header: string,
+  hint?: SessionHint,
+  activeSource?: ExecutionWorkflowSourceRead,
+): Promise<ValidationResult[]> {
   if (harnessDir === null) return []
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
-  const read = await activeSnapshotRows(harnessDir, hint)
+  const read = await activeSnapshotRows(harnessDir, hint, activeSource)
   if (read.rows === null || read.snapshot === null) return []
   const row = read.rows.find((r) => r?.id === planId || r?.plan_id === planId)
   const metadata = asRecord(row?.metadata)
@@ -676,9 +683,10 @@ export async function dispatchGateCore(
   harnessDir: string | null,
   prompt: string,
   hint?: SessionHint,
+  activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<{ violations: ValidationResult[]; writable: boolean | undefined }> {
   const header = assignmentHeaderRegion(prompt)
-  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...await worktreeL1Violations(harnessDir, header, hint)]
+  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...await worktreeL1Violations(harnessDir, header, hint, activeSource)]
   // Read-only roles (scout/explore) skip the branch-form gate entirely.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields

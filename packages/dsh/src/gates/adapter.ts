@@ -268,9 +268,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, hint)
+    const activeSource = harnessDir !== null && isAssignmentShaped(assignmentHeaderRegion(prompt))
+      ? await readExecutionWorkflowSource({ harnessDir }, hint)
+      : undefined
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, hint, activeSource)
     if (exec !== undefined) {
-      violations.push(...await leaseGateViolations(harnessDir, exec, writable, prompt, hint))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, prompt, hint, activeSource))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -291,8 +294,8 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
     if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
-      const source = await readExecutionWorkflowSource({ harnessDir }, hint)
-      if (source.kind === 'active') {
+      const source = activeSource
+      if (source?.kind === 'active') {
         try {
           recordDispatch({
             harnessDir,

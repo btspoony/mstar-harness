@@ -2194,8 +2194,11 @@ export function recordDispatch(input: {
     // one-time warn — never a root v1 write, never a terminal snapshot
     // write, never a sibling session's lifecycle (compass v3.0.0 § Catalog
     // selection rule).
-    const workflowDir = input.resolvedWorkflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
-    if (workflowDir === null) return
+    const workflowDir = input.resolvedWorkflowDir
+    if (workflowDir === undefined || workflowDir === null) {
+      log('warn', 'agent-flow dispatch record refused — the ACTIVE workflow target was omitted; resolve it from the ACTIVE execution workflow source before recording')
+      return
+    }
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)
     const planId = planIdOf(header)
