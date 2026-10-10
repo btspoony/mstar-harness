@@ -136,12 +136,10 @@ function probeOpencodeGenerationForDoctor(): OpencodeGeneration {
       timeout: OPENCODE_VERSION_TIMEOUT_MS,
     });
   } catch (error) {
+    const mode = classifyOpencodeProbeError(error);
     const stdoutField = error !== null && typeof error === "object" && "stdout" in error ? error.stdout : undefined;
     const text = typeof stdoutField === "string" ? stdoutField : Buffer.isBuffer(stdoutField) ? stdoutField.toString("utf8") : "";
-    const fromOutput = text.trim() === "" ? null : parseOpencodeVersionOutput(text);
-    if (fromOutput !== null) return fromOutput; // a non-zero exit that still printed a usable version line
-    const mode = classifyOpencodeProbeError(error);
-    const detail = mode === "unparseable" && text.trim() !== "" ? text.trim().split(/\r?\n/, 1)[0]?.slice(0, 120) : undefined;
+    const detail = text.trim() === "" ? undefined : text.trim().split(/\r?\n/, 1)[0]?.slice(0, 120);
     throw new Error(opencodeProbeFailureMessage(mode, detail));
   }
   const generation = parseOpencodeVersionOutput(output);

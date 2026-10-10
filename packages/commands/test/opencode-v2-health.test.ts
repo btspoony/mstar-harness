@@ -20,9 +20,10 @@
  *     the generation source (probe vs explicit flag vs both-keys).
  * All fixtures live in temp dirs — no real host binary is involved.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import { join } from "node:path";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
@@ -286,4 +287,39 @@ describe("OpenCode MCP doctor health", () => {
       else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
     }
   });
+  test("timed-out doctor version probe refuses even when stdout contains a valid version", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "opencode-timeout-project-"));
+    const homeRoot = mkdtempSync(join(tmpdir(), "opencode-timeout-home-"));
+    const binRoot = mkdtempSync(join(tmpdir(), "opencode-timeout-bin-"));
+    roots.push(projectRoot, homeRoot, binRoot);
+    writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify(V2_CONFIG));
+    writeMcpConfig(homeRoot, V2_CONFIG);
+    const fakeOpencode = join(binRoot, "opencode");
+    writeFileSync(fakeOpencode, "#!/bin/sh\nprintf 'opencode v2.0.24\\n'\nsleep 30\n");
+    chmodSync(fakeOpencode, 0o755);
+
+    const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
+    const previousPath = process.env.PATH;
+    process.env.MSTAR_CLI_PROJECT_ROOT = projectRoot;
+    process.env.PATH = `${binRoot}${path.delimiter}${previousPath ?? ""}`;
+    const home = spyOn(os, "homedir").mockReturnValue(homeRoot);
+    try {
+      const doctor = getLocalCommandDefinitions().find(({ id }) => id === "doctor");
+      expect(doctor).toBeDefined();
+      if (!doctor) return;
+      const result = await doctor.execute(
+        { target: "opencode", scope: "project" },
+        { versions: { cli: "test" }, effects: {} },
+      );
+      expect(result.status).toBe("refused");
+      expect(result.details.errors.join(" ")).toContain("--opencode-generation <v1|v2>");
+      expect(result.details.errors.join(" ").toLowerCase()).toContain("timeout");
+    } finally {
+      home.mockRestore();
+      if (previousProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
+      else process.env.MSTAR_CLI_PROJECT_ROOT = previousProjectRoot;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  }, 10_000);
 });
