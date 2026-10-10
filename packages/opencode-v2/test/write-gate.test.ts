@@ -152,6 +152,52 @@ describe("OpenCode V2 structured-write gate", () => {
   });
 
 
+  test("a pre-activation harness is no verdict for status/snapshot targets: the document lint decides", async () => {
+    const api = await loadWriteGateApi();
+    expect(api).not.toBeNull();
+    const invalid = "not-json";
+    // Issue #428 / PR #432 retired the file execution route: the engine's
+    // route decision now only resolves ACTIVE or throws. A pre-activation
+    // harness throws `store.not-initialized` — that is NO verdict, so the
+    // compass-governed document lint below decides (hard: refused; soft:
+    // warned) instead of the authority failing closed.
+    for (const preActivationCode of ["store.not-initialized", "store.not-active"] as const) {
+      const preActivationApi = {
+        ...api!,
+        resolveExecutionReadRoute: async () => {
+          throw Object.assign(new Error(preActivationCode), { code: preActivationCode });
+        },
+      } as WriteGateEngineApi;
+
+      const hard = harness("hard");
+      const hardPath = join(hard.harnessDir, "status.json");
+      const hardOriginal = readFileSync(hardPath, "utf8");
+      const hardBody = makeBody(() => writeFileSync(hardPath, invalid));
+      await expect(
+        hardBody.run(event("write", { filePath: hardPath, content: invalid }), preActivationApi),
+      ).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("[status.invalid-json]"),
+      });
+      expect(hardBody.calls()).toBe(0);
+      expect(readFileSync(hardPath, "utf8")).toBe(hardOriginal);
+
+      const soft = harness("soft");
+      const softPath = join(soft.harnessDir, "status.json");
+      const levels: string[] = [];
+      const softBody = makeBody(() => writeFileSync(softPath, invalid));
+      await softBody.run(
+        event("write", { filePath: softPath, content: invalid }),
+        preActivationApi,
+        (level) => {
+          levels.push(level);
+        },
+      );
+      expect(softBody.calls()).toBe(1);
+      expect(levels).toContain("warn");
+    }
+  });
+
   test("hard mode refuses invalid coordination writes; soft mode warns and proceeds", async () => {
     const hard = harness("hard");
     const hardPath = join(hard.harnessDir, "status.json");

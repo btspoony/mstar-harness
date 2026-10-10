@@ -142,13 +142,19 @@ function authorityError(code: string, message: string): AuthorityRefusal {
 async function authorityRefusalFor(api: WriteGateEngineApi, target: GatedDocument): Promise<AuthorityRefusal | null> {
   if (target.kind === "status" || target.kind === "snapshot") {
     try {
-      const route = await api.resolveExecutionReadRoute({ harnessDir: target.harnessDir });
-      return route === "execution"
-        ? authorityError("execution.direct-write-refused", "The ACTIVE execution authority retires this file as a persistence route")
-        : null;
+      // ACTIVE-only: the engine's route decision retires the file execution
+      // route entirely — status/snapshot writes are vetoed while the
+      // authority is ACTIVE. A pre-activation harness (`store.not-initialized`
+      // / `store.not-active`) is NO verdict: the compass-governed document
+      // lint below decides, mirroring the register route's legacy
+      // disposition. Any other refusal leaves the authority UNKNOWN and
+      // fails closed; there is no file-route fallback.
+      await api.resolveExecutionReadRoute({ harnessDir: target.harnessDir });
+      return authorityError("execution.direct-write-refused", "The ACTIVE execution authority retires this file as a persistence route");
     } catch (error) {
-      const code = errorCode(error) ?? "store.authority-unavailable";
-      return authorityError("store.authority-unavailable", `The execution authority could not be read (${code}: ${error instanceof Error ? error.message : String(error)})`);
+      const code = errorCode(error);
+      if (code !== undefined && PRE_ACTIVATION_CODES.has(code)) return null;
+      return authorityError("store.authority-unavailable", `The execution authority could not be read (${code ?? "unknown"}: ${error instanceof Error ? error.message : String(error)})`);
     }
   }
 
