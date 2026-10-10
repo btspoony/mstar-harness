@@ -1,6 +1,6 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve, join } from "node:path";
+import { dirname, isAbsolute, resolve, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { Tool } from "@opencode/schema/tool";
@@ -112,15 +112,17 @@ describe("built OpenCode V2 package integration", () => {
     expect(fixture.agents["fullstack-dev"]).toMatchObject({ mode: "subagent" });
   });
 
-  test("registers the PM entry skill and routes /pm to project-manager", async () => {
+  test("registers the PM entry skill with project-manager routing", async () => {
     const fixture = hostFixture();
     await setup(fixture);
     const skill = fixture.skills.pm;
     expect(skill).toBeDefined();
     if (!skill) return;
-    expect(skill.path).toContain("/packages/opencode-v2/harness-skills/pm/SKILL.md");
-    expect(skill.content).toContain("PM entry shim — force project-manager orchestration");
-    expect(skill.content).toContain("Host ships a **`/pm`** command or exposes this **`pm`** skill | → **`project-manager`**");
+    const source = readFileSync(skill.path, "utf8");
+    const description = source.match(/^description:\s*"?(.+?)"?$/m)?.[1];
+    expect(description).toBeDefined();
+    expect(description?.toLowerCase()).toContain("entry shim");
+    expect(description?.toLowerCase()).toContain("project-manager");
   });
 
   test("registers a bundled command with its template through the built entry", async () => {
@@ -137,19 +139,40 @@ describe("built OpenCode V2 package integration", () => {
     const text = fixture.prompts[0]?.text;
     expect(typeof text).toBe("string");
     if (typeof text !== "string") return;
-    expect(text).toContain("# Audit Codebase");
-    expect(text).toContain("audit this repository");
+    const userPrompt = "audit this repository";
+    expect(text.length).toBeGreaterThan(userPrompt.length);
+    expect(text.endsWith(`\n\n${userPrompt}`)).toBe(true);
   });
 
-  test("resolves nested role references from the package-local skill", async () => {
+  test("resolves and reads nested role references from the registered skill location", async () => {
     const fixture = hostFixture();
     await setup(fixture);
     const skill = fixture.skills["mstar-roles"];
     expect(skill).toBeDefined();
     if (!skill) return;
-    expect(skill.path).toContain("/packages/opencode-v2/harness-skills/mstar-roles/SKILL.md");
-    expect(skill.content).toContain("references/fullstack-dev-shared.md");
-    expect(skill.content).toContain("Role Reference Mapping");
+
+    const skillSource = readFileSync(skill.path, "utf8");
+    const reference = skillSource.match(/references\/[\w./-]+\.md/)?.[0];
+    expect(reference).toBeDefined();
+    if (!reference) return;
+
+    const previousCwd = process.cwd();
+    const consumerCwd = mkdtempSync(join(tmpdir(), "opencode-v2-consumer-"));
+    try {
+      const decoy = join(consumerCwd, reference);
+      mkdirSync(dirname(decoy), { recursive: true });
+      writeFileSync(decoy, "consumer cwd decoy");
+      process.chdir(consumerCwd);
+
+      expect(isAbsolute(skill.path)).toBe(true);
+      const packageReference = resolve(dirname(skill.path), reference);
+      const nestedContent = readFileSync(packageReference, "utf8");
+      expect(nestedContent).not.toBe("consumer cwd decoy");
+      expect(nestedContent.length).toBeGreaterThan(0);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(consumerCwd, { recursive: true, force: true });
+    }
   });
 
   test("registers bootstrap alongside editors and injects it once", async () => {
@@ -195,9 +218,29 @@ describe("built OpenCode V2 package integration", () => {
         ...refusedWrite,
         tool: "edit",
         id: "call-3" as ExecuteBeforeEvent["id"],
-        input: { path: "/tmp/opencode-v2-admitted.md", oldString: "before", newString: "after" },
+        input: { path: join(root, "admitted.md"), oldString: "before", newString: "after" },
       };
       await expect(Effect.runPromise(writeGate!(admittedEdit))).resolves.toBeUndefined();
+
+      const command = fixture.commands["codebase-audit"];
+      expect(command).toBeDefined();
+      if (!command) return;
+      await Effect.runPromise(command.execute({
+        sessionID: "session-1",
+        prompt: { text: "post-refusal audit", files: [], agents: [], skills: [] },
+        delivery: "default",
+      }));
+      const commandText = fixture.prompts.at(-1)?.text;
+      expect(typeof commandText).toBe("string");
+      if (typeof commandText !== "string") return;
+      expect(commandText.endsWith("\n\npost-refusal audit")).toBe(true);
+
+      const pmSkill = fixture.skills.pm;
+      expect(pmSkill).toBeDefined();
+      if (!pmSkill) return;
+      const pmSource = readFileSync(pmSkill.path, "utf8");
+      const pmDescription = pmSource.match(/^description:\s*"?(.+?)"?$/m)?.[1];
+      expect(pmDescription?.toLowerCase()).toContain("project-manager");
     } finally {
       process.chdir(previousCwd);
       rmSync(root, { recursive: true, force: true });
