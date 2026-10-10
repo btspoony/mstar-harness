@@ -91,12 +91,15 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
       id,
       cli: {
         path: ["milestone", verb], aliases: [], arguments: [],
-        options: opts.map((key) => ({
-          key, flags: flags[key], required: required[verb].includes(key),
-          ...(verb === "update" && key === "clearTarget" ? { help: "Optional: only true clears target, and it cannot be combined with --target. False does not select a patch." } : {}),
-          ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target=true." } : {}),
-          ...(verb === "assign" && key === "sessionRef" ? { help: "Optional checked constraint on the acquired coordinator identity; never pass a session file path." } : {}),
-        })),
+        options: [
+          ...opts.map((key) => ({
+            key, flags: flags[key], required: required[verb].includes(key),
+            ...(verb === "update" && key === "clearTarget" ? { help: "Optional: only true clears target, and it cannot be combined with --target. False does not select a patch." } : {}),
+            ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target=true." } : {}),
+            ...(verb === "assign" && key === "sessionRef" ? { help: "Optional checked constraint on the acquired coordinator identity; never pass a session file path." } : {}),
+          })),
+          ...(verb === "assign" ? [{ key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const }] : []),
+        ],
       },
       input: schema.pick(Object.fromEntries(opts.map((key) => [key, true])) as never),
       output: commandEnvelopeSchema,

@@ -35,7 +35,6 @@ import { executeCommand } from "@mstar-harness/commands";
 import {
   encodeExecutionSessionRef,
   getCatalog,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
   readExecutionAuthority,
@@ -181,7 +180,6 @@ async function activeFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  await initializeExecutionAuthority(context);
 
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
@@ -1219,7 +1217,6 @@ async function activeDeliveryFixture(label: string): Promise<DeliveryFixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  await initializeExecutionAuthority(context);
   const baseSha = headOf(root);
 
   const featurePath = join(root, "wt-feature");
@@ -1600,7 +1597,6 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  await initializeExecutionAuthority(context);
 
   writeText(
     join(harnessDir, CONTINUATION_COMPASS_REF),
@@ -1856,4 +1852,45 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
     // (7) No step in the whole chain refused: every recorded code is undefined.
     expect(refusalCodes.every((code) => code === undefined)).toBe(true);
   }, 120_000);
+});
+describe("mstar milestone assign — acquired identity CLI smoke", () => {
+  test("assign succeeds with MSTAR_EXECUTION_IDENTITY and refuses a stale session reference", async () => {
+    const fixture = await activeFixture("mstar-milestone-identity");
+    const identity = coordinatorIdentity();
+    const { coordinator } = await prepareRow(fixture);
+    const store = await openStore(fixture.context, "write");
+    store.db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','milestone-cli-project','Milestone CLI smoke','projects','milestone-cli-project/roadmap.md','now','now')").run();
+    store.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('I-MILESTONE-CLI','milestone-cli-project','CLI issue','bug','high','impact','acceptance','now','now','I-MILESTONE-CLI')").run();
+    const initialStoreRevision = (store.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
+    store.close();
+
+    const added = runCli([
+      "milestone", "add", "--project", "milestone-cli-project", "--name", "CLI milestone", "--ordinal", "0",
+      "--expect-store", String(initialStoreRevision), "--operation", "milestone-cli-add", "--harness", fixture.harnessDir,
+    ], fixture, identity);
+    expect(added.exitCode, added.stdout).toBe(0);
+    const milestoneId = dataOf(added).milestoneId;
+    expect(typeof milestoneId).toBe("string");
+    const assigned = runCli([
+      "milestone", "assign", "--project", "milestone-cli-project", "--issue", "I-MILESTONE-CLI",
+      "--id", String(milestoneId), "--reason", "CLI identity smoke", "--expect-issue", "1",
+      "--expect-store", String(dataOf(added).storeRevision), "--operation", "milestone-cli-assign",
+      "--actor", "project-manager", "--harness", fixture.harnessDir,
+    ], fixture, identity);
+    expect(assigned.exitCode, assigned.stdout).toBe(0);
+    expect(jsonOf(assigned).status).toBe("ok");
+
+    const staleRef = encodeExecutionSessionRef({ ...coordinator, sessionId: "stale-milestone-coordinator" });
+    const current = await openStore(fixture.context, "read");
+    const currentStoreRevision = (current.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
+    current.close();
+    const stale = runCli([
+      "milestone", "assign", "--project", "milestone-cli-project", "--issue", "I-MILESTONE-CLI",
+      "--id", String(milestoneId), "--reason", "stale reference must refuse", "--expect-issue", "2",
+      "--expect-store", String(currentStoreRevision), "--operation", "milestone-cli-stale-ref",
+      "--session-ref", staleRef, "--actor", "project-manager", "--harness", fixture.harnessDir,
+    ], fixture, identity);
+    expect(stale.exitCode).not.toBe(0);
+    expect(jsonOf(stale).status).toBe("refused");
+  });
 });

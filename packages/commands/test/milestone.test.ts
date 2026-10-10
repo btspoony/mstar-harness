@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bindExecutionSession, createExecutionWorkflow, initializeStore, readExecutionState, registerCatalogEntity, type WorkflowEntry, type WorkflowSnapshot } from "@mstar-harness/engine";
+import { bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, initializeStore, readExecutionState, registerCatalogEntity, type WorkflowEntry, type WorkflowSnapshot } from "@mstar-harness/engine";
 import { executeCommand } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
@@ -120,13 +120,17 @@ test("milestone assignment derives authority from the acquired identity when no 
  });
  const workflow=created.data.workflows[0];
  if(!workflow) throw new Error("active workflow registration returned no workflow");
- await bindExecutionSession({harnessDir:harness,caller},{workflowId,expected:workflow.workflowToken,operationId:"bind-active-coordinator"});
+ const bound=await bindExecutionSession({harnessDir:harness,caller},{workflowId,expected:workflow.workflowToken,operationId:"bind-active-coordinator"});
  const addRevision=(store.db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
  const added=await executeCommand("milestone.add",{project:"proj-active",name:"Active milestone",ordinal:0,expectStore:addRevision,operation:"add-active",harness},invocation(cwd,{source:"local",...caller}));
  expect(added.status,JSON.stringify(added)).toBe("ok");
  const milestone=added.data as {milestoneId:string;storeRevision:number};
  const assigned=await executeCommand("milestone.assign",{project:"proj-active",issue:"I-000506",id:milestone.milestoneId,reason:"I-000506 acceptance",expectIssue:1,expectStore:milestone.storeRevision,operation:"assign-active",actor:"project-manager",harness},invocation(cwd,{source:"local",...caller}));
- expect(assigned.status,JSON.stringify(assigned)).toBe("ok");
+ const staleRef=encodeExecutionSessionRef({...bound.data,sessionId:"different-milestone-coordinator"});
+ const staleStore=(store.db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
+ const staleIssue=(store.db.prepare("select revision from issues where id='I-000506'").get() as {revision:number}).revision;
+ const refused=await executeCommand("milestone.assign",{project:"proj-active",issue:"I-000506",id:milestone.milestoneId,reason:"stale ref must refuse",expectIssue:staleIssue,expectStore:staleStore,operation:"assign-stale-ref",sessionRef:staleRef,actor:"project-manager",harness},invocation(cwd,{source:"local",...caller}));
+ expect(refused.status,JSON.stringify(refused)).toBe("refused");
  expect(store.db.prepare("select milestone_id from issues where id='I-000506'").get()).toEqual({milestone_id:milestone.milestoneId});
  store.close();
 });
