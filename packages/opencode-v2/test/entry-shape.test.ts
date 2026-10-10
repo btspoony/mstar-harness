@@ -46,6 +46,12 @@ const makeContext = () => {
             },
           })).pipe(Effect.as({ dispose: Effect.void })),
       },
+      session: {
+        hook: () => Effect.succeed({ dispose: Effect.void }),
+      },
+      tool: {
+        hook: () => Effect.succeed({ dispose: Effect.void }),
+      },
     } as unknown as Context,
     agents,
     commands,
