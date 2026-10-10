@@ -29,6 +29,12 @@ function tempDir(prefix: string): string {
 
 function absentOnPath(): string {
   const directory = tempDir("host-presence-empty-path-");
+  // Keep `git` available: codex/dsh real-install refusal fires after
+  // shared-install's ensureLocalHarnessRepo, which shells out to git. The
+  // shim succeeds with empty output; the assertions below verify the refusal
+  // text and that no repo/config was materialized, so a no-op shim cannot
+  // mask a regression.
+  writeFileSync(join(directory, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   process.env.PATH = directory;
   return directory;
 }
