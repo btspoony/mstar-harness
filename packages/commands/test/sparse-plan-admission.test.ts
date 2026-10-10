@@ -8,10 +8,10 @@ import {
   createExecutionWorkflow,
   encodeExecutionSessionRef,
   executionContextFor,
-  initializeExecutionAuthority,
   initializeStore,
   mutateExecutionPlan,
   readExecutionPlan,
+  readExecutionState,
   registerCatalogEntity,
   storeDbPath,
   type ExecutionCaller,
@@ -84,8 +84,8 @@ async function buildFixture(label: string): Promise<{
   mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(repoRoot, ".mstar") };
   const store = await initializeStore(context);
+  const initialized = { token: (await readExecutionState(context)).token };
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
   const integrationPath = join(repoRoot, "wt-integration");
   runGit(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], repoRoot);
   writeText(join(repoRoot, ".mstar", COMPASS_REF), "---\nstatus: active\nplans:\n  - p-1\ntargetBranch: main\n---\n");
@@ -467,24 +467,15 @@ describe("sparse plan intent admission", () => {
     expect((envelope.data as PlanReceiptData).data?.coordination?.progress?.summary).toBe("sparse intent");
   });
 
-  test("the legacy file route still demands its own revision token", async () => {
+  test("the retired file session selector cannot substitute for an addressed workflow", async () => {
     const { repoRoot } = await buildFixture("sparse-file-route-revision");
-    // A valid legacy session envelope at the exact path the JSON route writes,
-    // so the refusal is the route's own revision gate — not a missing file.
-    const sessionPath = join(repoRoot, "workflows", WORKFLOW_ID, "sessions", `coordinator-${COORDINATOR_ID}.json`);
-    writeText(
-      sessionPath,
-      JSON.stringify({ schema_version: 1, role: "coordinator", session_id: COORDINATOR_ID, workflow_id: WORKFLOW_ID, harness_root: repoRoot }, null, 2),
-    );
     const envelope = await runPlanCommand(
       repoRoot,
-      { session: sessionPath, plan: PLAN_ID, operation: "op-file-route-revision", progress: PROGRESS },
+      { session: "workflows/wf-1/sessions/coordinator-host-coord.json", plan: PLAN_ID, operation: "op-file-route-revision", progress: PROGRESS },
       COORDINATOR_ID,
     );
-    // The file route's own expectedRevision gate fires before any store read:
-    // the execution token vocabulary never substitutes for the revision.
-    expect(envelope.status).toBe("usage");
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     if (envelope.status !== "usage") throw new Error(`expected usage, got ${envelope.status}`);
-    expect(envelope.message).toContain("expect must be a nonnegative integer revision");
+    expect(envelope.message).toContain("operation requires the addressed workflow");
   });
 });
