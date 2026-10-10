@@ -10,9 +10,12 @@
  * / blocked.
  * - mstar-audit/references/pr-review.md § Tally and derived score: tally
  * counts, leftover unmet-AC increments, verdict precedence, the locked
- * score formula (`max(0, 100 - 40*must_fix - 15*should_fix - 3*nit -
- * 10*unverified)`, integer, floor 0) and the override invariant (score
- * never overrides verdict).
+ * diminishing deduction schedule (must-fix 45 then 15 each · should-fix
+ * `max(12 - 3*(n-1), 2)` → 12,9,6,3,2,2… · nit 2 then 1 each, class cap 8
+ * · unverified 5 each, class cap 15; `score_pct = max(0, 100 - sum)`,
+ * integer, floor 0), the score bands (mergeable >= 90 · good 80-89 · pass
+ * 60-79 · fail < 60) and the override invariant (score and band never
+ * override verdict).
  * - mstar-audit/references/pr-review.md § Display contract: the two-line
  * chat header, verbatim.
  * - mstar-audit/references/pr-review.md § Section emoji map: 🔴 must-fix ·
@@ -31,6 +34,30 @@ export type MergeClass = (typeof MERGE_CLASSES)[number];
 /** The three PR-review verdict tokens (pr-review.md § Verdict synthesis). */
 export const PR_VERDICTS = ["ship it", "needs fixes", "blocked"] as const;
 export type PrVerdict = (typeof PR_VERDICTS)[number];
+
+/**
+ * Score bands (pr-review.md § Tally and derived score) — a display
+ * annotation grading the finding load. Never changes the verdict.
+ */
+export const PR_SCORE_BANDS = ["mergeable", "good", "pass", "fail"] as const;
+export type PrScoreBand = (typeof PR_SCORE_BANDS)[number];
+
+/** Band floors: mergeable >= 90 · good >= 80 · pass >= 60 · else fail. */
+const BAND_MERGEABLE_MIN = 90;
+const BAND_GOOD_MIN = 80;
+const BAND_PASS_MIN = 60;
+
+/**
+ * Band a `score_pct` — mergeable >= 90 · good 80-89 · pass 60-79 · fail
+ * < 60 (pr-review.md § Tally and derived score). Annotation only: the
+ * verdict stays count-driven ({@link computePrTally}).
+ */
+export function scoreBand(scorePct: number): PrScoreBand {
+  if (scorePct >= BAND_MERGEABLE_MIN) return "mergeable";
+  if (scorePct >= BAND_GOOD_MIN) return "good";
+  if (scorePct >= BAND_PASS_MIN) return "pass";
+  return "fail";
+}
 
 /**
  * Emoji per merge class (+ the unverified bucket) — pr-review.md § Section
@@ -63,29 +90,76 @@ export type PrTallyInput = {
 /** Result of {@link computePrTally}. */
 export type PrTallyResult = {
   verdict: PrVerdict;
- /** `max(0, 100 - 40*mustFix - 15*shouldFix - 3*nit - 10*unverified)`, integer, floor 0. */
+  /** `max(0, 100 - <class deductions>)` per the locked schedule, integer, floor 0. */
   scorePct: number;
+  /** Display band for `scorePct` (§ Tally and derived score) — never changes the verdict. */
+  band: PrScoreBand;
   tally: { mustFix: number; shouldFix: number; nit: number; unverified: number };
- /** Two-line chat display header, verbatim per pr-review.md § Display contract. */
+  /** Two-line chat display header, verbatim per pr-review.md § Display contract. */
   chatHeader: string;
 };
 
+// ---------------------------------------------------------------------------
+// Score deduction schedule — § Tally and derived score (single source)
+// ---------------------------------------------------------------------------
+
+/** Locked diminishing per-class deductions (§ Tally and derived score). */
+const MUST_FIX_FIRST = 45;
+const MUST_FIX_EACH_ADDITIONAL = 15;
+const SHOULD_FIX_FIRST = 12;
+const SHOULD_FIX_STEP = 3;
+const SHOULD_FIX_MIN = 2;
+const NIT_FIRST = 2;
+const NIT_EACH_ADDITIONAL = 1;
+const NIT_CAP = 8;
+const UNVERIFIED_EACH = 5;
+const UNVERIFIED_CAP = 15;
+
 /**
- * Compute the PR-review tally, score and verdict from accepted findings,
- * leftover unmet ACs and unverified residuals (pr-review.md § Tally and
- * derived score — formula semantics verbatim, SSOT immutable).
+ * Total score deduction for one tally — the single source of the locked
+ * diminishing schedule (§ Tally and derived score): must-fix 45 then 15
+ * each (no cap) · should-fix `max(12 - 3*(n-1), 2)` → 12,9,6,3,2,2… (no
+ * cap) · nit 2 then 1 each (class cap 8) · unverified 5 each (class cap
+ * 15). {@link computePrTally} and the report recompute share this helper —
+ * there is no second formula.
+ */
+function prScoreDeduction(counts: {
+  mustFix: number;
+  shouldFix: number;
+  nit: number;
+  unverified: number;
+}): number {
+  const mustFix =
+    counts.mustFix === 0 ? 0 : MUST_FIX_FIRST + MUST_FIX_EACH_ADDITIONAL * (counts.mustFix - 1);
+  let shouldFix = 0;
+  for (let n = 1; n <= counts.shouldFix; n++) {
+    shouldFix += Math.max(SHOULD_FIX_FIRST - SHOULD_FIX_STEP * (n - 1), SHOULD_FIX_MIN);
+  }
+  const nit =
+    counts.nit === 0 ? 0 : Math.min(NIT_FIRST + NIT_EACH_ADDITIONAL * (counts.nit - 1), NIT_CAP);
+  const unverified = Math.min(counts.unverified * UNVERIFIED_EACH, UNVERIFIED_CAP);
+  return mustFix + shouldFix + nit + unverified;
+}
+
+/**
+ * Compute the PR-review tally, score, band and verdict from accepted
+ * findings, leftover unmet ACs and unverified residuals (pr-review.md
+ * § Tally and derived score).
  *
  * Leftover unmet ACs increment the tally (unsafe-to-ship → must_fix + 1,
  * else should_fix + 1) BEFORE verdict derivation, so they cannot yield
  * `ship it`. Verdict precedence: any must_fix ≥ 1 → `blocked`; else any
- * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score is computed but
- * never overrides the verdict (override invariant).
+ * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
+ * locked diminishing deduction schedule via {@link prScoreDeduction} and
+ * the band is its display annotation — neither overrides the verdict
+ * (override invariant).
  */
 export function computePrTally(input: PrTallyInput): PrTallyResult {
  // Engine boundary guard : a negative unverified count lets
- // score_pct exceed 100 (100 - 10 * (-1)), a fractional one breaks integer
- // score arithmetic. Host-hook callers get a TypeError instead of an
- // out-of-range score; the formula below stays verbatim (SSOT immutable).
+ // score_pct exceed 100 (the unverified deduction goes negative), a
+ // fractional one breaks integer score arithmetic. Host-hook callers get
+ // a TypeError instead of an out-of-range score; the schedule below stays
+ // the SSOT.
   if (
     input.unverifiedCount !== undefined &&
     (!Number.isInteger(input.unverifiedCount) || input.unverifiedCount < 0)
@@ -109,13 +183,15 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
   }
   const unverified = input.unverifiedCount ?? 0;
 
-  const scorePct = Math.max(0, 100 - 40 * mustFix - 15 * shouldFix - 3 * nit - 10 * unverified);
+  const tally = { mustFix, shouldFix, nit, unverified };
+  const scorePct = Math.max(0, 100 - prScoreDeduction(tally));
   const verdict: PrVerdict = mustFix >= 1 ? "blocked" : shouldFix >= 1 ? "needs fixes" : "ship it";
+  const band = scoreBand(scorePct);
   const chatHeader =
-    `${verdict} \u00b7 ${scorePct}%\n` +
+    `${verdict} \u00b7 ${scorePct}% (${band})\n` +
     `must-fix=${mustFix} should-fix=${shouldFix} nit=${nit} unverified=${unverified}`;
 
-  return { verdict, scorePct, tally: { mustFix, shouldFix, nit, unverified }, chatHeader };
+  return { verdict, scorePct, band, tally, chatHeader };
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +254,11 @@ const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
  * persist gate's threat model includes hand-authored envelopes, so a
  * present tally must carry the full produced field set — `verdict` in
  * PR_VERDICTS, `scorePct` an integer in [0, 100], all four class counts
- * non-negative integers, `chatHeader` a string. Shape only — no
- * arithmetic consistency (the locked formula and `computePrTally` are
- * untouched); the verdict-equality rule stays a separate violation
- * (`review.verdict-tally-mismatch`).
+ * non-negative integers, `chatHeader` a string, and the optional `band`
+ * must be a valid token when present (absent = legacy-valid envelope).
+ * Shape only — no arithmetic consistency (the locked schedule and
+ * `computePrTally` are untouched); the verdict-equality rule stays a
+ * separate violation (`review.verdict-tally-mismatch`).
  */
 function checkProvidedTallyShape(tally: Record<string, unknown>, violations: ValidationResult[]): void {
   if (typeof tally.verdict !== "string" || !(PR_VERDICTS as readonly string[]).includes(tally.verdict)) {
@@ -229,6 +306,17 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
       `tally.chatHeader must be a string - got ${typeof tally.chatHeader}`,
     ));
   }
+  if (
+    tally.band !== undefined &&
+    (typeof tally.band !== "string" || !(PR_SCORE_BANDS as readonly string[]).includes(tally.band))
+  ) {
+    violations.push(violation(
+      "high",
+      "review.tally-malformed",
+      `tally.band "${String(tally.band)}" is not one of ${JSON.stringify(PR_SCORE_BANDS)} - omit the key (legacy-valid) or use a valid band token`,
+      `use one of: ${PR_SCORE_BANDS.join(" | ")}`,
+    ));
+  }
 }
 
 /**
@@ -240,10 +328,11 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
  * rejected with `review.inspector-vocab`; a provided `tally` is
  * shape-checked against the `PrTallyResult` {@link computePrTally} produces
  * (verdict vocab, integer `scorePct` in [0, 100], four non-negative-integer
- * counts, string `chatHeader`) and a malformed one is rejected with
- * `review.tally-malformed` (shape only — no arithmetic consistency); a
- * `tally.verdict` disagreeing with the top-level `verdict` is rejected
- * with `review.verdict-tally-mismatch` (consistency rule, architect-locked).
+ * counts, string `chatHeader`, optional `band` valid when present) and a
+ * malformed one is rejected with `review.tally-malformed` (shape only — no
+ * arithmetic consistency); a `tally.verdict` disagreeing with the top-level
+ * `verdict` is rejected with `review.verdict-tally-mismatch` (consistency
+ * rule, architect-locked).
  */
 export function validateMstarReviewV1(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -390,12 +479,13 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
 /**
  * Deterministic short Markdown summary for {@link synthesizeReview} when the
  * caller omits `summary_md` (template locked in the
- * engine test; no LLM). Tally line mirrors the chat display contract; each
- * finding contributes one `- <mergeClass>: <title>` bullet.
+ * engine test; no LLM). Verdict line mirrors the chat display contract
+ * (score with its band); each finding contributes one
+ * `- <mergeClass>: <title>` bullet.
  */
 function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
   const lines = [
-    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}%`,
+    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band})`,
     "",
     `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
   ];
@@ -637,10 +727,12 @@ function parseTallyCounts(raw: string | undefined): Record<"mustFix" | "shouldFi
 
 /**
  * Cap each tally bucket when reconstructing computePrTally inputs. Sound by
- * monotonicity: capped penalty <= true penalty, so if the capped input
- * already reaches the 0 floor both score at 0, and below the floor no
- * bucket was capped (identical penalty). Verdict sees the same zero/nonzero
- * buckets (positive counts stay positive through the cap).
+ * monotonicity: every class deduction grows with its count and is already
+ * class-capped where the schedule caps it (nit 8, unverified 15), so a
+ * capped penalty <= true penalty. If the capped input already reaches the 0
+ * floor both score at 0; below the floor no bucket was capped (identical
+ * penalty). Verdict sees the same zero/nonzero buckets (positive counts
+ * stay positive through the cap).
  */
 const TALLY_CAP = 50;
 
@@ -670,10 +762,10 @@ function parseCommentsState(raw: string | undefined): PrCommentsState | null {
  * - `verdict` exactly one of the three verdict tokens (§ Verdict synthesis)
  * and CONSISTENT with the tally (any must_fix -> blocked; else any
  * should_fix -> needs fixes; else ship it).
- * - `score_pct` integer 0-100 and equal to the locked-formula recompute
- * from the document's own tally via {@link computePrTally}
- * (mismatch = hand-arithmetic drift — the exact defect class this gate
- * exists to catch).
+ * - `score_pct` integer 0-100 and equal to the recompute from the
+ * document's own tally via {@link computePrTally} (locked diminishing
+ * schedule — mismatch = hand-arithmetic drift, the exact defect class this
+ * gate exists to catch).
  * - `tally` flow map with the four classes.
  * - `comments` tri-state: `posted` (alias `yes`) | `n/a-no-pr` | `failed`.
  * The states are distinct: a FAILED POST IS `FAILED`, never
@@ -740,8 +832,8 @@ export function validatePrReviewReport(text: string): GateResult {
         violations.push(violation(
           "high",
           "prreview.report.score-mismatch",
-          `score_pct ${declared} does not match the locked-formula recompute from tally (${recompute.scorePct})`,
-          "recompute via computePrTally: max(0, 100 - 40*must_fix - 15*should_fix - 3*nit - 10*unverified)",
+          `score_pct ${declared} does not match the recompute from tally (${recompute.scorePct})`,
+          "recompute via computePrTally: the locked diminishing schedule (must-fix 45 then 15 each; should-fix max(12-3*(n-1), 2); nit 2 then 1 each, cap 8; unverified 5 each, cap 15; floor 0)",
         ));
       }
     }

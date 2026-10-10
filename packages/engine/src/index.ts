@@ -468,6 +468,7 @@ export type {
   PrReviewSizing,
   PrReviewTier,
   PrTierKeyword,
+  PrScoreBand,
   PrSizeBand,
   PrTallyInput,
   PrTallyResult,
@@ -481,6 +482,7 @@ export type {
 export {
   MERGE_CLASSES,
   PR_REVIEW_TIER_BUDGETS,
+  PR_SCORE_BANDS,
   PR_VERDICTS,
   REVIEW_EMOJI,
   computePrTally,
@@ -491,6 +493,7 @@ export {
   prReviewSeatPrompt,
   prReviewSizing,
   resolvePrReviewTier,
+  scoreBand,
   synthesizeReview,
   validateFindingDoc,
   validateMstarReviewV1,
