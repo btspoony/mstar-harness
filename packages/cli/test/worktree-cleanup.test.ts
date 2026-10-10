@@ -2072,13 +2072,15 @@ async function activeFixture(prefix: string): Promise<ActiveFixture> {
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const context: StoreContext = { harnessDir };
+  // initializeStore creates AND activates the execution authority (create-only,
+  // single init); a second initializeExecutionAuthority would refuse
+  // execution.not-empty against the already-active domain.
   const store = await initializeStore(context);
   store.close();
-  await initializeExecutionAuthority(context);
   return { root, harnessDir, context };
 }
 
-/** Temp Git main worktree + `.mstar` store whose execution authority is still pre-activation. */
+/** Temp Git main worktree + `.mstar` dir holding ONLY retired file state — no store. */
 async function legacyStoreFixture(prefix: string): Promise<ActiveFixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   git(["init", "-q", "-b", "main"], root);
@@ -2090,8 +2092,6 @@ async function legacyStoreFixture(prefix: string): Promise<ActiveFixture> {
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const context: StoreContext = { harnessDir };
-  const store = await initializeStore(context);
-  store.close();
   return { root, harnessDir, context };
 }
 
@@ -2366,7 +2366,13 @@ describe("mstar worktree cleanup — ACTIVE execution authority", () => {
     }
   });
 
-  test("a store that predates activation keeps the unchanged file-authoritative route", async () => {
+  test("a harness without an ACTIVE store refuses with the retirement recovery and removes nothing", async () => {
+    // Disposition (issue #428): the pre-activation file-authoritative route is
+    // retired — `initializeStore` creates AND activates the execution
+    // authority, so no store can predate activation. The live face this test
+    // now asserts is the retirement refusal itself: a harness holding only
+    // retired snapshot.json state answers `store.not-initialized` with the
+    // scaffold/init/upgrade recovery and never touches Git state.
     const fx = await legacyStoreFixture("mstar-cleanup-legacy-route-");
     try {
       const main = git(["branch", "--show-current"], fx.root);
@@ -2391,13 +2397,17 @@ describe("mstar worktree cleanup — ACTIVE execution authority", () => {
           2,
         ),
       );
+      const beforeRefs = refInventory(fx.root);
 
       const dry = activeCleanup(fx, "wf-legacy");
-      expect(dry.exitCode).toBe(0);
-      expect(decisionRows(dry)).toEqual([
-        `remove | worktree | ${wtLegacy} | cleanup.remove.merged`,
-        "refuse | local-branch | feature/legacy | cleanup.refuse.checked-out",
-      ]);
+      expect(dry.exitCode).toBe(1);
+      expect(envelope(dry).status).toBe("refused");
+      expect(envelope(dry).code).toBe("store.not-initialized");
+      expect(message(dry)).toContain("pre-activation file route is retired");
+      expect(message(dry)).toContain("mstar store upgrade");
+      // The retired JSON never authorized a removal: Git state is untouched.
+      expect(refInventory(fx.root)).toBe(beforeRefs);
+      expect(existsSync(wtLegacy)).toBe(true);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
