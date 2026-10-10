@@ -84,6 +84,17 @@ function runBin(bin: string): (args: string[]) => string {
   };
 }
 
+/** Bounded variant for probes: a wedged PATH wrapper is force-killed at the
+ * deadline (SIGTERM ignore-safe) instead of blocking the doctor run. */
+function runBinBounded(bin: string, args: string[], timeoutMs: number): string {
+  return execFileSync(bin, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+}
+
 function localHarnessErrors(): string[] {
   if (!fs.existsSync(harnessRepoPath)) return [`Missing local harness repo: ${harnessRepoPath}`];
   const marker = harnessMarkers.map((entry) => path.join(harnessRepoPath, entry)).find((entry) => fs.existsSync(entry));
@@ -322,7 +333,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const pluginRuntimeErrors: string[] = [];
         if (input.target === "opencode" && v2AmongResolved) {
           try {
-            const nodeVersion = runBin("node")(["--version"]).trim().replace(/^v/, "");
+            const nodeVersion = runBinBounded("node", ["--version"], 5_000).trim().replace(/^v/, "");
             if (compareSemver(nodeVersion, OPENCODE_V2_NODE_FLOOR) < 0) {
               pluginRuntimeErrors.push(
                 "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeVersion + ".",

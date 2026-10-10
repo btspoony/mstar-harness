@@ -12,7 +12,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join, tmpdir } from "node:path";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { tmpdir as osTmpdir } from "node:os";
 import { getAdapter } from "../src/adapters";
 import { kimiAdapter } from "../src/adapters/kimi";
@@ -36,7 +37,7 @@ describe("kimiAdapter", () => {
   });
 
   test("init: present host (PATH stub) is notes-only and harmless — TUI install hint, zero mutations", async () => {
-    // Hermetic presence stub: a fake `kimi` on PATH satisfies the D14 gate
+    // Hermetic presence stub: a fake `kimi` on PATH satisfies the host-presence gate
     // without depending on the maintainer machine's real install.
     const stubDir = mkdtempSync(join(osTmpdir(), "kimi-stub-"));
     const stub = join(stubDir, "kimi");
@@ -56,17 +57,23 @@ describe("kimiAdapter", () => {
   });
 
   test("init with a missing kimi CLI on a real install refuses naming the executable recovery; dry-run still previews", async () => {
-    // The ambient CI PATH has no `kimi`; the D14 gate must refuse the real
-    // install with the executable recovery (install guide + rerun command),
-    // while `--dry-run` previews without probing (D15).
+    // The dry-run preview never probes (pure-preview rule).
     const dry = await kimiAdapter.runInstallInit!("project", true);
     expect(dry!.location).toBeTruthy();
 
+    // Hermetic absence: an empty PATH dir guarantees `kimi` is missing on any
+    // machine (maintainer installs included), so the refusal is deterministic.
+    const emptyDir = mkdtempSync(join(tmpdir(), "kimi-absent-"));
+    const previousPath = process.env.PATH;
+    process.env.PATH = emptyDir;
     let refused: Error | undefined;
     try {
       await kimiAdapter.runInstallInit!("project", false);
     } catch (error) {
       refused = error as Error;
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(emptyDir, { recursive: true, force: true });
     }
     expect(refused).toBeDefined();
     expect(refused!.message).toContain("kimi");

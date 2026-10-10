@@ -314,9 +314,9 @@ export function diagnoseMcpTarget(
   } = {},
 ): McpTargetHealth {
   const otherScopeDoctorCommand = options.otherScopeDoctorCommand
-    ?? "mstar doctor --target opencode --scope global --opencode-generation v2 (global file) or --scope project (project file)";
+    ?? "mstar doctor --target opencode --opencode-generation v2 --scope global (global file) or mstar doctor --target opencode --opencode-generation v2 --scope project (project file)";
   const otherScopeInitCommand = options.otherScopeInitCommand
-    ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or --scope project (project file)";
+    ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or mstar init --target opencode --opencode-generation v2 --scope project (project file)";
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
     ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.`

@@ -241,7 +241,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
     writeFakeBin("dsh", `printf '%s\\n' "$*" >> "${dshLog}"\nexit 0`);
   }
 
-  /** Fake opencode reporting a V2 version so the D14 presence gate and the
+  /** Fake opencode reporting a V2 version so the host-presence gate and the
    * generation probe resolve deterministically in tests that run a real
    * config-mode init for the opencode target. */
   function fakeOpencode(): void {
