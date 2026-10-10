@@ -37,6 +37,14 @@ const makeContext = () => {
             },
           })).pipe(Effect.as({ dispose: Effect.void })),
       },
+      session: {
+        hook: (kind: string, handler: (event: unknown) => unknown) =>
+          Effect.succeed({ dispose: Effect.void }),
+      },
+      tool: {
+        hook: (kind: string, handler: (event: unknown) => unknown) =>
+          Effect.succeed({ dispose: Effect.void }),
+      },
       skill: {
         transform: (update: (editor: { add: (definition: { name: string; location: string }) => void }) => void) =>
           Effect.sync(() => update({
