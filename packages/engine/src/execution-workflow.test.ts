@@ -34,7 +34,6 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   executionToken,
-  initializeExecutionAuthority,
   readExecutionPlan,
   readExecutionState,
   type ExecutionCaller,
@@ -242,7 +241,7 @@ async function workflowFixture(
   const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   const integrationPath = join(repoRoot, "wt-integration");
   runGit(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], repoRoot);
   const compassPath = join(harnessRoot, COMPASS_REF);
@@ -2556,6 +2555,6 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
         operation: { kind: "phase", phase: "phase-2-execute", compassPath: join(workspace, ".mstar", COMPASS_REF) },
       }),
     );
-    expect(refusal.code).toBe("execution.not-active");
+    expect(refusal.code).toBe("store.not-initialized");
   });
 });
