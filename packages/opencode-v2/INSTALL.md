@@ -35,7 +35,7 @@ Restart OpenCode. The plugin installs from npm and registers Morning Star runtim
 
 ## What the installer writes
 
-One `init` pass for the V2 generation produces, in the resolved `opencode.json`:
+One `init` pass for the V2 generation produces, in the resolved `opencode.json` (the `agents` block appears only when you supplied model overrides):
 
 ```json
 {
@@ -81,7 +81,7 @@ npx @mstar-harness/cli doctor --target opencode --opencode-generation v2
 
 ## Monorepo / git checkout of this repository
 
-After `bun install` or `npm install` at the repo root, run once so `harness-skills/`, `harness-agents/`, and `harness-commands/` exist for the plugin entry in `packages/opencode-v2/src/entry.ts`:
+After `bun install` or `npm install` at the repo root, run once so `harness-skills/`, `harness-agents/`, and `harness-commands/` exist for the plugin (entry `packages/opencode-v2/src/entry.ts` → `dist/mstar.js`):
 
 ```bash
 bun run opencode-v2:bundle-assets
@@ -110,7 +110,7 @@ Or re-run the installer CLI. Restart OpenCode after edits: the running plugin ke
 The two generations use different config keys, so one `opencode.json` can carry both:
 
 - **V2** — plural `plugins`, owned slot `@mstar-harness/opencode-v2@latest`, MCP nested under `mcp.servers`.
-- **V1** — singular `plugin`, owned slot `@mstar-harness/opencode@latest` (or the legacy `morning-star@git+…` entry), MCP at the top level of `mcp`.
+- **V1** — singular `plugin`, owned slot `@mstar-harness/opencode@latest` (or the legacy `morning-star@git+…` entry), MCP at `mcp["morning-star"]`.
 
 The installer writes only the generation it selected and never rewrites the other key. Running both host generations against one config path is a supported state: `doctor` without an explicit generation validates both and reports per-generation results, and passing `--opencode-generation <v1|v2>` scopes it to one generation. A config whose markers disagree with the resolved generation only produces a warning — markers are a consistency guard, not the selection path.
 

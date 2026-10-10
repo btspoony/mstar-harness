@@ -30,11 +30,11 @@ See [`INSTALL.md`](./INSTALL.md) for the full setup flow and the installer's wri
 
 ## Generation selection
 
-`mstar-harness init --target opencode` and `doctor --target opencode` resolve the generation before any config write:
+`mstar-harness init --target opencode` writes config only after resolving the generation, and `doctor --target opencode` resolves it before validating:
 
 - **`--opencode-generation <v1|v2>` always wins.** `v2` selects this package; `v1` selects [`@mstar-harness/opencode`](../opencode/README.md).
 - Without the flag, a real install probes the host binary (`opencode --version`, bounded timeout) and maps the parsed major: **≥ 2 → v2**, 1.x → v1.
-- Probe failure — binary missing, timeout, or output not in the `opencode vMAJOR.MINOR.PATCH` form — **refuses the install** with the failure mode and the `--opencode-generation` recovery. There is no silent v1 fallback.
+- Probe failure — binary missing, timeout, or output not in the `opencode vMAJOR.MINOR.PATCH` form — **refuses the real install** (and the doctor run) with the failure mode and the `--opencode-generation` recovery. There is no silent v1 fallback.
 - Under `--dry-run` no probe runs: the preview uses the explicit flag or the config markers, else it stays non-refusing with an explicit `generation: unresolved` annotation.
 - Config markers (plural `plugins` holding an owned V2 slot vs singular `plugin` holding an owned V1 slot) are a **consistency guard only**: a disagreement with the resolved generation warns; it never selects.
 
@@ -69,7 +69,7 @@ The V2 SDK types `execute.before` as a hook that **may fail with a typed `Tool.E
 
 Claimed coverage is exactly:
 
-- **`write`** `{path, content}` and **`edit`** `{path, oldString, newString, replaceAll}` — authority-route classification first (direct `store.db`/WAL/SHM writes, retired registers, unreadable authority), then coordination-document validation. The `edit` branch validates the synthesized post-state when the literal replacement composes (a single hit, or `replaceAll`), falling back to the on-disk document otherwise.
+- **`write`** `{path, content}` and **`edit`** `{path, oldString, newString, replaceAll}` — authority-route classification first (direct `store.db`/WAL/SHM writes, retired registers, unreadable authority), then coordination-document validation. The `edit` branch validates the synthesized post-state when the literal replacement composes (a single hit, or `replaceAll`), falling back to the on-disk document otherwise (a non-existent target has nothing to validate).
 - **`subagent`** dispatch — Assignment validation on `input.prompt`. The caller is the host-provided `event.agent` (readonly) and the spawn target is `input.agent`; neither is inferred from the other. Because V2 exposes the caller, the anti-recursion leg is **active** on this host (the V1 package skips it), and an empty/absent caller binding fails closed.
 - **Authority-class refusals** (`store.direct-write-refused`, `project.register.retired`, `store.authority-unavailable`, `execution.direct-write-refused`) refuse unconditionally in both enforcement modes; document-validity violations follow the repo's enforcement axis (hard → typed refusal, soft → logged warning). A missing or malformed required input on a claimed seam is a typed refusal naming the field and the recovery, never a silent skip.
 
