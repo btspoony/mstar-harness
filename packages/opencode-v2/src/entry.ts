@@ -28,6 +28,7 @@ import {
 } from "./assets";
 import type { CommandDefinition as AssetCommandDefinition, SkillEntry } from "./assets";
 import { defaultStatusLogger } from "./log";
+import { registerHooks } from "./hooks/mod";
 
 const PLUGIN_ID = "morning-star-harness";
 
@@ -95,7 +96,10 @@ const plugin = NativePlugin.define({
       "info",
       `registering ${Object.keys(agents).length} agents, ${Object.keys(commands).length} commands, and ${skills.length} skills`,
     );
-    return registerAssets(context, { agents, commands, skills, skillContent });
+    return Effect.gen(function* () {
+      yield* registerAssets(context, { agents, commands, skills, skillContent });
+      yield* registerHooks(context);
+    });
   },
 });
 
