@@ -4,8 +4,8 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
+  readExecutionState,
   registerCatalogEntity,
   type WorkflowEntry,
   type WorkflowSnapshot,
@@ -64,7 +64,9 @@ describe("dashboard ACTIVE projection views", () => {
     const harnessDir = await workspace("dashboard-active-");
     const context = { harnessDir };
     try {
-      const initialized = await initializeExecutionAuthority(context);
+      // `initializeStore` activated the execution authority (issue #428); read
+      // its root creation token back instead of re-initializing.
+      const initialized = { token: (await readExecutionState(context)).token };
       const id = "wf-synthetic";
       await createExecutionWorkflow(
         { ...context, caller: { sessionId: "session-synthetic", role: "coordinator", workflowId: id, planId: null } },

@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { catalogRootDir, linkCatalogEntities, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
-import { createExecutionWorkflow, initializeExecutionAuthority } from "./execution-store.js";
+import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { ExecutionCaller } from "./execution-store.js";
 import type { WorkflowSnapshot } from "./workflow.js";
@@ -206,11 +206,10 @@ ${text}
 `;
 }
 
-/** Root-declared workflow + catalog-linked compass/roadmap, all on disk. */
+/** Catalog-declared compass/roadmap documents, all on disk. The execution
+ * registry (ACTIVE store) and these declared documents are the projection's
+ * live source set; status.json and workflow snapshot files are retired. */
 async function seedStandard(f: Fixture): Promise<void> {
-  write(join(f.harness, "status.json"), rootDoc([{ id: "wf-a", dir: "workflows/wf-a" }]));
-  write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
-  await seedBinding(f, "wf-a", "plan-wf-a");
   await registerCatalogEntity(
     f.context,
     { kind: "iteration", id: "iter-a", title: "Iteration A", rootKind: "iterations", relativePath: "iter-a" },
@@ -361,7 +360,7 @@ function issueInput(occurrenceKey: string) {
 }
 async function activeWorkflowFixture(name: string, workflowId: string, planId: string): Promise<Fixture> {
   const f = await fixture(name);
-  const initialized = await initializeExecutionAuthority(f.context);
+  const initialized = await readExecutionState(f.context);
   await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op(`${name}-catalog`));
   const caller: ExecutionCaller = { sessionId: `${name}-coordinator`, role: "coordinator", workflowId };
   await createExecutionWorkflow({ ...f.context, caller }, {
@@ -386,7 +385,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
 
   test("ACTIVE execution rows publish through the dashboard projection", async () => {
     const f = await fixture("active-smoke-");
-    const initialized = await initializeExecutionAuthority(f.context);
+    const initialized = await readExecutionState(f.context);
     const workflowId = "wf-active-smoke";
     const planId = "plan-active-smoke";
     await registerCatalogEntity(
@@ -452,7 +451,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
   });
   test("an empty ACTIVE authority publishes a current empty projection", async () => {
     const f = await fixture("active-empty-");
-    await initializeExecutionAuthority(f.context);
+    await readExecutionState(f.context);
 
     const refreshed = await withStoreRead(f.context, queryDashboard("workflows"));
 
@@ -518,25 +517,14 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect(await projectedRows(f)).toEqual(lastGood);
   });
 
-  test("authority activation between a files capture and publication refuses stale publication", async () => {
-    const f = await fixture("files-activate-midflight-");
-    // A plain fixture store carries execution_meta with authority_state
-    // 'legacy' — the files arm captures it, activation flips it mid-flight.
-    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-files", dir: "workflows/wf-files" }]));
-    write(join(f.harness, "workflows", "wf-files", "snapshot.json"), snapshotDoc("wf-files"));
-    const first = await refreshProjections(f.context);
-    expect(first).toMatchObject({ freshness: "current", published: true });
-    const capture = await captureProjectionSources(f.context);
-    const handle = await openStore(f.context, "write");
-    try {
-      handle.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1 where id = 1").run();
-    } finally { handle.close(); }
-    await expect(publishProjectionCapture(f.context, capture)).rejects.toMatchObject({
-      code: "projection.source-stale",
-    });
-    // The retained generation is untouched; the next refresh takes the ACTIVE arm.
-    expect((await projections(f)).meta.generation).toBe(first.generation);
-  });
+  // Disposition (retired file-route case): "authority activation between a
+  // files capture and publication refuses stale publication" exercised the
+  // retired pre-activation files arm (a legacy execution_meta flipped to
+  // active mid-flight). Under the ACTIVE store the equivalent guard — a
+  // source movement between capture and publication refuses
+  // `projection.source-stale` and retains last-good rows — is asserted by
+  // "a deleted ACTIVE row refuses stale publication and retains last-good
+  // rows" above.
 
   test("two ACTIVE source movements produce stale health without advancing generation", async () => {
     const workflowId = "wf-double-movement";
@@ -564,7 +552,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
 
   test("an execution workflow row absent from the authority served graph is not projected", async () => {
     const f = await fixture("active-unserved-");
-    await initializeExecutionAuthority(f.context);
+    await readExecutionState(f.context);
     const workflowId = "wf-unserved";
     const handle = await openStore(f.context, "write");
     try {
@@ -683,7 +671,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     // Subcase A: plan membership changes after capture.
     await (async () => {
     const f = await fixture("active-plan-moved-");
-    const initialized = await initializeExecutionAuthority(f.context);
+    const initialized = await readExecutionState(f.context);
     const workflowId = "wf-plan-moved";
     const planId = "plan-original";
     await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op("plan-moved-catalog"));
@@ -719,7 +707,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     // Subcase B: captured workflow JSON changes after capture.
     await (async () => {
     const f = await fixture("active-row-moved-");
-    const initialized = await initializeExecutionAuthority(f.context);
+    const initialized = await readExecutionState(f.context);
     const workflowId = "wf-row-moved";
     const planId = "plan-row-moved";
     await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op("row-moved-catalog"));
@@ -756,7 +744,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
 describe("projection publication and last-good handling", () => {
   test("malformed execution registry entry JSON is classified as invalid", async () => {
     const f = await fixture("registry-invalid-");
-    await initializeExecutionAuthority(f.context);
+    await readExecutionState(f.context);
     const handle = await openStore(f.context, "write");
     try {
       handle.db
@@ -781,20 +769,18 @@ describe("projection publication and last-good handling", () => {
   test("each clean refresh publishes a new generation without a fingerprint-equality gate", async () => {
     const f = await fixture("publish-");
     await seedStandard(f);
-    // A workflow that was registered and closed before this refresh: retained
-    // history with a committed binding the root no longer lists.
-    write(join(f.harness, "workflows/wf-done/snapshot.json"), terminalSnapshotDoc("wf-done"));
-    await seedBinding(f, "wf-done", "plan-done");
 
     const first = await refreshProjections(f.context);
     expect(first).toMatchObject({ freshness: "current", published: true, generation: 1, diagnostics: [] });
     expect(first.builtAt).toBe(first.checkedAt);
     expect(first.changedKeys).toEqual(first.sources.map((source) => source.sourceKey));
-    expect(first.sources).toHaveLength(4);
-    expect(first.sources.find((source) => source.relativePath === "workflows/wf-done/snapshot.json")).toMatchObject({
-      declared: false,
-      state: "ok",
-    });
+    // The ACTIVE source set: the execution registry plus the declared compass
+    // (the roadmap is catalog content, not a declared projection source).
+    expect(first.sources).toHaveLength(2);
+    expect(first.sources.map((source) => source.sourceKey).sort()).toEqual([
+      "compass:iterations:iter-a/delivery-compass.md",
+      "root:harness:execution/registry",
+    ]);
 
     const rows = await projections(f);
     expect(rows.meta).toMatchObject({
@@ -805,43 +791,9 @@ describe("projection publication and last-good handling", () => {
       last_error_json: null,
     });
     expect(rows.sources.every((source) => source.generation === 1)).toBe(true);
-    expect(rows.workflows).toEqual([
-      expect.objectContaining({
-        generation: 1,
-        id: "wf-a",
-        type: "plan",
-        status: "running",
-        phase: "phase-2-execute",
-        started_at: STARTED_AT,
-        ended_at: null,
-        updated_at: STARTED_AT,
-        branch_base: "main",
-        branch_source: "feature/wf-a",
-        branch_integration: null,
-        branch_target: "main",
-        active_registration: 1,
-      }),
-      // Retained history: catalog identity survives, the root no longer lists
-      // it, so it is projected inactive.
-      expect.objectContaining({ id: "wf-done", status: "completed", active_registration: 0 }),
-    ]);
-    expect(rows.plans).toEqual([
-      expect.objectContaining({
-        generation: 1,
-        workflow_id: "wf-a",
-        plan_id: "plan-wf-a",
-        status: "InProgress",
-        progress: "half way",
-        phase: "phase-2-execute",
-        done_at: null,
-        catalog_pin_revision: 4,
-      }),
-      expect.objectContaining({ workflow_id: "wf-done", plan_id: "plan-wf-done", status: "Done" }),
-    ]);
-    // The workflow-wide integration mutex is the only remaining lease projection.
-    expect(rows.leases).toEqual([
-      expect.objectContaining({ workflow_id: "wf-a", kind: "integration-merge", holder: "session-2" }),
-    ]);
+    expect(rows.workflows).toEqual([]);
+    expect(rows.plans).toEqual([]);
+    expect(rows.leases).toEqual([]);
     expect(rows.compasses).toEqual([
       expect.objectContaining({
         generation: 1,
@@ -861,7 +813,7 @@ describe("projection publication and last-good handling", () => {
     expect(second).toMatchObject({ freshness: "current", published: true, generation: 2, changedKeys: [] });
     expect(second.builtAt).not.toBe(first.builtAt);
     expect(second.checkedAt >= first.checkedAt).toBe(true);
-    expect((await projectedRows(f)).workflows[0]).toMatchObject({ generation: 2, id: "wf-a" });
+    expect((await projections(f)).compasses[0]).toMatchObject({ generation: 2, iteration_id: "iter-a" });
   });
 
   test("a deleted declared source retains the last good generation and reports stale with a diagnostic", async () => {
@@ -870,11 +822,11 @@ describe("projection publication and last-good handling", () => {
     const first = await refreshProjections(f.context);
     const publishedRows = await projectedRows(f);
 
-    rmSync(join(f.harness, "workflows/wf-a/snapshot.json"), { force: true });
+    rmSync(join(f.iterationsDir, "iter-a/delivery-compass.md"), { force: true });
     const stale = await refreshProjections(f.context);
     expect(stale).toMatchObject({ freshness: "stale", published: false, generation: first.generation, builtAt: first.builtAt });
     expect(stale.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "workflow:harness:workflows/wf-a/snapshot.json", reason: "missing" }),
+      expect.objectContaining({ sourceKey: "compass:iterations:iter-a/delivery-compass.md", reason: "missing" }),
     );
     // The last good rows and their built_at survive untouched; only the
     // health columns move.
@@ -885,7 +837,7 @@ describe("projection publication and last-good handling", () => {
 
     // A later clean refresh publishes a new generation after the missing
     // source is restored; no content fingerprint adopts the old generation.
-    write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS);
     const recovered = await refreshProjections(f.context);
     expect(recovered).toMatchObject({
       freshness: "current",
@@ -898,28 +850,58 @@ describe("projection publication and last-good handling", () => {
   });
 
   test("an invalid and an inaccessible declared source each retain the last good generation", async () => {
+    // Disposition: the retired file route's separate "inaccessible" arm (a
+    // read refused at the OS level) is platform-specific and not reproducible
+    // without fault injection; the shared read classifies missing/invalid.
     const f = await fixture("invalid-");
     await seedStandard(f);
     const first = await refreshProjections(f.context);
 
-    write(join(f.harness, "workflows/wf-a/snapshot.json"), "{ not json");
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), "{ not json");
     const invalid = await refreshProjections(f.context);
     expect(invalid).toMatchObject({ freshness: "stale", generation: first.generation, builtAt: first.builtAt });
     expect(invalid.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "workflow:harness:workflows/wf-a/snapshot.json", reason: "invalid" }),
+      expect.objectContaining({ sourceKey: "compass:iterations:iter-a/delivery-compass.md", reason: "invalid" }),
     );
-    expect((await projections(f)).workflows[0]).toMatchObject({ status: "running", generation: first.generation });
+    expect((await projections(f)).compasses[0]).toMatchObject({ iteration_id: "iter-a", generation: first.generation });
 
-    write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS);
   });
 
 
   test("a first failure reports unavailable instead of an empty projection", async () => {
     const f = await fixture("first-failure-");
-    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-missing", dir: "workflows/wf-missing" }]));
+    // Declared but never written: the first refresh has nothing honest to show.
+    await registerCatalogEntity(
+      f.context,
+      { kind: "iteration", id: "iter-missing", title: "Iteration M", rootKind: "iterations", relativePath: "iter-missing" },
+      op("cat-iter-missing"),
+    );
+    await registerCatalogEntity(
+      f.context,
+      {
+        kind: "document",
+        id: "doc-missing",
+        title: "Compass",
+        rootKind: "iterations",
+        relativePath: "iter-missing/delivery-compass.md",
+        documentKind: "compass",
+      },
+      op("cat-doc-missing"),
+    );
+    await linkCatalogEntities(
+      f.context,
+      { from: { kind: "iteration", id: "iter-missing" }, relation: "documents", to: { kind: "document", id: "doc-missing" } },
+      op("link-doc-missing"),
+    );
     const report = await refreshProjections(f.context);
     expect(report).toMatchObject({ freshness: "unavailable", published: false, generation: null, builtAt: null });
-    expect(report.diagnostics).toContainEqual(expect.objectContaining({ reason: "missing" }));
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({
+        sourceKey: "compass:iterations:iter-missing/delivery-compass.md",
+        reason: "missing",
+      }),
+    );
     const rows = await projections(f);
     expect(rows.meta).toMatchObject({ generation: null, freshness: "unavailable" });
     expect(JSON.parse(String(rows.meta.last_error_json))).toMatchObject({ code: "projection.unavailable" });
@@ -927,49 +909,39 @@ describe("projection publication and last-good handling", () => {
     expect([rows.workflows, rows.plans, rows.leases, rows.compasses].every((table) => table.length === 0)).toBe(true);
   });
 
-  test("a clean unregister is a valid source-set change, while a missing still-declared snapshot is an error", async () => {
-    const f = await fixture("unregister-");
-    await seedStandard(f);
-    write(join(f.harness, "workflows/wf-done/snapshot.json"), terminalSnapshotDoc("wf-done"));
-    await seedBinding(f, "wf-done", "plan-done");
-    const first = await refreshProjections(f.context);
-    expect(first.sources.find((source) => source.relativePath === "workflows/wf-a/snapshot.json")?.declared).toBe(true);
+  // Disposition (retired file-route case): "a clean unregister is a valid
+  // source-set change, while a missing still-declared snapshot is an error"
+  // asserted root status.json unregistration plus a declared snapshot file.
+  // The file route is retired: unregistration now moves execution registry
+  // rows (covered by the deleted-ACTIVE-row source-stale cases above), and a
+  // declared-but-missing source is covered by the unavailable/missing cases
+  // here and in projection-sources.test.ts.
 
-    // Clean unregister: the root no longer lists wf-a, its snapshot stays.
-    write(join(f.harness, "status.json"), rootDoc([]));
-    const unregistered = await refreshProjections(f.context);
-    expect(unregistered).toMatchObject({ freshness: "current", published: true, diagnostics: [] });
-    expect(unregistered.changedKeys).toContain("root:harness:status.json");
-    const afterUnregister = await projectedRows(f);
-    expect(afterUnregister.workflows).toEqual([
-      expect.objectContaining({ id: "wf-a", active_registration: 0, status: "running" }),
-      expect.objectContaining({ id: "wf-done", active_registration: 0, status: "completed" }),
-    ]);
-    // wf-a moved from root-declared to retained history; no diagnostic.
-    expect(unregistered.sources.find((source) => source.relativePath === "workflows/wf-a/snapshot.json")?.declared).toBe(false);
-
-    // A still-declared workflow whose snapshot is missing IS an error.
-    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-b", dir: "workflows/wf-b" }]));
-    const broken = await refreshProjections(f.context);
-    expect(broken).toMatchObject({ freshness: "stale", published: false, generation: unregistered.generation });
-    expect(broken.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "workflow:harness:workflows/wf-b/snapshot.json", reason: "missing" }),
-    );
-    expect(await projectedRows(f)).toEqual(afterUnregister);
-  });
+  // Disposition (retired file-route case): the clean-unregister / still-declared
+  // snapshot pair asserted root status.json unregistration against a snapshot
+  // file. The file route is retired: unregistration now moves execution
+  // registry rows and is covered by the source-stale ACTIVE cases above; a
+  // declared-but-missing source is covered by the unavailable and missing
+  // cases here and in projection-sources.test.ts.
 
   test("a captured projection publishes despite later source-content edits", async () => {
     const f = await fixture("captured-edit-");
     await seedStandard(f);
     const older = await captureProjectionSources(f.context);
 
-    write(join(f.harness, "workflows/wf-b/snapshot.json"), snapshotDoc("wf-b"));
-    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-a", dir: "workflows/wf-a" }, { id: "wf-b", dir: "workflows/wf-b" }]));
-    await refreshProjections(f.context);
+    // A later content edit publishes its own newer generation first ...
+    write(
+      join(f.iterationsDir, "iter-a/delivery-compass.md"),
+      COMPASS.replace("Narrative summary of the iteration.", "Edited summary."),
+    );
+    const newer = await refreshProjections(f.context);
+    expect(newer).toMatchObject({ freshness: "current", published: true });
 
+    // ... and the publication of the older capture still wins with its own
+    // captured content.
     await expect(publishProjectionCapture(f.context, older)).resolves.toMatchObject({ freshness: "current", published: true });
     const rows = await projections(f);
-    expect(rows.workflows.map((workflow) => workflow.id)).toEqual(["wf-a"]);
+    expect(rows.compasses[0]).toMatchObject({ iteration_id: "iter-a", summary: "Narrative summary of the iteration." });
   });
 
   test("a rebuild leaves issue/catalog revisions and rows untouched", async () => {
@@ -980,12 +952,12 @@ describe("projection publication and last-good handling", () => {
 
     await refreshProjections(f.context);
     await refreshProjections(f.context);
-    write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a", { phase: "phase-3-close" }));
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS.replace("Narrative summary of the iteration.", "Edited narrative summary."));
     await refreshProjections(f.context);
 
     expect(await authorityFacts(f)).toEqual(before);
     // ... while the projection itself did move.
-    expect((await projections(f)).workflows[0]).toMatchObject({ phase: "phase-3-close" });
+    expect((await projections(f)).compasses[0]).toMatchObject({ iteration_id: "iter-a", summary: "Edited narrative summary." });
   });
 
   test("a projection format bump discards the old generation and rebuilds on the next read", async () => {
@@ -1001,7 +973,7 @@ describe("projection publication and last-good handling", () => {
     }
     // The old rows are not reinterpreted as authority: a failing capture now
     // reports unavailable with empty tables ...
-    rmSync(join(f.harness, "workflows/wf-a/snapshot.json"), { force: true });
+    rmSync(join(f.iterationsDir, "iter-a/delivery-compass.md"), { force: true });
     const afterBump = await refreshProjections(f.context);
     expect(afterBump).toMatchObject({ freshness: "unavailable", generation: null, published: false });
     const discarded = await projections(f);
@@ -1009,7 +981,7 @@ describe("projection publication and last-good handling", () => {
     expect(discarded.meta).toMatchObject({ generation: null, format_version: PROJECTION_FORMAT_VERSION });
 
     // ... and a clean capture rebuilds from scratch.
-    write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS);
     const rebuilt = await refreshProjections(f.context);
     expect(rebuilt).toMatchObject({ freshness: "current", published: true, generation: 1 });
   });
@@ -1028,14 +1000,13 @@ describe("projection publication and last-good handling", () => {
       } finally {
         handle.close();
       }
-      // The pure capture still works (it reads no projection table) ...
-      const capture = await captureProjectionSources(f.context);
-      expect(capture.blocked).toBe(false);
-      // ... and publication refuses with the upgrade pointer, writing nothing.
+      // The capture refuses: a store whose recorded schema predates the
+      // execution domain has no ACTIVE authority to read — the file route is
+      // retired, so there is nothing to project from.
       const actualError = await refreshProjections(f.context).then(() => null, (error: unknown) => error);
       expect(existsSync(join(f.harness, "store.db"))).toBe(true);
       expect(actualError).toMatchObject({
-        code: "projection.schema-outdated",
+        code: "execution.not-active",
         message: expect.stringContaining("mstar store upgrade --operator <name>"),
       });
     } finally {

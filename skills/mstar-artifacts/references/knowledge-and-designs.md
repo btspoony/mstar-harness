@@ -61,7 +61,7 @@
 
 ## 与执行 plan 行及 catalog 的链接
 
-- 某 plan 的**权威设计输入**在规格或迭代 compass 中时，经公共 prepare 域边界冻结到 store 执行 plan 行的 `metadata`（pre-activation：snapshot `plans[]`）：`primary_spec` / `spec_refs` → 优先 `{SPECS_DIR}/`；`iteration_compass` / `iteration_refs` → `{ITERATION_DIR}/`。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不推定新的 engine 行为。iteration-start 不得新增 knowledge 路径。
+- 某 plan 的**权威设计输入**在规格或迭代 compass 中时，经公共 prepare 域边界冻结到 store 执行 plan 行的 `metadata`：`primary_spec` / `spec_refs` → 优先 `{SPECS_DIR}/`；`iteration_compass` / `iteration_refs` → `{ITERATION_DIR}/`。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅迁移源只读，不推定新的 engine 行为。iteration-start 不得新增 knowledge 路径。
 - 执行方在 **implement 前**：先查 catalog（`mstar catalog list`，按 kind / document kind / lifecycle 过滤见 help）发现与当轮相关的 `active` 文档（发现式阅读，不要求通读全库；README 散文可作导览，但表格不是权威）；再按 metadata 读取已登记路径；均与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则

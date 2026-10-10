@@ -839,29 +839,42 @@ function authorityUnavailableRefusal(
 }
 
 /**
- * §5 (plan S4) what the control harness's EXECUTION authority says about a
- * coordination-document write in this host's dialect. `resolveExecutionReadRoute`
- * (through the lazy store holder) is the ONE place a consumer decides between
- * the DB authority and the file route; a store that EXISTS and cannot be read
- * is `unavailable` (fail-closed, never a fall-through to the file route) and a
- * harness with no store keeps the file route (§2.1: absence is not an
- * authority verdict). An installed engine without the route export is the
- * pre-execution engine: there is no authority to classify, so the documents
- * keep their unchanged document lint.
+ * Resolve the ACTIVE execution authority for a coordination-document write.
+ * `active` refuses the retired persistence route; `absent` is NO verdict (no
+ * store, a staged store, or an engine without the route export — the
+ * pre-activation state, where the document lint decides); `unavailable` is a
+ * fail-closed authority that exists but cannot be read. There is no file
+ * route.
  */
 type ExecutionWriteRoute =
-  | { kind: "files" }
   | { kind: "active" }
+  | { kind: "absent" }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
   const api = await storeApiLoader.load();
   const resolve = api?.resolveExecutionRoute;
-  if (resolve === undefined) return { kind: "files" };
+  if (resolve === undefined) {
+    // No route export (or no store API at all): an engine that predates the
+    // execution authority has no authority to consult — absence, not a
+    // refusal (the document lint keeps deciding).
+    return { kind: "absent" };
+  }
   try {
-    return (await resolve(harnessDir)) === "execution" ? { kind: "active" } : { kind: "files" };
+    const route = await resolve(harnessDir);
+    return route === "execution"
+      ? { kind: "active" }
+      : { kind: "absent" };
   } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
+    const refusal = refusalOf(error);
+    // An ABSENT store (`store.not-initialized`) and a store that exists but
+    // records no ACTIVE authority (`execution.not-active` — staged) are the
+    // pre-activation state: absence is not an authority verdict, so the
+    // document lint decides. Anything else (a corrupt/unreadable authority)
+    // refuses fail-closed.
+    return PRE_ACTIVATION_CODES.includes(refusal.code) || refusal.code === "execution.not-active"
+      ? { kind: "absent" }
+      : { kind: "unavailable", ...refusal };
   }
 }
 
@@ -977,6 +990,7 @@ export async function validateStatusWrite(
     for (const executionDir of executionDirs) {
       const executionRoute = await readExecutionWriteRoute(executionDir);
       if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved, log);
+      if (executionRoute.kind === "absent") continue; // no verdict — the next root (if any) decides
       if (executionRoute.kind === "unavailable") {
         return authorityUnavailableRefusal(
           executionRoute,

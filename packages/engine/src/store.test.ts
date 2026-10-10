@@ -57,8 +57,8 @@ import {
   type ArtifactStore,
 } from "../src/store.js";
 import { withProtectedWrite } from "../src/coordination-write.js";
-import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore } from "../src/store-db.js";
+import { PERSIST_PAYLOAD_CONTRACTS } from "../src/coordination.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -150,11 +150,13 @@ function memoryStore(): ArtifactStore {
   };
 }
 
-/** A control root holding a store whose execution authority is still `legacy`
- * (its schema has the execution tables; nothing was activated). */
+/** A legacy-route control root. `initializeStore` now creates ACTIVE
+ * execution authority, so restore the legacy state explicitly for tests whose
+ * purpose is to exercise the pre-activation transport behavior. */
 async function legacyControlRoot(label: string): Promise<string> {
   const root = tmpRoot(label);
   const handle = await initializeStore({ harnessDir: root });
+  handle.db.prepare("update execution_meta set authority_state = 'legacy' where id = 1").run();
   handle.close();
   return root;
 }
@@ -162,8 +164,9 @@ async function legacyControlRoot(label: string): Promise<string> {
 /** A control root whose execution authority is ACTIVE — the authority an
  * injected store's protected targets must be judged against. */
 async function activeControlRoot(label: string): Promise<string> {
-  const root = await legacyControlRoot(label);
-  await initializeExecutionAuthority({ harnessDir: root });
+  const root = tmpRoot(label);
+  const handle = await initializeStore({ harnessDir: root });
+  handle.close();
   return root;
 }
 
@@ -213,6 +216,31 @@ beforeEach(() => {
 afterEach(() => {
   setArtifactStore(undefined);
   delete process.env[ENV_KEY];
+});
+
+describe("persist-family kind retirement", () => {
+  test("persist payload contracts contain only review and json", () => {
+    expect(Object.keys(PERSIST_PAYLOAD_CONTRACTS)).toEqual(["review", "json"]);
+    expect(PERSIST_PAYLOAD_CONTRACTS).not.toHaveProperty("status");
+    expect(PERSIST_PAYLOAD_CONTRACTS).not.toHaveProperty("snapshot");
+  });
+});
+
+describe("migration-scoped store kinds", () => {
+  test("status and snapshot remain available for migration staging round-trips", async () => {
+    const root = tmpRoot("store-migration-kinds-");
+    try {
+      const store = authorizedStore(createFsStore(root));
+      const status = { version: 2, updated_at: "2026-10-10", workflows: [] };
+      const snapshot = { id: "wf-migration", status: "running" };
+      await store.put({ kind: "status", key: "root", payload: status });
+      await store.put({ kind: "snapshot", key: "wf-migration", payload: snapshot });
+      expect(await store.get<typeof status>({ kind: "status", key: "root" })).toEqual(status);
+      expect(await store.get<typeof snapshot>({ kind: "snapshot", key: "wf-migration" })).toEqual(snapshot);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -756,98 +784,8 @@ describe("setArtifactStore / getArtifactStore", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Injected store — canonical control-target guard (retained-body contract)
-// ---------------------------------------------------------------------------
-
-/**
- * Every call below runs inside `withEnv(<control root>)` so the guard resolves
- * a fixture authority instead of whatever harness the test runner's cwd happens
- * to sit in. The guard runs in the call's SYNCHRONOUS prologue — the env window
- * therefore covers the call expression itself, and the returned promise is
- * awaited outside it.
- *
- * The cases encode the boundary: an injected store is a body store. While the
- * CANONICAL CONTROL root's execution authority is ACTIVE, the protected control
- * documents (root register, workflow snapshot, and a `json` alias of either)
- * refuse before the injected method runs; the injector's own `root` claim can
- * neither establish that authority nor a refusal; body refs still round-trip.
- */
-describe("injected ArtifactStore \u2014 canonical control-target guard", () => {
-  test("an injected store cannot reach a protected target while the canonical authority is active", async () => {
-    const root = await activeControlRoot("injected-guard-protected-");
-    try {
-      const store = probeStore();
-      setArtifactStore(store);
-      const active = getArtifactStore();
-
-      const putStatus = withEnv(root, () =>
-        active.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
-      );
-      await expect(putStatus).rejects.toMatchObject({ code: "execution.direct-write-refused" });
-      const getStatus = withEnv(root, () => active.get({ kind: "status", key: "root" }));
-      await expect(getStatus).rejects.toMatchObject({ code: "execution.consumer-not-ready" });
-      const deleteStatus = withEnv(root, () => active.delete!({ kind: "status", key: "root" }));
-      await expect(deleteStatus).rejects.toMatchObject({ code: "execution.direct-write-refused" });
-
-      const putSnapshot = withEnv(root, () => active.put({ kind: "snapshot", key: "wf-1", payload: { id: "wf-1" } }));
-      await expect(putSnapshot).rejects.toMatchObject({ code: "execution.direct-write-refused" });
-
-      // A `json` alias of a protected file is the same class: the alias's
-      // canonical target decides, not the name the caller used.
-      mkdirSync(join(root, "workflows", "wf-1"), { recursive: true });
-      writeFileSync(join(root, "workflows", "wf-1", "snapshot.json"), "{}\n", "utf8");
-      const alias = join(root, "snapshot-alias.json");
-      symlinkSync(join(root, "workflows", "wf-1", "snapshot.json"), alias);
-      const putAlias = withEnv(root, () => active.put({ kind: "json", key: alias, payload: { probe: true } }));
-      await expect(putAlias).rejects.toMatchObject({ code: "execution.direct-write-refused" });
-
-      // Refuse BEFORE the injected callback: not one data port ran, and the
-      // protected target's bytes are untouched by the refused alias write.
-      expect(store.puts).toEqual([]);
-      expect(store.gets).toEqual([]);
-      expect(store.deletes).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("an injected store's root claim cannot establish authority, in either direction", async () => {
-    const root = await activeControlRoot("injected-guard-claim-");
-    const noStore = tmpRoot("injected-guard-claim-nostore-");
-    const foreign = await legacyControlRoot("injected-guard-claim-foreign-");
-    try {
-      // Every claim — none, a root with no authority, a FOREIGN harness root —
-      // is judged against the canonical control authority, which is active.
-      for (const store of [probeStore(), probeStore(noStore), probeStore(foreign)]) {
-        setArtifactStore(store);
-        const active = getArtifactStore();
-        const attempt = withEnv(root, () =>
-          active.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
-        );
-        await expect(attempt).rejects.toMatchObject({ code: "execution.direct-write-refused" });
-        expect(store.puts).toEqual([]);
-      }
-
-      // The claim invents no refusal either: a store claiming an ACTIVE root
-      // elsewhere leaves the declared route intact while the canonical control
-      // authority is inactive.
-      const claiming = probeStore(root);
-      setArtifactStore(claiming);
-      const claimedActive = getArtifactStore();
-      const legacy = await legacyControlRoot("injected-guard-claim-legacy-");
-      const allowed = withEnv(legacy, () =>
-        claimedActive.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
-      );
-      await expect(allowed).resolves.toBeUndefined();
-      expect(claiming.puts.map((doc) => doc.kind)).toEqual(["status"]);
-      expect(existsSync(join(root, "status.json"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-      rmSync(noStore, { recursive: true, force: true });
-      rmSync(foreign, { recursive: true, force: true });
-    }
-  });
-
+// Injected stores remain prohibited from serving the retired project register.
+describe("injected ArtifactStore \u2014 retired project-register guard", () => {
   test("body refs still round-trip through the injected store while the authority is active", async () => {
     const root = await activeControlRoot("injected-guard-bodies-");
     try {
@@ -876,31 +814,6 @@ describe("injected ArtifactStore \u2014 canonical control-target guard", () => {
       expect(existsSync(join(root, "status.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("an injected store keeps its declared route while the canonical authority is not active", async () => {
-    const legacy = await legacyControlRoot("injected-guard-legacy-");
-    const bare = tmpRoot("injected-guard-bare-");
-    try {
-      // `legacy` holds a store whose execution authority is not active; `bare`
-      // holds no store file at all. Both keep the legacy route.
-      for (const root of [legacy, bare]) {
-        const store = probeStore();
-        setArtifactStore(store);
-        const active = getArtifactStore();
-        const put = withEnv(root, () =>
-          active.put({ kind: "status", key: "root", payload: { version: 2, updated_at: "2026-09-22", workflows: [] } }),
-        );
-        await expect(put).resolves.toBeUndefined();
-        const get = withEnv(root, () => active.get({ kind: "snapshot", key: "wf-1" }));
-        await expect(get).resolves.toBeUndefined();
-        expect(store.puts.map((doc) => doc.kind)).toEqual(["status"]);
-        expect(store.gets.map((ref) => ref.kind)).toEqual(["snapshot"]);
-      }
-    } finally {
-      rmSync(legacy, { recursive: true, force: true });
-      rmSync(bare, { recursive: true, force: true });
     }
   });
 

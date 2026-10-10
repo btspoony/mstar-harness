@@ -17,19 +17,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  bindPlanSession,
-  mutatePlanCoordination,
-  readPlanCoordination,
-  type CoordinationResult,
-} from "../../src/coordination.js";
 import { initializeStore, openStore, type StoreContext } from "../../src/store-db.js";
-import {
-  CoordinationError,
-  type CompletionEvidence,
-  type PlanPrepareConfig,
-  type PlanProgress,
-} from "../../src/coordination-write.js";
+import { CoordinationError } from "../../src/coordination-write.js";
 import { registerCatalogEntity } from "../../src/catalog.js";
 import { createFsStore, setArtifactStore } from "../../src/store.js";
 
@@ -250,65 +239,6 @@ export async function failureOf(run: () => Promise<unknown>): Promise<Error> {
   throw new Error("expected the call to fail");
 }
 
-/** Bind the one workflow coordinator once per fixture with an explicit id. */
-export async function ensureCoordinator(fixture: Fixture): Promise<string> {
-  if (fixture.coordinatorSession === "") {
-    const bound = await bindPlanSession({
-      coordinator: true,
-      workflowId: WORKFLOW_ID,
-      harnessDir: fixture.harness,
-      cwd: fixture.root,
-      sessionId: FIXTURE_COORDINATOR_ID,
-    });
-    expect(bound.ok).toBe(true);
-    expect(bound.operation).toBe("bind");
-    fixture.coordinatorSession = bound.session_file;
-  }
-  return fixture.coordinatorSession;
-}
-
-/**
- * One ordinary coordinator operation on one explicitly addressed row. The
- * revision is read first (the way `mstar plan show` hands it to the caller)
- * unless the case supplies a deliberately stale one.
- */
-export async function coordinatorCall(
-  fixture: Fixture,
-  planId: string,
-  operation: Record<string, unknown>,
-  expectedRevision?: number,
-): Promise<CoordinationResult> {
-  const sessionPath = await ensureCoordinator(fixture);
-  const revision =
-    expectedRevision ?? (await readPlanCoordination(sessionPath, planId, fixture.root)).revision;
-  return mutatePlanCoordination({
-    sessionPath,
-    planId,
-    expectedRevision: revision,
-    operation: operation as never,
-  });
-}
-
-/** Ordinary revisable execution configuration for the addressed row. */
-export function prepareCall(fixture: Fixture, planId: string, config?: PlanPrepareConfig): Promise<CoordinationResult> {
-  return coordinatorCall(fixture, planId, config === undefined ? { kind: "prepare" } : { kind: "prepare", config });
-}
-
-/** The coordinator's ordinary state report for one row. */
-export function progressCall(fixture: Fixture, planId: string, progress: PlanProgress): Promise<CoordinationResult> {
-  return coordinatorCall(fixture, planId, { kind: "progress", progress });
-}
-
-/** Direct completion with the consumer-visible evidence and optional merge result. */
-export function completeCall(
-  fixture: Fixture,
-  planId: string,
-  evidence: CompletionEvidence,
-  integration?: { base_sha: string; result_sha: string },
-): Promise<CoordinationResult> {
-  return coordinatorCall(fixture, planId, { kind: "complete", evidence, ...(integration === undefined ? {} : { integration }) });
-}
-
 export type GitFixture = Fixture & { integrationPath: string; baseSha: string; planSha: string };
 
 export function headOf(cwd: string): string {
@@ -493,23 +423,7 @@ export async function reportOnlyGitFixture(): Promise<GitFixture> {
   return fixture;
 }
 
-/** The state an iteration row's `complete` starts from: real source and merge. */
-export async function acceptedFixture(): Promise<GitFixture> {
-  const fixture = await gitFixture();
-  await prepareCall(fixture, PLAN_ID);
-  await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "feature commit ready for review", evidence_paths: [] });
-  await progressCall(fixture, PLAN_ID, { status: "InReview", summary: "feature commit submitted for QC and QA", evidence_paths: [] });
-  return fixture;
-}
 
-/** The state a standalone development row's `complete` starts from. */
-export async function acceptedStandaloneFixture(): Promise<GitFixture> {
-  const fixture = await standaloneGitFixture();
-  await prepareCall(fixture, PLAN_ID);
-  await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "standalone source commit ready for review", evidence_paths: [] });
-  await progressCall(fixture, PLAN_ID, { status: "InReview", summary: "standalone source submitted for QC and QA", evidence_paths: [] });
-  return fixture;
-}
 
 /* ------------------------------------------------------------------------ *
  * Store-backed fixtures

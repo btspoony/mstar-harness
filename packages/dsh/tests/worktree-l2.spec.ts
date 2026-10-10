@@ -40,12 +40,12 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedFileWorkflow, seedHarness, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -114,20 +114,14 @@ const lastMessage = (decision: PreStepDecision): UserMessage | undefined =>
 const secondLastMessage = (decision: PreStepDecision): UserMessage | undefined =>
   decision.kind === 'enter' ? decision.messages.at(-2) : undefined
 
-/** Seed a boot-time iteration state (v2 root + workflow snapshot + steering compass) under root/harness. */
+/** Seed one ACTIVE iteration workflow snapshot and its referenced compass. */
 async function seedIteration(root: string, plans: unknown[], compass: string): Promise<void> {
   const harnessDir = join(root, 'harness')
-  await mkdir(harnessDir, { recursive: true })
+  await seedActiveWorkflow(harnessDir, 'iter-00000808-wt', plans as never[], {
+    type: 'iteration',
+    compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',
+  }, 'seed-iter-00000808-wt', root, 'iter-00000808-wt')
   await seedHarness(harnessDir, {
-    'status.json': v2Root([v2WorkflowEntry('iter-00000808-wt', 'iteration')]),
-    // `compass_ref` is the selected lifecycle's ONLY compass link (D4 —
-    // `migrate.ts` producer shape): the gate row resolves this snapshot's own
-    // compass, never the first active compass on disk.
-    'workflows/iter-00000808-wt/snapshot.json': v2Snapshot('iter-00000808-wt', {
-      type: 'iteration',
-      plans,
-      compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',
-    }),
     'iterations/iter-00000808-wt/delivery-compass.md': compass,
   })
 }
@@ -218,11 +212,11 @@ function worktreeFixture(root: string, branches: readonly string[]): Map<string,
  * ========================================================================== */
 
 describe('pre-step iteration gate — catalog composition (REAL-composition boot)', () => {
-  it('boot with status.json + steering compass → pre-step appends the iteration-gate row after the engine-status row (Task 1 tool result shape)', async () => {
+  it('boot with an ACTIVE workflow + compass → pre-step appends the iteration-gate row after the engine-status row (Task 1 tool result shape)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-gate-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
     const inbox = [inboxMessage()]
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
@@ -238,10 +232,9 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
     // The catalog payload is NOT persisted on the row's source — read it from
     // the same builder the pre-step listener rendered the row from.
-    const payload = buildCatalogPayload(app.ctx, app.harnessDir)
+    const payload = await buildCatalogPayloadWithStore(app.ctx, app.harnessDir)
     expect(payload.iteration).toMatchObject({
       iterationId: 'iter-00000808-wt',
-      statusPath: join(app.harnessDir, 'workflows/iter-00000808-wt/snapshot.json'),
       compassPath: join(app.harnessDir, 'iterations/iter-00000808-wt/delivery-compass.md'),
     })
     // The cached view reuses the Task 1 tool result shape (transition /
@@ -276,13 +269,13 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // All plans Done but the STEERING compass is still locked — the §3.5
     // close-exit checklist fails (status must be completed + end_date).
     await seedIteration(root, [PLAN_DONE], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
     expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
-    const payload = buildCatalogPayload(app.ctx, app.harnessDir)
+    const payload = await buildCatalogPayloadWithStore(app.ctx, app.harnessDir)
     expect(payload.iteration!.gate).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
     const codes = payload.iteration!.gate.violations.map((v) => v.code)
     expect(codes).toContain('EXIT_STATUS_NOT_COMPLETED')
@@ -295,7 +288,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-delegate-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
     const inbox = [inboxMessage()]
     // A later-mounted decider replaces the message set with its own enter
     // decision; the mstar listener must build on THAT.
@@ -315,7 +308,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-abort-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
     const controller = new AbortController()
     controller.abort()
 
@@ -330,22 +323,22 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     expect(decision).toEqual({ kind: 'enter', messages: [] })
   })
 
-  it('process-stability : gate result cached at boot — seeding status/compass AFTER boot does not add the row, no per-step I/O', async () => {
+  it('process-stability : gate result cached at boot — seeding an ACTIVE workflow after boot does not add another row, no per-step I/O', async () => {
     const app = booted = await bootApp()
     const inbox = [inboxMessage()]
 
-    // Boot without iteration state → only the engine-status row.
+    // Boot without an ACTIVE workflow → only the engine-status row.
     const before = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
     expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length + 1)
     expect(lastMessage(before)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
 
-    // A compass + status.json appearing mid-session does NOT re-watermark
-    // within the catalog TTL: the cache is built at boot (no disk I/O on
-    // the agent-loop hot path between refreshes; a change lands after
-    // `catalogTtlMs` expires — Config `catalogTtlMs`, default 60000).
+    // Adding the ACTIVE workflow + compass mid-session does NOT re-watermark
+    // within the catalog TTL: the cache is built at boot.
+    await seedActiveWorkflow(app.harnessDir, 'iter-00000808-wt', [PLAN_TODO], {
+      type: 'iteration',
+      compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',
+    }, 'seed-iter-00000808-wt', app.root, 'iter-00000808-wt')
     await seedHarness(app.harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('iter-00000808-wt', 'iteration')]),
-      'workflows/iter-00000808-wt/snapshot.json': v2Snapshot('iter-00000808-wt', { type: 'iteration', plans: [PLAN_TODO] }),
       'iterations/iter-00000808-wt/delivery-compass.md': COMPASS_ACTIVE,
     })
     const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, 2), defaultEnter(inbox))
@@ -353,22 +346,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     expect(lastMessage(after)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
   })
 
-  it('boot-time degrade — malformed status.json keeps the row absent while the engine-status catalog still appends', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-badstatus-'))
-    fixtureRoots.push(root)
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': 'not json {{{',
-      'iterations/iter-00000808-wt/delivery-compass.md': COMPASS_ACTIVE,
-    })
-    const app = booted = await bootApp({ root })
-
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
-
-    expect(decision.kind === 'enter' && decision.messages).toHaveLength(1)
-    expect(lastMessage(decision)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
-  })
+  // Disposition — malformed status.json handling is a retired file-route assertion; ACTIVE execution authority reports store and workflow errors.
 })
 
 /* ===========================================================================
@@ -650,9 +628,9 @@ describe('dispatch gate — worktree L1 integration topology (canonical reader +
     return { integration, feature }
   }
 
-  /** Public producers persist the workflow and its ordinary row source facts. */
+  /** Public ACTIVE producer persists the workflow and its ordinary row source facts. */
   async function seedL1Snapshot(harnessDir: string, overrides: Record<string, unknown>, plan: Record<string, unknown>): Promise<void> {
-    await seedFileWorkflow(harnessDir, 'wf-1', [plan], overrides)
+    await seedActiveWorkflow(harnessDir, 'wf-1', [plan], overrides, 'seed-wf-1', dirname(harnessDir), 'wf-1')
   }
 
   /** Iteration snapshot overrides wiring the seeded topology (canonical field + branch anchors). */
@@ -745,49 +723,9 @@ Do the thing, evidence-first.
     expect(codes).toContain('worktree.main.residency-switched')
   })
 
-  it('unreadable sibling lifecycle snapshot → worktree.l1.lifecycle-snapshot-unreadable refusal (fail-closed, CLI parity)', async () => {
-    const root = tmpRoot('dsh-wt-l1-sibling-')
-    const { feature } = seedL1Topology(root)
-    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
-    const advisories = captureAdvisories(app.ctx)
-    // Two ACTIVE lifecycles: the governing wf-1 (valid) + wf-2 whose
-    // snapshot is malformed. Incomplete lifecycle evidence must not weaken
-    // the main-branch non-ownership check — the scan refuses instead of
-    // silently skipping the sibling.
-    await seedL1Snapshot(app.harnessDir, { branch: { base: 'main' } }, planWithScope(feature, 'feature/a'))
-    // Intentional malformed sibling: it cannot pass the public snapshot writer.
-    await seedHarness(app.harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-1'), v2WorkflowEntry('wf-2')]),
-      'workflows/wf-2/snapshot.json': '{not json',
-    })
+  // Disposition — removed unreadable sibling snapshot coverage; ACTIVE workflow state is validated in the execution database, not by scanning snapshot.json files.
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('subagent', { description: 'probe', prompt: l1Assignment(feature) }, { id: 'test-agent', session: { header: { cwd: feature } } }), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' }) // warn mode: refusal is an advisory violation, not a deny
-    expect(advisories).toHaveLength(1)
-    expect(violationCodes(advisories[0])).toContain('worktree.l1.lifecycle-snapshot-unreadable')
-  })
-
-  it('hostile sibling workflow id in the register → selection refuses before L1 can attribute the lifecycle', async () => {
-    const root = tmpRoot('dsh-wt-l1-sibling-id-')
-    const { feature } = seedL1Topology(root)
-    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
-    const advisories = captureAdvisories(app.ctx)
-    // A register id is a single path component: an id carrying separators
-    // must refuse at the register boundary — before the id is ever joined
-    // under the workflows dir. Session selection validates the full register
-    // before L1 can attribute a governing snapshot.
-    await seedHarness(app.harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-1'), v2WorkflowEntry('../escape')]),
-      'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [planWithScope(feature, 'feature/a')], { branch: { base: 'main' } }),
-    })
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('subagent', { description: 'probe', prompt: l1Assignment(feature) }, { id: 'test-agent', session: { header: { cwd: feature } } }), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' }) // warn mode: refusal is an advisory violation, not a deny
-    expect(advisories).toHaveLength(1)
-    expect(violationCodes(advisories[0])).toContain('lease.dispatch.unverifiable')
-  })
+  // Disposition — removed hostile workflow-id register fixture; ACTIVE workflow ids are owned and validated by database producers, not joined from status.json paths.
 })
 
 describe('dispatch gate — worktree hostile inputs + header-region scoping', () => {

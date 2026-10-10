@@ -1730,7 +1730,9 @@ function readExecutionMeta(db: StoreDb, schemaVersion: number): ExecutionMeta | 
  * legacy one.
  */
 type ExecutionAuthorityProbe =
-  | { kind: "state"; dbPath: string; state: ExecutionAuthorityState | null }
+  | { kind: "active"; dbPath: string }
+  | { kind: "absent"; dbPath: string }
+  | { kind: "not-active"; dbPath: string; state: ExecutionAuthorityState | null }
   | { kind: "unreadable"; dbPath: string; error: unknown };
 
 /** Driver codes a store file that exists but cannot be read reports:
@@ -1833,25 +1835,6 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
   return db;
 }
 
-/** FILE guards receive target directories, including not-yet-created workflow
- * directories. Keep their existing process/control discovery separate from
- * selected StoreContexts: otherwise a future target could bypass an ACTIVE
- * parent store. The resolver retains main-worktree and linked-fail-closed rules. */
-function executionFileStorePath(context: StoreContext): string {
-  if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const target = resolve(context.harnessDir);
-  // Git cannot use a future directory as cwd. Probe its existing ancestor
-  // before any writer mkdir/lock, while retaining the original null fallback.
-  let start = target;
-  while (!existsSync(start)) {
-    const parent = dirname(start);
-    if (parent === start) break;
-    start = parent;
-  }
-  const root = resolveProcessHarnessDir(start);
-  // A non-Git harness may contain its own plans/ child; it is not a new root.
-  return join(root === join(start, "plans") ? start : root ?? target, "store.db");
-}
 
 /**
  * The execution authority state at the caller's selected database path,
@@ -1888,7 +1871,7 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
     dropProbeConnection();
-    return { kind: "state", dbPath, state: null };
+    return { kind: "absent", dbPath };
   }
   assertStoreRuntimeSupported();
   let db: StoreDb | null;
@@ -1899,11 +1882,12 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
     if (isOpenLevelFailure(error) || isBusyError(error)) return { kind: "unreadable", dbPath, error };
     return refuseOpenFailure(error, dbPath);
   }
-  if (db === null) return { kind: "state", dbPath, state: null };
+  if (db === null) return { kind: "absent", dbPath };
   try {
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
     readStoreMeta(db);
-    return { kind: "state", dbPath, state: readExecutionMeta(db, schemaVersion)?.authorityState ?? null };
+    const state = readExecutionMeta(db, schemaVersion)?.authorityState ?? null;
+    return state === "active" ? { kind: "active", dbPath } : { kind: "not-active", dbPath, state };
   } catch (error) {
     // A failed read leaves the connection's state unknown: never reuse it.
     dropProbeConnection();
@@ -1912,73 +1896,6 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
   }
 }
 
-/**
- * Refuse a protected file write while the control harness's execution authority
- * is ACTIVE. Root status, workflow snapshots and session envelopes are no
- * longer a persistence route, so persisting them — even from inside the
- * authorized protected-write context, through an injected `ArtifactStore`, or
- * with a valid byte token — would create a second authority.
- *
- * Synchronous by contract (primary spec §4.3): its callers are synchronous file
- * writers, so the probe above must never become an unawaited async guard, and
- * the authority verdict precedes payload validation at every call site.
- *
- * A store file that EXISTS and cannot be read is a refusal here too (primary
- * spec §5: no protected mutation while the authority cannot be established) —
- * never a fall back to the retired file route. Only a path with no store file
- * at all keeps the legacy route (there is no authority to establish).
- */
-export function assertExecutionFileWriteAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(executionFileStorePath(context));
-  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.state !== "active") return;
-  throw new StoreError(
-    "execution.direct-write-refused",
-    `The execution authority of ${probe.dbPath} is ACTIVE \u2014 root, workflow-snapshot and ` +
-      `session-envelope files are retired as a persistence route. Nothing was written: use the execution ` +
-      `DB route (the coordination/registration APIs against the active store), not a file writer.`,
-  );
-}
-
-/**
- * Refuse a legacy root/snapshot authority READ while the control harness's
- * execution authority is ACTIVE. The bytes may still sit on disk (migration
- * keeps its own explicit byte-witness readers), but no domain reader may
- * present them as authoritative success: a consumer that needs execution state
- * reads it through the DB adapter instead.
- *
- * Synchronous by contract (primary spec §4.3): legacy authority readers are
- * synchronous, and they share the write guard's lazy probe.
- *
- * Disposition, in the two cases the probe distinguishes (§2.1/§5):
- *
- * - a store file EXISTS at the probed path and cannot be read (`unreadable`:
- *   SQLITE_CANTOPEN / an I/O error / another writer past the bounded wait) →
- *   REFUSED with the store's own reader refusal (`store.corrupt` / `store.busy`,
- *   the same mapping `openStore(…, "read")` produces). Serving leftover JSON
- *   there would be exactly the forbidden fallback: bytes that cannot be
- *   checked against the authority are not an authority answer.
- * - no store file exists at the probed path (`state: null`, the
- *   never-initialized legacy/staged case) → the read proceeds, i.e. the legacy
- *   read route keeps its pre-guard behaviour. There is no store to read, so
- *   there is no authority verdict to make (§2.1: absence is not an authority
- *   verdict; closing that with the durable installed binding is the explicit 2b
- *   obligation).
- *
- * A store that is observable but broken (corrupt content, drifted/unknown
- * schema, unsupported runtime) throws out of the probe and refuses through
- * this guard as well.
- */
-export function assertExecutionFileReadAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(executionFileStorePath(context));
-  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.state !== "active") return;
-  throw new StoreError(
-    "execution.consumer-not-ready",
-    `The execution authority of ${probe.dbPath} is ACTIVE \u2014 this legacy file reader would serve ` +
-      `retired root/snapshot JSON as authority. Nothing was read: consume the execution DB adapter instead.`,
-  );
-}
 /**
  * Execute a synchronous read-only callback against the current execution
  * authority. This is the guard used immediately before file-native commits:
@@ -1991,7 +1908,7 @@ export function withExecutionReadGuard<T>(
 ): T {
   const probe = probeExecutionAuthority(storeDbPath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.state !== "active") {
+  if (probe.kind !== "active") {
     throw new StoreError(
       "execution.consumer-not-ready",
       "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.",
@@ -2061,10 +1978,11 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
   if (!existsSync(dbPath)) {
     throw new StoreError(
       "store.not-initialized",
-      `No issue store exists at ${dbPath}. For a genuinely empty workspace, run ` +
-        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" ` +
-        `to create and activate the selected store (or "mstar store init" with the same --harness ` +
-        `when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`,
+      `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely ` +
+        `empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; ` +
+        `for a workspace holding historical file state, run ` +
+        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to ` +
+        `import it and activate the store. Nothing was created.`,
     );
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
@@ -2167,6 +2085,7 @@ export async function initializeStore(
       }
       applyPendingMigrations(db, { alreadyInTransaction: true, attestation });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
+      db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
     } catch (error) {
       try {
@@ -2185,8 +2104,7 @@ export async function initializeStore(
       storeId: meta.storeId,
       epoch: meta.epoch,
       schemaVersion: MIGRATIONS.length,
-      // A freshly initialized store is active for issue/catalog and `legacy`
-      // for execution: initialization is not an execution activation.
+      // Init creates an active execution authority together with the schema.
       execution: readExecutionMeta(openDb, MIGRATIONS.length),
       close(): void {
         openDb.close();

@@ -15,13 +15,13 @@ ZCode **Plan mode** (`EnterPlanMode` / `ExitPlanMode`) uses read-only exploratio
 
 | Step | ZCode session | Harness SSOT |
 |------|---------------|--------------|
-| Enter | `EnterPlanMode` — explore read-only | Ensure `{HARNESS_DIR}` exists; register store-backed workflow/plan rows through public producer when known (file state only pre-activation) |
+| Enter | `EnterPlanMode` — explore read-only | Ensure `{HARNESS_DIR}` exists; register store-backed workflow/plan rows through public producer when known |
 | Design | Draft plan content; surface via `ExitPlanMode` plan text | Mirror main plan to `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes |
 | Clarify | `AskUserQuestion` for blocking ambiguity only | Record decisions in plan / spec when durable |
 | Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; store-backed plan row updated through public plan verbs |
 | Implement | Agent mode resumes | Per-task commits, Working branch, dispatch per `mstar-dispatch-gates` |
 
-`TodoWrite` and ZCode UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and the store-backed plan row via public plan verbs (snapshot files only pre-activation) when coordination requires it.
+`TodoWrite` and ZCode UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and the store-backed plan row via public plan verbs when coordination requires it.
 
 ## ExitPlanMode gate
 

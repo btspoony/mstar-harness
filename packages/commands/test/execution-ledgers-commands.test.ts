@@ -7,8 +7,8 @@ import {
   createExecutionWorkflow,
   encodeExecutionSessionRef,
   executionContextFor,
-  initializeExecutionAuthority,
   initializeStore,
+  readExecutionState,
   type ExecutionSessionRef,
   type ExecutionToken,
   type ExecutionIdentity,
@@ -38,8 +38,11 @@ async function activeFixture() {
   // than inventing one, and a fixture that skips this never reaches a route.
   mkdirSync(harnessDir, { recursive: true });
   const storeContext = { harnessDir };
-  (await initializeStore(storeContext)).close();
-  const initialized = await initializeExecutionAuthority(storeContext);
+  const store = await initializeStore(storeContext);
+  // `initializeStore` activates the execution authority (issue #428); read its
+  // root creation token back instead of re-initializing.
+  const initialized = { token: (await readExecutionState(storeContext)).token };
+  store.close();
   const identity: ExecutionIdentity = { source: "local", sessionId: COORDINATOR, workflowId: WORKFLOW, role: "coordinator" };
   const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
     entry: { id: WORKFLOW, type: "plan", status: "running", started_at: "2026-10-08T00:00:00Z", dir: `workflows/${WORKFLOW}` } as never,

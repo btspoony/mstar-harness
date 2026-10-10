@@ -57,13 +57,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, seedV2Tree, FakeSessionsRegistry, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
-import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
+import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
+import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import type { AgentFlowEventView } from '../src/types.ts'
 import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
 
@@ -163,31 +163,12 @@ async function makeHarnessWorkspace(prefix: string): Promise<string> {
   return ws
 }
 
-/** status.json wrapping one plan row (lease-gate fixture shape — kept for the v1→migration-required P-b degrade case). */
-const statusDoc = (plan: Record<string, unknown>): string =>
-  JSON.stringify({
-    version: 1,
-    updated_at: '2026-08-08',
-    plans: [plan],
-    residual_findings: {},
-    metadata: {},
-  })
-
-/** Seed the v2 P-b tree: v2 root + ACTIVE workflow snapshot carrying one plan row (Task 3 — the snapshot read). */
+/** Seed one ACTIVE execution workflow whose plan rows drive P-b attribution. */
 async function seedPbTree(harnessDir: string, plan: Record<string, unknown>): Promise<void> {
-  await seedHarness(harnessDir, {
-    'status.json': v2RootWithWorkflow(),
-    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan]),
-  })
+  await seedActiveWorkflow(harnessDir, 'wf-1', [plan])
 }
 
-/** Seed the v2 tree with a SNAPSHOT that is parseable-but-shape-invalid (`plans` non-array) — the P-b one-warn degrade (F-301). */
-async function seedPbShapeInvalid(harnessDir: string): Promise<void> {
-  await seedHarness(harnessDir, {
-    'status.json': v2RootWithWorkflow(),
-    'workflows/wf-1/snapshot.json': v2Snapshot('wf-1', { plans: {} }),
-  })
-}
+/** File-route-only invalid snapshot subjects are retired after ACTIVE cutover. */
 
 /** InProgress plan row with no recorded scope — uncovered. */
 const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
@@ -217,11 +198,6 @@ const DONE_NO_LEASE: Record<string, unknown> = {
   status: 'Done',
 }
 
-/** statusDoc for a MALFORMED status.json — the P-b read-failure case. */
-const UNREADABLE_STATUS = '{ "version": 1, "plans": ' // truncated — readJson throws
-
-/** A PARSEABLE but shape-invalid status.json (`plans` non-array) — P-b degraded like the unreadable case (F-301). */
-const SHAPE_INVALID_STATUS = '{ "version": 1, "plans": {} }'
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -620,104 +596,43 @@ describe('workflow gate — P-b lease attribution', () => {
     expect(advisories).toHaveLength(0)
   })
 
-  it('(f) status read failure → fail-open + ONE warn (broken status must not brick fan-out; P-a/P-c still run)', async () => {
+  it('(f) ACTIVE store read failure → fail-open + ONE warn (broken authority must not brick fan-out)', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-f-')
-    await seedHarness(join(ws, '.agents'), {
-      'status.json': v2RootWithWorkflow(),
-      'workflows/wf-1/snapshot.json': UNREADABLE_STATUS,
-    })
+    await seedHarness(join(ws, '.agents'), { 'store.db': 'not a sqlite database' })
     const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
     const warnSnapshot = warns.length
-
-    // Ralph under hard: P-b is degraded (fail-open + warn), P-a/P-c never
-    // apply — the call is allowed with exactly ONE warn.
     const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
-
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
     expect(warns.length - warnSnapshot).toBe(1)
   })
 
-  it('(g) parseable-but-shape-invalid status.json → fail-open + ONE warn (P-b degraded with parity to the unreadable read); P-a still runs (F-301)', async () => {
-    const ws = await makeHarnessWorkspace('dsh-ws-pb-g-')
-    await seedPbShapeInvalid(join(ws, '.agents'))
-    const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
-    const advisories = captureAdvisories(app.ctx)
-    const warns = captureDispatchWarns(app.ctx)
-    const warnSnapshot = warns.length
+  // Disposition: removed the v2 status/snapshot shape-invalid P-b subjects (g/h);
+  // the ACTIVE execution authority no longer consumes those retired files.
 
-    // Allowlisted under hard: P-b is degraded (fail-open + ONE warn — the
-    // same loudness as the unreadable read, F-301), P-a still evaluates and
-    // passes — the call is allowed, exactly ONE warn, no advisory.
-    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
-    expect(warns.length - warnSnapshot).toBe(1)
-  })
-
-  it('(h) v2 root + shape-invalid SNAPSHOT (no readable plans[]) + workflow + hard + unknown name → P-a deny survives the degraded P-b (workflow.name.unknown, exactly ONE warn) (F-304)', async () => {
-    const ws = await makeHarnessWorkspace('dsh-ws-pb-h-')
-    // The v2 root (active workflow) is valid; the SNAPSHOT's `plans` is
-    // non-array — the P-b read (Task 3 re-points it to the snapshot rows)
-    // treats it as shape-invalid → the same fail-open + ONE warn degrade as
-    // the unreadable read. The active v2 workflow ALSO satisfies the
-    // agent-flow writer's precondition, so the verdict row records.
-    await seedPbShapeInvalid(join(ws, '.agents'))
-    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
-    const advisories = captureAdvisories(app.ctx)
-    const warns = captureDispatchWarns(app.ctx)
-    const warnSnapshot = warns.length
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
-
-    expect(decision.kind).toBe('deny')
-    if (decision.kind !== 'deny') throw new Error('expected deny')
-    // The deny is the P-a unknown-name veto, NOT the lease red line — the
-    // P-b degrade did not swallow the name-axis policy.
-    expect(decision.reason).toContain('deploy-x')
-    expect(decision.reason).not.toContain('workflow.lease.uncovered')
-    expect(advisories).toHaveLength(0)
-    // Exactly ONE warn: the P-b degrade warn (the deny logs at error level).
-    expect(warns.length - warnSnapshot).toBe(1)
-    // The verdict row records into the ACTIVE workflow dir of the calling
-    // workspace's harness (`.agents/workflows/wf-1/agent-flow.jsonl`).
-    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
-    expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({
-      kind: 'workflow-verdict',
-      verdict: 'denied',
-      workflow: 'deploy-x',
-      mode: 'hard',
-      code: 'workflow.name.unknown',
-    })
-  })
 
   it('(i) P-b reads only the BOUND lifecycle snapshot; an unbound session degrades instead of silently picking the first active', async () => {
     const ws = await makeHarnessWorkspace('dsh-ws-pb-bound-')
     const harnessDir = join(ws, '.agents')
-    // wf-a is lease-covered, wf-b carries an orphan InProgress plan.
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2SnapshotWithPlans('wf-a', [IN_PROGRESS_WITH_LEASE]),
-      'workflows/wf-b/snapshot.json': v2SnapshotWithPlans('wf-b', [IN_PROGRESS_ORPHAN]),
-    })
+    // wf-a is lease-covered, wf-b carries an orphan InProgress plan; each
+    // fixture session gets an engine-issued C1 binding.
+    await seedActiveWorkflow(harnessDir, 'wf-a', [IN_PROGRESS_WITH_LEASE], {}, 'sess-covered', ws, 'wf-a')
+    await seedActiveWorkflow(harnessDir, 'wf-b', [IN_PROGRESS_ORPHAN], {}, 'sess-orphan', ws, 'wf-b')
     const app = booted = await bootApp({ workflowGate: 'hard', workflowNames: ['deploy-x'], harnessDir: null })
     const advisories = captureAdvisories(app.ctx)
     const warns = captureDispatchWarns(app.ctx)
 
     // Session A is durably bound to the COVERED lifecycle: the sibling's
     // orphan is not its red line, and the read is NOT a degrade (no warn).
-    expect(updateWorkflowSessionBinding(harnessDir, 'sess-covered', ws, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    // The fixture already persisted Session A's C1 binding.
     const warnSnapshot = warns.length
     expect(await app.ctx.waterfall('tools/pre-execute', workflowExecBound('deploy-x', ws, 'sess-covered'), defaultAllow)).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
     expect(warns.length - warnSnapshot).toBe(0)
 
     // Session B is bound to the OTHER lifecycle: the orphan IS its red line.
-    expect(updateWorkflowSessionBinding(harnessDir, 'sess-orphan', ws, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-b' }).kind).toBe('written')
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecBound('deploy-x', ws, 'sess-orphan'), defaultAllow)
     expect(decision.kind).toBe('deny')
     if (decision.kind !== 'deny') throw new Error('expected deny')
@@ -844,14 +759,8 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   it('(4) ask first-seen → ask verdict row; allow answer observed via run-start → cache records allow; second same-name call allowed without re-ask', async () => {
     const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
-    const parent = parentSession('parent-ask-e2e', app.root)
+    const parent = parentSession('seed-wf-1', app.root)
     sessions.register(parent)
-    // The session's DURABLE pick: the ledger's explicit-target resolver serves
-    // the legacy route only for a session that selected this lifecycle
-    // (`resolveExecutionLedgerTarget`, `workflow-selection.ts` — its single
-    // selection point; an unbound session gets no target, and the consumer
-    // never falls back to file-based inference).
-    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
 
     const first = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
     expect(first.kind).toBe('ask')
@@ -965,11 +874,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   it('(9) compliant workflow run produces the W-B2 run rows alongside the verdict row (consumer integration)', async () => {
     const app = booted = await bootApp({ workflowGate: 'warn', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
-    const parent = parentSession('parent-warn-e2e', app.root)
-    sessions.register(parent)
-    // The session's durable pick (see (4)): the explicit-target resolver's
-    // single selection point.
-    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
+    const parent = parentSession('seed-wf-1', app.root)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', workflowExec('deploy-x'), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
@@ -1013,10 +918,10 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     const root = await mkdtemp(join(tmpdir(), 'dsh-ws-t4-contain-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
-    await seedV2Tree(harnessDir)
+    await seedActiveWorkflow(harnessDir)
     const ctx = new Context()
     const sessions = new FakeSessionsRegistry(ctx)
-    const parent = parentSession('parent-throw-e2e', root)
+    const parent = parentSession('seed-wf-1', root)
     sessions.register(parent)
     const throwingCache = {
       record(): never {
@@ -1031,7 +936,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
       if (level === 'warn') captured.push(message)
     })
     try {
-      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), throwingCache)
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), throwingCache, resolveExecutionLedgerTarget)
       sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-throw-e2e', name: 'deploy-x' })
       await drainLedger()
       const view = readAgentFlow(join(harnessDir, 'workflows/wf-1'))
@@ -1054,11 +959,8 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   it('(13) P-c cache-key congruence (Task-5 fold-in): a control-char name gates and observes under ONE normalized key — second call no re-ask', async () => {
     const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
-    const parent = parentSession('parent-ctrl-e2e', app.root)
+    const parent = parentSession('seed-wf-1', app.root)
     sessions.register(parent)
-    // The session's durable pick (see (4)): the explicit-target resolver's
-    // single selection point.
-    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
     // `au\u0000dit` — the gate composes `metaName` through the shared
     // `normalizeWorkflowName` (ASCII control chars stripped); the run-start
     // observation keys the cache with the SAME normalized name. Pre-fix the
@@ -1121,11 +1023,8 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
   it('(15) name exceeding MAX_NAME still gate-keys consistently: the cache key is the UNCAPPED full name on both seams (the ledger ROW display name is capped separately)', async () => {
     const app = booted = await bootApp({ workflowGate: 'ask', sessionsService: 'fake', seedV2: true })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
-    const parent = parentSession('parent-long-e2e', app.root)
+    const parent = parentSession('seed-wf-1', app.root)
     sessions.register(parent)
-    // The session's durable pick (see (4)): the explicit-target resolver's
-    // single selection point.
-    expect(updateWorkflowSessionBinding(app.harnessDir, parent.header.id, app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
     const longName = `long-${'x'.repeat(1100)}` // > WORKFLOW_LEDGER_MAX_NAME_LENGTH (1024)
 
     // The gate path never caps ids: the full name IS the allowlist/ask
@@ -1161,12 +1060,8 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     await seedPbTree(join(ws, '.agents'), IN_PROGRESS_ORPHAN)
     const app = booted = await bootApp({ workflowGate: 'ask', harnessDir: null, sessionsService: 'fake' })
     const sessions = app.ctx.get('sessions') as unknown as FakeSessionsRegistry
-    const parent = parentSession('parent-w1-e2e', ws)
+    const parent = parentSession('seed-wf-1', ws)
     sessions.register(parent)
-    // The session's durable pick (see (4)): this workspace's harness is
-    // `.agents` (a recognized layout), so the resolver's own harness lookup
-    // needs no declaration — only the selection.
-    expect(updateWorkflowSessionBinding(join(ws, '.agents'), parent.header.id, ws, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-1' }).kind).toBe('written')
 
     // The P-b red line preempts P-c: the name is NEVER asked (advisory warn
     // verdict under ask mode, not an ask) — but the call RUNS, so the
@@ -1187,13 +1082,12 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     expect(sessionLedger?.events.some((e) => e.kind === 'workflow-run')).toBe(true)
     expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBeUndefined()
 
-    // The workspace is recovered (the orphan plan is resolved — the snapshot
-    // now carries the Done row): P-b passes.
-    await seedPbTree(join(ws, '.agents'), DONE_NO_LEASE)
+    const recoveredWs = await makeHarnessWorkspace('dsh-ws-w1-recovered-')
+    await seedPbTree(join(recoveredWs, '.agents'), DONE_NO_LEASE)
 
     // Ask mode keeps its promise for the never-resolved name: ASK again —
     // the pre-ask run did not pre-authorize it.
-    const second = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+    const second = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', recoveredWs), defaultAllow)
     expect(second.kind).toBe('ask')
   })
 

@@ -70,10 +70,10 @@ const ROADMAP_FILE = "roadmap.md";
  * NOT an import of `WorkflowSnapshot` from workflow.ts. The loose phase-gate
  * reads (`evaluatePhaseGate`) only touch `plans[].status`, so the full
  * schema stays out of those call paths. The Phase-6 gate
- * (`evaluatePostMergeClose`) DOES consume the strict T1 validator directly
- * (static edge iteration → workflow; workflow's closure never imports this
- * module, so no cycle is created). Keep this shape in sync manually when
- * the snapshot schema changes.
+ * (`evaluatePostMergeCloseFromExecutionAuthority`) consumes the strict T1
+ * validator directly (static edge iteration → workflow; workflow's closure
+ * never imports this module, so no cycle is created). Keep this shape in sync
+ * manually when the snapshot schema changes.
  */
 export type SnapshotDoc = {
   plans?: unknown;
@@ -504,176 +504,10 @@ export function evaluatePhaseGate(
 }
 
 /**
- * Phase 6 post-merge close local-state gate (phase-6-post-merge-close.md
- * §6.4 + Evidence): verifies the checkable post-close state — the workflow
- * snapshot is a valid v3 document (T1 `validateWorkflowSnapshot`, with the
- * single legacy `control_worktree_path` alias non-blocking exactly as the
- * canonical reader accepts and migrates it) in a terminal status (completed
- * | failed | stopped), has no top-level `integration_merge_lease`, and the
- * root `status.json` validates as a v2 registry (`validateStatusV2`,
- * structure-only) and no longer registers the workflow (removal-at-terminal).
- *
- * Deliberately does NOT verify remote merge evidence or physical cleanup —
- * the gate only reads local state. An invalid/unreadable ROOT — any
- * `validateStatusV2` failure (non-v2 version, missing `updated_at`,
- * malformed `workflows[]` or entries) — is a
- * violation (`PHASE6_INVALID_ROOT`): it is not proof of the entry's
- * absence. The integration lease probe runs only on terminal documents;
- * mid-flight leases on a running lifecycle are legitimate and the actionable
- * code is `PHASE6_NOT_TERMINAL`.
- *
- * Pure and additive: consumes T1's validators unchanged and does not touch
- * `evaluatePhaseGate` / `PhaseGateResult` (Phase 2–5 exit codes stay
- * intact). Stable machine codes: `PHASE6_NOT_TERMINAL`,
- * `PHASE6_ROOT_ENTRY_PRESENT`, `PHASE6_DANGLING_LEASE`,
- * `PHASE6_INVALID_SNAPSHOT`, `PHASE6_INVALID_ROOT`,
- * `PHASE6_DELIVERY_KIND_UNREGISTERED`, `PHASE6_DELIVERY_EVIDENCE_INCOMPLETE`,
- * `PHASE6_PLAN_ROW_NOT_DONE`.
- *
- * Plan-type delivery-kind consultation (seam S3, contract §6 S3 + §4g): a
- * terminal `type: plan` snapshot also consults the delivery evidence recorded
- * over the lifecycle — plan rows are the owned plan (no compass input) and
- * remote merge verification stays excluded by contract (§4f is the PM's
- * separate check). The consultation is the shared pure function
- * `consultDeliveryEvidence` (workflow.ts), which `closeWorkflow` runs before
- * writing a terminal snapshot — one implementation, so this read-only gate
- * and the write path can never disagree. It runs for a `completed` close ONLY:
- * `failed`/`stopped` closes are never demanded delivery evidence (§5 — failure
- * closes through its explicit status with a recorded reason and is never
- * treated as delivered), exactly as `closeWorkflow` preserves an
- * already-terminal snapshot unchanged without consulting; the type-generic
- * dangling-lease probe still covers every terminal status. The kind is never
- * inferred (§1): a plan workflow without a registered `delivery_kind` has no
- * close-verifiable delivery evidence — for a legacy terminal snapshot this is
- * outside the gate's automated recovery, because the create-only register
- * cannot backfill terminal bytes, so the remediation names the owner
- * snapshot-amendment path (the audit-promotion grandfather population is
- * disclosed there) instead of the register verb — and a registered kind with
- * incomplete delivery evidence (`development` without its registered
- * source/target branches, its compound disposition, its PR identity or the
- * PM's verified-merge record; `verification/report-only` without the recorded
- * completion policy or its fulfilment record) refuses the same way — missing
- * fields are incomplete registration, not an exempt workflow. A `completed`
- * close additionally requires every owned plan row `Done` (the post-write
- * mirror of `closeWorkflow`'s all-rows-Done guard, §3 terminal stage);
- * `failed`/`stopped` lifecycles keep their statuses and row states (§5 —
- * never rewritten as successfully completed). Every refusal is read-only: the
- * workflow stays registered/resumable.
- */
-export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknown): GateResult {
-  const violations: ValidationResult[] = [];
-  const shape = validateWorkflowSnapshot(snapshotDoc);
-  // Mirror `normalizeWorkflowSnapshot`: the legacy `control_worktree_path`
-  // alias is a non-blocking migration diagnostic that `closeWorkflow` accepts
-  // and migrates on the next authorized write, so the gate classifies
-  // INVALID_SNAPSHOT only from the blocking remainder — the gate and the
-  // closer must agree on which documents are closable.
-  const blocking = shape.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
-  if (blocking.length > 0) {
-    const detail = blocking.map((v) => v.message).join("; ");
-    violations.push(
-      violation(
-        "high",
-        "PHASE6_INVALID_SNAPSHOT",
-        `Workflow snapshot is not a valid v3 snapshot \u2014 the Phase-6 local close state cannot be verified (${detail})`,
-        "Repair {HARNESS_DIR}/workflows/<id>/snapshot.json (mstar status validate), then re-run the gate",
-      ),
-    );
-  }
-  // T1 terminal predicate — status-only read, guarded to object documents:
-  // the total validator above refuses parsed non-object bodies (a literal
-  // `null` snapshot.json etc.) as blocking violations, so this read cannot
-  // throw. Shape-invalid OBJECT documents still reach it — the
-  // The integration lease probe below intentionally runs on any terminal body.
-  const shapeOk = blocking.length === 0;
-  const terminal = isPlainObject(snapshotDoc) && isTerminalSnapshot(snapshotDoc as WorkflowSnapshot);
-  if (shapeOk && !terminal) {
-    violations.push(
-      violation(
-        "high",
-        "PHASE6_NOT_TERMINAL",
-        `Workflow status is ${JSON.stringify(snapshotDoc.status)} \u2014 post-merge close requires a terminal snapshot (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`,
-      ),
-    );
-  }
-  if (terminal && isPlainObject(snapshotDoc) && snapshotDoc.integration_merge_lease != null) {
-    violations.push(
-      violation(
-        "high",
-        "PHASE6_DANGLING_LEASE",
-        "A terminal snapshot still carries an integration mutex. The mutex must be settled before closing a failed/stopped workflow; a terminal snapshot cannot be amended by retrying close.",
-        "For a still-running workflow, use pre-activation FILE `mstar workflow recover-coordinator --session <prior-envelope> --operation-id <id> --reason <reason> --authorization-ref <reference> --stopped <prior-id> --attestation <absolute-json>` or ACTIVE `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`, then close as failed/stopped. If already terminal, preserve the snapshot and escalate an explicit workflow residual; do not retry close.",
-      ),
-    );
-  }
-  const workflowId = isPlainObject(snapshotDoc) && typeof snapshotDoc.id === "string" ? snapshotDoc.id : null;
-  // Plan-type delivery evidence, COMPLETED closes only (seam S3 — see the doc
-  // comment). Runs on shape-valid terminal documents: an invalid document is
-  // already PHASE6_INVALID_SNAPSHOT, and the validator owns enum validity (an
-  // out-of-enum delivery_kind never reaches this block as shape-ok). The
-  // consultation itself is `consultDeliveryEvidence` — the SAME pure function
-  // `closeWorkflow` runs before its terminal write, so this gate's verdict and
-  // the close refusal cannot drift apart.
-  //
-  // `failed` / `stopped` closes are NEVER demanded delivery evidence (§5: a
-  // failure closes through its explicit status with a recorded reason and is
-  // never treated as delivered) — exactly as `closeWorkflow` preserves an
-  // already-terminal snapshot unchanged without consulting. The type-generic
-  // dangling-lease probe above keeps running for every terminal status.
-  if (shapeOk && terminal && isPlainObject(snapshotDoc) && snapshotDoc.type === "plan" && snapshotDoc.status === "completed") {
-    violations.push(...consultDeliveryEvidence(snapshotDoc as unknown as WorkflowSnapshot));
-    // Every owned plan row Done (§3 terminal stage).
-    if (Array.isArray(snapshotDoc.plans)) {
-      for (const row of snapshotDoc.plans) {
-        if (isPlainObject(row) && row.status !== PLAN_STATUS_DONE) {
-          violations.push(
-            violation(
-              "high",
-              "PHASE6_PLAN_ROW_NOT_DONE",
-              `Workflow '${String(workflowId)}' is completed but owned plan row '${String(row.id)}' is ${JSON.stringify(row.status)} \u2014 a completed close requires every plan row Done (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a73 terminal stage)`,
-              "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
-            ),
-          );
-        }
-      }
-    }
-  }
-  // Full v2 root validation, not a minimal "workflows is an array" probe: a
-  // malformed registry (non-v2 version, missing `updated_at`, malformed
-  // `workflows[]` entries) must fail closed as PHASE6_INVALID_ROOT — an
-  // invalid root is not proof that the entry is gone, and the minimal probe
-  // false-PASSed whenever the workflow id was absent from an invalid
-  // registry. Doc input without a harness dir is structure-only
-  // (`validateStatusV2`); the removal-at-terminal snapshot invariants are
-  // the caller's deployment-level checks, not this pure gate's.
-  const rootGate = validateStatusV2(rootDoc as StatusV2Doc);
-  if (!rootGate.ok) {
-    violations.push(
-      violation(
-        "high",
-        "PHASE6_INVALID_ROOT",
-        "Root status.json is not a readable v2 workflow registry (workflows[] missing or not an array) \u2014 an invalid/unreadable root is not proof that the entry is gone",
-        "Repair or migrate {HARNESS_DIR}/status.json to the v2 shape, then re-run the gate",
-      ),
-    );
-  } else if (workflowId !== null && (rootDoc as StatusV2Doc).workflows.some((entry) => entry.id === workflowId)) {
-    violations.push(
-      violation(
-        "high",
-        "PHASE6_ROOT_ENTRY_PRESENT",
-        `Workflow '${workflowId}' is still registered in the root status.json workflows[] \u2014 post-merge close unregisters it (removal-at-terminal)`,
-        "Run 'mstar status workflow-close --workflow <id>' to finish the unregister",
-      ),
-    );
-  }
-  return { ok: violations.length === 0, violations };
-}
-
-/**
- * The ACTIVE-authority form of the Phase-6 post-merge close gate: the same
- * checks and violation codes as `evaluatePostMergeClose`, evaluated from the
- * execution DB authority instead of the retired snapshot/status documents
- * (I-000309). Facts and sources:
+ * The Phase-6 post-merge close gate (issue #428: the pre-activation
+ * snapshot/status file arm is retired, so this ACTIVE-authority form is the
+ * only one). It evaluates the same checks and violation codes from the
+ * execution DB authority. Facts and sources:
  *
  * - root register + registration  → the served graph's root (`readExecutionState`)
  * - terminal status, delivery evidence, plan rows Done → the workflow's own
@@ -895,7 +729,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
                 "high",
                 "PHASE6_DANGLING_LEASE",
                 "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.",
-                "Recovery is authority-specific: pre-activation FILE uses `mstar workflow recover-coordinator --session <prior-envelope> --operation-id <id> --reason <reason> --authorization-ref <reference> --stopped <prior-id> --attestation <absolute-json>`; ACTIVE uses `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. Only recover/close while the lifecycle is running; if already terminal, preserve it and escalate an explicit workflow residual.",
+                "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.workflows[]` collection and use its matching `token` as the `--expect` value for `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. A terminal workflow cannot be recovered; preserve it and record an explicit workflow residual.",
               ),
             );
           }

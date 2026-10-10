@@ -4,7 +4,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "../../cli/src/sdd-evidence.js";
-import { resolveSddExecutionContext, SddScriptError } from "@mstar-harness/engine";
+import {
+  createExecutionWorkflow,
+  initializeStore,
+  readExecutionState,
+  registerCatalogEntity,
+  resolveSddExecutionContext,
+  SddScriptError,
+} from "@mstar-harness/engine";
 import { getSddCommandDefinitions } from "../src/index.js";
 import { failed } from "../src/families/sdd.js";
 import type { InvocationContext } from "../src/types.js";
@@ -85,6 +92,40 @@ function evidenceWorkspace(root: string) {
   return { feature, harness, planFile, sddDir, requestPath };
 }
 
+/**
+ * The resolver reads workflow facts from the ACTIVE execution authority
+ * (issue #428), so a fixture whose contexts must RESOLVE seeds its store:
+ * one registered workflow with a Todo row (registered, no feature scope —
+ * the resolver's branch-alignment arm).
+ */
+async function seedResolvedAuthority(harness: string): Promise<void> {
+  const context = { harnessDir: harness };
+  (await initializeStore(context)).close();
+  await registerCatalogEntity(
+    context,
+    { kind: "plan", id: "plan", title: "plan", rootKind: "plans", relativePath: "plans/plan.md" },
+    { operationId: "catalog-plan", actor: "commands-sdd.test" },
+  );
+  await createExecutionWorkflow(
+    { harnessDir: harness, caller: { sessionId: "creator-plan", role: "coordinator", workflowId: "wf-plan" } },
+    {
+      entry: { id: "wf-plan", type: "plan", started_at: "2026-01-01T00:00:00.000Z", dir: "workflows/wf-plan" },
+      snapshot: {
+        schema_version: 1,
+        id: "wf-plan",
+        type: "plan",
+        status: "running",
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+        delivery_kind: "development",
+        plans: [{ id: "plan", title: "plan", file: "plans/plan.md", status: "Todo" }],
+      },
+      expected: (await readExecutionState(context)).token,
+      operationId: "seed-wf-plan",
+    },
+  );
+}
+
 function integrityOk(result: unknown): boolean | null {
   if (result === null || typeof result !== "object" || !("data" in result)) return null;
   const data = result.data;
@@ -151,6 +192,7 @@ describe("SDD command family", () => {
     const previousCwd = process.cwd();
     try {
       const fixture = evidenceWorkspace(root);
+      await seedResolvedAuthority(fixture.harness);
       const contextFile = join(root, "context.json");
       const declared = {
         planId: "plan",
@@ -163,7 +205,7 @@ describe("SDD command family", () => {
       };
       writeFileSync(contextFile, JSON.stringify(declared));
       process.chdir(fixture.feature);
-      const derived = resolveSddExecutionContext(declared as never);
+      const derived = await resolveSddExecutionContext(declared as never);
       expect(derived).not.toBe(declared);
       expect(Object.keys(derived).sort()).toEqual([
         "controlHarnessRoot", "featureCwd", "planFile", "planId", "sddDir", "workingBranch",
@@ -266,6 +308,7 @@ describe("SDD command family", () => {
       expect(readdirSync(staleRunDir).sort()).toEqual(staleEntries);
 
       const fixture = evidenceWorkspace(root);
+      await seedResolvedAuthority(fixture.harness);
       process.chdir(fixture.feature);
       const captured = await command("sdd.evidence.capture").execute({
         request: fixture.requestPath,

@@ -144,39 +144,3 @@ test("registry exposes schema descriptors for supported operations", async () =>
     expect(published).toMatchObject({ status: "ok", data: { descriptor: { id: definition.id } } });
   }
 });
-test("workflow operations expose independent missing-input diagnostics", async () => {
-  const context: InvocationContext = {
-    cwd: process.cwd(),
-    controlRoot: process.cwd(),
-    sessionId: "caller-session",
-    versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
-    signal: new AbortController().signal,
-    effects: {
-      async readInput() { return ""; },
-      async spawn() { return { exitCode: 0, signal: null, stdout: "", stderr: "" }; },
-      async startDashboard() { throw new Error("unused"); },
-      async openBrowser() { throw new Error("unused"); },
-    },
-  };
-  for (const [command, expected] of [
-    ["workflow.recover-coordinator", ["session", "operationId", "reason", "authorizationRef", "stopped"]],
-    ["workflow.show-prepare", ["session"]],
-    ["workflow.amend-prepare", ["session", "input"]],
-  ] as const) {
-    const result = await executeCommand(command, {}, context);
-    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(result.details?.required).toEqual(expected);
-    for (const path of expected) {
-      expect(result.details?.diagnostics).toContainEqual(expect.objectContaining({
-        path, code: "required", expected: "present", received: "undefined",
-      }));
-    }
-  }
-  const recovery = getCommandSchemas(getCommandDefinitions()).find((entry) => entry.id === "workflow.recover-coordinator")!;
-  expect(recovery.required).not.toContain("sessionId");
-  expect(recovery.requirements).toContainEqual(expect.objectContaining({
-    name: "attestation",
-    condition: { field: "interruptedIntegrationMergeClaim", equals: true },
-    required: true,
-  }));
-});

@@ -66,7 +66,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md`**（§1.1–§1.6；**
 
 ### 1–4. Research → Explore → Lock → Prototype → Write
 
-Survey structured harness dirs and planning artifacts as prescribed by §1.1 → scope **2–4** candidates → **autonomous** lock (`direction` constrains; retain rationale, success criteria, non-goals, scale budget and resolved branch policy; never silently default `main`/`master`; **STOP** if no credible candidate and no `direction`) → execute `direction-lock` at §1.2 tail before compass/plans drafts → persist the **§1.2.5 prototype** in the iteration package → write formal compass/plans/guides/specs per §1.3–§1.5.
+Survey structured harness dirs and planning artifacts as prescribed by §1.1 → scope **2–4** candidates → **autonomous** lock (`direction` constrains; retain rationale, success criteria, non-goals, scale budget and resolved branch policy; never silently default `main`/`master`; **STOP** if no credible candidate and no `direction`) → persist the **§1.2.5 prototype** → write formal compass/plans/guides/specs per §1.3–§1.5 → register the workflow and acquire this session's coordinator seat → execute `direction-lock` → proceed to Review & Edit.
 
 This command is explicit autonomous opt-in: choose **HTML, Markdown or JSON** to suit the design and retain it in **`{ITERATION_DIR}/<iteration-id>/prototypes/`**, with format rationale and autonomous disposition. Record path/revision and disposition in compass `## Prototype baseline`; plans trace it through existing `metadata.iteration_refs`. PM may invoke product-manager / architect for prototype contributions. Do not demand HTML or routine human confirmation, and do not fabricate user approval. Actual host Plan write/dispatch permissions still apply; use the active host bridge's supported resume when restricted.
 
@@ -76,14 +76,14 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**: record PM inc
 
 **Pre-integration checklist**（print before §6；all `[x]`）：
 
-- [ ] Autonomous direction lock rationale recorded in compass（**not** grill-me）
-- [ ] `direction-lock` anchor executed once the autonomous lock rationale is recorded and **before** the compass/plans draft（same anchor and carrier as `iteration-start` §3.5；no `grill-me` on this route）
+- [ ] Autonomous direction lock rationale recorded（**not** grill-me）
 - [ ] Prototype retained in iteration package with format rationale, autonomous disposition and traceability; no invented human approval
 - [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
-- [ ] compass + authored plans 经 `mstar iteration register` 登记到当前执行权威（ACTIVE: store.db）
+- [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
+- [ ] Compass + authored plans ready; `mstar iteration register` created the running ACTIVE workflow with branch anchors (store.db)
+- [ ] This session acquired the workflow's coordinator seat, then executed `direction-lock` before the Review & Edit chain
 - [ ] Role selection reasons recorded; selected invokes returned sequentially, mandatory writer last; no fake skip receipts / skipped-role markers / blocking questions; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock：compass `status: locked` + Prepare gates pass
-- [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
 - [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入
 
 ### 6. Integration Branch

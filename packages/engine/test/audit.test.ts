@@ -9,12 +9,11 @@
  */
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { createJwt, createOpenSshPrivateKey, createRsaPrivateKey } from "./fixtures/credentials.js";
 import {
-  promoteAuditPlans,
   redactSecrets,
   scaffoldAuditPlan,
   scanSecrets,
@@ -23,18 +22,10 @@ import {
   validateAuditStatusBlocks,
 } from "../src/audit.js";
 import type { AuditFinding } from "../src/audit.js";
-import { createFsStore, setArtifactStore, type ArtifactDoc } from "../src/store.js";
-import { getCatalog, listCatalog } from "../src/catalog.js";
-import {
-  listPendingCatalogRegistrations,
-  reconcileCatalogExecution,
-  registerCatalogExecution,
-  type CatalogExecutionRequest,
-} from "../src/catalog-registration.js";
+import { getCatalog } from "../src/catalog.js";
+import { registerShippedCatalogExecution } from "../src/execution-registration.js";
+import { readExecutionState, type ExecutionContext } from "../src/execution-store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
-import { readJson } from "../src/core.js";
-import { validateStatus } from "../src/status.js";
-import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -825,11 +816,6 @@ describe("scaffoldAuditPlan", () => {
 });
 
 
-// ---------------------------------------------------------------------------
-// promoteAuditPlans — v2 workflow promotion of selected audit plans
-// (snapshot written BEFORE registerWorkflow; validateStatus + snapshot
-// validators pass on the promoted artifacts)
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Finding gates + additive metadata (audit-finding-contract.md §§3–8)
@@ -1350,391 +1336,6 @@ describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
   });
 });
 
-describe("promoteAuditPlans", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "engine-audit-promote-"));
-  afterAll(() => {
-    setArtifactStore(undefined);
-    rmSync(tmp, { recursive: true, force: true });
-  });
-  /** Per-test harness root with the active ArtifactStore pointed at it (Task
- * 2: the promote path's root upsert persists via `registerWorkflowEntryLocked`
- * → `getArtifactStore().put`; the store must resolve to this harness). */
-  function promoteHarnessDir(name: string): string {
-    const harnessDir = join(tmp, name);
-    setArtifactStore(createFsStore(harnessDir));
-    return harnessDir;
-  }
-
- /** Scaffold the standard 2-plan audit dir used by the error-path tests. */
-  function mkPlanAudit(outDir: string, date: string): void {
-    scaffoldAuditPlan(
-      outDir,
-      [
-        {
-          title: "Fix N+1 query in order list",
-          category: "perf" as const,
-          impact: "Every order-list render issues 1+N queries.",
-          effort: "M" as const,
-          risk: "MED" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/orders.ts:42"],
-          priority: "P1" as const,
-        },
-        {
-          title: "Rotate leaked AWS keys",
-          category: "security" as const,
-          impact: "Credentials in git history.",
-          effort: "S" as const,
-          risk: "HIGH" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/config.ts:3"],
-          priority: "P1" as const,
-        },
-      ],
-      { date },
-    );
-  }
-
-  test("the delivery declaration is required and coherent (kind never inferred/defaulted, §1/§4a)", async () => {
-    const harnessDir = promoteHarnessDir("harness-declaration");
-    const outDir = join(harnessDir, "plans", "audit-2026-09-16");
-    mkPlanAudit(outDir, "2026-09-16");
-
-    // Missing kind: refused before any write (no snapshot, no root entry).
-    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir } as never)).rejects.toThrow(/deliveryKind must be one of/);
-    // Development without its anchors: the shared per-kind coherence rule.
-    await expect(
-      promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/a" }),
-    ).rejects.toThrow(/delivery source and target branches/);
-    // Verification/report-only without its completion policy.
-    await expect(
-      promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "verification/report-only" }),
-    ).rejects.toThrow(/completion policy/);
-    expect(existsSync(join(harnessDir, "workflows"))).toBe(false);
-    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
-
-    // A coherent verification/report-only declaration records kind + policy.
-    const promoted = await promoteAuditPlans(outDir, ["001"], {
-      harnessDir,
-      deliveryKind: "verification/report-only",
-      completionPolicy: "acceptance artifacts under the audit dir",
-    });
-    const snapshot = readJson(join(harnessDir, "workflows", promoted.workflowId, WORKFLOW_SNAPSHOT_FILE));
-    expect(snapshot.delivery_kind).toBe("verification/report-only");
-    expect(snapshot.completion_policy).toBe("acceptance artifacts under the audit dir");
-    expect(snapshot.branch).toBeUndefined();
-    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
-  });
-
-  test("writes a plan workflow snapshot + registers it (type plan, matching started_at)", async () => {
-    const harnessDir = promoteHarnessDir("harness");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-08");
-    scaffoldAuditPlan(
-      outDir,
-      [
-        {
-          title: "Fix N+1 query in order list",
-          category: "perf" as const,
-          impact: "Every order-list render issues 1+N queries.",
-          effort: "M" as const,
-          risk: "MED" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/orders.ts:42"],
-          priority: "P1" as const,
-        },
-        {
-          title: "Rotate leaked AWS keys",
-          category: "security" as const,
-          impact: "Credentials in git history.",
-          effort: "S" as const,
-          risk: "HIGH" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/config.ts:3"],
-          priority: "P1" as const,
-        },
-      ],
-      { date: "2026-08-08" },
-    );
-
-    const result = await promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
-    const workflowId = result.workflowId;
-    expect(workflowId).toBe("audit-2026-08-08");
-    expect(result.snapshotPath).toBe(join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
-
- // (a) snapshot exists with exactly the selected plan row (Todo)
-    const snapshotPath = join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
-    expect(existsSync(snapshotPath)).toBe(true);
-    const snapshot = readJson(snapshotPath);
-    expect(snapshot.schema_version).toBe(1);
-    expect(snapshot.id).toBe(workflowId);
-    expect(snapshot.type).toBe("plan");
-    expect(snapshot.status).toBe("running");
-    // Contract §1/§4a: the promoted lifecycle declares its delivery kind (and
-    // its per-kind evidence) at registration — never inferred, never defaulted.
-    expect(snapshot.delivery_kind).toBe("development");
-    expect(snapshot.branch).toEqual({ source: "feature/audit-plans", target: "main" });
-    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
-    expect(snapshot.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-    expect(snapshot.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const plans = snapshot.plans as Array<Record<string, unknown>>;
-    expect(plans).toHaveLength(1);
-    expect(plans[0]).toMatchObject({
-      id: "001-fix-n-1-query-in-order-list",
-      title: "Fix N+1 query in order list",
-      file: "audit-2026-08-08/001-fix-n-1-query-in-order-list.md",
-      status: "Todo",
-    });
-
- // (b) root status.json has the workflow entry, type plan, matching started_at
-    const statusPath = join(harnessDir, "status.json");
-    const status = readJson(statusPath);
-    expect(status.version).toBe(2);
-    const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
-    expect(entry).toBeDefined();
-    expect(entry).toMatchObject({
-      id: workflowId,
-      type: "plan",
-      dir: `workflows/${workflowId}`,
-    });
-    expect(entry?.started_at).toBe(snapshot.started_at);
-
- // (c) validateStatus passes on the status path
-    expect(validateStatus(statusPath).ok).toBe(true);
-
- // (d) validateWorkflowSnapshot passes on the snapshot
-    expect(validateWorkflowSnapshot(readJson(snapshotPath)).ok).toBe(true);
-  });
-
-  test("re-promote with the same workflow id refuses and leaves the first rows intact", async () => {
-    const harnessDir = promoteHarnessDir("harness-clobber");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-09");
-    scaffoldAuditPlan(
-      outDir,
-      [
-        {
-          title: "Fix N+1 query in order list",
-          category: "perf" as const,
-          impact: "Every order-list render issues 1+N queries.",
-          effort: "M" as const,
-          risk: "MED" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/orders.ts:42"],
-          priority: "P1" as const,
-        },
-        {
-          title: "Rotate leaked AWS keys",
-          category: "security" as const,
-          impact: "Credentials in git history.",
-          effort: "S" as const,
-          risk: "HIGH" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/config.ts:3"],
-          priority: "P1" as const,
-        },
-      ],
-      { date: "2026-08-09" },
-    );
-
-    const first = await promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
-    const workflowId = first.workflowId;
-    const snapshotPath = join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
-    const before = readJson(snapshotPath);
-
- // A second promote of the same audit dir (different subset) must refuse,
- // naming the existing snapshot path — not silently whole-rewrite and drop
- // the previously promoted 001 Todo row.
-    await expect(promoteAuditPlans(outDir, ["002"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(snapshotPath);
-
- // First rows intact: same started_at, still exactly the 001 Todo row.
-    const after = readJson(snapshotPath);
-    expect(after.started_at).toBe(before.started_at);
-    expect((after.plans as Array<Record<string, unknown>>)).toHaveLength(1);
-    expect((after.plans as Array<Record<string, unknown>>)[0]).toMatchObject({
-      id: "001-fix-n-1-query-in-order-list",
-      title: "Fix N+1 query in order list",
-      status: "Todo",
-    });
-
- // Root registration unchanged.
-    const status = readJson(join(harnessDir, "status.json"));
-    const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
-    expect(entry?.started_at).toBe(before.started_at);
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-  });
-
-  test("two concurrent promotes of the same audit dir: exactly one wins, the other refuses (TOCTOU)", async () => {
-    const harnessDir = promoteHarnessDir("harness-concurrent");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-12");
-    mkPlanAudit(outDir, "2026-08-12");
-
- // Reproduce the cross-process TOCTOU window in-process: hold the
- // SNAPSHOT-dir write lock (`.status-write.lockdir` inside
- // `workflows/<id>/` — the serialization point of the pre-fix
- // writeWorkflowSnapshot) BEFORE either promote runs. Both promotes then
- // pass the re-promote guard (no snapshot exists yet) and queue at the
- // snapshot lock. Releasing it lets the pre-fix code run BOTH promotes to
- // completion — the later writer whole-rewrites the snapshot and upserts
- // the root, silently dropping the earlier rows. The fixed code
- // serializes guard + snapshot write + root registration on the ROOT
- // status.json lock instead, so only the first promote may complete and
- // the second re-checks under the lock and refuses. (Both promotes settle
- // synchronously up to their first await, so no wall-clock delay is
- // needed to know they have reached their blocking point.)
-    const workflowId = "audit-2026-08-12";
-    const snapshotLockDir = join(harnessDir, "workflows", workflowId, ".status-write.lockdir");
-    mkdirSync(snapshotLockDir, { recursive: true });
-
-    const promoteA = promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
-    const promoteB = promoteAuditPlans(outDir, ["002"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
- // Attach settlement handlers in the SAME tick the promises are created —
- // a rejected promote must never surface as an unhandled rejection while
- // the interleaving below runs.
-    const settled = Promise.allSettled([promoteA, promoteB]);
- // Genuine delay required (integration test): the engine's cross-process
- // lockdir polling cannot be driven with deterministic timers, and both
- // promotes must reach their blocking point on the snapshot lockdir the
- // test holds before it is released — reproducing the cross-process
- // interleaving where two writers are past the re-promote guard, queued
- // on the snapshot lock (same rationale as the suite's migrate/lease
- // concurrency tests).
-    await Bun.sleep(150);
- // Release the snapshot lock the test held (the fixed code never takes
- // it; the pre-fix code removes it on release — force/recursive is safe).
-    rmSync(snapshotLockDir, { recursive: true, force: true });
-    const [a, b] = await settled;
-    rmSync(snapshotLockDir, { recursive: true, force: true });
-
-    const fulfilled = [a, b].filter((r) => r.status === "fulfilled");
-    const rejected = [a, b].filter((r) => r.status === "rejected");
- // The root lock serializes guard+write+register — exactly one promote
- // may win; the other must refuse. (Pre-fix, BOTH fulfill: the TOCTOU
- // loser's whole-rewrite silently replaces the winner's rows.)
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
-    const refuseError = (rejected[0] as PromiseRejectedResult).reason as Error;
-    expect(refuseError.message).toContain("refusing to promote");
-    expect(refuseError.message).toContain(join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
-
- // First rows intact: the winner's snapshot is exactly its single Todo
- // row, never clobbered by the loser's selection (001 vs 002 — a TOCTOU
- // loser would have whole-rewritten it with its own selection).
-    const snapshotPath = join(harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
-    const snapshot = readJson(snapshotPath);
-    const plans = snapshot.plans as Array<Record<string, unknown>>;
-    expect(plans).toHaveLength(1);
-    expect(plans[0]?.id).toBe("001-fix-n-1-query-in-order-list");
-    expect(plans[0]).toMatchObject({ status: "Todo" });
-
- // Root registration intact and valid; the entry mirrors the snapshot.
-    const statusPath = join(harnessDir, "status.json");
-    expect(validateStatus(statusPath).ok).toBe(true);
-    const status = readJson(statusPath);
-    const entry = (status.workflows as Array<Record<string, unknown>>).find((w) => w.id === workflowId);
-    expect(entry).toBeDefined();
-    expect(entry?.started_at).toBe(snapshot.started_at);
-    expect((status.workflows as Array<Record<string, unknown>>)).toHaveLength(1);
-  });
-
-  test("register failure rolls back the snapshot so a retry converges (W-001)", async () => {
-    const harnessDir = promoteHarnessDir("harness-register-failure");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-10");
-    mkPlanAudit(outDir, "2026-08-10");
-
- // Conflicting root state: a second workflow row whose snapshot is missing
- // makes validateStatusV2 fail for the WHOLE document, so registerWorkflow
- // throws only AFTER promoteAuditPlans has already written this workflow's
- // snapshot. Simulates a concurrent root writer / validation failure that
- // the promote path cannot predict before its snapshot write.
-    const statusPath = join(harnessDir, "status.json");
-    const staleRoot = {
-      version: 2,
-      updated_at: "2026-08-09",
-      workflows: [
-        { id: "other-wf", type: "plan", started_at: "2026-08-09T00:00:00.000Z", dir: "workflows/other-wf" },
-      ],
-    };
-    mkdirSync(harnessDir, { recursive: true });
-    writeFileSync(statusPath, JSON.stringify(staleRoot, null, 2));
-
-    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(/invalid status\.json/);
-
- // Rollback: the snapshot written before the failed register is removed,
- // so the fix-1 re-promote guard no longer blocks a retry.
-    const workflowDir = join(harnessDir, "workflows", "audit-2026-08-10");
-    expect(existsSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE))).toBe(false);
-    expect(existsSync(workflowDir)).toBe(false);
-
-    expect(readJson(statusPath)).toEqual(staleRoot);
- // Retry after the root conflict is resolved converges end-to-end.
-    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-08-09", workflows: [] }, null, 2));
-    const retry = await promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
-    expect(existsSync(join(harnessDir, "workflows", retry.workflowId, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-  });
-
-  test("promotes a selected subset only (multi-id, out-of-selection rows absent)", async () => {
-    const harnessDir = promoteHarnessDir("harness-subset");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-11");
-    mkPlanAudit(outDir, "2026-08-11");
-
-    const result = await promoteAuditPlans(outDir, ["002", "001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
-    const snapshot = readJson(join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE));
-    const plans = snapshot.plans as Array<Record<string, unknown>>;
-    expect(plans).toHaveLength(2);
- // Row order follows the selection order, not the directory order.
-    expect(plans[0].id).toBe("002-rotate-leaked-aws-keys");
-    expect(plans[1].id).toBe("001-fix-n-1-query-in-order-list");
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
-  });
-
-  test("duplicate numeric prefix resolves to the FIRST (lowest) filename (S-03)", async () => {
- // Manual duplicate `001-*.md` files: selecting bare `001` must promote
- // the lowest filename (`001-a.md`), never the highest — the pre-fix
- // `byNum.set` loop let later entries overwrite earlier ones.
-    const harnessDir = promoteHarnessDir("harness-dup-prefix");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-22");
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, "001-a.md"), "# Plan A\n");
-    writeFileSync(join(outDir, "001-b.md"), "# Plan B\n");
-
-    const result = await promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
-    const snapshot = readJson(join(harnessDir, "workflows", result.workflowId, WORKFLOW_SNAPSHOT_FILE));
-    const plans = snapshot.plans as Array<Record<string, unknown>>;
-    expect(plans).toHaveLength(1);
- // S-03: lowest filename wins for the shared numeric prefix.
-    expect(plans[0]).toMatchObject({
-      id: "001-a",
-      title: "Plan A",
-      file: "audit-2026-08-22/001-a.md",
-      status: "Todo",
-    });
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
-  });
-
-  test("error paths: empty selected / missing harnessDir / unknown plan id / hostile workflow id", async () => {
-    const harnessDir = promoteHarnessDir("harness-errors");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-11");
-    mkPlanAudit(outDir, "2026-08-11");
-
- // Empty selection is a usage error before any write.
-    await expect(promoteAuditPlans(outDir, [], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(/at least one plan id/);
- // Missing harnessDir is rejected before any write (no harness, no workflow dir).
-    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir: "" })).rejects.toThrow(/harnessDir is required/);
- // Unknown plan id names the offending id and does not promote a subset.
-    await expect(promoteAuditPlans(outDir, ["999"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(/999/);
- // Hostile workflow id (path traversal) is refused by the path-component
- // guard, never resolved into a workflow path.
-    await expect(promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main", workflowId: "../x" })).rejects.toThrow(
-      /safe path component/,
-    );
- // All failures left the harness untouched (no snapshot, no status.json).
-    expect(existsSync(join(harnessDir, "workflows"))).toBe(false);
-    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // f11: redactSecrets must NOT be re-exported from the engine barrel —
@@ -1892,172 +1493,47 @@ describe("supplyChainChecks action-unpinned trailing comment (fix round)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// coordinated-writer — promoteAuditPlans writes create-only (spec C4)
-// ---------------------------------------------------------------------------
-
-describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => {
-  test("refuses to replace an existing snapshot and preserves its identity", async () => {
-    const tmp = mkdtempSync(join(tmpdir(), "coordinated-writer-promote-"));
+describe("audit promotion through the ACTIVE registration seam", () => {
+  test("registers the audit workflow and catalog binding atomically on an ACTIVE store", async () => {
+    const root = mkdtempSync(join(tmpdir(), "engine-audit-active-registration-"));
     try {
-      const harnessDir = join(tmp, "harness");
-      setArtifactStore(createFsStore(harnessDir));
-      const outDir = join(harnessDir, "plans", "audit-2026-09-15");
-      scaffoldAuditPlan(
-        outDir,
-        [
-          {
-            title: "Fix N+1 query in order list",
-            category: "perf" as const,
-            impact: "Every order-list render issues 1+N queries.",
-            effort: "M" as const,
-            risk: "MED" as const,
-            confidence: "HIGH" as const,
-            evidence: ["src/orders.ts:42"],
-            priority: "P1" as const,
+      const harnessDir = join(root, ".mstar");
+      mkdirSync(harnessDir, { recursive: true });
+      const context: StoreContext = { harnessDir };
+      const store = await initializeStore(context);
+      store.close();
+      const outDir = join(harnessDir, "plans", "audit-2026-10-09");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(outDir, "001-fix-the-duplicate-index.md"), "# Fix the duplicate index\n\n**plan_id:** 001-fix-the-duplicate-index\n");
+      const workflowId = "audit-2026-10-09";
+      const executionContext: ExecutionContext = {
+        ...context,
+        caller: { sessionId: "audit-coordinator", role: "coordinator", workflowId },
+      };
+
+      const receipt = await registerShippedCatalogExecution(executionContext, {
+        actor: "project-manager",
+        workflow: {
+          kind: "audit",
+          outDir,
+          selected: ["001"],
+          options: {
+            harnessDir,
+            deliveryKind: "verification/report-only",
+            completionPolicy: "audit evidence retained in the plan directory",
           },
-        ],
-        { date: "2026-09-15" },
+        },
+      });
+
+      expect(receipt).toMatchObject({ workflowId, catalogRevision: 1, recovered: false });
+      const state = await readExecutionState(context);
+      expect(state.data.workflows.map((workflow) => workflow.state.id)).toEqual([workflowId]);
+      expect(state.data.workflows[0]?.plans.map((plan) => plan.plan.id)).toEqual(["001-fix-the-duplicate-index"]);
+      expect((await getCatalog(context, { kind: "plan", id: "001-fix-the-duplicate-index" })).entity.title).toBe(
+        "Fix the duplicate index",
       );
-      const snapshotPath = join(harnessDir, "workflows", "audit-2026-09-15", WORKFLOW_SNAPSHOT_FILE);
-      mkdirSync(dirname(snapshotPath), { recursive: true });
-      const foreign = '{\n  "schema_version": 1,\n  "id": "audit-2026-09-15",\n  "type": "plan",\n  "status": "running",\n  "started_at": "2026-09-15T00:00:00Z",\n  "updated_at": "2026-09-15",\n  "plans": []\n}\n';
-      writeFileSync(snapshotPath, foreign, "utf8");
-
-      await expect(promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(/already exists/);
-      expect(existsSync(snapshotPath)).toBe(true);
-      expect(readJson(snapshotPath)).toMatchObject({ id: "audit-2026-09-15", plans: [] });
     } finally {
-      setArtifactStore(undefined);
-      rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// catalog registration — the registration journal drives the audit promotion
-// (state-projection-contract §3). The promotion keeps its run-once/rollback
-// semantics; the doc's own body is the title authority (the report README
-// index is a report artifact, §2/§4).
-// ---------------------------------------------------------------------------
-describe("catalog registration — the journal drives the audit promotion", () => {
-  const root = mkdtempSync(join(tmpdir(), "engine-audit-catalog-registration-"));
-  afterAll(() => {
-    setArtifactStore(undefined);
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  /** Temp workspace with the real harness marker + an initialized active store. */
-  async function workspace(name: string): Promise<{ harnessDir: string; context: StoreContext }> {
-    const harnessDir = join(root, name);
-    mkdirSync(join(harnessDir, ".mstar"), { recursive: true });
-    const context: StoreContext = { harnessDir };
-    const handle = await initializeStore(context);
-    handle.close();
-    setArtifactStore(createFsStore(harnessDir));
-    return { harnessDir, context };
-  }
-
-  const PLAN_FILE = "001-fix-the-duplicate-index.md";
-
-  /** An audit dir whose README index disagrees with the plan body on purpose. */
-  function auditDir(harnessDir: string, date: string): string {
-    const outDir = join(harnessDir, "audit", date);
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, PLAN_FILE), "# Fix the duplicate index\n\n## Impact\nEvery lookup scans twice.\n");
-    writeFileSync(
-      join(outDir, "README.md"),
-      "# Audit Report\n\n## Execution order & status\n\n| Plan | Title | Priority | Effort | Depends on | Status |\n" +
-        "|------|-------|----------|--------|------------|--------|\n| 001 | Hand-edited index title | P1 | S | none | TODO |\n",
-    );
-    return outDir;
-  }
-
-  function auditRequest(harnessDir: string, outDir: string, operationId: string, expected: number): CatalogExecutionRequest {
-    return {
-      operationId,
-      actor: "project-manager",
-      expectedCatalogRevision: expected,
-      workflow: {
-        kind: "audit",
-        outDir,
-        selected: ["001"],
-        options: { harnessDir, deliveryKind: "verification/report-only", completionPolicy: "acceptance artifacts under the audit dir" },
-      },
-      delta: {
-        entities: [{ kind: "plan", id: "001-fix-the-duplicate-index", title: "Fix the duplicate index", rootKind: "plans", relativePath: PLAN_FILE }],
-        binding: { catalogKind: "plan", catalogId: "001-fix-the-duplicate-index" },
-      },
-    };
-  }
-
-  test("catalog registration — the promotion registers through the journal and the plan body is the title authority", async () => {
-    const { harnessDir, context } = await workspace("promote-");
-    const outDir = auditDir(harnessDir, "2026-09-18");
-
-    const receipt = await registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-registration", 0));
-    expect(receipt).toEqual({ operationId: "op-audit-registration", workflowId: "2026-09-18", catalogRevision: 1, recovered: false });
-
-    const snapshot = readJson(join(harnessDir, "workflows", "2026-09-18", WORKFLOW_SNAPSHOT_FILE));
-    expect(snapshot.completion_policy).toBe("acceptance artifacts under the audit dir");
-    // The README index says "Hand-edited index title"; the promoted row carries
-    // the reviewed body's own title.
-    expect(snapshot.plans).toEqual([
-      { id: "001-fix-the-duplicate-index", title: "Fix the duplicate index", file: PLAN_FILE, status: "Todo" },
-    ]);
-    expect(validateWorkflowSnapshot(snapshot).ok).toBe(true);
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-    expect((await getCatalog(context, { kind: "plan", id: "001-fix-the-duplicate-index" })).entity.relativePath).toBe(PLAN_FILE);
-    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-  });
-
-  test("rollback deletes its created snapshot after a content-only edit, then reconciliation recovers", async () => {
-    const { harnessDir, context } = await workspace("promote-failure-");
-    const outDir = auditDir(harnessDir, "2026-09-17");
-    const base = createFsStore(harnessDir);
-    const snapshotPath = join(harnessDir, "workflows", "2026-09-17", WORKFLOW_SNAPSHOT_FILE);
-    let armed = true;
-    let snapshotEdited = false;
-    setArtifactStore({
-      ...base,
-      put: async (doc: ArtifactDoc) => {
-        if (doc.kind === "snapshot") {
-          await base.put(doc);
-          const saved = readJson(snapshotPath) as Record<string, unknown>;
-          saved.updated_at = "2099-01-01T00:00:00.000Z";
-          writeFileSync(snapshotPath, `${JSON.stringify(saved)}\n`, "utf8");
-          snapshotEdited = true;
-          return;
-        }
-        if (armed && doc.kind === "status") {
-          armed = false;
-          throw new Error("injected status write failure");
-        }
-        return base.put(doc);
-      },
-    });
-
-    const previousCwd = process.cwd();
-    try {
-      // Use this disposable harness as the actual process control root too;
-      // the workspace's active authority never resolves to the user's store.
-      process.chdir(harnessDir);
-      await expect(
-        registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-failure", 0)),
-      ).rejects.toThrow(/injected status write failure/);
-      expect(snapshotEdited).toBe(true);
-      setArtifactStore(createFsStore(harnessDir));
-
-      expect(existsSync(snapshotPath)).toBe(false);
-      expect((await listCatalog(context, {})).total).toBe(0);
-      expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-audit-failure"]);
-
-      const recovered = await reconcileCatalogExecution(context, "op-audit-failure");
-      expect(recovered).toEqual({ operationId: "op-audit-failure", workflowId: "2026-09-17", catalogRevision: 1, recovered: true });
-      expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-      expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
-    } finally {
-      process.chdir(previousCwd);
-      setArtifactStore(undefined);
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

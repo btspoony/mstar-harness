@@ -1411,7 +1411,7 @@ export async function captureSddEvidence(
 
   // Phase 1: resolve + gate the dispatched context. Refusal before child;
   // no implicit cwd correction for a mislocated hosted leaf.
-  const resolved = resolveSddExecutionContext(validatedRequest.context);
+  const resolved = await resolveSddExecutionContext(validatedRequest.context);
   const cwdGate = checkSddAction(resolved, { kind: "source", cwd: process.cwd() });
   if (!cwdGate.ok) {
     throw gateError(

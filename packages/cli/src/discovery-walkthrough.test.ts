@@ -253,12 +253,14 @@ describe("#324 fixture discovery walkthrough", () => {
           ]).stdout,
         ).status,
       ).toBe("ok");
-      // Legacy coordinator form: --workflow only, no --execution.
+      // ACTIVE disposition: the legacy `--workflow`-only form is a usage
+      // refusal naming the executable `--execution` route; nothing binds.
       const coordinatorForm = envelope(
         cli(["plan", "bind", "--coordinator", "--workflow", "wf-legacy", "--session-id", "legacy-coord", "--harness", legacyHarness]).stdout,
       );
-      expect(coordinatorForm.status).toBe("refused");
-      expect(coordinatorForm.code).toBe("execution.consumer-not-ready");
+      expect(coordinatorForm.status).toBe("usage");
+      expect(coordinatorForm.code).toBe("command.invalid-input");
+      expect(String(coordinatorForm.message)).toContain("--execution");
       const retried = envelope(cli([
         "plan", "bind", "--execution", "--coordinator", "--workflow", "wf-legacy",
         "--session-id", "legacy-coord", "--harness", legacyHarness,

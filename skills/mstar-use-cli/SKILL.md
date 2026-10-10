@@ -1,6 +1,6 @@
 ---
 name: mstar-use-cli
-description: Use when a Morning Star agent must choose, run, or interpret `mstar-harness` / `mstar` CLI commands — picking the command family for a task (plan row, lifecycle close, register write, report landing, worktree and lease checks, path resolution), satisfying its current semantic preconditions (harness/control root, cwd, actor/session identity, numeric revision or execution token), or reading exit codes 0 / 1 / 2 and stable refusal codes. Also load it when a topical skill's engine-check callout points at the CLI, or a command refuses for a missing precondition. Recorded digests are provenance, not mutation credentials. Flags and option wording belong to CLI help.
+description: Use when a Morning Star agent must choose, run, or interpret `mstar-harness` / `mstar` CLI commands — picking the command family for a task (plan row, lifecycle close, register write, report landing, worktree and integration-lease checks, path resolution), satisfying its current semantic preconditions (harness/control root, cwd, actor/session identity, numeric revision or execution token), or reading exit codes 0 / 1 / 2 and stable refusal codes. Also load it when a topical skill's engine-check callout points at the CLI, or a command refuses for a missing precondition. Recorded digests are provenance, not mutation credentials. Flags and option wording belong to CLI help.
 ---
 
 # CLI contract (`mstar-use-cli`)
@@ -41,31 +41,29 @@ Do not load for:
 ### 1. Task → command family
 
 
-Start with the intended ordinary action, not a universal preflight chain. The acquired primary coordinator's own reference/current scope token/operation id may be derived where unambiguous; explicit constraints validate. Address row actions with --plan and select workflow when needed. File authority uses its workflow envelope/revision, never a per-row identity. Genuine missing configuration/source facts use revisable prepare; defaults do not require a ceremonial record.
+Start with the intended ordinary action, not a universal preflight chain. The acquired primary coordinator's own reference/current scope token/operation id may be derived where unambiguous; explicit constraints validate. Address row actions with --plan and select workflow when needed. Genuine missing configuration/source facts use revisable prepare; defaults do not require a ceremonial record.
 Find the task, run the family, then read its owning skill for the rules around it.
 
 | Task | Family | Owning skill |
 |---|---|---|
 | Read selected row state/configuration/evidence and token | `mstar plan show` | `mstar-artifacts` |
 | Bootstrap/resume the workflow coordinator only | `mstar plan bind` | `mstar-iteration` |
-| Revise row source metadata and QA/cleanup configuration | `mstar plan prepare` | `mstar-artifacts`, `mstar-iteration` |
+| Revise row source metadata and QA/cleanup configuration (the Prepare view and its amendments) | `mstar plan prepare` | `mstar-artifacts`, `mstar-iteration` |
 | Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` | `mstar-sdd`, `mstar-project-governance` (capture contract) |
 | Record Done directly from QC/QA and declared-route proof | `mstar plan complete` | `mstar-artifacts`, `mstar-branch-worktree`, `mstar-iteration` |
-| Amend an approved Prepare scope | `mstar workflow show-prepare`, `mstar workflow amend-prepare` | `mstar-artifacts` |
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` | `mstar-artifacts` |
 | Register an iteration workflow | `mstar iteration register` | `mstar-artifacts` (lifecycle semantics) |
 | Close one finished lifecycle (terminal workflow state + root unregister in the current authority) | `mstar status workflow-close` | `mstar-iteration` (Phase 6) |
 | Validate a coordination document before trusting or replacing it | `mstar status validate` | `mstar-artifacts` |
 | Read the open-issue rollup; enforce a plan's findings-cleanup mode over the issues linked to it | `mstar status tech-debt`, `mstar status findings-cleanup` | `mstar-project-governance`, `mstar-artifacts` |
-| Initialize a fresh issue/catalog store; upgrade/import recognizable execution state and activate authority; or run staged migration, backup, activation and retirement | the `store` group (`init` / `upgrade` / `migrate` / `backup` / `activate` / `retire`) | `mstar-conventions` (DB authority and pre-activation file split); help owns inputs; `activate` is not a routine step after `init` / `upgrade` |
+| Initialize a fresh issue/catalog store; upgrade/import recognizable execution state and activate authority; or run staged migration, backup, activation and retirement | the `store` group (`init` / `upgrade` / `migrate` / `backup` / `activate` / `retire`) | `mstar-conventions` (store authority and bootstrap paths); help owns inputs; `activate` is not a routine step after `init` / `upgrade` |
 | Preview/apply execution recovery from a store backup; export current execution state | `mstar store execution restore-preview`, `mstar store execution restore`, `mstar store execution export` | `mstar-artifacts`; current help owns authorization and recovery inputs |
-| Read/write/list/delete retained persisted documents (`review` / unrelated `json`); root/snapshot file kinds refuse under ACTIVE | `mstar persist get`, `mstar persist write`, `mstar persist list`, `mstar persist delete` | `mstar-artifacts`; `residuals` kind is retired on every route |
+| Read/write/list/delete retained persisted documents (`review` / unrelated `json`); the `residuals` kind refuses and the root/snapshot kinds are outside this surface | `mstar persist get`, `mstar persist write`, `mstar persist list`, `mstar persist delete` | `mstar-artifacts`; `residuals` kind is retired on every route |
 | Launch argv under a fresh local execution identity; recover a stopped coordinator or explicitly named plan owner (never resume) | `mstar session run`, `mstar session recover` | `mstar-iteration`, `mstar-artifacts` |
 | Land or check a QC seat report | `mstar qc validate-report` | `mstar-review-qc` |
 | Validate an Assignment before dispatch | `mstar dispatch validate` | `mstar-dispatch-gates` |
 | Map an execution mode to its QC seat count; assert tri identity | `mstar review seats` | `mstar-review-qc` |
-| Verify workflow-wide integration merge exclusion | `mstar lease verify-integration` | `mstar-artifacts`, `mstar-branch-worktree` |
-| Check L1 / L2 pre-dispatch worktree topology | `mstar worktree check` | `mstar-branch-worktree`, `mstar-dispatch-gates` |
+| Check workflow-entry facts (branch anchors, main residency, integration checkout cleanliness, integration merge lease) or the L1 / L2 pre-dispatch worktree topology | `mstar worktree check` (L1 per-plan gains the lease fact; `--entry` is the workflow-level form) | `mstar-branch-worktree`, `mstar-dispatch-gates` |
 | Assert QC / QA checkout alignment across seat files | `mstar worktree qc-alignment` | `mstar-branch-worktree` |
 | Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` | `mstar-iteration` |
 | SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec`, `mstar sdd evidence` | `mstar-sdd` |
@@ -124,7 +122,7 @@ A CLI claim is proven when:
 
 - the command was actually run, or the result is a machine object a command produced this round — not a recollection of documentation;
 - the exit code matches the family contract, and a `1` is reported with its stable code and message;
-- preconditions were explicit: absolute paths, an explicit root wherever discovery is ambiguous, the transport's authority stated (an independently acquired identity with a session reference on the active route — on plan mutations the engine derives the caller-owned binding and the current token, while workflow-level writes and a fresh active bind state the scope's full token —, or a session envelope obtained from the bind verb on the pre-activation route), and any explicitly supplied token held only as a fresh constraint;
+- preconditions were explicit: absolute paths, an explicit root wherever discovery is ambiguous, the transport's authority stated (an independently acquired identity with a session reference on the active route — on plan mutations the engine derives the caller-owned binding and the current token, while workflow-level writes and a fresh active bind state the scope's full token), and any explicitly supplied token held only as a fresh constraint;
 - no refusal was retried with a stale token — a stale explicit token was refreshed by re-reading the addressed scope;
 - commands quoted in a plan, report or handoff are re-runnable as written, with real absolute paths or visibly-marked placeholders;
 - for a validator, the cited check is the one that covers the claim being made.
@@ -134,7 +132,7 @@ A CLI claim is proven when:
 | Open | When |
 |---|---|
 | `references/plan-and-workflow.md` | plan / workflow families: verb and role boundaries, refusal codes, JSON envelopes, the completion sequence, the CAS read-modify-write shape |
-| `references/status-and-registers.md` | `status.json` root and workflow snapshot: write surfaces, protection levels, versioned replacement, close order; the retired residual register (migration history) and the store-issued open items that replaced it |
+| `references/status-and-registers.md` | ACTIVE store authority for the lifecycle close and the issue store, plus the migration staging files that carry historical status/snapshot state; protected-write authorization |
 | `references/checks-and-lints.md` | maintainer validators and lints that skill callouts cite: what each checks, its owning skill, its exit codes |
 | `references/preconditions.md` | harness-root resolution, control root vs feature worktree, neutral cwd, session identity, tokens, and how each missing precondition presents itself |
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createFsStore, initializeStore, scaffoldHarness, setArtifactStore } from "@mstar-harness/engine";
+import { createFsStore, initializeStore, readExecutionState, scaffoldHarness, setArtifactStore } from "@mstar-harness/engine";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getAuditCommandDefinitions, getCommandDefinitions } from "../src/index.js";
@@ -99,8 +99,10 @@ describe("audit command family", () => {
 
     const promoted = await command("audit.promote").execute({ path: auditDir, deliveryKind: "verification/report-only", completionPolicy: "completion evidence is recorded", harness }, context(root));
     expect(promoted.status).toBe("ok");
-    expect(existsSync(path.join(harness, "workflows", "audit-2026-09-27", "snapshot.json"))).toBe(true);
-    expect(JSON.parse(readFileSync(path.join(harness, "status.json"), "utf8")).workflows.map((workflow: { id: string }) => workflow.id)).toContain("audit-2026-09-27");
+    // Issue #428: promotion registers the workflow in the ACTIVE execution
+    // store; the retired snapshot.json/status.json artifacts are not written.
+    const state = await readExecutionState({ harnessDir: harness });
+    expect(state.data.workflows.map((workflow: { state: { id: string } }) => workflow.state.id)).toContain("audit-2026-09-27");
     expect(existsSync(path.join(root, "unrelated"))).toBe(false);
   });
 

@@ -35,75 +35,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import mstarGates from "../src/hooks/pre/mstar-gates";
 
-// --- golden decisions (captured PRE-refactor; do not regenerate by hand) ---
-
-/**
- * The consumer-visible decision per matrix cell. The verbatim reason string
- * (including its skill citation) is not pinned: it is wording, not behavior —
- * a reworded diagnostic must not fail this parity guard.
- */
-const GOLDEN: Record<string, "block" | "pass"> = {
-  "hard-custom/register/invalid-json": "block",
-  "hard-custom/register/missing": "pass",
-  "hard-custom/register/oversized": "pass",
-  "hard-custom/register/valid": "pass",
-  "hard-custom/snapshot/invalid-json": "block",
-  "hard-custom/snapshot/missing": "pass",
-  "hard-custom/snapshot/oversized": "pass",
-  "hard-custom/snapshot/valid": "pass",
-  "hard-custom/status/invalid-json": "block",
-  "hard-custom/status/missing": "pass",
-  "hard-custom/status/oversized": "pass",
-  "hard-custom/status/valid": "pass",
-  "hard-declared/register/invalid-json": "block",
-  "hard-declared/register/missing": "pass",
-  "hard-declared/register/oversized": "pass",
-  "hard-declared/register/valid": "pass",
-  "hard-declared/snapshot/invalid-json": "block",
-  "hard-declared/snapshot/missing": "pass",
-  "hard-declared/snapshot/oversized": "pass",
-  "hard-declared/snapshot/valid": "pass",
-  "hard-declared/status/invalid-json": "block",
-  "hard-declared/status/missing": "pass",
-  "hard-declared/status/oversized": "pass",
-  "hard-declared/status/valid": "pass",
-  "hard-default/register/invalid-json": "block",
-  "hard-default/register/missing": "pass",
-  "hard-default/register/oversized": "pass",
-  "hard-default/register/valid": "pass",
-  "hard-default/snapshot/invalid-json": "block",
-  "hard-default/snapshot/missing": "pass",
-  "hard-default/snapshot/oversized": "pass",
-  "hard-default/snapshot/valid": "pass",
-  "hard-default/status/invalid-json": "block",
-  "hard-default/status/missing": "pass",
-  "hard-default/status/oversized": "pass",
-  "hard-default/status/valid": "pass",
-  "hard-double/register/invalid-json": "block",
-  "hard-double/register/missing": "pass",
-  "hard-double/register/oversized": "pass",
-  "hard-double/register/valid": "pass",
-  "hard-double/snapshot/invalid-json": "block",
-  "hard-double/snapshot/missing": "pass",
-  "hard-double/snapshot/oversized": "pass",
-  "hard-double/snapshot/valid": "pass",
-  "hard-double/status/invalid-json": "block",
-  "hard-double/status/missing": "pass",
-  "hard-double/status/oversized": "pass",
-  "hard-double/status/valid": "pass",
-  "soft-default/register/invalid-json": "pass",
-  "soft-default/register/missing": "pass",
-  "soft-default/register/oversized": "pass",
-  "soft-default/register/valid": "pass",
-  "soft-default/snapshot/invalid-json": "pass",
-  "soft-default/snapshot/missing": "pass",
-  "soft-default/snapshot/oversized": "pass",
-  "soft-default/snapshot/valid": "pass",
-  "soft-default/status/invalid-json": "pass",
-  "soft-default/status/missing": "pass",
-  "soft-default/status/oversized": "pass",
-  "soft-default/status/valid": "pass",
-};
 
 // --- fixture docs ---
 
@@ -289,8 +220,8 @@ afterAll(() => {
   for (const tree of trees) rmSync(tree.root, { recursive: true, force: true });
 });
 
-describe("omp Gate-1 golden fixture-matrix parity (pre/post extraction)", () => {
-  test("every matrix cell matches the captured pre-refactor block/pass decision", async () => {
+describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", () => {
+  test("the missing ACTIVE authority fails closed across coordination-document forms", async () => {
     const warnings: string[] = [];
     let handler: ((event: unknown) => Promise<unknown>) | undefined;
     mstarGates({
@@ -325,16 +256,12 @@ describe("omp Gate-1 golden fixture-matrix parity (pre/post extraction)", () => 
       }
     }
 
-    // No Gate-1 degradation warnings exist anymore — a stray warn is a
-    // parity break, not noise.
-    expect(warnings).toEqual([]);
-
-    // Identical block/pass decisions, cell by cell (reason wording is not asserted).
-    const mismatches: string[] = [];
-    for (const [key, expected] of Object.entries(GOLDEN)) {
-      const got = actual[key];
-      if (got !== expected) mismatches.push(`${key}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
-    }
+    // Retired-file route subjects (T7a/T21): the old captured pre-refactor
+    // block/pass matrix is no longer authoritative. With no ACTIVE store,
+    // every coordination-document operation is refused instead of falling
+    // through to the retired document validator.
+    const mismatches = Object.entries(actual).filter(([, result]) => result !== "block");
+    expect(Object.keys(actual)).toHaveLength(60);
     expect(mismatches).toEqual([]);
   }, 60_000);
 });

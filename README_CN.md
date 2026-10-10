@@ -33,6 +33,13 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 - **由专职角色分工，而不是一段超长 prompt** —— PM 负责编排；需求、架构、实现、QC、验收、审计、运维各有专属角色与明确边界。
 - **留下可审计的轨迹** —— 计划、发现、审查报告与决策都记录在仓库的 harness 目录里，而不只是留在对话中。
 - **边界都是明确的** —— 流程负责开 PR 并停在 merge-ready；是否合并由你决定。审计只读并给出报告；任何触及真实环境的操作都需要你的明确授权。
+- **确定性门禁，由 TS 引擎强制执行** —— path/status/lease/dispatch/sdd/iteration/lint 门禁运行在 `@mstar-harness/engine` 中，而非仅靠 prompt 建议
+- **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
+- **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
+- **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
+- **可插拔 JSON 持久化（review 文档）** —— review envelope 与无关的通用 JSON 经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储。执行态**从不**经此路径存储
+- **Store 权威** —— `{HARNESS_DIR}/store.db`（SQLite）一经建立（`mstar store init`，历史文件态用 `mstar store upgrade`）即为 issue、catalog、roadmap 与 workflow/plan 执行态的权威；`status.json` 与 workflow snapshot 仅为该迁移工具链写入的迁移暂存，已退役的 project register 是迁移历史、没有写入路径，open item 以 store 中的 issue 为准。无 store 的 workspace 没有执行权威——用对话追踪（no-plan mode）
+- **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 ## 安装
 

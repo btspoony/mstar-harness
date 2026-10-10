@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { applyStoreMigration, captureIssue, closeIssue, getIssue, initializeExecutionAuthority, initializeStore, listIssues, openStore, planStoreMigration, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, upgradeStoreMinimal, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
+import { applyStoreMigration, captureIssue, closeIssue, getIssue, initializeStore, listIssues, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, upgradeStoreMinimal, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   dashboardFailure,
   dashboardFilters,
@@ -239,7 +239,7 @@ describe("dashboard views over a real store", () => {
 
   test("projection views answer the published generation and disclose it", async () => {
     const { context } = await workspace("projection-");
-    await initializeExecutionAuthority(context);
+    await readExecutionAuthority(context);
     const report = await refreshProjections(context);
     expect(report.freshness).toBe("current");
 

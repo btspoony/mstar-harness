@@ -355,9 +355,9 @@ function authorityUnavailableRefusal(
   );
 }
 
-/** §4.3: root status and workflow snapshots are no longer a persistence route
- * once the execution authority is ACTIVE \u2014 persisting them would create a
- * second authority, so the write is refused even when its bytes are valid. */
+/** Root status and workflow snapshots are not a persistence route: execution
+ * state is authoritative, and direct file writes must never create a second
+ * authority. */
 function executionDirectWriteRefusal(targetPath: string): ValidationResult {
   return authorityViolation(
     EXECUTION_DIRECT_WRITE_CODE,
@@ -369,24 +369,27 @@ function executionDirectWriteRefusal(targetPath: string): ValidationResult {
 }
 
 /**
- * §5 (plan S4) what the control harness's EXECUTION authority says about a
- * coordination-document write. `resolveExecutionReadRoute` — the engine's ONE
- * route decision — is inlined here like the rest of the engine glue; a store
- * that EXISTS and cannot be read is `unavailable` (fail-closed: no protected
- * mutation while the authority cannot be established) and never a fall-through
- * to the file route. A harness with no store keeps the file route (absence is
- * not an authority verdict, §2.1), so the pre-activation write path is
- * unchanged.
+ * §5 (plan S4): resolve the control harness's execution authority before
+ * allowing a coordination-document write. The write is vetoed only while the
+ * authority is ACTIVE; a pre-activation harness (`store.not-initialized`,
+ * `store.not-active`) keeps the compass-governed document lint — the same
+ * exclusion list the register route mirrors (`PRE_ACTIVATION_CODES`). Any
+ * other refusal leaves the authority state UNKNOWN and fails closed; no
+ * file-route fallback is supported.
  */
 async function readExecutionWriteRoute(harnessDir: string): Promise<
-  | { kind: "files" }
   | { kind: "active" }
+  | { kind: "pre-activation" }
   | { kind: "unavailable"; code: string; message: string }
 > {
   try {
-    return (await resolveExecutionReadRoute({ harnessDir })) === "execution" ? { kind: "active" } : { kind: "files" };
+    await resolveExecutionReadRoute({ harnessDir });
+    return { kind: "active" };
   } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
+    const refusal = refusalOf(error);
+    return PRE_ACTIVATION_CODES.includes(refusal.code)
+      ? { kind: "pre-activation" }
+      : { kind: "unavailable", ...refusal };
   }
 }
 
@@ -576,6 +579,9 @@ try {
           authorityUnavailableRefusal(executionRoute, "the harness's execution authority", "coordination-document write"),
         ]);
       }
+      // `pre-activation`: no store, or a staged one — the compass-governed
+      // document lint below decides (issue contract §7, mirrored from the
+      // register route's `legacy` disposition).
     }
     // A case-variant register basename (FW-3) bypasses both exact-case
     // classifications and is classified by the folded shape walk instead.

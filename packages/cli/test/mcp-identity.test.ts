@@ -12,8 +12,8 @@ import {
   createExecutionWorkflow,
   encodeExecutionSessionRef,
   executionContextFor,
-  initializeExecutionAuthority,
   initializeStore,
+  readExecutionAuthority,
   type ActivationAttestation,
   type ExecutionToken,
 } from "@mstar-harness/engine";
@@ -116,7 +116,7 @@ async function initializedHarness() {
   const harness = path.join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   (await initializeStore({ harnessDir: harness })).close();
-  const authority = await initializeExecutionAuthority({ harnessDir: harness });
+  const authority = await readExecutionAuthority({ harnessDir: harness });
   return { root, harness, authority };
 }
 

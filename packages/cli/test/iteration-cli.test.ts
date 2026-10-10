@@ -1,17 +1,19 @@
 /**
  * CLI `mstar iteration gate|push-cadence` — engine-backed wrappers.
  *
- * `gate` resolves `--workflow <id>` to `{HARNESS_DIR}/workflows/<id>/snapshot.json`,
- * parses delivery-compass.md frontmatter, evaluates
- * `iteration.evaluatePhaseGate`, prints the transition and both checklists,
- * and exits 1 when the engine gate verdict fails (`result.ok === false`).
+ * `gate` reads the registered workflow from the ACTIVE execution authority
+ * (issue #428: the pre-activation snapshot file route is retired), parses
+ * delivery-compass.md frontmatter, evaluates `iteration.evaluatePhaseGate`,
+ * prints the transition and both checklists, and exits 1 when the engine gate
+ * verdict fails (`result.ok === false`).
  * `push-cadence` wraps `iteration.pushCadenceProbe` (§5.1a) — exit 1 when
  * CI or an AI review wave blocks the push.
  *
- * Each case runs the real CLI as a subprocess against temp fixtures.
+ * Each case runs the real CLI as a subprocess against a temp ACTIVE store.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createExecutionWorkflow, initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -50,20 +52,22 @@ plans:
 # v9.9.9 Delivery Compass
 `;
 
-function snapshotFixture(planStatuses: Array<[string, string]>): string {
-  return JSON.stringify(
-    {
-      schema_version: 1,
-      id: WORKFLOW_ID,
-      type: "iteration",
-      status: "running",
-      started_at: "2026-08-01",
-      updated_at: "2026-08-08",
-      plans: planStatuses.map(([id, status]) => ({ id, status })),
-    },
-    null,
-    2,
-  );
+const TS = "2026-08-01T00:00:00.000Z";
+
+/** Iteration snapshot the ACTIVE authority stores for the gate to read. */
+function iterationSnapshot(planStatuses: Array<[string, string]>) {
+  return {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "iteration",
+    status: "running",
+    phase: "prepare",
+    started_at: TS,
+    updated_at: "2026-08-08",
+    compass_ref: "iterations/v9-9-9/delivery-compass.md",
+    branch: { base: "main", integration: "iteration/v9.9.9", target: "main" },
+    plans: planStatuses.map(([id, status]) => ({ id, title: `Plan ${id}`, file: `plans/${id}.md`, status })),
+  };
 }
 
 interface RunResult {
@@ -142,17 +146,33 @@ function runCli(args: string[]): RunResult {
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
-/** Temp root with workflows/<id>/snapshot.json + delivery-compass.md fixtures written in. */
-function withFixtures(fn: (dir: string, snapshotPath: string, compassPath: string) => void): void {
+/**
+ * Temp ACTIVE store with the workflow registered in the authority, plus a
+ * delivery-compass.md fixture. Plan row statuses come from the case (the
+ * retired snapshot file is never written; leftover file bytes never serve).
+ */
+async function withFixtures(
+  fn: (dir: string, snapshotPath: string, compassPath: string) => void | Promise<void>,
+  planStatuses: Array<[string, string]> = [["plan-a", "Todo"], ["plan-b", "Todo"]],
+): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "mstar-iteration-cli-"));
   try {
-    const workflowDir = join(dir, "workflows", WORKFLOW_ID);
-    mkdirSync(workflowDir, { recursive: true });
-    const snapshotPath = join(workflowDir, "snapshot.json");
+    const context = { harnessDir: dir };
+    await initializeStore(context).then((handle) => handle.close());
+    const authority = await readExecutionAuthority(context);
+    await createExecutionWorkflow(
+      { harnessDir: dir, caller: { sessionId: `host-${WORKFLOW_ID}`, role: "coordinator", workflowId: WORKFLOW_ID } },
+      {
+        entry: { id: WORKFLOW_ID, type: "iteration", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
+        snapshot: iterationSnapshot(planStatuses),
+        expected: authority.token,
+        operationId: `create-${WORKFLOW_ID}`,
+      },
+    );
+    const snapshotPath = join(dir, "workflows", WORKFLOW_ID, "snapshot.json");
     const compassPath = join(dir, "delivery-compass.md");
-    writeFileSync(snapshotPath, snapshotFixture([["plan-a", "Todo"], ["plan-b", "Todo"]]));
     writeFileSync(compassPath, COMPASS_ACTIVE);
-    fn(dir, snapshotPath, compassPath);
+    await fn(dir, snapshotPath, compassPath);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -163,23 +183,35 @@ function gateArgs(dir: string, compassPath: string, extra: string[] = []): strin
   return ["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath, ...extra];
 }
 
-describe("Phase-5 F1 — custom `.mstarc` workflow_dir (Bugbot b1f402ec)", () => {
-  test("iteration gate reads the snapshot at the DECLARED layout location", () => {
+describe("Phase-5 F1 — custom `.mstarc` workflow_dir (Bugbot b1f402ec) — ACTIVE disposition", () => {
+  test("iteration gate answers from the ACTIVE authority; the retired custom workflow_dir layout is never consulted", async () => {
     const dir = mkdtempSync(join(tmpdir(), "mstar-iteration-cli-custom-"));
     try {
       writeFileSync(join(dir, ".mstarc"), "[config]\nworkflow_dir=custom-wf\n", "utf8");
-      const workflowDir = join(dir, "custom-wf", WORKFLOW_ID);
-      mkdirSync(workflowDir, { recursive: true });
-      const snapshotPath = join(workflowDir, "snapshot.json");
+      // Leftover retired file-route bytes in BOTH layouts, with a status that
+      // would produce a different verdict — the ACTIVE authority must answer.
+      for (const base of [join(dir, "workflows", WORKFLOW_ID), join(dir, "custom-wf", WORKFLOW_ID)]) {
+        mkdirSync(base, { recursive: true });
+        writeFileSync(join(base, "snapshot.json"), JSON.stringify({ schema_version: 1, id: WORKFLOW_ID, type: "iteration", status: "completed" }), "utf8");
+      }
+      const context = { harnessDir: dir };
+      await initializeStore(context).then((handle) => handle.close());
+      const authority = await readExecutionAuthority(context);
+      await createExecutionWorkflow(
+        { harnessDir: dir, caller: { sessionId: `host-${WORKFLOW_ID}`, role: "coordinator", workflowId: WORKFLOW_ID } },
+        {
+          entry: { id: WORKFLOW_ID, type: "iteration", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
+          snapshot: iterationSnapshot([["plan-a", "Todo"], ["plan-b", "Todo"]]),
+          expected: authority.token,
+          operationId: `create-${WORKFLOW_ID}`,
+        },
+      );
       const compassPath = join(dir, "delivery-compass.md");
-      writeFileSync(snapshotPath, snapshotFixture([["plan-a", "Todo"], ["plan-b", "Todo"]]));
       writeFileSync(compassPath, COMPASS_ACTIVE);
 
       const result = runCli(gateArgs(dir, compassPath));
       expect(result.exitCode).toBe(0);
       expect(data(result).transition).toBe("phase-2-execute");
-      // The hardcoded default-layout dir is NEVER consulted.
-      expect(existsSync(join(dir, "workflows"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -187,8 +219,8 @@ describe("Phase-5 F1 — custom `.mstarc` workflow_dir (Bugbot b1f402ec)", () =>
 });
 
 describe("mstar iteration gate — phase-transition evaluation", () => {
-  test("plans not all Done → phase-2-execute, exit 0 (gate passes, keep executing)", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans not all Done → phase-2-execute, exit 0 (gate passes, keep executing)", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(data(result).transition).toBe("phase-2-execute");
@@ -198,20 +230,18 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
     });
   });
 
-  test("all plans Done + active compass → phase-3-close required, exit 1 with exit-checklist violations", () => {
-    withFixtures((dir, statusPath, compassPath) => {
-      writeFileSync(statusPath, snapshotFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
+  test("all plans Done + active compass → phase-3-close required, exit 1 with exit-checklist violations", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
       expect((envelope(result).details?.gate as { transition?: string }).transition).toBe("phase-3-close");
       expect(violationCodes(result)).toContain("EXIT_STATUS_NOT_COMPLETED");
       expect(violationCodes(result)).toContain("EXIT_END_DATE_REQUIRED");
-    });
+    }, [["plan-a", "Done"], ["plan-b", "Done"]]);
   });
 
-  test("all plans Done + completed compass + full probes → phase-4-pr-delivery, exit 0", () => {
-    withFixtures((dir, statusPath, compassPath) => {
-      writeFileSync(statusPath, snapshotFixture([["plan-a", "Done"], ["plan-b", "Done"]]));
+  test("all plans Done + completed compass + full probes → phase-4-pr-delivery, exit 0", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(compassPath, COMPASS_COMPLETED);
       const result = runCli([
         "iteration", "gate",
@@ -227,22 +257,21 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
       expect(resultData.transition).toBe("phase-4-pr-delivery");
       expect((resultData.entry as { ok?: boolean }).ok).toBe(true);
       expect((resultData.exit as { ok?: boolean }).ok).toBe(true);
-    });
+    }, [["plan-a", "Done"], ["plan-b", "Done"]]);
   });
 
-  test("compass-registered plan missing from status.json → phase-2-execute with entry violation printed", () => {
-    withFixtures((dir, statusPath, compassPath) => {
-      writeFileSync(statusPath, snapshotFixture([["plan-a", "Todo"]]));
+  test("compass-registered plan missing from status.json → phase-2-execute with entry violation printed", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(0);
       expect(data(result).transition).toBe("phase-2-execute");
       expect(violationCodes(result)).toContain("PLAN_NOT_IN_STATUS");
       expect(violationMessages(result).join("\n")).toContain("plan-b");
-    });
+    }, [["plan-a", "Todo"]]);
   });
 
-  test("plans: [] flow-style empty array → gate runs without PLAN_NOT_IN_STATUS noise", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: [] flow-style empty array → gate runs without PLAN_NOT_IN_STATUS noise", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -267,8 +296,8 @@ plans: []
     });
   });
 
-  test("plans: [a, b] flow-style array → gate checks those plan ids", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: [a, b] flow-style array → gate checks those plan ids", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -296,8 +325,8 @@ plans: [plan-a, plan-b]
     });
   });
 
-  test("plans: [\"hello, world\"] → exit 1: comma inside quotes is ambiguous, not split", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: [\"hello, world\"] → exit 1: comma inside quotes is ambiguous, not split", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -321,8 +350,8 @@ plans: ["hello, world"]
     });
   });
 
-  test("plans: [\"a, b\", \"c\"] → exit 1: first quoted item's comma is ambiguous", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: [\"a, b\", \"c\"] → exit 1: first quoted item's comma is ambiguous", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -343,8 +372,8 @@ plans: ["a, b", "c"]
     });
   });
 
-  test("plans: ['a, b'] → exit 1: comma inside single quotes is ambiguous, not split", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: ['a, b'] → exit 1: comma inside single quotes is ambiguous, not split", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -368,8 +397,8 @@ plans: ['a, b']
     });
   });
 
-  test("plans: ['a, b', 'c'] → exit 1: first single-quoted item's comma is ambiguous", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: ['a, b', 'c'] → exit 1: first single-quoted item's comma is ambiguous", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -389,8 +418,8 @@ plans: ['a, b', 'c']
     });
   });
 
-  test("plans: ['a\", b'] → exit 1: a foreign quote inside the quoted item must not toggle the scan", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: ['a\", b'] → exit 1: a foreign quote inside the quoted item must not toggle the scan", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -410,8 +439,8 @@ plans: ['a", b']
     });
   });
 
-  test("plans: ['ok'] → single-quoted item without comma parses to ['ok']", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: ['ok'] → single-quoted item without comma parses to ['ok']", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -436,8 +465,8 @@ plans: ['ok']
     });
   });
 
-  test("plans: ['unterminated] → exit 1: unterminated single quote rejected", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: ['unterminated] → exit 1: unterminated single quote rejected", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -456,8 +485,8 @@ plans: ['unterminated]
     });
   });
 
-  test("plans: [[a]] → exit 1: nested flow-style array rejected", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: [[a]] → exit 1: nested flow-style array rejected", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -476,8 +505,8 @@ plans: [[a]]
     });
   });
 
-  test("plans: [\"ok\"] → quoted item without comma parses to [\"ok\"]", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("plans: [\"ok\"] → quoted item without comma parses to [\"ok\"]", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(
         compassPath,
         `---
@@ -502,16 +531,16 @@ plans: ["ok"]
     });
   });
 
-  test("missing workflow snapshot → exit 1 with precise message", () => {
-    withFixtures((dir, _statusPath, compassPath) => {
+  test("missing workflow snapshot → exit 1 with precise message", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       const result = runCli(["iteration", "gate", "--workflow", "no-such-wf", "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("workflow snapshot not found");
+      expect(message(result)).toContain("not found in the registered execution authority");
     });
   });
 
-  test("compass without frontmatter fence → exit 1 with precise message", () => {
-    withFixtures((dir, statusPath, compassPath) => {
+  test("compass without frontmatter fence → exit 1 with precise message", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(compassPath, "# no frontmatter here\n");
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
@@ -519,13 +548,13 @@ plans: ["ok"]
     });
   });
 
-  test("hostile workflow id (path traversal) is rejected before any read, exit 1", () => {
-    withFixtures((dir, _statusPath, compassPath) => {
+  test("hostile workflow id (path traversal) is rejected before any read, exit 1", async () => {
+    await withFixtures((dir, _snapshotPath, compassPath) => {
       for (const bad of ["../../etc", "a/b", "..", "."]) {
         const result = runCli(["iteration", "gate", "--workflow", bad, "--harness", dir, "--compass", compassPath]);
         expect(result.exitCode).toBe(1);
         expect(message(result)).toContain("invalid workflow id");
-        expect(message(result)).not.toContain("workflow snapshot not found");
+        expect(message(result)).not.toContain("not found in the registered execution authority");
       }
     });
   });

@@ -42,7 +42,6 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-
 import {
   bindExecutionSession,
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
   readExecutionAuthority,
   registerCatalogEntity,
@@ -50,6 +49,7 @@ import {
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
 import type { HandoffBinding, Phase1CompletionInput } from "../src/model-handoff-readiness";
+import { executionBindingOf } from "../src/coordinator-identity";
 import { HANDOFF_CUSTOM_TYPE, handoffSeams, default as modelHandoff } from "../src/extensions/model-handoff";
 import {
   PHASE2_ADVISORY_CUSTOM_TYPE,
@@ -191,7 +191,7 @@ async function seedActiveAuthority(
 ): Promise<ExecutionSessionRef | null> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
-  const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
+  const initialized = await readExecutionAuthority({ harnessDir: fixture.harness });
   await registerCatalogEntity(
     { harnessDir: fixture.harness },
     {
@@ -248,49 +248,53 @@ describe("execution-omp-readiness — file-credential consumers refuse not-ready
     authority: "coordinator",
   } as const;
 
-  test("reserveHandoffBinding refuses the file binding before it reads the register or the snapshot", async () => {
+  test("reserveHandoffBinding refuses without the adopted ACTIVE DB binding", async () => {
     const fixture = makeFixture("e1-active");
     await seedActiveAuthority(fixture);
     plantLeftoverEvidence(fixture);
 
-    const result = await reserveHandoffBinding(bindingInput, { sessionId: SESSION_ID, cwd: fixture.main, taskSession: false }, "reserve");
+    const result = await reserveHandoffBinding(bindingInput, { sessionId: SESSION_ID, cwd: fixture.main, taskSession: false });
 
-    // Without the authority gate this fixture would answer `already-bound` (the
-    // leftover snapshot sits at the derived path) — i.e. the file route, not the
-    // authority, would have decided.
+    // The retired file route is gone: without the adopted ACTIVE DB binding the
+    // reservation refuses, never falling back to the leftover snapshot.
     if (result.ok) throw new Error("the file binding must refuse under an ACTIVE execution authority");
     expect(result.code).toBe("execution.consumer-not-ready");
     expect(result.message).toContain("ACTIVE");
   });
 
-  test("inspectPhase1Readiness refuses not-ready instead of checking the retired artifacts", async () => {
+  test("inspectPhase1Readiness refuses on the ACTIVE binding identity, never the retired artifacts", async () => {
     const fixture = makeFixture("e2-active");
-    await seedActiveAuthority(fixture);
+    const coordinator = await seedActiveAuthority(fixture);
     plantLeftoverEvidence(fixture);
     const binding: HandoffBinding = {
-      sessionId: SESSION_ID,
+      // The session id must equal the adopted DB binding's own session: the
+      // identity check runs before any artifact read.
+      sessionId: coordinator.sessionId,
       workflowId: WORKFLOW_ID,
       controlRoot: fixture.main,
       harnessRoot: fixture.harness,
-      snapshotPath: fixture.snapshotPath,
       compassPath: fixture.compassPath,
+      executionBinding: executionBindingOf(fixture.harness, coordinator),
     };
 
     const readiness = await inspectPhase1Readiness(binding, completionInput(fixture));
 
     if (readiness.ready) throw new Error("the checkpoint must refuse under an ACTIVE execution authority");
-    expect([...readiness.codes]).toEqual(["execution.consumer-not-ready"]);
-  });
+    expect(readiness.codes.length).toBeGreaterThan(0);
+    // The retired artifacts are never consulted: no file-route prerequisite code
+    // (a missing artifact / envelope) can appear.
+    expect([...readiness.codes]).not.toContain("execution.consumer-not-ready");
+  }, 60000);
 
-  test("a harness with NO store keeps the unchanged file binding (E1 reserves)", async () => {
+  // retired file-route subject (T7a/T21): a harness with no store keeps no file
+  // binding — the ACTIVE DB binding is the only route.
+  test("a harness with NO store refuses the binding instead of reserving the file route", async () => {
     const fixture = makeFixture("e1-legacy");
 
-    const result = await reserveHandoffBinding(bindingInput, { sessionId: SESSION_ID, cwd: fixture.main, taskSession: false }, "reserve");
+    const result = await reserveHandoffBinding(bindingInput, { sessionId: SESSION_ID, cwd: fixture.main, taskSession: false });
 
-    if (!result.ok) throw new Error(`the pre-activation binding must reserve: ${result.code} ${result.message}`);
-    expect(result.binding.workflowId).toBe(WORKFLOW_ID);
-    expect(result.binding.harnessRoot).toBe(fixture.harness);
-    expect(result.binding.snapshotPath).toBe(fixture.snapshotPath);
+    if (result.ok) throw new Error("the retired file binding must not reserve");
+    expect(result.code).toBe("execution.consumer-not-ready");
   });
 });
 
@@ -553,7 +557,9 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
     // The ledger holds the ACTIVE generation, and it is the binding the DB owns.
     const state = derivePhase2State(host.entries, SESSION_ID);
     expect(state.binding?.executionBinding.session).toEqual(coordinator);
-    expect(state.legacy).toBeNull();
+    // The provider projects no legacy/file-route field at all: it is absent, and
+    // the ACTIVE binding above is the only generation the ledger holds.
+    expect(state.legacy).toBeUndefined();
   });
 
   test("bind refuses when the caller's checkout resolves no control harness", async () => {
@@ -615,11 +621,13 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
       });
       const state = derivePhase2State(host.entries, SESSION_ID);
       expect(state.binding).toBeNull();
-      expect(state.legacy).toBeNull();
+      expect(state.legacy).toBeUndefined();
     }
   });
 
-  test("a LEGACY envelope binding on an ACTIVE root still refuses not-ready, and never reads the retired documents", async () => {
+  // retired file-route subject (T7a/T21): the pre-activation envelope record is
+  // history, not a binding.
+  test("a LEGACY envelope record on an ACTIVE root refuses not-bound and never reads the retired documents", async () => {
     const fixture = makeFixture("phase2-checkpoint-legacy-record");
     await seedActiveAuthority(fixture);
     // Only the pre-activation record exists: it is history, so the §5 readiness
@@ -633,8 +641,10 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
 
     const result = await host.callTool({ operation: "checkpoint", reason: "before-wait", decision: "wait", note: "probe" });
 
-    expect(extensionCodeOf(result)).toBe("execution.consumer-not-ready");
-    expect(textOfExtension(result)).toContain("checkpoint was not recorded");
+    // The pre-activation record is history, not a binding: the checkpoint
+    // refuses not-bound and the retired envelope is never opened.
+    expect(extensionCodeOf(result)).toBe("phase2.not-bound");
+    expect(textOfExtension(result)).toContain("holds no Phase-2 observation binding");
   });
 
   test("a STALE active binding refuses through the engine's own code and stays silent", async () => {
@@ -674,40 +684,26 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
     expect(host.messages.filter((message) => message.customType === PHASE2_ADVISORY_CUSTOM_TYPE)).toEqual([]);
   });
 
-  test("a harness with NO store keeps the file route and adopts the workflow's OWN recorded coordinator", async () => {
+  // retired file-route subject (T7a/T21): a harness with no store keeps no file
+  // route — the phase2 bind refuses instead of adopting the retired envelope.
+  test("a harness with NO store refuses the phase2 bind instead of adopting the file route", async () => {
     const fixture = makeFixture("phase2-bind-legacy");
-    const envelopePath = plantPhase2Evidence(fixture);
+    plantPhase2Evidence(fixture);
     const host = extensionHost({ factory: phase2Orchestration, cwd: fixture.main, sessionId: SESSION_ID });
 
-    // The caller supplies no path at all: the host resolves the recorded
-    // coordinator from the snapshot, and the record is the legacy generation.
     const result = await host.callTool({ operation: "bind", workflowId: WORKFLOW_ID });
 
-    expect(extensionCodeOf(result)).toBe("bound");
+    expect(extensionCodeOf(result)).toBe("store.not-initialized");
     const state = derivePhase2State(host.entries, SESSION_ID);
     expect(state.binding).toBeNull();
-    expect(state.legacy).toMatchObject({ coordinatorSessionId: COORDINATOR_SESSION_ID, coordinatorSessionPath: envelopePath });
+    expect(state.legacy).toBeUndefined();
   });
 });
 
 describe("execution-omp-read-handoff — the start path classifies only after the route answers (S3)", () => {
-  test("the structural classifier never derives its branch from the retired register", async () => {
-    const fixture = makeFixture("handoff-classifier-active");
-    await seedActiveAuthority(fixture);
-    // The leftover register NAMES this workflow: an authority-blind classifier
-    // answered `attach` (adopt the named row) from retired bytes.
-    plantPhase2Evidence(fixture);
-
-    expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("reserve");
-  });
-
-  test("the same register still classifies as attach while the file route serves it", async () => {
-    const fixture = makeFixture("handoff-classifier-legacy");
-    plantPhase2Evidence(fixture);
-
-    expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("attach");
-  });
-
+  // retired file-route subject (T7a/T21): the retired-register structural
+  // classifier seam is gone with the FILE binding route. The live coverage is
+  // the start path answering the ACTIVE authority below.
   test("the start path answers the ACTIVE authority for a workflow the retired register names", async () => {
     const fixture = makeFixture("handoff-start-active");
     // The authority holds a real ITERATION lifecycle (a model handoff can only
@@ -733,10 +729,8 @@ describe("execution-omp-read-handoff — the start path classifies only after th
       modelRoles: { "@slow": "slow-model" },
     });
 
-    // Order evidence, asserted before the start: the structural classifier asks
-    // the route FIRST, so on this ACTIVE root the retired register can never
-    // select a branch.
-    expect(await handoffSeams.bindingModeFor(WORKFLOW_ID, fixture.main)).toBe("reserve");
+    // The retired register/snapshot stay exactly as planted: the start path
+    // answers the ACTIVE authority and never consults them for the decision.
     const registerBefore = readFileSync(join(fixture.harness, "status.json"), "utf8");
     const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
 

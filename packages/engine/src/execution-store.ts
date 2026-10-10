@@ -65,6 +65,7 @@ import {
 } from "./recovery-intent.js";
 import {
   rowPlanId,
+  rowPlanIds,
   validatePlanRow,
   validateWorkflowEntry,
   type PlanRow,
@@ -1233,6 +1234,52 @@ export async function readExecutionState(context: StoreContext): Promise<Executi
     storeId: tx.storeId,
     epoch: tx.epoch,
   }));
+}
+
+/** One governing plan-row candidate projected from the ACTIVE graph. */
+export type ExecutionPlanRowMatch = {
+  workflowId: string;
+  row: Record<string, unknown>;
+  state: ExecutionState["workflows"][number]["state"];
+};
+
+/**
+ * §3 the registration ADMISSION verdict for one plan id, projected INSIDE the
+ * same read-only transaction that reads the graph (issue #428 round-5
+ * contract): governing-row selection and its absence/ambiguity classification
+ * are computed over ONE consistent engine-owned snapshot, never over a graph
+ * a concurrent commit has already superseded. The sdd vocabulary that refuses
+ * on the verdict stays with the resolver — this read is the transactional
+ * state the fail-closed judgment runs on. Store-level verdicts (absent ->
+ * `store.not-initialized`, staged -> `execution.not-active`, damaged ->
+ * `store.corrupt`) refuse out of the same transaction.
+ */
+export type ExecutionPlanAdmission =
+  | { kind: "absent"; graph: ExecutionState }
+  | { kind: "ambiguous"; graph: ExecutionState; workflowIds: string[] }
+  | ({ kind: "row"; graph: ExecutionState } & ExecutionPlanRowMatch);
+
+export async function readExecutionPlanAdmission(
+  context: StoreContext,
+  planId: string,
+): Promise<ExecutionPlanAdmission> {
+  return withExecutionReadTransaction(context, (tx) => {
+    const graph = readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution);
+    const matches: ExecutionPlanRowMatch[] = [];
+    for (const workflow of graph.workflows) {
+      for (const view of workflow.plans) {
+        if (rowPlanIds(view.plan).includes(planId)) {
+          matches.push({ workflowId: workflow.state.id, row: view.plan as Record<string, unknown>, state: workflow.state });
+          break; // one row per workflow is enough
+        }
+      }
+    }
+    if (matches.length === 0) return { kind: "absent", graph };
+    if (matches.length > 1) {
+      return { kind: "ambiguous", graph, workflowIds: matches.map((match) => match.workflowId) };
+    }
+    return { kind: "row", graph, ...matches[0]! };
+  });
 }
 /**
  * Read the cleanup safety universe from ACTIVE authority, including retained

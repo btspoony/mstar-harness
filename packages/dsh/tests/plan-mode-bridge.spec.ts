@@ -13,14 +13,14 @@
  * point, and the service-missing degrade.
  */
 import { describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { SessionHint } from '../src/gates/workflow-selection.ts'
-import { seedHarness, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry } from './harness.ts'
+import { seedActiveWorkflow, seedHarness } from './harness.ts'
 import {
   planModeTarget,
   registerPlanModeBridge,
@@ -51,18 +51,23 @@ async function seedLifecycles(
     iterationId: string
     plans: Array<{ id: string; status: string }>
     compass?: 'active' | 'locked' | 'completed' | null
+    compassRef?: string
   }>,
 ): Promise<void> {
-  const files: Record<string, string> = {
-    'status.json': v2Root(rows.map((row) => v2WorkflowEntry(row.iterationId, 'iteration'))),
-  }
+  const root = dirname(harnessDir)
   for (const row of rows) {
     const compass = row.compass === undefined ? 'active' : row.compass
-    const ref = compass === null ? null : `iterations/${row.iterationId}/delivery-compass.md`
-    files[`workflows/${row.iterationId}/snapshot.json`] = v2SnapshotWithPlans(row.iterationId, row.plans, { compass_ref: ref })
-    if (compass !== null) files[`iterations/${row.iterationId}/delivery-compass.md`] = `---\niteration_id: ${row.iterationId}\nstatus: ${compass}\n---\n`
+    const ref = row.compassRef ?? (compass === null ? null : `iterations/${row.iterationId}/delivery-compass.md`)
+    const plans = row.plans.map((plan) => ({ ...plan, title: plan.id, file: `plans/${plan.id}.md` }))
+    const snapshotOverrides: Record<string, unknown> = { type: 'iteration' }
+    if (ref !== null) snapshotOverrides.compass_ref = ref
+    await seedActiveWorkflow(harnessDir, row.iterationId, plans, snapshotOverrides, `seed-${row.iterationId}`, root, row.iterationId)
+    if (compass !== null && row.compassRef === undefined) {
+      await seedHarness(harnessDir, {
+        [`iterations/${row.iterationId}/delivery-compass.md`]: `---\niteration_id: ${row.iterationId}\nstatus: ${compass}\n---\n`,
+      })
+    }
   }
-  await seedHarness(harnessDir, files)
 }
 
 /**
@@ -82,6 +87,12 @@ const rootAgent = (cwd: string, id = 'root-1'): unknown => ({ id, session: { hea
 
 /** A child agent (in-process subagent: `parentSession` stamped at creation). */
 const childAgent = (cwd: string): unknown => ({ id: 'child-1', session: { header: { cwd, parentSession: 'root-1' } } })
+/** Let the async ACTIVE workflow read started by a host event settle. */
+const settlePlanModeBridge = (): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, 0)
+  return promise
+}
 
 /**
  * The fake registered as a cordis `planMode` service (`ctx.get('planMode')` —
@@ -147,7 +158,7 @@ describe('planMode bridge — planModeTarget (Prepare-window policy)', () => {
           { id: 'plan-b', status: 'InProgress' },
         ],
       }])
-      expect(planModeTarget(harnessDir)).toBe(true)
+      expect(await planModeTarget(harnessDir)).toBe(true)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -157,7 +168,7 @@ describe('planMode bridge — planModeTarget (Prepare-window policy)', () => {
     const { root, harnessDir } = await tempHarness('dsh-planmode-target-locked-')
     try {
       await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }], compass: 'locked' }])
-      expect(planModeTarget(harnessDir)).toBe(true)
+      expect(await planModeTarget(harnessDir)).toBe(true)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -173,78 +184,44 @@ describe('planMode bridge — planModeTarget (Prepare-window policy)', () => {
           { id: 'plan-b', status: 'Done' },
         ],
       }])
-      expect(planModeTarget(harnessDir)).toBe(false)
+      expect(await planModeTarget(harnessDir)).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('no compass_ref / a completed compass / ANOTHER lifecycle compass → false (never a borrowed iteration gate)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-planmode-target-noiter-')
+  it('no compass_ref / completed compass / mismatched compass are not Prepare-window targets', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-planmode-target-noiter-'))
+    const noCompass = join(root, 'no-compass')
+    const completed = join(root, 'completed')
+    const mismatch = join(root, 'mismatch')
     try {
-      // A lifecycle with no compass_ref at all.
-      await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }], compass: null }])
-      expect(planModeTarget(harnessDir)).toBe(false)
-      // A completed compass does not steer (resolveCompassEnforcement parity).
-      await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }], compass: 'completed' }])
-      expect(planModeTarget(harnessDir)).toBe(false)
-      // A compass belonging to a DIFFERENT lifecycle (`iteration_id` mismatch)
-      // never steers this session's plan mode, active status notwithstanding.
-      await seedHarness(harnessDir, {
-        'status.json': v2Root([v2WorkflowEntry(ITER, 'iteration')]),
-        [`workflows/${ITER}/snapshot.json`]: v2SnapshotWithPlans(ITER, [{ id: 'plan-a', status: 'Todo' }], {
-          compass_ref: 'iterations/iter-other/delivery-compass.md',
-        }),
+      await seedLifecycles(noCompass, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }], compass: null }])
+      expect(await planModeTarget(noCompass)).toBe(false)
+      await seedLifecycles(completed, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }], compass: 'completed' }])
+      expect(await planModeTarget(completed)).toBe(false)
+      await seedLifecycles(mismatch, [{
+        iterationId: ITER,
+        plans: [{ id: 'plan-a', status: 'Todo' }],
+        compassRef: 'iterations/iter-other/delivery-compass.md',
+      }])
+      await seedHarness(mismatch, {
         'iterations/iter-other/delivery-compass.md': '---\niteration_id: iter-other\nstatus: active\n---\n',
       })
-      expect(planModeTarget(harnessDir)).toBe(false)
+      expect(await planModeTarget(mismatch)).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('a compass_ref escaping the harness root does not steer → false (never a path outside the harness)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-planmode-target-escape-')
-    try {
-      // A REAL steering compass outside the harness root, referenced by a
-      // traversal ref from the snapshot.
-      await mkdir(join(root, 'outside'), { recursive: true })
-      await writeFile(join(root, 'outside', 'delivery-compass.md'), `---\niteration_id: ${ITER}\nstatus: active\n---\n`)
-      await seedHarness(harnessDir, {
-        'status.json': v2Root([v2WorkflowEntry(ITER, 'iteration')]),
-        [`workflows/${ITER}/snapshot.json`]: v2SnapshotWithPlans(ITER, [{ id: 'plan-a', status: 'Todo' }], {
-          compass_ref: '../outside/delivery-compass.md',
-        }),
-      })
-      expect(planModeTarget(harnessDir)).toBe(false)
-      // An absolute ref is equally refused.
-      await seedHarness(harnessDir, {
-        [`workflows/${ITER}/snapshot.json`]: v2SnapshotWithPlans(ITER, [{ id: 'plan-a', status: 'Todo' }], {
-          compass_ref: join(root, 'outside', 'delivery-compass.md'),
-        }),
-      })
-      expect(planModeTarget(harnessDir)).toBe(false)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
+  // Disposition — traversal/absolute refs in hand-edited snapshot.json were a file-route contract; ACTIVE producers reject invalid compass refs before selection.
 
-  it('missing / empty / plan-less status.json → false (no plan rows to put in Prepare)', async () => {
-    const { root, harnessDir } = await tempHarness('dsh-planmode-target-nostatus-')
+  // Disposition — missing/plan-less status.json and snapshot.json cases tested retired file resolution; ACTIVE authority has no corresponding document read.
+  it('an ACTIVE workflow with no plan rows is outside the Prepare window', async () => {
+    const { root, harnessDir } = await tempHarness('dsh-planmode-target-emptyplans-')
     try {
-      // No status.json at all.
-      expect(planModeTarget(harnessDir)).toBe(false)
-      // A snapshot without a `plans` array (selection still resolves — the
-      // snapshot read degrades to false).
-      await mkdir(join(harnessDir, 'workflows', ITER), { recursive: true })
-      await seedHarness(harnessDir, {
-        'status.json': v2Root([v2WorkflowEntry(ITER, 'iteration')]),
-        [`workflows/${ITER}/snapshot.json`]: v2Snapshot(ITER, { compass_ref: `iterations/${ITER}/delivery-compass.md` }),
-      })
-      expect(planModeTarget(harnessDir)).toBe(false)
-      // An empty plans array.
       await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [] }])
-      expect(planModeTarget(harnessDir)).toBe(false)
+      expect(await planModeTarget(harnessDir)).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -257,9 +234,9 @@ describe('planMode bridge — planModeTarget (Prepare-window policy)', () => {
         { iterationId: 'iter-a', plans: [{ id: 'plan-a', status: 'Todo' }] },
         { iterationId: 'iter-b', plans: [{ id: 'plan-b', status: 'Todo' }] },
       ])
-      expect(planModeTarget(harnessDir)).toBeUndefined()
+      expect(await planModeTarget(harnessDir)).toBeUndefined()
       // A hint that matches NEITHER lifecycle is just as unbound.
-      expect(planModeTarget(harnessDir, { cwd: root, sessionId: 'root-1' })).toBeUndefined()
+      expect(await planModeTarget(harnessDir, { cwd: root, sessionId: 'root-1' })).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -274,10 +251,10 @@ describe('planMode bridge — planModeTarget (Prepare-window policy)', () => {
       ])
       const hint = (selectedWorkflowId: string): SessionHint => ({ cwd: root, sessionId: 'root-1', selectedWorkflowId })
       // Same cwd for both sessions: only the durable pick separates them.
-      expect(planModeTarget(harnessDir, hint('iter-a'))).toBe(false)
-      expect(planModeTarget(harnessDir, hint('iter-b'))).toBe(true)
+      expect(await planModeTarget(harnessDir, hint('iter-a'))).toBe(false)
+      expect(await planModeTarget(harnessDir, hint('iter-b'))).toBe(true)
       // A pick naming a NON-active id falls through to the unbound state.
-      expect(planModeTarget(harnessDir, hint('iter-gone'))).toBeUndefined()
+      expect(await planModeTarget(harnessDir, hint('iter-gone'))).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -290,7 +267,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
     try {
       await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }] }])
       const planMode = new FakePlanModeService(new Context())
-      const ok = syncPlanMode(rootAgent(root), { resolver: new HarnessResolver(harnessDir), planMode })
+      const ok = await syncPlanMode(rootAgent(root), { resolver: new HarnessResolver(harnessDir), planMode })
 
       expect(ok).toBe(true)
       expect(planMode.active).toBe(true)
@@ -305,7 +282,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
     try {
       await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'InReview' }] }])
       const planMode = new FakePlanModeService(new Context())
-      const ok = syncPlanMode(rootAgent(root), { resolver: new HarnessResolver(harnessDir), planMode })
+      const ok = await syncPlanMode(rootAgent(root), { resolver: new HarnessResolver(harnessDir), planMode })
 
       // The sync ran (set called with false) — but the session is ALREADY in
       // the default OFF state, so upstream set returns 'noop' and appends NO
@@ -328,7 +305,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
       ])
       const planMode = new FakePlanModeService(new Context())
       const resolver = new HarnessResolver(harnessDir)
-      const ok = syncPlanMode(rootAgent(root), { resolver, planMode })
+      const ok = await syncPlanMode(rootAgent(root), { resolver, planMode })
 
       expect(ok).toBe(false)
       expect(planMode.setCalls).toBe(0)
@@ -337,7 +314,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
       // The durable pick binds the session → the sync mirrors that
       // lifecycle's Prepare state (and only then).
       await seedBinding(harnessDir, 'root-1', root, 'iter-b')
-      expect(syncPlanMode(rootAgent(root), { resolver, planMode })).toBe(true)
+      expect(await syncPlanMode(rootAgent(root), { resolver, planMode })).toBe(true)
       expect(planMode.events).toEqual([{ active: true }])
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -349,7 +326,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
     try {
       await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }] }])
       const planMode = new FakePlanModeService(new Context())
-      const ok = syncPlanMode(childAgent(root), { resolver: new HarnessResolver(harnessDir), planMode })
+      const ok = await syncPlanMode(childAgent(root), { resolver: new HarnessResolver(harnessDir), planMode })
 
       expect(ok).toBe(false)
       expect(planMode.setCalls).toBe(0)
@@ -365,7 +342,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
       const plainWorkspace = join(root, 'plain-workspace')
       await mkdir(plainWorkspace, { recursive: true })
       const planMode = new FakePlanModeService(new Context())
-      const ok = syncPlanMode(rootAgent(plainWorkspace), { resolver: new HarnessResolver(undefined), planMode })
+      const ok = await syncPlanMode(rootAgent(plainWorkspace), { resolver: new HarnessResolver(undefined), planMode })
 
       expect(ok).toBe(false)
       expect(planMode.setCalls).toBe(0)
@@ -378,7 +355,7 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
     const { root, harnessDir } = await tempHarness('dsh-planmode-sync-absent-')
     try {
       await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }] }])
-      expect(syncPlanMode(rootAgent(root), { resolver: new HarnessResolver(harnessDir), planMode: undefined })).toBe(false)
+      expect(await syncPlanMode(rootAgent(root), { resolver: new HarnessResolver(harnessDir), planMode: undefined })).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -391,13 +368,13 @@ describe('planMode bridge — syncPlanMode (root filter + set)', () => {
       const planMode = new FakePlanModeService(new Context())
       const resolver = new HarnessResolver(harnessDir)
 
-      expect(syncPlanMode(rootAgent(root), { resolver, planMode })).toBe(true)
+      expect(await syncPlanMode(rootAgent(root), { resolver, planMode })).toBe(true)
       expect(planMode.events).toEqual([{ active: true }])
 
       // Same harness state again (the decision-point re-evaluation): the fake
       // set returns 'noop' (upstream `if (active === target) return 'noop'`) —
       // the event log stays ONE entry, no churn.
-      expect(syncPlanMode(rootAgent(root), { resolver, planMode })).toBe(true)
+      expect(await syncPlanMode(rootAgent(root), { resolver, planMode })).toBe(true)
       expect(planMode.setCalls).toBe(2)
       expect(planMode.events).toEqual([{ active: true }])
     } finally {
@@ -417,7 +394,7 @@ describe('planMode bridge — apply wiring (agent/created + subagent/start decis
       try {
         registerPlanModeBridge(ctx, new HarnessResolver(harnessDir))
         ctx.events.emit('agent/created', { agent: rootAgent(root), source: 'fresh' })
-        ctx.events.emit('agent/created', { agent: childAgent(root), source: 'fresh' })
+        await settlePlanModeBridge()
 
         expect(planMode.active).toBe(true)
         expect(planMode.events).toEqual([{ active: true }])
@@ -432,7 +409,10 @@ describe('planMode bridge — apply wiring (agent/created + subagent/start decis
   it('subagent/start decision point: the parentSession root walk re-evaluates idempotently; a mid-session Prepare flip flips the flag', async () => {
     const { root, harnessDir } = await tempHarness('dsh-planmode-wiring-decision-')
     try {
-      await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'Todo' }] }])
+      await seedLifecycles(harnessDir, [
+        { iterationId: 'iter-a', plans: [{ id: 'plan-a', status: 'Todo' }] },
+        { iterationId: 'iter-b', plans: [{ id: 'plan-b', status: 'InProgress' }] },
+      ])
       const ctx = new Context()
       const planMode = new FakePlanModeService(ctx)
       const agents = new FakeAgentRegistry(ctx)
@@ -444,20 +424,20 @@ describe('planMode bridge — apply wiring (agent/created + subagent/start decis
       const prior = setPlanModeBridgeLogger(() => {})
       try {
         registerPlanModeBridge(ctx, resolver)
-        // Session-start in the Prepare window → committed ON.
+        await seedBinding(harnessDir, 'root-d1', root, 'iter-a')
         ctx.events.emit('agent/created', { agent: rootFixture, source: 'fresh' })
+        await settlePlanModeBridge()
         expect(planMode.events).toEqual([{ active: true }])
-
         // Decision point with the SAME Prepare state → idempotent no-op (no churn).
         ctx.events.emit('subagent/start', { runId: 'run-1', provider: 'in-process', id: 'child-d1', local: true })
-        expect(planMode.events).toEqual([{ active: true }])
+        await settlePlanModeBridge()
         expect(planMode.setCalls).toBe(2)
 
         // The Prepare window closes mid-session (the plan advances past Todo) →
         // the decision point flips the root flag back OFF.
-        await seedLifecycles(harnessDir, [{ iterationId: ITER, plans: [{ id: 'plan-a', status: 'InProgress' }] }])
+        await seedBinding(harnessDir, 'root-d1', root, 'iter-b')
         ctx.events.emit('subagent/start', { runId: 'run-2', provider: 'in-process', id: 'child-d1', local: true })
-
+        await settlePlanModeBridge()
         expect(planMode.events).toEqual([{ active: true }, { active: false }])
         expect(planMode.active).toBe(false)
       } finally {
@@ -484,6 +464,7 @@ describe('planMode bridge — apply wiring (agent/created + subagent/start decis
         }
         registerPlanModeBridge(ctx, new ThrowingResolver(harnessDir))
         expect(() => ctx.events.emit('agent/created', { agent: rootAgent(root), source: 'fresh' })).not.toThrow()
+        await settlePlanModeBridge()
         const warn = captured.find((m) => m.startsWith('warn:') && m.includes('planMode bridge sync failed'))
         expect(warn).toBeDefined()
         expect(warn).toContain('planmode resolver boom')

@@ -185,7 +185,6 @@ const fullSource: MstarEngineStatusPayload = {
   enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   iteration: {
     iterationId: 'iter-00000809-dsh-workflow-viz',
-    statusPath: '/proj/.mstar/status.json',
     compassPath: '/proj/.mstar/iterations/iter-00000809-dsh-workflow-viz/delivery-compass.md',
     gate: {
       transition: 'phase-2-execute',

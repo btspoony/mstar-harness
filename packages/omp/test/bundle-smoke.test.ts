@@ -650,7 +650,10 @@ describe("@mstar-harness/omp packed artifact", () => {
       // points; enabled unsafe workflows remain visibly rejected.
       expect(report.startInert).toMatchObject({ ok: true, isError: false, code: "preference-off" });
       expect(report.fireInert).toMatchObject({ ok: true, isError: false, code: "preference-off" });
-      expect(report.startUnsafeWorkflow).toMatchObject({ ok: false, isError: true, code: "invalid-workflow" });
+      // The pre-activation register route is retired: without an ACTIVE store,
+      // an unsafe workflow start refuses as register-invalid rather than
+      // reaching the old invalid-workflow validator.
+      expect(report.startUnsafeWorkflow).toMatchObject({ ok: false, isError: true, code: "register-invalid" });
       expect(report.fireWithoutBinding).toMatchObject({ ok: false, isError: true, code: "not-pending" });
 
       // The hook loads from the same packed artifact: exactly one tool_call
@@ -741,10 +744,10 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.schema.rejectsUnknownOperation).toContain("operation must be");
       expect(report.schema.rejectsUnknownKey).toBeTruthy();
 
-      // The inlined engine runs inside the packed extension: a bind for a
-      // workflow this control root does not hold refuses, and an unbound session
-      // cannot checkpoint. Both are visible results rather than silent no-ops.
-      expect(report.bindMissingWorkflow).toMatchObject({ ok: false, isError: true, code: "phase2.snapshot-unreadable" });
+      // The retired snapshot route is gone: the bind against a missing ACTIVE
+      // store refuses through the authority; a separate unbound checkpoint
+      // refuses with its live not-bound code.
+      expect(report.bindMissingWorkflow).toMatchObject({ ok: false, isError: true, code: "store.not-initialized" });
       expect(report.checkpointUnbound).toMatchObject({ ok: false, isError: true, code: "phase2.not-bound" });
 
       // Native settings API exercised for real, across sessions: the writing

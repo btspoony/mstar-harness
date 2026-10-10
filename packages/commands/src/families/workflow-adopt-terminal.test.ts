@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { initializeExecutionAuthority, initializeStore, openStore, type StoreDb } from "@mstar-harness/engine";
+import { initializeStore, openStore, readExecutionState, type StoreDb } from "@mstar-harness/engine";
 import { activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { executeCommand } from "../definitions.js";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
@@ -18,9 +18,11 @@ async function fixture(active = true): Promise<{ root: string; harness: string }
   mkdirSync(harness, { recursive: true });
   const initial = await initializeStore({ harnessDir: harness });
   initial.close();
-  if (active) await initializeExecutionAuthority({ harnessDir: harness });
+  const initialized = await readExecutionState({ harnessDir: harness });
+  expect(initialized.token).toBeDefined();
   const writer = await openStore({ harnessDir: harness }, "write");
   try {
+    if (!active) writer.db.prepare("update execution_meta set authority_state = 'legacy' where id = 1").run();
     writer.db.prepare(
       "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, ?, ?, ?)",
     ).run("wf-command", JSON.stringify({
@@ -235,15 +237,15 @@ test("fresh adoption operation against listed adopted revision gets the exact al
   }
 });
 
-test("inactive-authority refusal names the supported status and store-upgrade recovery", async () => {
+test("legacy authority refusal names the supported status recovery", async () => {
   const { root, harness } = await fixture(false);
   const refused = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness, expect: "1", operation: "adopt-inactive", reason: "inactive authority",
   }, invocation(root));
   expectAdoptionRefusal(
     refused,
-    "terminal adoption requires an active execution authority",
-    "Run mstar status validate to inspect the harness, then mstar store upgrade --operator <name> to import legacy execution state and activate the execution authority before retrying adoption.",
+    "[execution.not-active] the execution authority is legacy; terminal adoption requires an active authority",
+    "mstar status validate.",
   );
 });
 test("a valid explicit revision reaches the engine while an explicit stale CAS is engine-rejected without mutation", async () => {
