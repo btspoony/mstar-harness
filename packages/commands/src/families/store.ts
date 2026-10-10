@@ -52,7 +52,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       exitCode: 1,
       message,
       recovery: id === "store.init" && message.includes("legacy execution state exists at ")
-        ? 'For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade".'
+        ? 'For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical file state, run mstar store upgrade.'
         : id === "store.init"
           ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
           : id === "store.upgrade"

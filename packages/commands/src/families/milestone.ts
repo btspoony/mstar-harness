@@ -48,7 +48,7 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
     throw new UsageError("milestone.assign requires an acquired workflow coordinator identity; run it from the workflow's acquired coordinator session.");
   }
   if (acquired.role !== "coordinator") {
-    return refusalEnvelope({ command: id, status: "refused", code: "issue.scope-refused", exitCode: 1, message: "The acquired identity does not hold the workflow coordinator seat." });
+    return refusalEnvelope({ command: id, status: "refused", code: "issue.scope-refused", exitCode: 1, message: "The acquired identity does not hold the workflow coordinator seat.", recovery: "Issue milestone assignment belongs to the workflow's acquired coordinator session; bind a coordinator first with mstar plan bind --execution true --coordinator true --workflow <workflow-id>." });
   }
   const execution = executionContextFor(store, acquired);
   const mutation: MutationContext & {expectedStoreRevision:number} = {operationId,actor:requireValue(input.actor,"--actor"),...(input.sessionRef === undefined ? {} : {sessionRef:input.sessionRef}),expectedRevision:input.expectIssue,expectedStoreRevision:input.expectStore};

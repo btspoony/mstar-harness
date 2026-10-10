@@ -255,7 +255,7 @@ describe("plan command family", () => {
       throw new Error("plan.bind refusal carries no details.recovery");
     }
     const recovery = String(staleDetails.recovery);
-    expect(recovery).toContain("mstar plan bind --execution --workflow");
+    expect(recovery).toContain("mstar plan bind --execution true --coordinator true --workflow <workflow-id>");
     expect(recovery).toContain("--coordinator");
     expect(recovery).toContain("--resume-ref");
   });

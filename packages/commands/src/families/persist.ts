@@ -107,11 +107,11 @@ function readPayload(input: string | undefined, file: string | undefined, cwd: s
   if (input !== undefined) return input;
   if (file === undefined) return refusalEnvelope({ command: command, status: "usage", code: "command.invalid-input", exitCode: 2, message: "provide input or file; protocol stdin is never read implicitly" });
   const requested = path.isAbsolute(file) ? file : path.resolve(cwd, file);
-  if (!existsSync(requested)) return refusalEnvelope({ command: command, status: "refused", code: "persist.input-file-not-found", exitCode: 1, message: `persist payload file not found: ${requested}`, recovery: "The payload file must exist at the reported path and be readable; retry the same persist write with that file." });
+  if (!existsSync(requested)) return refusalEnvelope({ command: command, status: "refused", code: "persist.input-file-not-found", exitCode: 1, message: `persist payload file not found: ${requested}`, recovery: "Make the payload file readable at the reported path, then run mstar persist write review --key <key> --file <path> to retry." });
   try {
     return readFileSync(requested, "utf8");
   } catch (error) {
-    return refusalEnvelope({ command: command, status: "refused", code: "persist.input-read-failed", exitCode: 1, message: messageOf(error), recovery: "Make the payload file readable at the reported path and retry the same persist write." });
+    return refusalEnvelope({ command: command, status: "refused", code: "persist.input-read-failed", exitCode: 1, message: messageOf(error), recovery: "Correct the file permissions at the reported path, then run mstar persist write review --key <key> --file <path> to retry." });
   }
 }
 
@@ -151,18 +151,18 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         if (isFailure(kind)) return kind;
         if (input.key === "") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "key must be non-empty" });
         const keyProblem = invalidKey(kind, input.key);
-        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key using the supported persist kind and key constraints, then retry." });
+        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist write review --key <key> --input <json> to retry." });
         const raw = readPayload(input.input, input.file, context.cwd, id);
         if (typeof raw !== "string") return raw;
         let payload: unknown;
-        try { payload = JSON.parse(raw); } catch (error) { return refusalEnvelope({ command: id, status: "refused", code: "persist.invalid-json", exitCode: 1, message: `persist payload is not valid JSON: ${messageOf(error)}`, recovery: "Correct the JSON syntax and retry with the same persist kind and key." }); }
+        try { payload = JSON.parse(raw); } catch (error) { return refusalEnvelope({ command: id, status: "refused", code: "persist.invalid-json", exitCode: 1, message: `persist payload is not valid JSON: ${messageOf(error)}`, recovery: "Correct the JSON syntax, then run mstar persist write review --key <key> --input <json> to retry." }); }
         try {
           validatePayload(kind, payload);
           const store = await resolveStore(input.store, context.cwd);
           await store.put({ kind, key: input.key, payload, ...(input.schema === undefined ? {} : { schema: input.schema }) });
           return ok(id, { kind, key: input.key });
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.write-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.write-refused") }, recovery: "Correct the reported store or payload issue, then retry the same persist write." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.write-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.write-refused") }, recovery: "Correct the reported store or payload issue, then run mstar persist write review --key <key> --input <json> to retry." });
         }
       },
     }),
@@ -177,12 +177,12 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         if (isFailure(kind)) return kind;
         if (input.key === "") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "key must be non-empty" });
         const keyProblem = invalidKey(kind, input.key);
-        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key using the supported persist kind and key constraints, then retry." });
+        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist get review --key <key> to retry." });
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (input.versioned === true) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
-            if (typeof root !== "string") return refusalEnvelope({ command: id, status: "refused", code: "coordination.local-store-required", exitCode: 1, message: "versioned reads require the local FsStore", recovery: "Use the local FsStore for a versioned read, or omit --versioned for an injected store." });
+            if (typeof root !== "string") return refusalEnvelope({ command: id, status: "refused", code: "coordination.local-store-required", exitCode: 1, message: "versioned reads require the local FsStore", recovery: "Read versioned bytes through the local FsStore; run mstar persist get review --key <key> --versioned." });
             const ref = { kind, key: input.key };
             const payload = await store.get(ref);
             if (payload === undefined) return ok(id, { payload: null, version: "absent" });
@@ -190,14 +190,14 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
             return ok(id, { payload: JSON.parse(bytes.toString("utf8")), version: `sha256:${createHash("sha256").update(bytes).digest("hex")}` });
           }
           const payload = await store.get({ kind, key: input.key });
-          if (payload === undefined) return refusalEnvelope({ command: id, status: "refused", code: "persist.not-found", exitCode: 1, message: `persist get ${kind}/${input.key}: no stored document`, recovery: `Create it with mstar persist write ${kind} --key ${input.key} --input <json>, then read it with mstar persist get ${kind} --key ${input.key}.` });
+          if (payload === undefined) return refusalEnvelope({ command: id, status: "refused", code: "persist.not-found", exitCode: 1, message: `persist get ${kind}/${input.key}: no stored document`, recovery: "Create it with mstar persist write review --key <key> --input <json>, then read it with mstar persist get review --key <key>." });
           if (input.validate === true) {
             validatePayload(kind, payload);
             return ok(id, { payload, validation: kind === "json" ? "parse-only" : "ok" });
           }
           return ok(id, { payload });
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.get-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.get-refused") }, recovery: "Correct the reported store or validation failure and retry the same persist get." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.get-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.get-refused") }, recovery: "Correct the reported store or validation failure, then run mstar persist get review --key <key> to retry." });
         }
       },
     }),
@@ -216,7 +216,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           const refs = await store.list(kind);
           return ok(id, refs.map(({ key }) => key).sort());
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.list-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.list-refused") }, recovery: "Correct the reported store failure, then retry listing the same persist kind." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.list-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.list-refused") }, recovery: "Correct the reported store failure, then run mstar persist list review to retry." });
         }
       },
     }),
@@ -230,14 +230,14 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         if (isFailure(kind)) return kind;
         if (input.key === "") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "key must be non-empty" });
         const keyProblem = invalidKey(kind, input.key);
-        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key using the supported persist kind and key constraints, then retry." });
+        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist delete review --key <key> to retry." });
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (typeof store.delete !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support delete" });
           await store.delete({ kind, key: input.key });
           return ok(id, { kind, key: input.key, deleted: true });
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.delete-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.delete-refused") }, recovery: "Correct the reported store or key failure and retry the same persist delete." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.delete-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.delete-refused") }, recovery: "Correct the reported store or key failure, then run mstar persist delete review --key <key> to retry." });
         }
       },
     }),
