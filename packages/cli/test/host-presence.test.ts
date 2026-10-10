@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,8 @@ const originalPath = process.env.PATH;
 const originalHome = process.env.HOME;
 const originalProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const tempDirs: string[] = [];
+const adapterHome = mkdtempSync(path.join(os.tmpdir(), "host-presence-adapter-home-"));
+afterAll(() => rmSync(adapterHome, { recursive: true, force: true }));
 
 afterEach(() => {
   process.env.PATH = originalPath;
@@ -30,16 +32,25 @@ function absentOnPath(): string {
   process.env.PATH = directory;
   return directory;
 }
-function useHome(prefix: string, existingHarness = false): string {
-  const home = tempDir(prefix);
-  process.env.HOME = home;
+function useAdapterHome(existingHarness = false): string {
+  process.env.HOME = adapterHome;
   if (existingHarness) {
-    const harness = path.join(home, ".mstar", "harness");
+    const harness = path.join(adapterHome, ".mstar", "harness");
     mkdirSync(path.join(harness, ".omp-plugin"), { recursive: true });
     mkdirSync(path.join(harness, ".git"), { recursive: true });
     writeFileSync(path.join(harness, ".omp-plugin", "plugin.json"), "{}");
   }
-  return home;
+  return adapterHome;
+}
+
+function captureError(action: () => unknown): Error {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw error;
+  }
+  throw new Error("Expected the adapter to refuse the install.");
 }
 
 describe("shared host-presence probe (injectable runner)", () => {
@@ -83,7 +94,7 @@ describe("shared host-presence probe (injectable runner)", () => {
 describe("omp host presence at init", () => {
   test("real init refuses before writes; dry-run still previews link without probing", async () => {
     const root = tempDir("omp-presence-project-");
-    const home = useHome("omp-presence-home-");
+    const home = useAdapterHome();
     process.env.PATH = tempDir("omp-presence-path-");
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
     // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
@@ -189,15 +200,16 @@ describe("repo-built CLI host-presence smoke", () => {
 
 describe("codex and dsh presence behavior remains pinned", () => {
   test("codex missing-binary refusal and dry-run preview are unchanged", async () => {
-    const home = useHome("codex-presence-home-", true);
+    const home = useAdapterHome(true);
     const root = tempDir("codex-presence-project-");
     absentOnPath();
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
     // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
     const adapter = await import("../src/adapters/codex");
-    expect(() => adapter.codexAdapter.runInstallInit?.("project", false)).toThrow(
-      "codex CLI not found on PATH. Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
-    );
+    const refusal = captureError(() => adapter.codexAdapter.runInstallInit?.("project", false));
+    expect(refusal.message).toContain("codex CLI not found on PATH");
+    expect(refusal.message).toContain("npm install -g @openai/codex");
+    expect(refusal.message).toContain("then re-run init");
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
     const preview = adapter.codexAdapter.runInstallInit?.("project", true);
     expect(preview?.notes.some((note) => note.includes("Would run: codex plugin marketplace add"))).toBe(true);
@@ -206,15 +218,16 @@ describe("codex and dsh presence behavior remains pinned", () => {
   });
 
   test("dsh missing-binary refusal and pure dry-run preview are unchanged", async () => {
-    const home = useHome("dsh-presence-home-");
+    const home = useAdapterHome();
     const root = tempDir("dsh-presence-project-");
     absentOnPath();
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
     // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
     const adapter = await import("../src/adapters/dsh");
-    expect(() => adapter.dshAdapter.runInstallInit?.("project", false)).toThrow(
-      "dsh CLI not found on PATH. Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
-    );
+    const refusal = captureError(() => adapter.dshAdapter.runInstallInit?.("project", false));
+    expect(refusal.message).toContain("dsh CLI not found on PATH");
+    expect(refusal.message).toContain("pnpm add -g @deepseek-ai/dsh");
+    expect(refusal.message).toContain("then re-run init");
     expect(existsSync(path.join(home, ".dsh"))).toBe(false);
     const preview = adapter.dshAdapter.runInstallInit?.("project", true);
     expect(preview?.notes.some((note) => note.includes("Would run: dsh plugin"))).toBe(true);
