@@ -2531,6 +2531,8 @@ export interface WorkflowVerdictInput {
    * skipped rather than attributed to an arbitrary lifecycle.
    */
   hint?: SessionHint
+  /** ACTIVE workflow directory already resolved by the async gate read. */
+  resolvedWorkflowDir?: string
 }
 
 /**
@@ -2556,7 +2558,7 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
     // v3 write path: the ACTIVE workflow dir BOUND to this session. No bound
     // lifecycle → skipped with a one-time warn (never a root v1 write, never
     // a terminal snapshot write, never a sibling session's lifecycle).
-    const workflowDir = resolveAgentFlowWriteDir(input.harnessDir, input.hint)
+    const workflowDir = input.resolvedWorkflowDir ?? resolveAgentFlowWriteDir(input.harnessDir, input.hint)
     if (workflowDir === null) return
     const agent = input.exec !== undefined ? agentOfExec(input.exec) : undefined
     const callId = input.exec !== undefined ? callIdOf(input.exec) : undefined
