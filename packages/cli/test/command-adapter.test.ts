@@ -1260,6 +1260,28 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     expect(result.exitCode).not.toBe(0);
   });
 
+  test("REAL init v1 refuses a V2-nested mcp row without touching the dual-host config (mirror refusal)", () => {
+    const root = tempProject();
+    const original = JSON.stringify({
+      "$schema": "https://opencode.ai/config.json",
+      "plugins": ["@mstar-harness/opencode-v2@latest"],
+      "mcp": { "servers": { "context7": { "type": "remote", "url": "https://mcp.context7.com/mcp" } } },
+    }, null, 2);
+    writeFileSync(join(root, "opencode.json"), original, "utf8");
+    const binDir = stubOpencode("opencode v2.0.24");
+    const result = runInit(
+      ["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v1"],
+      `${binDir}:${ISOLATED_PATH}`,
+      root,
+    );
+    expect(result.exitCode).not.toBe(0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toContain("V2-nested MCP rows");
+    expect(output).toContain("mcp.servers.context7");
+    expect(output).toContain("--opencode-generation v1");
+    expect(readFileSync(join(root, "opencode.json"), "utf8")).toBe(original);
+  });
+
   test("REAL init v2 refuses a V1-flat mcp row without touching the dual-host config", () => {
     const root = tempProject();
     // Pre-seed a V1-flat mcp row: one file cannot serve both MCP dialects

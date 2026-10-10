@@ -90,7 +90,25 @@ function applyAssignments(config: Record<string, unknown>, assignments: Record<s
 }
 
 function applyV1Init(config: Record<string, unknown>, assignments: Record<string, string>) {
+ refuseV2NestedMcpRows(config);
  return applyAssignments(updatePluginList(ensureConfigSchema(config)), assignments);
+}
+
+/** Mirror of the V2 flat-row refusal: the two MCP dialects cannot coexist in
+ * one config, so a V1 init on a V2-initialized file refuses with the same
+ * scope-split recovery instead of letting the V1 host load a V2-only row. */
+function refuseV2NestedMcpRows(config: Record<string, unknown>): void {
+ const mcp = ensureObject(config.mcp);
+ const servers = ensureObject(mcp.servers);
+ const nested = Object.keys(servers);
+ if (nested.length === 0) return;
+ throw new Error(
+  'This opencode.json carries V2-nested MCP rows (' + nested.map((row) => 'mcp.servers.' + row).join(', ') + ') that the V1 MCP dialect'
+  + ' (flat mcp.<server> only) cannot represent alongside it. The file was not modified. Supported recovery: separate the'
+  + ' generations across scopes \u2014 project and global init resolve to different config files, so run this init with the'
+  + ' --scope whose file has no V2-nested MCP rows, or move those servers off the nested dialect manually. Then re-run'
+  + ' mstar init --target opencode --opencode-generation v1.',
+ );
 }
 
 // --- V2 write set (plural `plugins` / `agents` keys; $schema preserve-don't-invent) ---
