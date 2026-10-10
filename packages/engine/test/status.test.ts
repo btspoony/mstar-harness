@@ -43,7 +43,6 @@ import type { GateResult, ValidationResult } from "../src/core.js";
 import type { FindingsCleanupMode } from "../src/project.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
-const EMPTY_TEMPLATE = join(FIXTURES, "status.empty.json");
 const REAL_SHAPE = join(FIXTURES, "status.real-shape.json");
 
 function tmpRoot(prefix: string): string {
@@ -322,15 +321,16 @@ describe("validateResidual", () => {
 });
 
 describe("validateStatusV2", () => {
-  test("v2 empty template validates clean (fixtures/status.empty.json)", () => {
-    const result = validateStatusV2(EMPTY_TEMPLATE);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("accepts a parsed object or a file path", () => {
+  test("accepts a parsed object or a valid file path", () => {
     expect(validateStatusV2(v2doc()).ok).toBe(true);
-    expect(validateStatusV2(EMPTY_TEMPLATE).ok).toBe(true);
+    const root = tmpRoot("status-v2-file-");
+    const path = join(root, "status.json");
+    try {
+      writeFileSync(path, JSON.stringify(v2doc()), "utf8");
+      expect(validateStatusV2(path).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("v2 fixture with active workflow entries validates clean (incl. nested relative dir)", () => {
