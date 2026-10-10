@@ -149,35 +149,55 @@ function topologyFixture(
   return { linked, integration, mainBranch, featureBranch: "feature/plan-a", integrationBranch };
 }
 
-/** Write `workflows/<id>/snapshot.json` into `dir`; returns the snapshot path. */
-function writeSnapshot(dir: string, doc: Record<string, unknown>, workflowId: string = WORKFLOW_ID): string {
-  const workflowDir = join(dir, "workflows", workflowId);
-  mkdirSync(workflowDir, { recursive: true });
-  const snapshotPath = join(workflowDir, "snapshot.json");
-  writeFileSync(snapshotPath, JSON.stringify(doc, null, 2));
-  return snapshotPath;
+/**
+ * Seed the ACTIVE execution graph through engine domain operations, then bind
+ * its coordinator using the public CLI. No status/snapshot JSON is authority.
+ */
+/**
+ * Seed an ACTIVE execution graph through engine domain operations, then bind
+ * its coordinator using the public CLI. No status/snapshot JSON is authority.
+ */
+function writeSnapshot(dir: string, doc: Record<string, unknown>, workflowId: string = WORKFLOW_ID): void {
+  const startedAt = "2026-10-10T00:00:00.000Z";
+  const type = doc.type === "iteration" ? "iteration" : "plan";
+  const snapshot = {
+    schema_version: 1, id: workflowId, type, status: "running", started_at: startedAt, updated_at: startedAt,
+    branch: doc.branch, integration_worktree_path: doc.integration_worktree_path,
+    plans: Array.isArray(doc.plans) ? doc.plans : [],
+  };
+  const setup = `
+    import { existsSync } from "node:fs";
+    import { initializeStore, readExecutionAuthority, createExecutionWorkflow } from "@mstar-harness/engine";
+    const context = { harnessDir: ${JSON.stringify(dir)} };
+    if (!existsSync(context.harnessDir + "/store.db")) {
+      const store = await initializeStore(context); store.close();
+    }
+    const initial = await readExecutionAuthority(context);
+    const workflowId = ${JSON.stringify(workflowId)};
+    const startedAt = ${JSON.stringify(startedAt)};
+    const created = await createExecutionWorkflow(
+      { harnessDir: context.harnessDir, caller: { sessionId: "fixture-creator-" + workflowId, role: "coordinator", workflowId, planId: null } },
+      {
+        entry: { id: workflowId, type: ${JSON.stringify(type)}, status: "running", started_at: startedAt, dir: "workflows/" + workflowId },
+        snapshot: ${JSON.stringify(snapshot)},
+        expected: initial.token,
+        operationId: "create-" + workflowId,
+      },
+    );
+    process.stdout.write(created.data.workflows.find((workflow) => workflow.state.id === workflowId).workflowToken);
+  `;
+  const proc = Bun.spawnSync([process.execPath, "-e", setup], { cwd: CLI_ROOT, env: cliEnv(), stdout: "pipe", stderr: "pipe" });
+  if (proc.exitCode !== 0) throw new Error(`ACTIVE fixture registration failed: ${proc.stderr.toString()}`);
+  const workflowToken = proc.stdout.toString().trim();
+  if (workflowToken.length === 0) throw new Error("ACTIVE fixture registration returned no workflow token");
+  const bound = runCli([
+    "plan", "bind", "--execution", "--workflow", workflowId, "--coordinator",
+    "--expect", workflowToken, "--operation", `bind-${workflowId}`,
+    "--harness", dir, "--session-id", `fixture-creator-${workflowId}`,
+  ], dir);
+  if (bound.exitCode !== 0) throw new Error(`ACTIVE coordinator bind failed: ${bound.stdout}${bound.stderr}`);
 }
 
-/**
- * Write the v2 root register (`status.json` — `workflows[]` holds ACTIVE
- * lifecycles only) listing the given workflow ids as active.
- */
-function writeRegister(dir: string, ids: string[]): string {
-  const registerPath = join(dir, "status.json");
-  writeFileSync(
-    registerPath,
-    JSON.stringify(
-      {
-        version: 2,
-        updated_at: "2026-08-08",
-        workflows: ids.map((id) => ({ id, type: "plan", started_at: "2026-08-08", dir: `workflows/${id}` })),
-      },
-      null,
-      2,
-    ),
-  );
-  return registerPath;
-}
 
 /** Base snapshot doc: single running workflow with the given plans. */
 function snapshotDoc(plans: unknown[], extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -284,27 +304,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     }
   });
 
-  test("v1 control_worktree_path snapshot reads through the canonical reader (advisory, exit 0)", () => {
-    const root = tmpRoot("mstar-wt-l1-legacy-");
-    try {
-      const topo = topologyFixture(root);
-      writeSnapshot(
-        root,
-        snapshotDoc([PLAN_A(topo.linked)], {
-          branch: { base: topo.mainBranch, integration: topo.integrationBranch },
-          control_worktree_path: topo.integration,
-        }),
-      );
-      const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
-      expectOutput(result, "ok", "worktree.check.ok", 0);
-      expect(result.stderr).toContain("workflow.snapshot.legacy-control-worktree-path");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+// retired v1 file snapshot alias subject
 
   test("--integration override wins over the snapshot integration_worktree_path", () => {
     const root = tmpRoot("mstar-wt-l1-int-");
@@ -472,21 +472,14 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     }
   });
 
-  test("two matching plan rows (id + plan_id) → worktree.l1.ambiguous, exit 1", () => {
-    const root = tmpRoot("mstar-wt-l1-amb-");
+  test("ACTIVE registration refuses duplicate plan identities", () => {
+    const root = tmpRoot("mstar-wt-l1-duplicate-");
     try {
-      writeSnapshot(
-        root,
-        snapshotDoc(
-          [
-            PLAN_A(root),
-            { plan_id: "plan-a", title: "Plan A (legacy)", file: "plans/plan-a.md", status: "InProgress", metadata: PLAN_A(root).metadata },
-          ],
-          { control_worktree_path: root },
-        ),
-      );
-      const result = runCli(["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root]);
-      expectOutput(result, "refused", "worktree.l1.ambiguous", 1);
+      const duplicateRows = [
+        PLAN_A(root),
+        { plan_id: "plan-a", title: "Plan A duplicate", file: "plans/plan-a.md", status: "InProgress", metadata: PLAN_A(root).metadata },
+      ];
+      expect(() => writeSnapshot(root, snapshotDoc(duplicateRows))).toThrow("duplicate plan identity");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -569,7 +562,6 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
       // currently sits on — the ownership evidence must come from the
       // sibling snapshot, not only the governing one.
       writeSnapshot(root, snapshotDoc([], { id: "wf-2", type: "plan", branch: { integration: mainBranch } }), "wf-2");
-      writeRegister(root, [WORKFLOW_ID, "wf-2"]);
       const result = runCli(
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", "recorded-main"],
         root,
@@ -584,67 +576,11 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
     }
   });
 
-  test("malformed sibling snapshot refuses the check (fail-closed probe), exit 1", () => {
-    const root = tmpRoot("mstar-wt-l1-sibling-bad-");
-    try {
-      const linked = worktreeFixture(root);
-      const mainBranch = git(["branch", "--show-current"], root);
-      writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(linked)]));
-      // Registered active sibling with an unreadable snapshot — incomplete
-      // lifecycle evidence must refuse, never silently skip.
-      mkdirSync(join(root, "workflows", "wf-2"), { recursive: true });
-      writeFileSync(join(root, "workflows", "wf-2", "snapshot.json"), "{ not json");
-      writeRegister(root, [WORKFLOW_ID, "wf-2"]);
-      const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
-        root,
-      );
-      expectOutput(result, "refused", "worktree.l1.lifecycle-snapshot-unreadable", 1);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+// disposition: retired file-route-only malformed sibling snapshot fixture; ACTIVE sibling state is database-backed.
 
-  test("multi-snapshot pass: registered siblings collect, unregistered retained snapshots do not (exit 0)", () => {
-    const root = tmpRoot("mstar-wt-l1-sibling-ok-");
-    try {
-      const topo = topologyFixture(root);
-      writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
-      // A second active workflow with its own integration anchor (distinct
-      // from main) — registered, collected, check still passes.
-      writeSnapshot(root, snapshotDoc([], { id: "wf-2", type: "plan", branch: { integration: "iteration/wf-2" } }), "wf-2");
-      // An UNREGISTERED retained snapshot is not an active lifecycle — even
-      // one whose integration anchor is the branch main sits on must not
-      // refuse the check (the register decides the active set).
-      writeSnapshot(root, snapshotDoc([], { id: "wf-old", type: "plan", branch: { integration: topo.mainBranch } }), "wf-old");
-      writeRegister(root, [WORKFLOW_ID, "wf-2"]);
-      const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
-      expectOutput(result, "ok", "worktree.check.ok", 0);
-      expect(result.stderr).toBe("");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+// disposition: retired retained/unregistered snapshot membership subject; registry membership is ACTIVE database state.
 
-  test("unreadable root register refuses the check (active set cannot be enumerated), exit 1", () => {
-    const root = tmpRoot("mstar-wt-l1-register-bad-");
-    try {
-      const linked = worktreeFixture(root);
-      const mainBranch = git(["branch", "--show-current"], root);
-      writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(linked)]));
-      writeFileSync(join(root, "status.json"), "{ not json");
-      const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
-        root,
-      );
-      expectOutput(result, "refused", "worktree.l1.lifecycle-register-unreadable", 1);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+// disposition: retired corrupt root-register JSON fixture; ACTIVE root membership is held in store.db.
 });
 
 describe("mstar worktree check — process-harness discovery starts at the verified main worktree", () => {
@@ -689,39 +625,7 @@ describe("mstar worktree check — process-harness discovery starts at the verif
   });
 });
 
-describe("mstar status validate — canonical snapshot reader advisory", () => {
-  test("legacy-only snapshot: JSON advisory preserved, exit 0, source bytes unchanged", () => {
-    const root = tmpRoot("mstar-status-legacy-");
-    try {
-      const workflowDir = join(root, "workflows", "wf-legacy");
-      mkdirSync(workflowDir, { recursive: true });
-      const snapshotPath = join(workflowDir, "snapshot.json");
-      const raw = JSON.stringify(
-        {
-          schema_version: 1,
-          id: "wf-legacy",
-          type: "plan",
-          status: "running",
-          started_at: "2026-08-08",
-          updated_at: "2026-08-08",
-          plans: [],
-          control_worktree_path: join(root, "integration"),
-        },
-        null,
-        2,
-      );
-      writeFileSync(snapshotPath, raw);
-      const result = runCli(["status", "validate", snapshotPath]);
-      const output = expectOutput(result, "ok", "status.ok", 0, "status.validate");
-      expect(output.data).toMatchObject({ path: snapshotPath });
-      const diagnostics = output.data?.diagnostics as Array<{ code: string }>;
-      expect(diagnostics.some((diagnostic) => diagnostic.code === "workflow.snapshot.legacy-control-worktree-path")).toBe(true);
-      expect(readFileSync(snapshotPath, "utf8")).toBe(raw); // advisory never rewrites the source
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
+// disposition: retired legacy snapshot/status byte assertion; ACTIVE database rows are execution authority.
 
 describe("mstar worktree check — L2 (parallel writable tracks)", () => {
   test("tracks with existing worktrees on the right branches → OK, exit 0", () => {
@@ -795,44 +699,7 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
 });
 
 
-test("retained track equal to recorded main is accepted and ordinary progress can retire stale tracks", () => {
-  const root = tmpRoot("mstar-retained-track-");
-  try {
-    const linked = worktreeFixture(root);
-    const mainBranch = git(["branch", "--show-current"], root);
-    const row = { ...PLAN_A(linked), metadata: { ...PLAN_A(linked).metadata, track_branches: [mainBranch] } };
-    const snapshot = writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
-    const register = writeRegister(root, [WORKFLOW_ID]);
-    const beforeSnapshot = readFileSync(snapshot, "utf8");
-    const beforeRegister = readFileSync(register, "utf8");
-    const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
-    expectOutput(result, "ok", "worktree.check.ok", 0);
-    expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
-    expect(readFileSync(register, "utf8")).toBe(beforeRegister);
-
-    mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "plan-a.md"), `# Plan A\n\n**plan_id:** plan-a\n**Main worktree branch:** ${mainBranch}\n**Working branch:** feature/plan-a\n`);
-    const bound = commandOutput(runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", root, "--session-id", "retained-track-coordinator"], root));
-    if (bound.status !== "ok" || typeof bound.data?.session_file !== "string") throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
-    const session = bound.data.session_file;
-    const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", root], root));
-    if (shown.status !== "ok" || typeof shown.data?.revision !== "number") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
-    const foreignRoot = join(root, "foreign-control");
-    mkdirSync(foreignRoot);
-    const beforeForeignRead = readFileSync(snapshot, "utf8");
-    expectOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", foreignRoot], root), "refused", "coordination.scope-mismatch", 1, "plan.show");
-    expect(readFileSync(snapshot, "utf8")).toBe(beforeForeignRead);
-    expect(existsSync(join(foreignRoot, "store.db"))).toBe(false);
-    const corrected = commandOutput(runCli([
-      "plan", "progress", "--session", session, "--plan", "plan-a", "--harness", root, "--expect", String(shown.data.revision),
-      "--progress", JSON.stringify({ status: "InProgress", summary: "retire the mistaken main track", evidence_paths: [], track_branches: [] }),
-    ], root));
-    if (corrected.status !== "ok") throw new Error(`track correction failed: ${JSON.stringify(corrected)}`);
-    const repairedRow = (JSON.parse(readFileSync(snapshot, "utf8")).plans as Array<{ id: string; metadata: Record<string, unknown> }>).find((plan) => plan.id === "plan-a")!;
-    expect(repairedRow.metadata).toMatchObject({ worktree_path: linked, working_branch: "feature/plan-a", track_branches: [] });
-    expectOutput(runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root), "ok", "worktree.check.ok", 0);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
+// disposition: retired retained JSON-byte assertion and legacy coordinator operations; ACTIVE store rows are the authority.
 
 test("degraded Git refuses a linked checkout marker before local harness discovery", () => {
   const root = tmpRoot("mstar-degraded-linked-");

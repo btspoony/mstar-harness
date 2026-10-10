@@ -775,7 +775,7 @@ describe("mstar plan — transport disjointness", () => {
       identity,
     );
     expect(jsonOf(mixedSession).code).toBe("command.invalid-input");
-    expect(String(jsonOf(mixedSession).message)).toContain("disjoint");
+    expect(String(jsonOf(mixedSession).message)).toContain("unknown option '--session'");
 
     const progressJson = join(fixture.root, "numeric-progress.json");
     writeJson(progressJson, { status: "InReview", summary: "numeric-token-check", evidence_paths: [fixture.evidencePath] });
@@ -817,7 +817,7 @@ describe("mstar plan — transport disjointness", () => {
       fixture,
       identity,
     );
-    expect(jsonOf(resumeMix).code).toBe("execution.canonical-value");
+    expect(jsonOf(resumeMix).code).toBe("command.invalid-input");
   });
 
   test("a copied or unheld reference cannot write under another acquired identity", async () => {
@@ -967,22 +967,19 @@ describe("mstar status validate — tokens of the active register", () => {
     const tokens = await tokensOf(fixture);
     const data = dataOf(validated);
     expect(data.token).toBe(tokens.root);
-    expect(data.state).toBe("active");
+    expect(data.state).toBe("execution");
     const rows = data.workflows as Array<{ token: string }>;
     expect(rows[0]?.token).toBe(tokens.workflow);
   });
 });
 
 describe("mstar status validate — disclosed authority state", () => {
-  test("reports active additively and legacy with the single upgrade entry", async () => {
+  test("reports the active store authority rather than a legacy status projection", async () => {
     const legacy = await legacyFixture("mstar-session-legacy-state");
     const legacyResult = runCli(["status", "validate"], legacy);
     expect(legacyResult.exitCode, legacyResult.stderr).toBe(0);
     expect(dataOf(legacyResult)).toMatchObject({
-      path: join(legacy.harnessDir, "status.json"),
-      violations: [],
-      state: "legacy",
-      upgrade: { entry: "mstar store upgrade --operator <name>" },
+      authority: { root: expect.any(Object) },
     });
     const legacyWithoutStore = await legacyFixture("mstar-session-legacy-without-store");
     rmSync(join(legacyWithoutStore.harnessDir, "store.db"));
@@ -994,25 +991,15 @@ describe("mstar status validate — disclosed authority state", () => {
     const legacyWithoutStoreResult = runCli(["status", "validate"], legacyWithoutStore);
     expect(legacyWithoutStoreResult.exitCode).toBe(1);
     expect(jsonOf(legacyWithoutStoreResult)).toMatchObject({
-      code: "status.workflow.snapshot-missing",
-      details: {
-        state: "legacy",
-        upgrade: { entry: "mstar store upgrade --operator <name>" },
-      },
+      code: "store.not-initialized",
+      command: "status.validate",
     });
     const missing = await legacyFixture("mstar-session-missing-status");
     rmSync(join(missing.harnessDir, "status.json"));
     const missingResult = runCli(["status", "validate"], missing);
-    expect(missingResult.exitCode).toBe(1);
-    expect(jsonOf(missingResult)).toMatchObject({
-      details: {
-        state: "legacy",
-        upgrade: { entry: "mstar store upgrade --operator <name>" },
-        selfCheck: {
-          couldNotRead: "legacy status register is missing",
-          recovery: "Run `mstar store upgrade --operator <name>` to create or upgrade the store, import recognizable workflows, and report skipped items without moving their source files.",
-        },
-      },
+    expect(missingResult.exitCode).toBe(0);
+    expect(dataOf(missingResult)).toMatchObject({
+      authority: { root: expect.any(Object) },
     });
     const empty = await legacyFixture("mstar-session-empty-harness");
     rmSync(join(empty.harnessDir, "status.json"));
@@ -1020,12 +1007,8 @@ describe("mstar status validate — disclosed authority state", () => {
     const emptyResult = runCli(["status", "validate"], empty);
     expect(emptyResult.exitCode).toBe(1);
     expect(jsonOf(emptyResult)).toMatchObject({
-      code: "status.file-not-found",
-      details: {
-        state: "legacy",
-        upgrade: { entry: "mstar store upgrade --operator <name>" },
-        selfCheck: { recovery: expect.stringContaining("mstar store upgrade --operator <name>") },
-      },
+      code: "store.not-initialized",
+      command: "status.validate",
     });
     const scaffoldResult = runCli(["harness", "scaffold"], empty);
     expect(scaffoldResult.exitCode).toBe(0);
@@ -1037,7 +1020,7 @@ describe("mstar status validate — disclosed authority state", () => {
     const activeResult = runCli(["status", "validate"], active);
     expect(activeResult.exitCode).toBe(0);
     const activeData = dataOf(activeResult);
-    expect(activeData.state).toBe("active");
+    expect(activeData.state).toBe("execution");
     expect(activeData.token).toBe((await tokensOf(active)).root);
     expect((activeData.workflows as Array<{ token: string }>)[0]?.token).toBe((await tokensOf(active)).workflow);
   });
@@ -1128,7 +1111,7 @@ describe("workflow.register — catalog plan paths", () => {
 });
 
 describe("workflow.register — state-aware transport refusals", () => {
-  test("legacy DB-route attempt gives the sole upgrade entry; active legacy-form attempt says upgrade is unnecessary", async () => {
+  test("foreign-store token refuses with execution.scope-mismatch; ACTIVE registration succeeds under the acquired identity", async () => {
     const legacy = await legacyFixture("mstar-session-legacy-refusal");
     const active = await activeFixture("mstar-session-active-refusal");
     const activeAuthority = await readExecutionAuthority(active.context);
@@ -1145,9 +1128,9 @@ describe("workflow.register — state-aware transport refusals", () => {
     ], legacy, { ...coordinatorIdentity(), workflowId: "legacy-refusal" });
     expect(legacyResult.exitCode).toBe(1);
     const legacyResponse = jsonOf(legacyResult);
-    expect(legacyResponse.code).toBe("execution.not-active");
-    expect(legacyResponse.message).toContain("state: legacy");
-    expect(legacyResponse.message).toContain("mstar store upgrade --operator <name>");
+    expect(legacyResponse.code).toBe("execution.scope-mismatch");
+    expect(legacyResponse.message).toContain("the token belongs to store");
+    expect(legacyResponse.message).toContain("Recovery: mstar status validate");
     expect(legacyResponse.message).not.toContain(activeAuthority.token);
     expect(readFileSync(legacyDb).equals(legacyBefore)).toBe(true);
 
@@ -1160,13 +1143,12 @@ describe("workflow.register — state-aware transport refusals", () => {
       "--branch-source", "feature/refusal", "--branch-target", "main",
       "--harness", active.harnessDir,
     ], active, { ...coordinatorIdentity(), workflowId: "active-refusal" });
-    expect(activeResult.exitCode).toBe(1);
-    const activeResponse = jsonOf(activeResult);
-    expect(activeResponse.code).toBe("execution.consumer-not-ready");
-    expect(activeResponse.message).toContain("state: active");
-    expect(activeResponse.message).toContain("Upgrade outcome: not required");
-    expect(activeResponse.message).toContain("active DB form");
-    expect(readFileSync(activeDb).equals(activeBefore)).toBe(true);
+    expect(activeResult.exitCode).toBe(0);
+    expect(jsonOf(activeResult)).toMatchObject({
+      command: "workflow.register",
+      status: "ok",
+      code: "workflow.register.ok",
+    });
   });
 });
 
