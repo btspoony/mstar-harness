@@ -104,10 +104,10 @@ function refuseV2NestedMcpRows(config: Record<string, unknown>): void {
  if (nested.length === 0) return;
  throw new Error(
   'This opencode.json carries V2-nested MCP rows (' + nested.map((row) => 'mcp.servers.' + row).join(', ') + ') that the V1 MCP dialect'
-  + ' (flat mcp.<server> only) cannot represent alongside it. The file was not modified. Supported recovery: separate the'
-  + ' generations across scopes \u2014 project and global init resolve to different config files, so run this init with the'
-  + ' --scope whose file has no V2-nested MCP rows, or move those servers off the nested dialect manually. Then re-run'
-  + ' mstar init --target opencode --opencode-generation v1.',
+  + ' (flat mcp.<server> only) cannot represent alongside it. The file was not modified. Supported recovery (CLI), executable as printed:'
+  + ' mstar init --target opencode --opencode-generation v1 --scope global (validates ~/.config/opencode/opencode.json, which does not'
+  + ' carry these nested rows), or mstar init --target opencode --opencode-generation v1 --scope project after moving the V2-only'
+  + ' servers out of this file. The V2 host keeps serving the nested rows from its own file.',
  );
 }
 
@@ -182,10 +182,10 @@ function mergeV2McpServer(config: Record<string, unknown>) {
  if (flatRows.length > 0) {
   throw new Error(
    'This opencode.json carries V1-flat MCP rows (' + flatRows.map((row) => 'mcp.' + row).join(', ') + ') that the V2 MCP dialect'
-   + ' (mcp.servers only) cannot represent alongside them. The file was not modified. Supported recovery: separate the'
-   + ' generations across scopes \u2014 project and global init resolve to different config files, so run this init with the'
-   + ' --scope whose file has no V1-flat MCP rows (the V1 host keeps serving the flat rows from its own file), or move those'
-   + ' servers off the flat dialect manually. Then re-run mstar init --target opencode --opencode-generation v2.',
+   + ' (mcp.servers only) cannot represent alongside them. The file was not modified. Supported recovery (CLI), executable as printed:'
+   + ' mstar init --target opencode --opencode-generation v2 --scope global (validates ~/.config/opencode/opencode.json, which does not'
+   + ' carry these flat rows), or mstar init --target opencode --opencode-generation v2 --scope project after moving the V1-only'
+   + ' servers out of this file. The V1 host keeps serving the flat rows from its own file.',
  );
 }
  next.mcp = mcp;
