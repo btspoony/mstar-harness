@@ -223,11 +223,11 @@ export const opencodeAdapter: AgentAdapter = {
   // No getAvailableModels — default init never calls `opencode models` (that command can hang with no feedback).
   resolveConfigPath: (scope, outputPath) => resolveOpencodeConfigPath(scope, outputPath),
   mutateConfigForInit: async (config, assignments, opts = {}) => {
-    // D14: on a REAL install the host-presence gate runs first — a missing
-    // `opencode` binary refuses with the install-command error before any
-    // generation logic and before any config write. Under `--dry-run` the
-    // gate never runs (D15 pure preview).
-    if (opts.dryRun !== true) await ensureHostPresent("opencode", opts.probeRunner);
+    // D14: resolve the executable's PATH entry before generation logic or any
+    // config write. A broken/hung `opencode --version` is handled separately
+    // by the generation probe, which can recover through the explicit flag.
+    // Under `--dry-run` neither lookup nor generation probe runs (D15).
+    if (opts.dryRun !== true) await ensureHostPresent("opencode", opts.presenceRunner);
     const resolution = await resolveInitGeneration(config, opts);
     console.log(resolution.sourceLine);
     if (resolution.warning !== null) console.warn(`Warning: ${resolution.warning}`);

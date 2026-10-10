@@ -35,12 +35,10 @@ export type PluginValidateOptions = {
 };
 
 /**
- * Injectable subprocess seam for the generation/presence probes (opencode
- * init). The runner receives the exact command to spawn plus the timeout
- * bound it must enforce (the default seam aborts the child; injected test
- * seams may ignore the hint — the probe additionally races its own timer).
- * Only benign probes travel this seam (`<binary> --version`); nothing else
- * is ever spawned through it.
+ * Injectable subprocess seam for executable lookup and generation probes.
+ * The runner receives a command and timeout hint; the default runner aborts
+ * the child, and callers independently race its promise so a runner that
+ * ignores the hint cannot block indefinitely.
  */
 export type ProbeCommandRunner = (
   command: readonly string[],
@@ -53,7 +51,9 @@ export type MutateConfigForInitOptions = {
   generation?: OpencodeGeneration;
   /** `--dry-run`: presence/generation probes never run — pure preview (D15). */
   dryRun?: boolean;
-  /** Test seam overriding the subprocess runner for the probes. */
+  /** Test seam overriding executable-PATH lookup; absent in production. */
+  presenceRunner?: ProbeCommandRunner;
+  /** Test seam overriding the OpenCode generation subprocess runner. */
   probeRunner?: ProbeCommandRunner;
 };
 

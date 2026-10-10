@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { OPENCODE_VERSION_TIMEOUT_MS } from "@mstar-harness/commands";
 import type { Target, ProbeCommandRunner } from "../types";
+import { withProbeAbort } from "./probe-timeout";
 
 export type { ProbeCommandRunner };
 
@@ -11,10 +13,8 @@ export type { ProbeCommandRunner };
  * config write. `--dry-run` NEVER probes or refuses on a missing binary for
  * any target (D15).
  *
- * The presence probe spawns the binary's benign `--version` through the same
- * injectable-runner seam as the version probe, bounded by a short timeout —
- * any failure (ENOENT, non-zero exit, timeout) means "not present", matching
- * the in-repo precedent (`isDshAvailable` / `isCodexAvailable` probe shape).
+ * Presence resolves the executable on PATH; it does not require `<binary>
+ * --version` to succeed. An independent race also cuts off a hung lookup.
  */
 
 /** Per-target host binary map; zcode is absent by design because it has no host CLI. */
@@ -27,12 +27,8 @@ export const HOST_PRESENCE_BINARIES: Partial<Record<Target, string>> = {
   kimi: "kimi",
 };
 
-/**
- * Presence-probe timeout. The observed healthy path (`opencode --version`)
- * takes ~3s, so "short bounded" must stay above that; this is the same bound
- * the version probe uses by default.
- */
-export const HOST_PRESENCE_TIMEOUT_MS = 5_000;
+/** Share the version-probe deadline while bounding PATH lookup independently. */
+export const HOST_PRESENCE_TIMEOUT_MS = OPENCODE_VERSION_TIMEOUT_MS;
 
 /** Per-target recovery wording mirrors existing adapters; copied to avoid adapter/helper cycles. */
 const HOST_PRESENCE_INSTALL_HINTS: Partial<Record<Target, string>> = {
@@ -62,9 +58,9 @@ function defaultPresenceRunner(command: readonly string[], opts: { timeoutMs: nu
     command[0],
     command.slice(1) as string[],
     { timeout: opts.timeoutMs, encoding: "utf8", windowsHide: true },
-    (error, stdout) => {
+    (error, stdout, stderr) => {
       if (error !== null && error !== undefined) {
-        reject(Object.assign(error, { stdout }));
+        reject(Object.assign(error, { stdout, stderr }));
         return;
       }
       resolve(stdout);
@@ -73,10 +69,16 @@ function defaultPresenceRunner(command: readonly string[], opts: { timeoutMs: nu
   return promise;
 }
 
+function executableLookupCommand(binary: string): string[] {
+  return process.platform === "win32"
+    ? ["where.exe", binary]
+    : ["/bin/sh", "-c", "command -v \"$1\" >/dev/null 2>&1", "sh", binary];
+}
+
 /**
- * Refuse unless the target's host CLI answers on PATH. Resolves with the
- * binary name when present; throws the typed `HostPresenceRefusal` (naming
- * the target and its documented install command) when not.
+ * Refuse unless the target's host CLI resolves on PATH. Resolves with the
+ * mapped executable name when present; throws typed refusal when lookup fails
+ * or exceeds its independent timeout.
  */
 export async function ensureHostPresent(target: Target, runner: ProbeCommandRunner = defaultPresenceRunner): Promise<string> {
   const binary = HOST_PRESENCE_BINARIES[target];
@@ -90,9 +92,11 @@ export async function ensureHostPresent(target: Target, runner: ProbeCommandRunn
     throw new Error(`No documented install command is seeded for target ${target}; the presence refusal would not be actionable.`);
   }
   try {
-    await runner([binary, "--version"], { timeoutMs: HOST_PRESENCE_TIMEOUT_MS });
+    const pending = runner(executableLookupCommand(binary), { timeoutMs: HOST_PRESENCE_TIMEOUT_MS });
+    await withProbeAbort(pending, HOST_PRESENCE_TIMEOUT_MS);
   } catch {
     throw new HostPresenceRefusal(`${binary} CLI not found on PATH. ${hint}`, target, binary);
   }
   return binary;
 }
+
