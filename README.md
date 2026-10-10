@@ -39,7 +39,7 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 |------|---------|
 | dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh` — needs the `dsh` CLI on `PATH`; installs the plugin plus LLM fallbacks (`--no-fallbacks` skips the second) |
 | omp | `npx @mstar-harness/cli init --target omp` — needs the `omp` CLI installed |
-| OpenCode | `npx @mstar-harness/cli init --target opencode` |
+| OpenCode | `npx @mstar-harness/cli init --target opencode` — probes the installed `opencode` version: 1.x installs `@mstar-harness/opencode`, 2.x installs `@mstar-harness/opencode-v2` (override with `--opencode-generation`) |
 | Cursor | `npx @mstar-harness/cli init --target cursor` — creates a real plugin checkout, so `git` is required |
 | Kimi Code | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`, then install **morning-star-harness** from Settings → Plugin Management |

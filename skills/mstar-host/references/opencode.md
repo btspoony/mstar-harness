@@ -12,6 +12,22 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 - **Role body**: `mstar-roles` `references/<id>.md` (or shared references + parameters).
 - Implementation evidence and RCA behavior: `mstar-coding-behavior`.
 
+## Generation split: V1 package vs V2 package
+
+Two OpenCode generations are supported by two independent packages; the installer/doctor resolve which one applies (`opencode --version` probe on real installs; `--opencode-generation <v1|v2>` always wins; probe failure refuses with that flag as the recovery — never a guess). A config carrying both generations' keys is a supported dual-host state that the doctor validates per generation.
+
+- **OpenCode 1.x** → `@mstar-harness/opencode` (V1 plugin API `@opencode-ai/plugin` 1.4.8). Every other section of this reference documents that surface: warn-only write hook, `task` dispatch, no caller identity.
+- **OpenCode 2.x** → **`@mstar-harness/opencode-v2`** (pinned `@opencode/plugin` **2.0.26**).
+
+V2 differences that change harness behavior:
+
+- **Refusal is real, not warn-only.** V2's `execute.before` may fail with a typed `Tool.Error`, so this entry refuses where the V1 hook can only log: authority-class refusals (`store.direct-write-refused`, `project.register.retired`, `store.authority-unavailable`, `execution.direct-write-refused`) are unconditional in both enforcement modes, and hard-blocked document/dispatch violations abort the call before it runs. The warn-only paragraph further below remains the **V1** contract.
+- **Dispatch tool is `subagent`** (the V1 `task` rename) with `{agent, description, prompt, …}`: Assignment validation reads `input.prompt`, the **caller is the host-provided `event.agent`** (readonly), and the spawn target is **`input.agent`** — neither is inferred from the other. Because V2 exposes the caller, the caller-scoped `antiRecursionPrecheck` leg is **active** here (an empty/absent caller binding fails closed); the V1 #156 "caller leg skipped" engine scope does not apply on V2.
+- **Coverage claims:** `write` / `edit` / `subagent` only. `patch`, `shell`, and Code Mode (`execute`/`opencode`/`browser`) are explicit non-claims — no arbitrary shell-write protection.
+- **Config keys are plural**: `plugins`, `agents.<role>.model`, MCP under `mcp.servers["morning-star"]`; `$schema` is preserved, never invented. Assets load from the installed package (`harness-skills/` + `harness-agents/` + `harness-commands/`); the first user message receives the `<IMPORTANT_FOR_HARNESS>` bootstrap and `system` stays untouched.
+
+The V2 package's own contract (install, config write set, floors, refusal codes, verification status) → `packages/opencode-v2/README.md` + `packages/opencode-v2/INSTALL.md`. Installed-host behavior is unverified on both generations.
+
 ## OpenCode-specific capabilities
 
 - **Structured clarify**: prefer **`question`** tool (title, prompt, options, optional custom text). Requires `permission.question` in config (user-maintained; do not edit global config without consent).

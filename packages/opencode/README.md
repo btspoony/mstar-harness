@@ -26,6 +26,8 @@ npx @mstar-harness/cli init --target opencode
 
 That command executes the CLI’s Bun-shebang bin, so it needs **Bun >=1.4.0** on PATH — `npx` fetches the package but does not supply the runtime. On a Node-only machine run the installed bundle under Node instead: `node node_modules/@mstar-harness/cli/dist/mstar-harness.js init --target opencode`.
 
+**OpenCode 2.x hosts:** this package targets the OpenCode 1.x plugin API (`@opencode-ai/plugin` 1.4.8) — on OpenCode 2.x install [`@mstar-harness/opencode-v2`](../opencode-v2/README.md) instead. The installer selects the generation from your host version (`opencode --version`); pass `--opencode-generation <v1|v2>` to override.
+
 ## What you get
 
 | Path in package | Contents |
