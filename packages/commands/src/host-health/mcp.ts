@@ -306,13 +306,17 @@ export function diagnoseMcpTarget(
     configFilePath?: string;
     requireNestedV2Shape?: boolean;
     requireFlatV1Shape?: boolean;
-    /** Exact, executable recovery command for the other scope's config file.
+    /** Exact, executable recovery commands for the other scope's config file.
      * Direct callers that don't know the current scope get both concrete
-     * scope commands spelled out. */
-    otherScopeDoctorCommand = "mstar doctor --target opencode --scope global --opencode-generation v2 (global file) or --scope project (project file)";
-    otherScopeInitCommand = "mstar init --target opencode --opencode-generation v2 --scope global (global file) or --scope project (project file)";
+     * scope commands spelled out (the in-function defaults below). */
+    otherScopeDoctorCommand?: string;
+    otherScopeInitCommand?: string;
   } = {},
 ): McpTargetHealth {
+  const otherScopeDoctorCommand = options.otherScopeDoctorCommand
+    ?? "mstar doctor --target opencode --scope global --opencode-generation v2 (global file) or --scope project (project file)";
+  const otherScopeInitCommand = options.otherScopeInitCommand
+    ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or --scope project (project file)";
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
     ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
@@ -403,7 +407,7 @@ export function diagnoseMcpTarget(
         errors.push(`MCP config ${relativeConfig} carries only the nested \`mcp.servers\` shape; the OpenCode V1 host reads the server only from flat \`mcp.<server>\` rows. Supported recovery (CLI): run the V1 checks against the other scope's config file, or author the flat row in this file by hand (\`init --opencode-generation v1\` refuses to touch V2-nested configs).`);
       }
       if (legacyFlatBlocked) {
-        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI), executable as printed: run "${options.otherScopeDoctorCommand}" to validate the other scope's config file, or "${options.otherScopeInitCommand}" to init there (init refuses to write mixed configs in this file by design).`);
+        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI), executable as printed: run "${otherScopeDoctorCommand}" to validate the other scope's config file, or "${otherScopeInitCommand}" to init there (init refuses to write mixed configs in this file by design).`);
       } else {
         const serverRecord = record(servers);
         if (serverRecord === null) {
