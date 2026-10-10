@@ -231,7 +231,10 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
   const landed = landedPathOf(requested);
   const logger = services.logger ?? defaultStatusLogger;
   if (isStoreAuthorityTarget(api, requested) || isStoreAuthorityTarget(api, landed)) {
-    throw refusal("store.direct-write-refused", "store.db and its WAL/SHM files are store authority and cannot be written by a tool");
+    throw refusal(
+      "store.direct-write-refused",
+      "store.db and its WAL/SHM files are store authority and cannot be written by a tool. Use supported mstar issue or mstar catalog commands for record changes, or mstar store upgrade/migrate for supported imports; raw database-byte edits have no supported direct-write verb, so escalate repairs to the project maintainer.",
+    );
   }
 
   const target = classifyDocument(api, requested, landed);
