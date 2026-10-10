@@ -21,14 +21,13 @@ export const OPENCODE_BIN = "opencode";
  *   `[opencode, --version]` (`-v` is its documented alias; `opencode models`
  *   and every other subcommand stay banned — the command list is not a
  *   parameter).
- * - The default runner aborts the child at `timeoutMs`; a runner seam that
- *   ignores the hint (e.g. a never-settling test fake) is additionally cut
- *   off by the probe's own timer race.
- * - Every failure resolves to a typed refusal naming the failure mode and
+ * - The default runner aborts the actual child on timeout (SIGTERM, followed
+ *   by SIGKILL if it does not exit); a runner seam that ignores the hint is
+ *   additionally cut off by the probe's own timer race.
+ * - Every failure resolves to a typed refusal naming its failure mode and
  *   the `--opencode-generation <v1|v2>` recovery — never a guess, no silent
- *   v1 fallback. A missing binary is normally refused earlier by the
- *   host-presence gate; the probe still fails closed if it is ever reached
- *   without one.
+ *   v1 fallback. Missing binaries are normally refused earlier by the
+ *   host-presence gate; the probe still fails closed if reached without one.
  */
 
 export class OpencodeVersionProbeRefusal extends Error {
@@ -41,12 +40,13 @@ export class OpencodeVersionProbeRefusal extends Error {
   }
 }
 
-function defaultRunner(command: readonly string[], opts: { timeoutMs: number }): Promise<string> {
+function defaultRunner(command: readonly string[]): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
-  execFile(
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const child = execFile(
     command[0],
     command.slice(1) as string[],
-    { timeout: opts.timeoutMs, encoding: "utf8", windowsHide: true },
+    { encoding: "utf8", windowsHide: true },
     (error, stdout, stderr) => {
       if (error !== null && error !== undefined) {
         reject(Object.assign(error, { stdout, stderr }));
@@ -55,7 +55,17 @@ function defaultRunner(command: readonly string[], opts: { timeoutMs: number }):
       resolve(stdout);
     },
   );
-  return promise;
+  child.once("close", () => clearTimeout(forceKillTimer));
+  const abortable = promise as Promise<string> & { abort?: () => void };
+  abortable.abort = () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    if (!child.kill("SIGTERM")) return;
+    forceKillTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, 100);
+    forceKillTimer.unref();
+  };
+  return abortable;
 }
 
 /** Bounded `opencode --version` generation probe (spec Q3). */
