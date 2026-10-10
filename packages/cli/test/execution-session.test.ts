@@ -1858,6 +1858,14 @@ describe("mstar milestone assign — acquired identity CLI smoke", () => {
     const fixture = await activeFixture("mstar-milestone-identity");
     const identity = coordinatorIdentity();
     const { coordinator } = await prepareRow(fixture);
+    const validation = runCli(["status", "validate"], fixture);
+    expect(validation.exitCode, validation.stdout).toBe(0);
+    const workflows = dataOf(validation).workflows;
+    expect(Array.isArray(workflows)).toBe(true);
+    if (!Array.isArray(workflows)) throw new Error("status validate did not return its workflow collection");
+    expect(workflows.some((entry) =>
+      entry !== null && typeof entry === "object" && "id" in entry && entry.id === WORKFLOW_ID && "token" in entry
+    )).toBe(true);
     const store = await openStore(fixture.context, "write");
     store.db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','milestone-cli-project','Milestone CLI smoke','projects','milestone-cli-project/roadmap.md','now','now')").run();
     store.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('I-MILESTONE-CLI','milestone-cli-project','CLI issue','bug','high','impact','acceptance','now','now','I-MILESTONE-CLI')").run();
