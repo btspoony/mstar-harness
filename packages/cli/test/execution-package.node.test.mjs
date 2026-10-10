@@ -704,8 +704,8 @@ test("committed ZCode hook refuses the retired coordination-document route on an
   assert.ok(snapshot.stderr.includes("[high] execution.direct-write-refused: "), `unexpected: ${snapshot.stderr}`);
 });
 
-test("committed ZCode hook refuses a status.json write when no execution store exists", () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-r3-hook-no-store-")));
+test("committed ZCode hook keeps the pre-activation document gate intact", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-r3-hook-legacy-")));
   roots.push(root);
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "workflows"), { recursive: true });
@@ -713,15 +713,19 @@ test("committed ZCode hook refuses a status.json write when no execution store e
   const validStatus = JSON.stringify({ version: 2, updated_at: "2026-09-23", workflows: [] });
   writeFileSync(join(harness, "status.json"), validStatus);
 
-  const refused = runGate(writeEvent({ file_path: join(harness, "status.json"), content: validStatus }, root));
-  assert.equal(refused.exitCode, 2);
-  assert.equal(refused.stdout, "");
-  const lines = refused.stderr.trimEnd().split("\n");
+  const pass = runGate(writeEvent({ file_path: join(harness, "status.json"), content: validStatus }, root));
+  assert.equal(pass.exitCode, 0, `expected a silent pass, got ${pass.exitCode} (stderr: ${pass.stderr})`);
+  assert.equal(pass.stdout, "");
+  assert.equal(pass.stderr, "");
+
+  writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
+  const blocked = runGate(writeEvent({ file_path: join(harness, "status.json"), content: "{ not json" }, root));
+  assert.equal(blocked.exitCode, 2);
+  assert.equal(blocked.stdout, "");
+  const lines = blocked.stderr.trimEnd().split("\n");
   assert.equal(lines[0], "[Morning Star write gate] blocked Write to status.json");
-  assert.ok(
-    lines.slice(1).some((line) => /execution\.authority-unavailable|store\.not-initialized/.test(line)),
-    `expected the no-store authority refusal, got: ${refused.stderr}`,
-  );
+  assert.ok(lines[1].startsWith("[high] status.invalid-json: "), `unexpected violation line: ${lines[1]}`);
+  assert.equal(lines.length, 3);
 });
 
 /* ------------------------------------------------------------------------ *
