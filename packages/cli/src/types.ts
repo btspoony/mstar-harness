@@ -87,7 +87,7 @@ export type AgentAdapter = {
     scope: Scope,
     dryRun: boolean,
     initFlags?: InstallInitFlags,
-  ) => { location: string; notes: string[] };
+  ) => { location: string; notes: string[] } | Promise<{ location: string; notes: string[] }>;
   runInstallDoctor?: (scope: Scope) => { location: string; errors: string[]; notes?: string[] };
   printPostSetupSummary?: (config: Record<string, unknown>) => void;
 };

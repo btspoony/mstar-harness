@@ -67,7 +67,7 @@ async function runInit(options: InitOptions) {
   if (!options.scope && !options.yes) console.log(pc.dim("Scope not provided; defaulting to project."));
   if (adapter.mode === "install") {
     logStep("Step 2/2 - Run target install flow");
-    const installResult = adapter.runInstallInit?.(scope, !!options.dryRun, { noFallbacks: options.noFallbacks });
+    const installResult = await adapter.runInstallInit?.(scope, !!options.dryRun, { noFallbacks: options.noFallbacks });
     if (!installResult) throw new Error(`Adapter ${target} does not implement install init flow.`);
     console.log(pc.green(`Status: ${options.dryRun ? "ready (dry-run)" : "configured"} (${scope})`));
     console.log(`Target: ${target}`);

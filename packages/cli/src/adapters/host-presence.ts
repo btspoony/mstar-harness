@@ -17,7 +17,7 @@ export type { ProbeCommandRunner };
  * the in-repo precedent (`isDshAvailable` / `isCodexAvailable` probe shape).
  */
 
-/** Per-target host binary map, CLI-having install targets only. Seeded with the repo-evidenced names; the pinned `cursor`→`cursor-agent` and `kimi`→`kimi` entries land in Task 5. `zcode` is absent by design (no host CLI — never added). */
+/** Per-target host binary map; zcode is absent by design because it has no host CLI. */
 export const HOST_PRESENCE_BINARIES: Partial<Record<Target, string>> = {
   opencode: "opencode",
   omp: "omp",
@@ -32,9 +32,12 @@ export const HOST_PRESENCE_BINARIES: Partial<Record<Target, string>> = {
  */
 export const HOST_PRESENCE_TIMEOUT_MS = 5_000;
 
-/** Documented install command per target. Seeded with the wired targets; adopting tasks add their target's line when they wire the gate (the spec pins the wordings). */
+/** Per-target recovery wording mirrors existing adapters; copied to avoid adapter/helper cycles. */
 const HOST_PRESENCE_INSTALL_HINTS: Partial<Record<Target, string>> = {
   opencode: "Install the OpenCode CLI (https://opencode.ai), then re-run: npx @mstar-harness/cli init --target opencode --scope <global|project>",
+  omp: "Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install @mstar-harness/omp",
+  codex: "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
+  dsh: "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
 };
 
 export class HostPresenceRefusal extends Error {
