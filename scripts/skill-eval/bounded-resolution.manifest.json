@@ -1140,9 +1140,6 @@
       "migrate": {
         "excluded": "host-environment dependent or destructive corpus route; explicit unverified route"
       },
-      "lease.verify-integration": {
-        "scenario": "bounded-res-lease-boundary"
-      },
       "iteration.gate": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
@@ -1180,15 +1177,6 @@
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "workflow.evidence": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "workflow.show-prepare": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "workflow.amend-prepare": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "workflow.recover-coordinator": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "workflow.phase": {
