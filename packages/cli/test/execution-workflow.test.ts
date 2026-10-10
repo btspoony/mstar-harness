@@ -28,7 +28,6 @@ import { tmpdir } from "node:os";
 import {
   ACTIVATION_PROTOCOL_VERSION,
   encodeExecutionSessionRef,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
   readExecutionAuthority,
@@ -133,7 +132,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  await initializeExecutionAuthority(context);
+  await readExecutionAuthority(context);
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
   writeText(planMarkdown, `# Active workflow transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
   return { root, harnessDir, context, planMarkdown };
@@ -671,8 +670,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(jsonOf(evidenceMix)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
 
-    // The one-time delivery-kind rewrite needs both delivery anchors. The
-    // CLI returns one aggregated usage envelope and leaves the header intact.
+    // ACTIVE disposition: the one-time delivery-kind rewrite input is retired
+    // — the registered delivery kind selects permitted members. The flag is
+    // not a recognized option and the header stays intact.
     const headerBeforeDeclare = await storedHeader(fixture);
     const declare = runCli(
       [
@@ -694,16 +694,19 @@ describe("mstar workflow \u2014 documented invocation", () => {
     const details = declarationEnvelope.details;
     const diagnostics = details !== null && typeof details === "object" && "diagnostics" in details ? details.diagnostics : undefined;
     expect(diagnostics).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: "branchSource" }), expect.objectContaining({ path: "branchTarget" })]),
+      expect.arrayContaining([expect.objectContaining({ code: "commander.unknownOption", token: "--declare-kind" })]),
     );
     expect(await storedHeader(fixture)).toEqual(headerBeforeDeclare);
   });
 
-  test("the retired pre-activation registration path is refused while the authority is active", async () => {
+  test("the documented registration form answers through the ACTIVE authority; no file-route bytes", async () => {
+    // ACTIVE disposition: the pre-activation `workflow register` file route is
+    // retired — the same documented flags register through the authority's
+    // catalog route and never write snapshot/status bytes.
     const fixture = await activeFixture("mstar-workflow-legacy");
-    const identity = coordinatorIdentity();
+    const identity = coordinatorIdentity("wf-legacy-form", "legacy-form-coordinator");
     const before = await readExecutionAuthority(fixture.context);
-    const legacy = runCli(
+    const registered = runCli(
       [
         "workflow",
         "register",
@@ -727,14 +730,14 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(legacy.exitCode).toBe(1);
-    expect(String(jsonOf(legacy).code)).toBe("execution.consumer-not-ready");
-    // No file-route bytes were created by the refusal.
+    expect(registered.exitCode).toBe(0);
+    expect(jsonOf(registered)).toMatchObject({ command: "workflow.register", status: "ok", code: "workflow.register.ok" });
+    // No file-route bytes were created by the registration.
     expect(existsSync(join(fixture.harnessDir, "workflows", "wf-legacy-form", "snapshot.json"))).toBe(false);
     expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
     const after = await readExecutionAuthority(fixture.context);
-    expect(after.token).toBe(before.token);
-    expect(after.data).toEqual(before.data);
+    expect(after.data.root.workflows.map((entry) => entry.id)).toContain("wf-legacy-form");
+    expect(after.token).not.toBe(before.token);
   });
   test("session recover --unowned accepts empty stoppedSessions only for a workflow with no coordinator", async () => {
     const fixture = await activeFixture("mstar-session-recover-unowned");
