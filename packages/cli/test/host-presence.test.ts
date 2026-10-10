@@ -8,7 +8,6 @@ import type { ProbeCommandRunner } from "../src/types";
 const originalPath = process.env.PATH;
 const originalHome = process.env.HOME;
 const originalProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
-const originalHarnessDir = process.env.MSTAR_HARNESS_DIR;
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -17,8 +16,6 @@ afterEach(() => {
   else process.env.HOME = originalHome;
   if (originalProjectRoot === undefined) delete process.env.MSTAR_CLI_PROJECT_ROOT;
   else process.env.MSTAR_CLI_PROJECT_ROOT = originalProjectRoot;
-  if (originalHarnessDir === undefined) delete process.env.MSTAR_HARNESS_DIR;
-  else process.env.MSTAR_HARNESS_DIR = originalHarnessDir;
   for (const directory of tempDirs.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -89,6 +86,7 @@ describe("omp host presence at init", () => {
     const home = useHome("omp-presence-home-");
     process.env.PATH = tempDir("omp-presence-path-");
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
+    // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
     const adapter = await import("../src/adapters/omp");
     let refusal: unknown;
     try {
@@ -144,8 +142,6 @@ exit 0`,
       PATH: binDir,
       HOME: home,
       MSTAR_CLI_PROJECT_ROOT: root,
-      MSTAR_HARNESS_DIR: path.join(home, ".mstar"),
-      MSTAR_CONTROL_ROOT: "",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -197,6 +193,7 @@ describe("codex and dsh presence behavior remains pinned", () => {
     const root = tempDir("codex-presence-project-");
     absentOnPath();
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
+    // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
     const adapter = await import("../src/adapters/codex");
     expect(() => adapter.codexAdapter.runInstallInit?.("project", false)).toThrow(
       "codex CLI not found on PATH. Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
@@ -213,6 +210,7 @@ describe("codex and dsh presence behavior remains pinned", () => {
     const root = tempDir("dsh-presence-project-");
     absentOnPath();
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
+    // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
     const adapter = await import("../src/adapters/dsh");
     expect(() => adapter.dshAdapter.runInstallInit?.("project", false)).toThrow(
       "dsh CLI not found on PATH. Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
