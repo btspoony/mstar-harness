@@ -59,6 +59,8 @@ describe("shared host-presence probe (injectable runner)", () => {
       ["omp", "omp", "Install Oh My Pi"],
       ["codex", "codex", "Install the Codex CLI"],
       ["dsh", "dsh", "Install the DeepSeek Harness CLI"],
+      ["cursor", "cursor-agent", "Install Cursor (https://cursor.com) — the Cursor IDE / cursor-agent CLI — then re-run init"],
+      ["kimi", "kimi", "https://www.kimi.com/code/docs/kimi-code-cli/"],
     ] as const;
     const runner: ProbeCommandRunner = async () => {
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
@@ -84,8 +86,8 @@ describe("shared host-presence probe (injectable runner)", () => {
     };
     await expect(ensureHostPresent("omp", runner)).resolves.toBe("omp");
     expect(calls).toEqual([["omp", "--version"]]);
+    expect(HOST_PRESENCE_BINARIES).toMatchObject({ cursor: "cursor-agent", kimi: "kimi" });
   });
-
   test("zcode is absent from the host-presence map", () => {
     expect(HOST_PRESENCE_BINARIES).not.toHaveProperty("zcode");
   });
@@ -116,6 +118,40 @@ describe("omp host presence at init", () => {
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
   });
 });
+describe("cursor and kimi host presence at init", () => {
+  test("real init refuses before writes; dry-run previews without probing", async () => {
+    for (const target of ["cursor", "kimi"] as const) {
+      const home = useAdapterHome();
+      const root = tempDir(`${target}-presence-project-`);
+      absentOnPath();
+      process.env.MSTAR_CLI_PROJECT_ROOT = root;
+      // Dynamic import is intentional: shared-install captures HOME-derived paths at module load.
+      const adapter = target === "cursor"
+        ? (await import("../src/adapters/cursor")).cursorAdapter
+        : (await import("../src/adapters/kimi")).kimiAdapter;
+      let refusal: unknown;
+      try {
+        await adapter.runInstallInit?.("project", false);
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(HostPresenceRefusal);
+      expect((refusal as HostPresenceRefusal).target).toBe(target);
+      expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
+      expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
+      if (target === "cursor") {
+        expect((refusal as Error).message).toBe("cursor-agent CLI not found on PATH. Install Cursor (https://cursor.com) — the Cursor IDE / cursor-agent CLI — then re-run init");
+      } else {
+        expect((refusal as Error).message).toBe("kimi CLI not found on PATH. Install the Kimi Code CLI (https://www.kimi.com/code/docs/kimi-code-cli/), then re-run: npx @mstar-harness/cli init --target kimi --scope <global|project>");
+        expect((refusal as Error).message).not.toContain("/plugins install");
+      }
+      const preview = await adapter.runInstallInit?.("project", true);
+      expect(preview?.notes.length).toBeGreaterThan(0);
+      expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
+      expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
+    }
+  });
+});
 
 // These are product-behaviour pins for existing adapter paths; no source behavior
 // changes are intended for codex or dsh in this task.
@@ -137,10 +173,17 @@ exit 0`,
 exit 0`,
       dsh: `if [ "$1" = "--version" ]; then echo "dsh test"; elif [ "$*" = "--profile web --dump-config" ]; then echo "[]"; fi
 exit 0`,
+      "cursor-agent": `if [ "$1" = "--version" ]; then echo "cursor-agent test"; fi
+exit 0`,
+      kimi: `if [ "$1" = "--version" ]; then echo "kimi test"; fi
+exit 0`,
+      git: "exit 0",
     };
-    const executable = path.join(binDir, target);
-    writeFileSync(executable, `#!/bin/sh\n${commands[target]}\n`);
-    chmodSync(executable, 0o755);
+    for (const [name, script] of Object.entries(commands)) {
+      const executable = path.join(binDir, name);
+      writeFileSync(executable, `#!/bin/sh\n${script}\n`);
+      chmodSync(executable, 0o755);
+    }
   }
   const args = [
     "init", "--target", target, "--scope", "project", "--yes", "--no-global-cli",
@@ -171,13 +214,17 @@ describe("repo-built CLI host-presence smoke", () => {
       omp: "omp plugin install @mstar-harness/omp",
       codex: "npm install -g @openai/codex",
       dsh: "pnpm add -g @deepseek-ai/dsh",
+      cursor: "Install Cursor (https://cursor.com) — the Cursor IDE / cursor-agent CLI — then re-run init",
+      kimi: "https://www.kimi.com/code/docs/kimi-code-cli/",
     };
     const previewLine = {
       omp: "Would run: omp plugin link",
       codex: "Would run: codex plugin marketplace add",
       dsh: "Would run: dsh plugin",
+      cursor: "Would clone",
+      kimi: "Install via Kimi TUI: /plugins install",
     };
-    for (const target of ["omp", "codex", "dsh"] as const) {
+    for (const target of ["omp", "codex", "dsh", "cursor", "kimi"] as const) {
       const refused = smokeCli(target, "missing");
       expect(refused.result.exitCode).not.toBe(0);
       expect(refused.output).toContain(installLine[target]);
@@ -195,7 +242,7 @@ describe("repo-built CLI host-presence smoke", () => {
       expect(present.output).not.toContain(`${target} CLI not found on PATH`);
       console.log(`[smoke ${target} real/stub] ${present.output.trim().replaceAll("\n", " | ")}`);
     }
-  });
+  }, 30_000);
 });
 
 describe("codex and dsh presence behavior remains pinned", () => {
