@@ -230,6 +230,33 @@ describe("OpenCode V2 structured-write gate", () => {
 
   });
 
+  test("omitted replaceAll defaults to a unique-match edit and validates synthesized post-state", async () => {
+    const { harnessDir } = harness("hard");
+    const path = join(harnessDir, "status.json");
+    const current = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
+    writeFileSync(path, current);
+    const api = await loadWriteGateApi();
+    const inputs: unknown[] = [];
+    const testApi = {
+      ...api!,
+      validateStatusWriteDoc: (content: unknown, filePath: string, kind: "status" | "snapshot" | "register") => {
+        inputs.push(content);
+        return api!.validateStatusWriteDoc(content, filePath, kind);
+      },
+    } as WriteGateEngineApi;
+    const body = makeBody();
+
+    await expect(
+      body.run(event("edit", { path, oldString: "\"version\":2", newString: "not-json" }), testApi),
+    ).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[status.invalid-json]"),
+    });
+    expect(inputs).toEqual([expect.stringContaining("not-json")]);
+    expect(body.calls()).toBe(0);
+    expect(readFileSync(path, "utf8")).toBe(current);
+  });
+
   test("non-composable edits validate the existing document and benign writes do not read or refuse", async () => {
     const { harnessDir, root } = harness("hard");
     const valid = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });

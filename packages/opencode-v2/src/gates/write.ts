@@ -176,9 +176,15 @@ function countOccurrences(text: string, needle: string): number {
 
 function prospectiveEdit(current: string, input: Record<string, unknown>): string | undefined {
   const { oldString, newString, replaceAll } = input;
-  if (typeof oldString !== "string" || oldString === "" || typeof newString !== "string" || typeof replaceAll !== "boolean") return undefined;
+  if (
+    typeof oldString !== "string" ||
+    oldString === "" ||
+    typeof newString !== "string" ||
+    (replaceAll !== undefined && typeof replaceAll !== "boolean")
+  ) return undefined;
+  const replaceEveryMatch = replaceAll === true;
   const hits = countOccurrences(current, oldString);
-  if (hits === 0 || (hits !== 1 && replaceAll !== true)) return undefined;
+  if (hits === 0 || (hits !== 1 && !replaceEveryMatch)) return undefined;
   return current.split(oldString).join(newString);
 }
 
