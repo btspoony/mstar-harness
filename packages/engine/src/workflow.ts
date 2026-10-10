@@ -957,7 +957,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   const storedCoordination = isPlainObject(stored.coordination) ? stored.coordination : {};
   if (incomingCoordination.coordinator !== undefined &&
       !isDeepStrictEqual(incomingCoordination.coordinator, storedCoordination.coordinator)) {
-    throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change the coordinator because the execution store is authoritative; run `mstar status validate` to read the workflow token, then recover a stopped coordinator with `mstar session recover` using that token.", { field: "coordination.coordinator" });
+    throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change the coordinator because the execution store is authoritative; run mstar status validate to read the workflow token, then use the documented session recover command with its required workflow, operation, reason, attestation and expect options to rebind a stopped coordinator.", { field: "coordination.coordinator" });
   }
   const rows = Array.isArray(stored.plans) ? stored.plans : [];
   const incomingRows = Array.isArray(candidate.plans) ? candidate.plans : [];

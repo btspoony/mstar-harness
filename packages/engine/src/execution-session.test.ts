@@ -5,7 +5,7 @@
  * The transport cases are pure values. The recovery cases run the REAL modules
  * against a REAL `node:sqlite` store in a per-test temporary root: the authority
  * is initialized and the lifecycle is created and bound through the published
- * verbs (`initializeExecutionAuthority` → `createExecutionWorkflow` →
+ * verbs (`readExecutionState` → `createExecutionWorkflow` →
  * `bindExecutionSession`), exactly as the store's own suites do. No case reads
  * or writes this checkout's control store.
  *
@@ -38,7 +38,6 @@ import {
 import {
   bindExecutionSession,
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   readExecutionPlan,
   readExecutionState,
   serializeExecutionValue,
@@ -210,7 +209,7 @@ async function sessionFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   const coordinatorCaller = caller(COORDINATOR_ID);
   const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
     entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` } as never,

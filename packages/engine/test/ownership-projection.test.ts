@@ -1,111 +1,69 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "../src/catalog-registration.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
-import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
-import { WORKFLOW_SNAPSHOT_FILE } from "../src/workflow.js";
+import { join } from "node:path";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  readExecutionState,
+  type ExecutionCaller,
+  type ExecutionContext,
+} from "../src/execution-store.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "mstar-ownership-projection-"));
-afterEach(() => setArtifactStore(undefined));
+const root = mkdtempSync(join(tmpdir(), "mstar-active-ownership-projection-"));
+afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-async function fixture(name: string) {
-  const harnessDir = mkdtempSync(join(root, name));
-  mkdirSync(join(harnessDir, ".mstar"), { recursive: true });
-  const context: StoreContext = { harnessDir };
-  (await initializeStore(context)).close();
-  setArtifactStore(createFsStore(harnessDir));
-  const planId = "fixture-plan";
-  mkdirSync(join(harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(harnessDir, "plans", `${planId}.md`), `# Fixture plan\n\n**plan_id:** ${planId}\n`);
-  return { harnessDir, context, planId };
+const workflowId = "wf-active-ownership";
+const ts = "2026-09-18T00:00:00.000Z";
+function caller(sessionId: string): ExecutionCaller {
+  return { sessionId, role: "coordinator", workflowId };
+}
+function executionContext(harnessDir: string, identity: ExecutionCaller): ExecutionContext {
+  return { harnessDir, caller: identity };
 }
 
-function request(harnessDir: string, planId: string, operationId: string, expectedCatalogRevision: number, coordinator = "session-original") {
-  return {
-    operationId,
-    actor: "project-manager" as const,
-    expectedCatalogRevision,
-    workflow: {
-      kind: "plan" as const,
-      workflowId: "wf-ownership",
-      options: {
-        harnessDir,
-        plan: { id: planId, title: "Fixture plan", file: `plans/${planId}.md` },
-        deliveryKind: "development" as const,
-        branchSource: "feature/fixture",
-        branchTarget: "main",
+describe("ACTIVE execution ownership projection", () => {
+  test("the durable coordinator binding owns the workflow and rejects a foreign holder", async () => {
+    const harnessDir = mkdtempSync(join(root, "coordinator-"));
+    mkdirSync(harnessDir, { recursive: true });
+    const context: StoreContext = { harnessDir };
+    const store = await initializeStore(context);
+    store.close();
+    const state = await readExecutionState(context);
+    const owner = caller("session-original");
+    const created = await createExecutionWorkflow(executionContext(harnessDir, owner), {
+      entry: { id: workflowId, type: "plan", started_at: ts, dir: `workflows/${workflowId}` } as never,
+      snapshot: {
+        schema_version: 1,
+        id: workflowId,
+        type: "plan",
+        status: "running",
+        started_at: ts,
+        updated_at: ts,
+        phase: "phase-1-prepare",
         project: "harness",
-        coordinator: { session_id: coordinator, session_file: join(harnessDir, `${coordinator}.json`) },
-        startedAt: "2026-09-18T00:00:00.000Z",
-      },
-    },
-    delta: {
-      entities: [{ kind: "plan" as const, id: planId, title: "Fixture plan", rootKind: "plans" as const, relativePath: basename(`plans/${planId}.md`) }],
-      binding: { catalogKind: "plan" as const, catalogId: planId },
-    },
-  };
-}
-
-function snapshotPath(harnessDir: string) {
-  return join(harnessDir, "workflows", "wf-ownership", WORKFLOW_SNAPSHOT_FILE);
-}
-
-describe("catalog migration ownership projection", () => {
-  test("refuses a different coordinator without issuing a successful receipt", async () => {
-    const { harnessDir, context, planId } = await fixture("coordinator-");
-    await registerCatalogExecution(context, request(harnessDir, planId, "op-owner", 0));
-    const before = readFileSync(snapshotPath(harnessDir), "utf8");
-    await expect(registerCatalogExecution(context, request(harnessDir, planId, "op-retry", 1, "session-other")))
-      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
-    expect(JSON.parse(before).coordination.coordinator.session_id).toBe("session-original");
-    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-  });
-
-  test("ignores ordinary workflow and plan progress", async () => {
-    const { harnessDir, context, planId } = await fixture("progress-");
-    await registerCatalogExecution(context, request(harnessDir, planId, "op-progress", 0));
-    const snapshot = JSON.parse(readFileSync(snapshotPath(harnessDir), "utf8"));
-    snapshot.status = "paused";
-    snapshot.plans[0].status = "InProgress";
-    writeFileSync(snapshotPath(harnessDir), `${JSON.stringify(snapshot, null, 2)}\n`);
-    await expect(registerCatalogExecution(context, request(harnessDir, planId, "op-progress", 0)))
-      .resolves.toMatchObject({ operationId: "op-progress", workflowId: "wf-ownership" });
-    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-  });
-
-  test("reconciles a pending journal identity in the pre-projection shape", async () => {
-    const { harnessDir, context, planId } = await fixture("legacy-identity-");
-    await registerCatalogExecution(context, request(harnessDir, planId, "op-legacy", 0));
-    const before = await listPendingCatalogRegistrations(context);
-    expect(before).toEqual([]);
-    // Recreate an interrupted execution-written operation while preserving its real snapshot/root bytes.
-    const handle = await openStore(context, "write");
-    const row = handle.db.prepare("select catalog_delta_json from catalog_operations where operation_id = ?").get("op-legacy") as { catalog_delta_json: string };
-    const journal = JSON.parse(row.catalog_delta_json);
-    const snapshot = JSON.parse(readFileSync(snapshotPath(harnessDir), "utf8"));
-    journal.workflow.identity = JSON.stringify({ ...snapshot, status: snapshot.status, coordinator: snapshot.coordination.coordinator });
-    handle.db.prepare("update catalog_operations set phase = 'execution-written', result_json = null, catalog_delta_json = ? where operation_id = ?")
-      .run(JSON.stringify(journal), "op-legacy");
-    handle.close();
-    const beforeReconcile = await listPendingCatalogRegistrations(context);
-    expect(beforeReconcile).toMatchObject([{ operationId: "op-legacy", phase: "execution-written", rootVisible: true }]);
-    await reconcileCatalogExecution(context, "op-legacy");
-    const afterReconcile = await listPendingCatalogRegistrations(context);
-    expect(afterReconcile).toEqual([]);
-    const committed = await openStore(context, "read");
-    expect((committed.db.prepare("select phase from catalog_operations where operation_id = ?").get("op-legacy") as { phase: string }).phase)
-      .toBe("committed");
-    committed.close();
-  });
-
-  test("refuses a changed registration input", async () => {
-    const { harnessDir, context, planId } = await fixture("changed-input-");
-    await registerCatalogExecution(context, request(harnessDir, planId, "op-input-owner", 0));
-    const changed = request(harnessDir, planId, "op-input-retry", 1);
-    changed.workflow.options.branchSource = "feature/changed";
-    await expect(registerCatalogExecution(context, changed)).rejects.toMatchObject({ code: "catalog.registration-conflict" });
-    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+        compass_ref: "iterations/iter-20260918-fixture/delivery-compass.md",
+        delivery_kind: "development",
+        branch: { base: "main", source: "feature/fixture", target: "main", integration: "integration/wf-active-ownership" },
+        integration_worktree_path: join(harnessDir, "integration"),
+        execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+        plans: [{ id: "fixture-plan", title: "Fixture plan", file: "plans/fixture-plan.md", status: "Todo" }],
+      } as never,
+      expected: state.token,
+      operationId: "create-active-ownership",
+    });
+    const workflow = created.data.workflows.find((item) => item.state.id === workflowId);
+    if (workflow === undefined) throw new Error("fixture: ACTIVE workflow was not created");
+    const bound = await bindExecutionSession(executionContext(harnessDir, owner), {
+      workflowId,
+      expected: workflow.workflowToken,
+      operationId: "bind-active-owner",
+    });
+    expect(bound.data.sessionId).toBe("session-original");
+    await expect(bindExecutionSession(executionContext(harnessDir, caller("session-other")), {
+      workflowId,
+      operationId: "bind-foreign-owner",
+    })).rejects.toMatchObject({ code: "execution.session-unavailable", details: { holder: "session-original" } });
   });
 });
