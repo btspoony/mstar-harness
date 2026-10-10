@@ -301,12 +301,19 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const resolvedGeneration = input.generation ?? (resolvedGenerations.length === 1 ? resolvedGenerations[0] : undefined);
         const v2AmongResolved = resolvedGenerations.includes("v2") || input.generation === "v2";
         const v1AmongResolved = resolvedGenerations.includes("v1") || input.generation === "v1";
+        // Concrete, executable recovery commands for the OTHER scope's file.
+        const otherScope = input.scope === "project" ? "global" : "project";
+        const generationSuffix = input.generation ? ` --opencode-generation ${input.generation}` : "";
+        const otherScopeDoctorCommand = `mstar doctor --target opencode --scope ${otherScope}${generationSuffix}`;
+        const otherScopeInitCommand = `mstar init --target opencode --opencode-generation v2 --scope ${otherScope}`;
         const mcpHealth = input.target === "dsh"
           ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
           : diagnoseMcpTarget(input.target, os.homedir(), undefined, {
             ...(projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath }),
             ...(v2AmongResolved ? { requireNestedV2Shape: true } : {}),
             ...(v1AmongResolved ? { requireFlatV1Shape: true } : {}),
+            otherScopeDoctorCommand,
+            otherScopeInitCommand,
           });
         // The published V2 plugin runs in OpenCode's Node process and needs
         // node:sqlite (Node >=24.18.0) — INSTALL.md:70 promises doctor checks

@@ -302,7 +302,14 @@ export function diagnoseMcpTarget(
   target: HostTarget,
   configRoot: string,
   runtime: McpRuntime = actualRuntime(),
-  options: { configFilePath?: string; requireNestedV2Shape?: boolean; requireFlatV1Shape?: boolean } = {},
+  options: {
+    configFilePath?: string;
+    requireNestedV2Shape?: boolean;
+    requireFlatV1Shape?: boolean;
+    /** Exact, executable recovery command for the other scope's config file. */
+    otherScopeDoctorCommand?: string;
+    otherScopeInitCommand?: string;
+  } = {},
 ): McpTargetHealth {
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
@@ -394,7 +401,7 @@ export function diagnoseMcpTarget(
         errors.push(`MCP config ${relativeConfig} carries only the nested \`mcp.servers\` shape; the OpenCode V1 host reads the server only from flat \`mcp.<server>\` rows. Supported recovery (CLI): run the V1 checks against the other scope's config file, or author the flat row in this file by hand (\`init --opencode-generation v1\` refuses to touch V2-nested configs).`);
       }
       if (legacyFlatBlocked) {
-        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI): run the V2 checks against the other scope's config file (\`mstar doctor --target opencode --scope global|project\` resolves to a different file), or run \`mstar init --target opencode --opencode-generation v2 --scope <other>\` there (init refuses to write mixed configs in this file by design).`);
+        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI), executable as printed: run "${options.otherScopeDoctorCommand}" to validate the other scope's config file, or "${options.otherScopeInitCommand}" to init there (init refuses to write mixed configs in this file by design).`);
       } else {
         const serverRecord = record(servers);
         if (serverRecord === null) {
