@@ -1112,7 +1112,7 @@ describe("workflow.register — catalog plan paths", () => {
 });
 
 describe("workflow.register — state-aware transport refusals", () => {
-  test("legacy DB-route attempt gives the sole upgrade entry; active legacy-form attempt says upgrade is unnecessary", async () => {
+  test("foreign-store token refuses with execution.scope-mismatch; ACTIVE registration succeeds under the acquired identity", async () => {
     const legacy = await legacyFixture("mstar-session-legacy-refusal");
     const active = await activeFixture("mstar-session-active-refusal");
     const activeAuthority = await readExecutionAuthority(active.context);
