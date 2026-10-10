@@ -298,6 +298,7 @@ export function diagnoseMcpTarget(
   target: HostTarget,
   configRoot: string,
   runtime: McpRuntime = actualRuntime(),
+  options: { configFilePath?: string } = {},
 ): McpTargetHealth {
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
@@ -309,7 +310,7 @@ export function diagnoseMcpTarget(
   }
 
   const { configFile: relativeConfig, format } = HOST_MCP_CONFIGS[target];
-  const configPath = path.join(configRoot, relativeConfig);
+  const configPath = options.configFilePath ?? path.join(configRoot, relativeConfig);
 
   if (!fs.existsSync(configPath)) {
     return {

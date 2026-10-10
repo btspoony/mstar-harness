@@ -178,7 +178,10 @@ function diagnoseOpencodeTarget(root: string, generation: OpencodeGeneration | u
 
 async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation?: OpencodeGeneration): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
   if (target === "opencode") {
-    return diagnoseOpencodeTarget(resolveProjectRoot(), generation);
+    const root = scope === "global"
+      ? path.join(os.homedir(), ".config", "opencode")
+      : resolveProjectRoot();
+    return diagnoseOpencodeTarget(root, generation);
   }
   if (target === "cursor") {
     const result = diagnoseCursorHost(scope);
@@ -281,12 +284,15 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
         const result = await diagnose(input.target, input.scope, input.generation);
-        // Host MCP configs live under the USER's config root (~/.cursor/mcp.json,
-        // ~/.codex/config.toml, ...), not inside the harness checkout; dsh composes
-        // its Cordis rows under the profile dir instead.
+        // MCP configs are global by default; project-scoped OpenCode uses the
+        // project's own opencode.json, while dsh composes rows in its profile.
+        const projectOpencodeMcpPath = input.target === "opencode" && input.scope === "project"
+          ? path.join(resolveProjectRoot(), "opencode.json")
+          : undefined;
         const mcpHealth = input.target === "dsh"
           ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
-          : diagnoseMcpTarget(input.target, os.homedir());
+          : diagnoseMcpTarget(input.target, os.homedir(), undefined,
+            projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath });
         const errors = [...result.errors, ...mcpHealth.errors];
         const data = {
           ...result,

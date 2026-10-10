@@ -212,12 +212,12 @@ export function diagnoseOpencodeV2Host(
 }
 
 /**
- * Parse the observed `opencode vMAJOR.MINOR.PATCH` output form (local
- * evidence: `opencode v2.0.24` in ~3s). major ≥ 2 → v2, 1.x → v1; anything
+ * Parse prefixed (`opencode vMAJOR.MINOR.PATCH`) and plain
+ * (`MAJOR.MINOR.PATCH`) output forms. Major ≥ 2 → v2, 1.x → v1; anything
  * else (0.x, garbage) → `null` — the caller refuses, never guesses.
  */
 export function parseOpencodeVersionOutput(output: string): OpencodeGeneration | null {
-  const match = /^\s*opencode\s+v(\d+)\.\d+\.\d+.*$/im.exec(output);
+  const match = /^\s*(?:opencode\s+v)?(\d+)\.\d+\.\d+.*$/im.exec(output);
   if (!match) return null;
   const major = Number(match[1]);
   if (major >= 2) return "v2";

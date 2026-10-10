@@ -34,7 +34,7 @@ function absentOnPath(): string {
   // shim succeeds with empty output; the assertions below verify the refusal
   // text and that no repo/config was materialized, so a no-op shim cannot
   // mask a regression.
-  writeFileSync(join(directory, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  writeFileSync(path.join(directory, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   process.env.PATH = directory;
   return directory;
 }
@@ -82,7 +82,7 @@ describe("shared host-presence probe (injectable runner)", () => {
       expect(refusal).toMatchObject({ target, binary });
       expect((refusal as Error).message).toContain(hint);
       if (target === "cursor") {
-        expect((refusal as Error).message).toContain("Install Cursor");
+        expect((refusal as Error).message).toContain("curl https://cursor.com/install -fsS | bash");
         expect((refusal as Error).message).toContain("cursor-agent CLI");
         expect((refusal as Error).message).toContain("re-run init");
       }
@@ -134,7 +134,10 @@ describe("omp host presence at init", () => {
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
 
     const result = await adapter.ompAdapter.runInstallInit?.("project", true);
-    expect(result?.notes.some((note) => note.includes("Would run: omp plugin link"))).toBe(true);
+    const dryRunNotes = result?.notes.join("\n") ?? "";
+    expect(dryRunNotes).toContain("presence is unchecked under --dry-run (would-run preview)");
+    expect(dryRunNotes).not.toContain("omp CLI not found on PATH");
+    expect(dryRunNotes).toContain("Would run: omp plugin link");
     expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
   });
@@ -166,7 +169,7 @@ describe("cursor and kimi host presence at init", () => {
       expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
       const message = (refusal as Error).message;
       if (target === "cursor") {
-        expect(message).toContain("Install Cursor (https://cursor.com)");
+        expect(message).toContain("curl https://cursor.com/install -fsS | bash");
         expect(message).toContain("then re-run init");
       } else {
         expect(message).toContain("Install the Kimi Code CLI (https://www.kimi.com/code/docs/kimi-code-cli/)");
@@ -256,7 +259,7 @@ describe("repo-built CLI host-presence smoke", () => {
       expect(refused.result.exitCode).not.toBe(0);
       expect(refused.output).toContain(installLine[target]);
       if (target === "cursor") {
-        expect(refused.output).toContain("Install Cursor");
+        expect(refused.output).toContain("curl https://cursor.com/install -fsS | bash");
         expect(refused.output).toContain("cursor-agent CLI");
         expect(refused.output).toContain("re-run init");
       }

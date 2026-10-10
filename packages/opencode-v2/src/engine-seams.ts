@@ -143,6 +143,6 @@ export function loadWriteGateApi(): Promise<WriteGateApi | null> {
       validateStatusWriteDoc: engine.validateStatusWriteDoc,
       withStoreRead: engine.withStoreRead,
     };
-  }).catch(() => null);
+  });
   return writeGateApiPromise;
 }

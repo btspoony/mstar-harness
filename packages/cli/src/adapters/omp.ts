@@ -98,7 +98,7 @@ async function runInit(scope: Scope, dryRun: boolean) {
     const linkArgs = ["plugin", "link", ompPackagePath];
     if (scope === "project") linkArgs.push("--scope", "project");
     notes.push(
-      "omp CLI not found on PATH. Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install @mstar-harness/omp",
+      "omp CLI presence is unchecked under --dry-run (would-run preview); install Oh My Pi (`omp`) before executing init.",
       `Would run: omp ${linkArgs.join(" ")}`,
     );
   } else {

@@ -62,7 +62,7 @@ export function registerAssets(context: Context, assets: BundledAssets): Effect.
               sessionID: input.sessionID,
               text: [command.template, input.prompt.text].filter(Boolean).join("\n\n"),
               files: input.prompt.files,
-              agents: input.prompt.agents,
+              agents: command.agent === undefined ? input.prompt.agents : [{ name: command.agent }],
               skills: input.prompt.skills,
               delivery: input.delivery,
             })),

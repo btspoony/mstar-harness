@@ -212,9 +212,10 @@ describe("diagnoseOpencodeV2Host", () => {
 });
 
 describe("parseOpencodeVersionOutput", () => {
-  test("maps the observed `opencode vMAJOR.MINOR.PATCH` form (major >= 2 → v2, 1.x → v1)", () => {
+  test("maps prefixed and plain semantic versions to generations", () => {
     expect(parseOpencodeVersionOutput("opencode v2.0.24\n")).toBe("v2");
     expect(parseOpencodeVersionOutput("opencode v1.9.9")).toBe("v1");
+    expect(parseOpencodeVersionOutput("1.14.40")).toBe("v1");
   });
 
   test("never guesses on unmapped or unparseable output", () => {
