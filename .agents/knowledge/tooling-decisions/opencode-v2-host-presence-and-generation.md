@@ -3,7 +3,7 @@ title: OpenCode V2 host-presence gate and generation probe
 category: tooling-decisions
 tags: [opencode, opencode-v2, installer, d14, d15, host-presence]
 created: 2026-10-10
-source: iter-20261010-v4-phase6
+source: {ITERATION_ID}
 status: active
 ---
 
@@ -36,4 +36,4 @@ status: active
 - `packages/cli/src/adapters/opencode-version-probe.ts` — bounded probe.
 - `packages/cli/test/host-presence.test.ts` — refusal/preview corpus.
 
-Cross-links: `.mstar/iterations/iter-20261010-v4-phase6/specs/opencode-v2-native-package-contract.md` (full contract, local artifact).
+Cross-links: `{ITERATION_DIR}/<iteration-id>/specs/opencode-v2-native-package-contract.md` (full contract, local artifact).
