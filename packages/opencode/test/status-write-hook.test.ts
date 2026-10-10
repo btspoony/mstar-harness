@@ -30,26 +30,31 @@ function makeHarness(): { project: string; harness: string; statusPath: string; 
 }
 
 describe("validateStatusWrite — ACTIVE-only authority", () => {
-  test("a missing ACTIVE store refuses status.json regardless of document validity", async () => {
+  test("a missing store is the pre-activation state: the document lint decides, no invented authority", async () => {
     const fixture = makeHarness();
     try {
       const result = await validateStatusWrite(fixture.statusPath, {
         doc: { version: 2, updated_at: "2026-08-08", workflows: [{ id: "wf-1", type: "invalid" }] },
       });
+      // Plan S4: absence is not an authority verdict — the retired route is
+      // only refused while the execution authority is ACTIVE. The invalid
+      // document still fails, but through its own lint.
       expect(result?.ok).toBe(false);
-      expect(result?.violations.map((violation) => violation.code)).toContain("store.authority-unavailable");
-      expect(result?.violations[0]?.message).toContain("mstar store init");
+      expect(result?.violations.map((violation) => violation.code)).toContain("status.workflow.invalid-type");
+      expect(result?.violations.some((violation) => violation.code === "store.authority-unavailable")).toBe(false);
+      expect(result?.hardBlocked).toBe(false);
     } finally {
       rmSync(fixture.project, { recursive: true, force: true });
     }
   });
 
-  test("a missing ACTIVE store refuses workflow snapshot writes", async () => {
+  test("a missing store leaves the snapshot write to its document lint", async () => {
     const fixture = makeHarness();
     try {
       const result = await validateStatusWrite(fixture.snapshotPath, { doc: { type: "invalid" } });
       expect(result?.ok).toBe(false);
-      expect(result?.violations.map((violation) => violation.code)).toContain("store.authority-unavailable");
+      expect(result?.violations.map((violation) => violation.code)).toContain("workflow.snapshot.invalid-type");
+      expect(result?.violations.some((violation) => violation.code === "store.authority-unavailable")).toBe(false);
     } finally {
       rmSync(fixture.project, { recursive: true, force: true });
     }

@@ -52,7 +52,6 @@ const fullSource: MstarEngineStatusPayload = {
   enforcement: { hard: true, source: 'iteration compass' as EnforcementSource },
   iteration: {
     iterationId: 'iter-00000810-panel-zones',
-    statusPath: '/proj/.mstar/status.json',
     compassPath: '/proj/.mstar/iterations/iter-00000810-example/delivery-compass.md',
     gate: {
       transition: 'phase-2-execute',
