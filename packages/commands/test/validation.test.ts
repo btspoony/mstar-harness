@@ -86,14 +86,11 @@ describe("validation command family", () => {
     expect(result.message).toContain("pre-activation file route is retired");
   });
 
-  test("ACTIVE worktree check reads registered workflows from the execution graph", async () => {
+  test("ACTIVE worktree entry check admits standalone plans with registered source/target anchors", async () => {
     const cwd = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
     execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "initial"], { cwd });
     const harness = path.join(cwd, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    const integrationWorktree = path.join(cwd, "integration-worktree");
-    execFileSync("git", ["worktree", "add", "-q", "-b", "integration/synthetic", integrationWorktree], { cwd });
     mkdirSync(harness, { recursive: true });
     const storeContext = { harnessDir: harness };
     (await initializeStore(storeContext)).close();
@@ -106,8 +103,7 @@ describe("validation command family", () => {
       snapshot: {
         schema_version: 1, id: "workflow-synthetic", type: "plan", status: "running",
         started_at: "2026-09-26T00:00:00Z", updated_at: "2026-09-26T00:00:00Z",
-        branch: { base: "main", source: "feature/synthetic", integration: "integration/synthetic", target: "main" },
-        integration_worktree_path: integrationWorktree,
+        branch: { source: "feature/synthetic", target: "main" },
         plans: [
           { id: "plan-synthetic", title: "Synthetic plan", file: "plans/plan-synthetic.md", status: "InProgress" },
           { id: "plan-synthetic-secondary", title: "Synthetic secondary plan", file: "plans/plan-synthetic-secondary.md", status: "Todo" },
@@ -117,6 +113,13 @@ describe("validation command family", () => {
       expected: initialized.token,
       operationId: "workflow-synthetic",
     });
+    const entryCheck = await definition("worktree.check").execute(
+      { workflow: "workflow-synthetic", harness, entry: true },
+      context(cwd, async ({ argv }) => argv[1] === "worktree"
+        ? { exitCode: 0, signal: null, stdout: `worktree ${cwd}\nbranch main\n`, stderr: "" }
+        : { exitCode: 0, signal: null, stdout: "main", stderr: "" }),
+    );
+    expect(entryCheck.status).toBe("ok");
     const bound = await bindExecutionSession(execution, {
       workflowId: identity.workflowId, expected: created.data.workflows[0]!.workflowToken,
       operationId: "bind-synthetic",
