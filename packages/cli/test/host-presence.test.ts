@@ -214,7 +214,9 @@ describe("codex and dsh presence behavior remains pinned", () => {
     absentOnPath();
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
     const adapter = await import("../src/adapters/dsh");
-    expect(() => adapter.dshAdapter.runInstallInit?.("project", false)).toThrow(/dsh CLI not found on PATH/i);
+    expect(() => adapter.dshAdapter.runInstallInit?.("project", false)).toThrow(
+      "dsh CLI not found on PATH. Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
+    );
     expect(existsSync(path.join(home, ".dsh"))).toBe(false);
     const preview = adapter.dshAdapter.runInstallInit?.("project", true);
     expect(preview?.notes.some((note) => note.includes("Would run: dsh plugin"))).toBe(true);
