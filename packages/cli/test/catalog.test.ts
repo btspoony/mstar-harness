@@ -220,10 +220,14 @@ describe("mstar catalog import", () => {
     expect(cloneReceipt.links).toEqual(payload.links);
     expect(cloneReceipt.links.length).toBeGreaterThan(0);
 
-    // No workflow session, no root registration: import is catalog-only.
+    // No workflow session, no root registration: import is catalog-only. The
+    // clone's ACTIVE authority stays empty — import never opens an execution
+    // session or registers a workflow.
     expect(readdirSync(clone.harness)).not.toContain("workflows");
     expect(readdirSync(clone.harness)).not.toContain("status.json");
-    await expect(readExecutionState({ harnessDir: clone.harness })).rejects.toMatchObject({ code: "execution.not-active" });
+    const cloneState = await readExecutionState({ harnessDir: clone.harness });
+    expect(cloneState.data.workflows).toEqual([]);
+    expect(cloneState.data.root.workflows).toEqual([]);
   });
 
   test("a conflicting plan is refused and writes nothing", async () => {
