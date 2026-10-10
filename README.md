@@ -32,13 +32,6 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 - **Specialists instead of one long prompt** — a PM orchestrates; separate roles own requirements, architecture, implementation, QC, acceptance, audits, and ops, each with a narrow brief.
 - **A trail you can audit** — plans, findings, review reports, and decisions are recorded under the harness directory in your repo, not just in the chat.
 - **Boundaries are explicit** — the workflow opens pull requests and stops at merge-ready; merging stays your call. Audits read and report, and anything that touches a real environment needs your explicit authorization.
-- **Deterministic gates, enforced by a TS engine** — path/status/lease/dispatch/sdd/iteration/lint gates run in `@mstar-harness/engine`, not as prompt suggestions
-- **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
-- **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
-- **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Pluggable JSON persistence (review documents)** — review envelopes and unrelated generic JSON persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`. Execution state is never stored this way
-- **Store authority** — `{HARNESS_DIR}/store.db` (SQLite) is the issue, catalog, roadmap, and workflow/plan execution authority once created (`mstar store init`, or `mstar store upgrade` for historical file state); `status.json` and workflow snapshots are migration staging written only by that migration tooling, the retired project registers are migration history with no write path, and open items are issues in the store. A workspace without a store has no execution authority — track the work in conversation (no-plan mode)
-- **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 ## Install
 
