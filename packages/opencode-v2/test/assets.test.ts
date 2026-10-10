@@ -101,8 +101,8 @@ describe("agent projection (frontmatter -> V2 agent info)", () => {
     expect(projected.permissions).toEqual([
       { action: "write", resource: "*", effect: "allow" },
       { action: "edit", resource: "*", effect: "allow" },
-      { action: "bash", resource: "*", effect: "allow" },
-      { action: "task", resource: "*", effect: "allow" },
+      { action: "shell", resource: "*", effect: "allow" },
+      { action: "subagent", resource: "*", effect: "allow" },
     ]);
   });
 
@@ -113,8 +113,21 @@ describe("agent projection (frontmatter -> V2 agent info)", () => {
     expect(projected.mode).toBe("subagent");
     expect(projected.permissions).toEqual([
       { action: "write", resource: "*", effect: "allow" },
-      { action: "task", resource: "*", effect: "deny" },
-      { action: "task", resource: "explore", effect: "allow" },
+      { action: "subagent", resource: "*", effect: "deny" },
+      { action: "subagent", resource: "explore", effect: "allow" },
+    ]);
+  });
+
+  test("translates legacy bash and task actions for V2 permissions", () => {
+    const projected = projectAgentDefinition({
+      name: "project-manager",
+      tools: { task: true },
+      permission: { bash: { "*": "deny" } },
+    });
+
+    expect(projected.permissions).toEqual([
+      { action: "subagent", resource: "*", effect: "allow" },
+      { action: "shell", resource: "*", effect: "deny" },
     ]);
   });
 

@@ -141,6 +141,7 @@ describe("built OpenCode V2 package integration", () => {
     const userPrompt = "audit this repository";
     expect(text.length).toBeGreaterThan(userPrompt.length);
     expect(text.endsWith(`\n\n${userPrompt}`)).toBe(true);
+    expect(fixture.prompts[0]?.agents).toEqual([{ name: "project-manager" }]);
   });
 
   test("resolves and reads nested role references from the registered skill location", async () => {

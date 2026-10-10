@@ -16,10 +16,11 @@
  * Projection semantics (shared contract §Q2, pinned from upstream tag
  * `v2.0.26` `packages/schema/src/config/agent.ts` + `packages/schema/src/permission.ts`):
  * - agent frontmatter `prompt` (the markdown body) → V2 `system`;
- * - legacy `tools` map and legacy `permission.*` tree are dropped and converted
- *   to an ordered V2 `permissions` ruleset (`{action, resource, effect}`,
- *   last-match-wins) — legacy `tools` enables become `effect: "allow"` rules
- *   first, then legacy permission-tree entries in source order;
+ * - legacy `tools` and `permission.*` actions are projected to ordered V2 permission
+ *   rules (`{action, resource, effect}`, last-match-wins); legacy `bash` and `task`
+ *   become V2 `shell` and `subagent`;
+ * - legacy `tools` enables become `effect: "allow"` rules first, then legacy
+ *   permission-tree entries in source order;
  * - `mode` passes through only when it is one of the V2 agent-mode literals
  *   `["subagent", "primary", "all"]` (the enum expresses the V1 seat
  *   semantics: primary PM seat, subagent leaves); anything else is dropped;
@@ -277,6 +278,12 @@ const isV2AgentMode = (value: unknown): value is V2AgentMode =>
 const isPermissionEffect = (value: unknown): value is PermissionRule["effect"] =>
   value === "allow" || value === "deny" || value === "ask";
 
+// Legacy harness actions map to V2 permission actions declared at
+// https://github.com/anomalyco/opencode/blob/v2.0.26/packages/schema/src/permission.ts.
+const V2_PERMISSION_ACTION: Record<string, string> = { bash: "shell", task: "subagent" };
+
+const v2PermissionAction = (action: string): string => V2_PERMISSION_ACTION[action] ?? action;
+
 /** Legacy frontmatter -> V2 agent info (conversion table; §Q2 semantics above).
  * Fails closed: a permission value that is not an effect literal throws naming
  * the offending action/resource — silent projection drift is never acceptable
@@ -298,10 +305,9 @@ export function projectAgentDefinition(raw: JsonObject): ProjectedAgent {
 
   if (typeof raw.tools === "object" && raw.tools !== null && !Array.isArray(raw.tools)) {
     for (const [action, enabled] of Object.entries(raw.tools)) {
-      rules.push({ action, resource: "*", effect: enabled === true ? "allow" : "deny" });
+      rules.push({ action: v2PermissionAction(action), resource: "*", effect: enabled === true ? "allow" : "deny" });
     }
   }
-
   if (typeof raw.permission === "object" && raw.permission !== null && !Array.isArray(raw.permission)) {
     for (const [action, resourceMap] of Object.entries(raw.permission)) {
       if (typeof resourceMap !== "object" || resourceMap === null || Array.isArray(resourceMap)) {
@@ -315,7 +321,7 @@ export function projectAgentDefinition(raw: JsonObject): ProjectedAgent {
             `agent projection: permission.${action}.${resource} carries non-effect value ${JSON.stringify(effect)} (expected allow|deny|ask)`,
           );
         }
-        rules.push({ action, resource, effect });
+        rules.push({ action: v2PermissionAction(action), resource, effect });
       }
     }
   }
