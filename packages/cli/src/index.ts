@@ -4,7 +4,7 @@ import engineManifest from "../../engine/package.json" with { type: "json" };
 import { select } from "@inquirer/prompts";
 import { getCommandDefinitions } from "@mstar-harness/commands";
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import path from "node:path";
 import pc from "picocolors";
 import { getAdapter } from "./adapters";
@@ -82,15 +82,16 @@ async function runInit(options: InitOptions) {
     ? "Step 3/4 - Apply explicit role model overrides from CLI flags"
     : "Step 3/4 - Fast setup (schema + plugin; OpenCode default models)");
   logStep("Step 4/4 - Update config");
+  const generationOpts = { generation: options.opencodeGeneration, dryRun: !!options.dryRun };
   const configPath = adapter.resolveConfigPath?.(scope, options.output);
   if (!configPath) throw new Error(`Adapter ${target} does not implement config path resolution.`);
-  const updated = adapter.mutateConfigForInit?.(readJson(configPath), assignments);
+  const updated = await adapter.mutateConfigForInit?.(readJson(configPath), assignments, generationOpts);
   if (!updated) throw new Error(`Adapter ${target} does not implement init mutation.`);
-  const checkErrors = adapter.validateConfig?.(updated) || [];
+  const checkErrors = adapter.validateConfig?.(updated, generationOpts) || [];
   if (checkErrors.length) throw new Error(`Configuration verification failed:\n- ${checkErrors.join("\n- ")}`);
   if (!options.dryRun) {
     writeJson(configPath, updated);
-    const persistedErrors = adapter.validateConfig?.(readJson(configPath)) || [];
+    const persistedErrors = adapter.validateConfig?.(readJson(configPath), generationOpts) || [];
     if (persistedErrors.length) throw new Error(`Post-write verification failed:\n- ${persistedErrors.join("\n- ")}`);
   }
   console.log(pc.green(`Status: ${options.dryRun ? "ready (dry-run)" : "configured"} (${scope})`));
@@ -112,6 +113,12 @@ program
   .option("--dry-run", "Preview result without writing config")
   .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")
   .option("--no-global-cli", "Skip installing the matching-version @mstar-harness/cli globally after init")
+  .addOption(
+    new Option(
+      "--opencode-generation <generation>",
+      "OpenCode config generation: v1|v2 (default: probe the installed opencode version on real installs; config markers under --dry-run)",
+    ).choices(["v1", "v2"]),
+  )
   .option("--pm-model <model>", "Optional: model for project-manager (advanced override)")
   .option("--strategic-models <a,b,c>", "Optional: models for architect/product-manager/prompt-engineer")
   .option("--dev-models <a,b,c>", "Optional: models for fullstack-dev/fullstack-dev-2/frontend-dev")
