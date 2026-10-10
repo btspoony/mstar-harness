@@ -358,8 +358,8 @@ export function diagnoseMcpTarget(
       // level: a config mixing nested rows with legacy flat rows is rejected
       // by OpenCode itself, so doctor must never report it aligned.
       const mixedMcpShapes = target === "opencode"
-        && mcpConfig !== null
-        && Object.keys(mcpConfig).some((key) => key !== "timeout" && key !== "servers");
+        && hasNestedV2Shape
+        && Object.keys(mcpConfig!).some((key) => key !== "timeout" && key !== "servers");
             if (mixedMcpShapes) {
         const flatRows = Object.keys(mcpConfig!).filter((key) => key !== "timeout" && key !== "servers");
         const flatList = flatRows.map((row) => `mcp.${row}`).join(", ");
