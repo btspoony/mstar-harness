@@ -53,7 +53,7 @@ describe("pr-review command family", () => {
     writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
     const tally = await command("pr-review.tally").execute({ findings }, context);
     expect(tally.status).toBe("ok");
-    expect(tally.data).toMatchObject({ verdict: "blocked", scorePct: 57, tally: { mustFix: 1, nit: 1 } });
+    expect(tally.data).toMatchObject({ verdict: "blocked", scorePct: 53, band: "fail", tally: { mustFix: 1, nit: 1 } });
 
     const report = path.join(cwd, "report.md");
     writeFileSync(report, "# Fixture report\n");

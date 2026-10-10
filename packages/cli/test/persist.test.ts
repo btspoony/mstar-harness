@@ -108,7 +108,7 @@ const STATUS_PAYLOAD = { version: 2, updated_at: "2026-08-27", workflows: [] };
 /** Register-shaped payload: what the retired `residuals` kind used to accept. */
 const REGISTER_PAYLOAD = { entries: {} };
 /** Minimal valid `mstar.review/v1` envelope (shape; tally consistent
- * — {1 should-fix, 1 nit} ⇒ 100-15-3=82, needs fixes). */
+ * — {1 should-fix, 1 nit} ⇒ 100-12-2=86, needs fixes). */
 const REVIEW_PAYLOAD = {
   schema: "mstar.review/v1",
   verdict: "needs fixes",
@@ -123,9 +123,9 @@ const REVIEW_PAYLOAD = {
   ],
   tally: {
     verdict: "needs fixes",
-    scorePct: 82,
+    scorePct: 86,
     tally: { mustFix: 0, shouldFix: 1, nit: 1, unverified: 0 },
-    chatHeader: "needs fixes \u00b7 82%\nmust-fix=0 should-fix=1 nit=1 unverified=0",
+    chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 nit=1 unverified=0",
   },
 };
 
