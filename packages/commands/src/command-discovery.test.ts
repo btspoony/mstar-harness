@@ -254,64 +254,9 @@ describe("command discovery", () => {
 });
 
 
-test("workflow.recover-coordinator is FILE-only and returns usage with the supported ACTIVE recovery pointer", async () => {
-  const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
-  if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
-  const keys = recovery.cli.options.map((option) => option.key);
-  // The FILE transports only: no second ACTIVE recovery alias.
-  for (const key of ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation"]) {
-    expect(keys).toContain(key);
-  }
-  for (const removed of ["workflow", "expect", "operation", "priorSession", "unowned"]) {
-    expect(keys).not.toContain(removed);
-  }
-  // The published pointer names the supported ACTIVE verb and its inputs.
-  expect(recovery.description).toContain("mstar session recover");
-
-  // A real ACTIVE execution authority rejects the FILE transport as usage and
-  // names the supported session recovery.
-  const root = mkdtempSync(join(tmpdir(), "mstar-recover-active-"));
-  try {
-    const harness = join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    const store = await initializeStore({ harnessDir: harness });
-    store.close();
-    await initializeExecutionAuthority({ harnessDir: harness });
-    const sessionPath = join(root, "coordinator.json");
-    writeFileSync(sessionPath, JSON.stringify({
-      schema_version: 1,
-      role: "coordinator",
-      session_id: "prior",
-      workflow_id: "wf-active",
-      harness_root: harness,
-    }));
-    const envelope = await executeCommand("workflow.recover-coordinator", {
-      session: sessionPath,
-      operationId: "recover-1",
-      reason: "active authority",
-      authorizationRef: "auth-1",
-      stopped: ["prior"],
-      harness,
-    }, {
-      cwd: root,
-      controlRoot: null,
-      sessionId: "caller-session",
-      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
-      signal: new AbortController().signal,
-      effects: {
-        async readInput() { return ""; },
-        async spawn() { throw new Error("recovery must not spawn a process"); },
-        async startDashboard() { throw new Error("dashboard is unavailable in this test"); },
-        async openBrowser() { throw new Error("browser is unavailable in this test"); },
-      },
-    });
-    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (envelope.status !== "usage") throw new Error("expected the ACTIVE recovery usage refusal");
-    expect(String(envelope.message)).toContain("mstar session recover");
-    for (const flag of ["--workflow", "--prior-session", "--unowned", "--reason", "--attestation", "--expect", "--operation"]) {
-      expect(String(envelope.message)).toContain(flag);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+test("retired workflow verbs are absent from the command registry", () => {
+  const ids = Object.fromEntries(getCommandDefinitions().map((entry) => [entry.id, true]));
+  for (const id of ["workflow.show-prepare", "workflow.amend-prepare", "workflow.recover-coordinator"]) {
+    expect(ids[id]).toBeUndefined();
   }
 });

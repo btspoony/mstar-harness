@@ -42,9 +42,6 @@ function definition(id: string) {
 describe("session and workflow command families", () => {
   test("iteration.register publishes and validates its sparse row payload", () => {
     const iteration = definition("iteration.register");
-    // The prepare-amendment family is a retired stub and publishes no `input`
-    // payload contract; the surviving sparse-row payload validates as before.
-    expect(definition("workflow.amend-prepare").payloads?.input).toBeUndefined();
     expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
   });
@@ -71,21 +68,8 @@ describe("session and workflow command families", () => {
     expect(JSON.stringify(policy)).not.toContain(secret);
     expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
 
-    const attestation = path.join(context.cwd, "malformed-attestation.json");
-    writeFileSync(attestation, `{"operator":${secret}}`);
-    const recovery = await executeCommand("workflow.recover-coordinator", {
-      session: path.join(context.cwd, "unused-session.json"),
-      operationId: "recover-malformed",
-      reason: "malformed proof",
-      authorizationRef: "fixture-authorization",
-      stopped: ["prior-session"],
-      attestation,
-    }, context);
-    // The FILE-form recover-coordinator is a retired stub (T3b): the refusal is
-    // the verb-retired stub, still redacting the malformed source bytes.
-    expect(recovery).toMatchObject({ status: "refused", code: "workflow.verb-retired" });
-    expect(JSON.stringify(recovery)).not.toContain(secret);
   });
+
   test("unreadable non-adoption workflow files recover through their own --file route", async () => {
     const context = testContext({ sessionId: "caller-session" });
     const harness = path.join(context.cwd, ".mstar");
@@ -134,16 +118,6 @@ describe("session and workflow command families", () => {
     expect(result.details?.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "sessionId", code: "required" }),
     ]));
-  });
-  test("the retired coordinator recovery refuses without publishing a session transport", async () => {
-    // T3b retired the FILE-form coordinator recovery to a refusing stub; the
-    // ACTIVE replacement (`mstar session recover`) owns the runtime-identity
-    // rule, so this verb publishes no `--session-id` context option.
-    const recovery = definition("workflow.recover-coordinator");
-    expect(recovery.cli.options ?? []).not.toContainEqual(expect.objectContaining({ key: "sessionId" }));
-    const result = await recovery.execute({ sessionId: "child-agent-session", operationId: "recover-1" }, testContext());
-    expect(result).toMatchObject({ status: "refused", code: "workflow.verb-retired" });
-    expect(String(result.message)).toContain("mstar session recover");
   });
 
 

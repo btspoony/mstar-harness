@@ -260,7 +260,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           });
           return gate.ok ? ok(id, gate) : refusal(id, gate.violations[0]?.code ?? "worktree.entry.invalid", gate.violations[0]?.message ?? "workflow-entry checks failed", { ...gate, workflowId: workflow }, "Correct every engine-enforced workflow-entry violation listed in details, then rerun mstar worktree check --workflow <id> --entry. This does not replace the full pre-dispatch checklist.");
         }
-        const planView = input.planId === undefined
+        const planView = plan === undefined
           ? registered.plans.length === 1 ? registered.plans[0] : undefined
           : registered.plans.find((candidate) => candidate.plan.id === plan);
         if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a plan id that exists in the workflow.");

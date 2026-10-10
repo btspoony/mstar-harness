@@ -458,13 +458,6 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
       file: "Path-only wire: absolute path to a UTF-8 JSON file; inline JSON text is not accepted.",
     }, { delivery: deliveryEvidenceSchema }),
-    ...([
-      ["workflow.show-prepare", "workflow show-prepare", "The pre-activation Prepare workflow view is retired; use `mstar plan prepare` for the current DB-backed Prepare view."],
-      ["workflow.amend-prepare", "workflow amend-prepare", "Pre-activation Prepare amendments are retired; use `mstar plan prepare` to revise the current DB-backed Prepare configuration."],
-      ["workflow.recover-coordinator", "workflow recover-coordinator", "Pre-activation coordinator-session recovery is retired; use `mstar session recover` for ACTIVE coordinator recovery."],
-    ] as const).map(([id, label, recovery]) => makeDefinition(id, "Retired command; refuses without mutation.", "read", ["json"], async () =>
-      refusalEnvelope({ command: id, status: "refused", code: "workflow.verb-retired", exitCode: 1, message: `${label}: removed — ${recovery} This verb writes nothing.` }),
-    )),
     makeDefinition(
       "workflow.adopt-terminal",
       "Adopt an eligible unadopted terminal header without registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
