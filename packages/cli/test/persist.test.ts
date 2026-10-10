@@ -105,15 +105,6 @@ function harnessEnv(dir: string): Record<string, string> {
 
 /** Valid payloads (each passes the kind's existing validator). */
 const STATUS_PAYLOAD = { version: 2, updated_at: "2026-08-27", workflows: [] };
-const SNAPSHOT_PAYLOAD = {
-  schema_version: 1,
-  id: "wf-1",
-  type: "plan",
-  status: "running",
-  started_at: "2026-08-27T00:00:00.000Z",
-  updated_at: "2026-08-27",
-  plans: [],
-};
 /** Register-shaped payload: what the retired `residuals` kind used to accept. */
 const REGISTER_PAYLOAD = { entries: {} };
 /** Minimal valid `mstar.review/v1` envelope (shape; tally consistent
