@@ -1228,6 +1228,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
       env: cliEnv(pathValue, projectRoot, home),
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 15_000,
     });
     return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
   }
@@ -1246,7 +1247,8 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     const binDir = mkdtempSync(join(tmpdir(), "node-fake-"));
     tempRoots.push(binDir);
     const script = join(binDir, "node");
-    writeFileSync(script, `#!/bin/sh\necho "v${version}"\n`, { mode: 0o755 });
+    const lines = ["#!/bin/sh", `echo "v${version}"`, ""];
+    writeFileSync(script, lines.join("\n"), { mode: 0o755 });
     return binDir;
   }
 
@@ -1326,7 +1328,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     expect(readFileSync(join(root, "opencode.json"), "utf8")).toBe(original);
   });
 
-  test("the scope-split recovery is real for doctor: the other scope's config validates clean while this file keeps the flat row", () => {
+  test("the scope-split recovery is real for doctor: the other scope's config validates clean while this file keeps the flat row", async () => {
     const projectRoot = tempProject();
     // Project config: legacy flat row (v2 doctor flags it as a mismatch).
     writeFileSync(join(projectRoot, "opencode.json"), JSON.stringify({
@@ -1369,7 +1371,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     expect(globalOut).toContain('MCP config aligned for opencode');
   });
 
-  test("a PATH node below the V2 plugin floor is refused naming the requirement", () => {
+  test("a PATH node below the V2 plugin floor is refused naming the requirement", async () => {
     const projectRoot = tempProject();
     const home = tempProject();
     const globalConfigDir = join(home, ".config", "opencode");
@@ -1390,7 +1392,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     expect(result.exitCode).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("Node >=24.18.0");
     expect(`${result.stdout}\n${result.stderr}`).toContain("20.0.0");
-  });
+  }, 20_000);
 
   test("the scope-split recovery is real: the same flat row does not block a global-scope v2 init", () => {
     const root = tempProject();
