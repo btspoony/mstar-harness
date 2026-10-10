@@ -401,9 +401,9 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
       identityEnv(),
     );
     expect(result.exitCode).toBe(1);
-    // The retired file route never answers: the ACTIVE authority is the only
-    // route, and its refusal names how a control root acquires one.
-    expect(envelope(result).code).toBe("execution.not-active");
+    // The retired file route never answers: a control root without a store
+    // refuses store.not-initialized and its recovery names the ACTIVE route.
+    expect(envelope(result).code).toBe("store.not-initialized");
     expect(recoveryOf(result)).toContain("mstar store init");
     expect(readFileSync(statusPath, "utf8")).toBe(beforeStatus);
     expect(readFileSync(snapshotPath, "utf8")).toBe(beforeSnapshot);
