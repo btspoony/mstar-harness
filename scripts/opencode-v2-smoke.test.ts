@@ -38,9 +38,10 @@ function installedFixture(options: { id?: string; effect?: boolean; nestedRefere
 }
 
 describe("OpenCode V2 installed package smoke", () => {
-  test("imports the installed entry and finds package-local assets and engines", async () => {
+  test("imports the installed entry with Node and finds package-local assets and engines", async () => {
     const result = await inspectInstalledPackage(installedFixture());
     expect(result).toMatchObject({
+      runtime: "node",
       id: "morning-star-harness",
       lifecycle: "effect",
       assets: {
@@ -51,6 +52,7 @@ describe("OpenCode V2 installed package smoke", () => {
       },
       engines: { node: ">=24.18.0", bun: ">=1.4.0" },
     });
+    expect(result.nodeVersion).toMatch(/^v\d+\./);
   });
 
   test("rejects an installed entry with the wrong plugin identity", async () => {
