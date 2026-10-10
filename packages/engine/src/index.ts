@@ -462,6 +462,7 @@ export {
 export type {
   MergeClass,
   MstarReviewFinding,
+  MstarReviewTally,
   MstarReviewV1,
   PrReportTarget,
   PrReviewSeatPromptOptions,

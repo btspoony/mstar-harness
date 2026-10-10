@@ -240,17 +240,25 @@ export type MstarReviewFinding = {
 };
 
 /**
+ * Envelope tally shape — the computed {@link PrTallyResult} with the
+ * display-only `band` optional, so a band-less legacy envelope stays
+ * assignable to {@link MstarReviewV1} (and valid) while a computed
+ * `PrTallyResult` (band present) remains assignable too.
+ */
+export type MstarReviewTally = Omit<PrTallyResult, "band"> & { band?: PrScoreBand };
+
+/**
  * The `mstar.review/v1` envelope (the review envelope schema) — a parseable review
  * document with harness vocab, sibling to the Markdown pr-review report.
  * `verdict` is PR_VERDICTS; `tally` (when present) must be a full
- * `PrTallyResult` (shape-checked) whose `verdict` must equal the top-level
- * `verdict` (consistency rule).
+ * {@link MstarReviewTally} (shape-checked) whose `verdict` must equal the
+ * top-level `verdict` (consistency rule).
  */
 export type MstarReviewV1 = {
   schema: "mstar.review/v1";
   verdict: PrVerdict;
   summary_md: string;
-  tally?: PrTallyResult;
+  tally?: MstarReviewTally;
   findings: MstarReviewFinding[];
   target?: { owner?: string; repo?: string; pr?: number; head_sha?: string };
 };
