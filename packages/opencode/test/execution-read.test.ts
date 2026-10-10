@@ -27,8 +27,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
-  initializeExecutionAuthority,
   initializeStore,
+  readExecutionState,
   registerCatalogEntity,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext } from "@mstar-harness/engine";
@@ -95,7 +95,7 @@ function makeHarnessProject(): {
 async function seedActiveExecutionAuthority(harness: string, statusPath: string): Promise<void> {
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
-  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  const initialized = await readExecutionState({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },
     {

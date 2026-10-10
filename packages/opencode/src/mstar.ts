@@ -840,25 +840,41 @@ function authorityUnavailableRefusal(
 
 /**
  * Resolve the ACTIVE execution authority for a coordination-document write.
- * Missing runtime authority is unavailable; this adapter has no file route.
+ * `active` refuses the retired persistence route; `absent` is NO verdict (no
+ * store, a staged store, or an engine without the route export — the
+ * pre-activation state, where the document lint decides); `unavailable` is a
+ * fail-closed authority that exists but cannot be read. There is no file
+ * route.
  */
 type ExecutionWriteRoute =
   | { kind: "active" }
+  | { kind: "absent" }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
   const api = await storeApiLoader.load();
   const resolve = api?.resolveExecutionRoute;
   if (resolve === undefined) {
-    return { kind: "unavailable", code: "execution.route-unavailable", message: "the installed engine does not expose ACTIVE execution routing" };
+    // No route export (or no store API at all): an engine that predates the
+    // execution authority has no authority to consult — absence, not a
+    // refusal (the document lint keeps deciding).
+    return { kind: "absent" };
   }
   try {
     const route = await resolve(harnessDir);
     return route === "execution"
       ? { kind: "active" }
-      : { kind: "unavailable", code: "execution.not-active", message: "the pre-activation file route is retired" };
+      : { kind: "absent" };
   } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
+    const refusal = refusalOf(error);
+    // An ABSENT store (`store.not-initialized`) and a store that exists but
+    // records no ACTIVE authority (`execution.not-active` — staged) are the
+    // pre-activation state: absence is not an authority verdict, so the
+    // document lint decides. Anything else (a corrupt/unreadable authority)
+    // refuses fail-closed.
+    return PRE_ACTIVATION_CODES.includes(refusal.code) || refusal.code === "execution.not-active"
+      ? { kind: "absent" }
+      : { kind: "unavailable", ...refusal };
   }
 }
 
@@ -974,6 +990,7 @@ export async function validateStatusWrite(
     for (const executionDir of executionDirs) {
       const executionRoute = await readExecutionWriteRoute(executionDir);
       if (executionRoute.kind === "active") return executionDirectWriteRefusal(resolved, log);
+      if (executionRoute.kind === "absent") continue; // no verdict — the next root (if any) decides
       if (executionRoute.kind === "unavailable") {
         return authorityUnavailableRefusal(
           executionRoute,

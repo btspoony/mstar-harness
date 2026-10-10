@@ -271,7 +271,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(entries.some(([level]) => level === "error")).toBe(true);
   });
 
-  test("unrelated writes bypass the authority route; coordination writes fail closed without ACTIVE storage", async () => {
+  test("unrelated writes bypass the authority route; a missing store leaves coordination writes to their document lint (plan S4)", async () => {
     const fixture = makeHarnessProject();
     const reads = countStoreRoute();
     const { log } = capture();
@@ -280,16 +280,19 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
     expect(reads()).toBe(0);
 
+    // No store = the pre-activation state: absence is not an authority
+    // verdict, so the valid document passes and nothing is fail-closed.
     const status = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
-    expect(status?.ok).toBe(false);
-    expect(status?.violations[0]?.code).toBe("store.authority-unavailable");
+    expect(status?.ok).toBe(true);
+    expect(status?.hardBlocked).toBe(false);
     expect(reads()).toBeGreaterThan(0);
 
     const snapshotPath = join(fixture.harness, "workflows", "wf-a", "snapshot.json");
     mkdirSync(join(snapshotPath, ".."), { recursive: true });
     writeFileSync(snapshotPath, JSON.stringify({ schema_version: 1, id: "wf-a", type: "plan" }));
     const snapshot = await validateStatusWrite(snapshotPath, { log });
-    expect(snapshot?.violations[0]?.code).toBe("store.authority-unavailable");
+    expect(snapshot?.ok).toBe(false);
+    expect(snapshot?.violations[0]?.code).toBe("workflow.snapshot.missing-status");
 
     await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(reads()).toBeGreaterThan(0);
