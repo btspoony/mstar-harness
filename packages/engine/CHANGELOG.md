@@ -7,6 +7,7 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 ## [Unreleased]
 
 - Workflow-entry refusals for missing `branch.base`, `branch.target` or `branch.integration` now direct operators to confirm authority with `mstar status validate` and register a correctly anchored iteration; they no longer recommend Prepare or integration-worktree mutations that cannot edit those anchors.
+- `mstar worktree check --entry` admits standalone plan workflows with their registered source/target anchors and main-worktree residency check, while reserving integration-anchor and integration-checkout checks for iterations.
 
 ## [3.11.2] - 2026-09-19
 
