@@ -14,7 +14,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeExecutionAuthority, initializeStore, listIssues, openStore, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
+import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeStore, listIssues, openStore, readExecutionAuthority, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
@@ -72,11 +72,11 @@ async function seedIssue(context: StoreContext, title: string, severity: Capture
 
 /** A real active workflow, created through the public execution boundary. */
 async function declareWorkflow(context: StoreContext, id: string): Promise<void> {
-  const initial = await initializeExecutionAuthority(context);
+  const authority = await readExecutionAuthority(context);
   await createExecutionWorkflow({
     ...context, caller: { role: "coordinator", sessionId: "dashboard-fixture", workflowId: id },
   }, {
-    expected: initial.token, operationId: "create-dashboard-workflow",
+    expected: authority.token, operationId: "create-dashboard-workflow",
     entry: { id, type: "plan", started_at: RECORDED_AT, dir: `workflows/${id}` },
     snapshot: {
       schema_version: 1, id, type: "plan", status: "running",
@@ -337,24 +337,19 @@ describe("roadmap authority API", () => {
 });
 
 describe("workflow detail and the projection generation", () => {
-  test("a bookmarked workflow detail answers the unavailable envelope, not a missing record", async () => {
-    // No harness sources: no generation can be published, so a workflow row
-    // cannot be read at all. The detail must disclose that (the envelope's own
-    // projection block) instead of claiming the record does not exist.
+  test("a bookmarked workflow detail answers the published empty generation, never an unavailable record", async () => {
+    // ACTIVE disposition: the pre-activation "no published generation"
+    // envelope is retired. An ACTIVE authority with no workflows publishes a
+    // current empty generation, so a bookmarked id is a structured 404 inside
+    // it and the list answers the same fact as an unlisted page.
     const { dir } = await workspace("workflow-unavailable-");
     const server = await start(dir);
     try {
       const res = await raw(new URL("/api/workflows/wf-bookmarked", server.url).href);
-      expect(res.status).toBe(200);
-      const envelope = JSON.parse(res.body) as {
-        data: null;
-        projection: { generation: number | null; freshness: string };
-      };
-      expect(envelope.data).toBeNull();
-      expect(envelope.projection.generation).toBeNull();
-      expect(envelope.projection.freshness).toBe("unavailable");
-      // The matching list route answers the same fact as an unlisted page: no
-      // rows are claimed in either place.
+      expect(res.status).toBe(404);
+      const envelope = JSON.parse(res.body) as { data?: unknown; error?: { code?: string } };
+      expect(envelope.data).toBeUndefined();
+      expect(envelope.error?.code).toBe("not-found");
       const list = await raw(new URL("/api/workflows", server.url).href);
       expect(list.status).toBe(200);
       expect((JSON.parse(list.body) as { data: { items: unknown[] } }).data.items).toEqual([]);

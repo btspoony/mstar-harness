@@ -18,9 +18,9 @@
  * fixture harness — no live harness is ever touched.
  */
 import { describe, expect, test } from "bun:test";
-import { initializeStore } from "@mstar-harness/engine";
+import { initializeStore, openStore, readExecutionState, type ExecutionState } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -28,6 +28,8 @@ const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
+/** Shared subprocess identity: a coordinator binds only through its creating session. */
+const FIXTURE_SESSION_ID = "0f0e0d0c-0b0a-4901-8a7b-000000000001";
 /** Invalid-input coverage spawns many CLI processes; avoid the 5s default under CI load. */
 const MULTI_CLI_TEST_TIMEOUT_MS = 120_000;
 
@@ -66,6 +68,7 @@ function cliEnv(): Record<string, string> {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
     if (value !== undefined) env[key] = value;
   }
+  env.MSTAR_HOST_SESSION_ID = FIXTURE_SESSION_ID;
   return env;
 }
 
@@ -135,16 +138,47 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   }
 }
 
+/**
+ * One read open settles the WAL side files: a read-only open right after a
+ * writer close (initializeStore or a CLI subprocess) can otherwise refuse
+ * `store.corrupt` while the -wal/-shm pair is still on disk (Bun 1.4.0). The
+ * just-closed writer's deferred cleanup can race the first read open, so a
+ * `store.corrupt` (SQLITE_CANTOPEN) read retries briefly before giving up.
+ */
+async function registeredState(harness: string): Promise<ExecutionState> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await openStore({ harnessDir: harness }, "read").then((handle) => handle.close());
+      return await readExecutionState({ harnessDir: harness });
+    } catch (error) {
+      lastError = error;
+      if ((error as { code?: string }).code !== "store.corrupt") throw error;
+      // Real-time backoff is required here: the competing writer is an exited
+      // external CLI subprocess whose deferred WAL cleanup exposes no signal,
+      // so no event or fake timer can deterministically order this retry.
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 50);
+      await promise;
+    }
+  }
+  throw lastError;
+}
+
 describe("mstar iteration register", () => {
   test("registers an iteration end to end: root entry + snapshot, both validate (exit 0)", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
+    await setupHarness(async (harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));
       expect(result.exitCode).toBe(0);
       expect(envelope(result)).toMatchObject({ command: "iteration.register", status: "ok", code: "iteration.register.ok" });
 
-      expect(existsSync(snapshot)).toBe(true);
-      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(doc).toMatchObject({
+      // DB-only route: the retired file artifacts are never written.
+      expect(existsSync(snapshot)).toBe(false);
+      expect(existsSync(root)).toBe(false);
+
+      const registered = await registeredState(harness);
+      const view = registered.data.workflows[0]!;
+      expect(view.state).toMatchObject({
         schema_version: 1,
         id: WORKFLOW_ID,
         type: "iteration",
@@ -152,12 +186,12 @@ describe("mstar iteration register", () => {
         compass_ref: COMPASS_REF,
         project: "engine",
       });
-      expect(doc.branch).toEqual({
+      expect(view.state.branch).toEqual({
         base: "main",
         integration: "feature/20260918-iteration-register-cli-integrate",
         target: "main",
       });
-      expect(doc.plans).toEqual([
+      expect(view.plans.map((item) => item.plan)).toEqual([
         {
           id: "20260918-plan-alpha",
           title: "Plan 20260918-plan-alpha",
@@ -181,54 +215,49 @@ describe("mstar iteration register", () => {
           },
         },
       ]);
-
-      const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([
+      expect(registered.data.root.workflows).toEqual([
         { id: WORKFLOW_ID, type: "iteration", started_at: "2026-09-18T00:00:00.000Z", dir: `workflows/${WORKFLOW_ID}` },
       ]);
-
-      // Product contract: both registered documents validate (exit 0).
-      expect(runCli(["status", "validate", root]).exitCode).toBe(0);
-      expect(runCli(["status", "validate", snapshot]).exitCode).toBe(0);
     });
   });
 
   test("the registered workflow accepts a coordinator binding (exit 0)", async () => {
-    await setupHarness((harness) => {
+    await setupHarness(async (harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator"], harness);
+      const bind = runCli(["plan", "bind", "--coordinator", "--execution", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", FIXTURE_SESSION_ID], harness);
       expect(bind.exitCode).toBe(0);
-      const payload = envelope(bind).data as { session: Record<string, unknown> };
-      expect(payload.session.role).toBe("coordinator");
-      expect(payload.session.workflow_id).toBe(WORKFLOW_ID);
+      const payload = envelope(bind).data;
+      if (!payload || typeof payload !== "object" || !("data" in payload)) throw new Error("bind receipt carries no session record");
+      const session = payload.data;
+      if (!session || typeof session !== "object" || !("role" in session) || !("workflowId" in session)) throw new Error("bind receipt carries no session record");
+      expect(session.role).toBe("coordinator");
+      expect(session.workflowId).toBe(WORKFLOW_ID);
     });
   });
   test("a distinct operation cannot register an already-registered workflow id", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
+    await setupHarness(async (harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const beforeSnapshot = readFileSync(snapshot, "utf8");
-      const beforeRoot = readFileSync(root, "utf8");
+      const before = await registeredState(harness);
 
       const duplicate = runCli(registerArgs(harness));
       expect(duplicate.exitCode).toBe(1);
       expect(message(duplicate)).toContain("[catalog.registration-conflict]");
-      expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
-      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
+      expect(await registeredState(harness)).toEqual(before);
     });
   });
 
   test("a distinct-operation retry after losing the root entry refuses without restoring bytes", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
+    await setupHarness(async (harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const snapshotBytes = readFileSync(snapshot, "utf8");
-      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
-      const lostRootBytes = readFileSync(root, "utf8");
+      const before = await registeredState(harness);
 
-      const retry = runCli(registerArgs(harness));
-      expect(retry.exitCode).toBe(1);
-      expect(message(retry)).toContain("[catalog.registration-conflict]");
-      expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
-      expect(readFileSync(root, "utf8")).toBe(lostRootBytes);
+      // ACTIVE disposition: the root register lives in the store, so a
+      // distinct operation against the same workflow id cannot lose it by
+      // editing bytes — the conflict refusal still leaves the store untouched.
+      const distinct = runCli(registerArgs(harness, ["--row", row("20260918-plan-gamma")]));
+      expect(distinct.exitCode).toBe(1);
+      expect(message(distinct)).toContain("[catalog.registration-conflict]");
+      expect(await registeredState(harness)).toEqual(before);
     });
   });
 
