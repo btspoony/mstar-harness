@@ -53,15 +53,10 @@ The prototype checkpoint in §1.2.5 applies with or without a Plan session. Obey
 
 **Autonomous branch resolve**：仅 `autonomous` 模式；解析顺序与 STOP 规则见 **`references/autonomous-direction-lock.md`**（勿把该顺序套用到 interactive 以跳过向用户确认）。
 
-<!-- host-hook: direction-lock -->
-> Execute the active host reference's `## Host hooks` declaration for `direction-lock`; this file defines no host action.
->
-> 本 anchor 在**方向已锁定**（interactive：与用户收敛 / autonomous：方向 rationale 落盘）之后、**compass 与 plans 初稿落盘之前**执行。host 动作由 active host reference 的声明决定：ACTIVE arm 面向 DB 自身的工作流视图，调用时目标 workflow **必须已持有 running ACTIVE lifecycle 且本 session 在其 coordinator 席位上**（否则按 host 拒绝码 `register-invalid` / `coordinator-elsewhere` 处理 —— 不存在未注册 id 的预约路线）；登记与 coordinator 席位的当前顺序 → §1.5。
 
 ### 1.2.5 Prototype checkpoint — before formal authoring
 
-Use the collected opinions and preliminary direction from §1.1–§1.2 to make the design understandable before turning it into formal documents. The `direction-lock` hook above remains before any compass/plans draft. Create or reuse `{ITERATION_DIR}/<iteration-id>/` early and retain the design material under `prototypes/` (path authority → `mstar-conventions/references/artifact-storage-paths.md`).
-
+Use the collected opinions and preliminary direction from §1.1–§1.2 to make the design understandable before turning it into formal documents. Create or reuse `{ITERATION_DIR}/<iteration-id>/` early and retain the design material under `prototypes/` (path authority → `mstar-conventions/references/artifact-storage-paths.md`).
 **Interactive path**
 
 1. Create a human-readable **HTML prototype** in the package. Explain the problem, proposed outcome, scope/non-goals and important trade-offs in plain language, with visuals that expose the design: screens/interactions for UI work, or flows, states, relationships and before/after views for non-UI work. Choose what helps this user decide; neither production code nor a fixed UI template is required.
@@ -178,7 +173,10 @@ Allowed owners are `product-manager`, `architect`, `writing-specialist` or `PM` 
 
 ## 1.5 登记执行状态（formal iteration 必填）
 
-iteration 正式全流程**必须**经 **`mstar iteration register`** 注册到当前权威（登记要求各 plan 行文档已就绪；依赖登记与 coordinator 席位的 host 动作 —— 如 `direction-lock` 的 ACTIVE arm —— 先完成登记与席位获取再调用）：
+iteration 正式全流程**必须**经 **`mstar iteration register`** 注册到当前权威（登记要求各 plan 行文档已就绪）。完成注册后先经 `mstar plan bind --execution --workflow <id> --coordinator` 获取本 session 的 coordinator 席位，再执行 `direction-lock` host action，最后进入 §1.6 Review & Edit；该 ACTIVE arm 不支持未注册 workflow 的预留。
+<!-- host-hook: direction-lock -->
+> Execute the active host reference's `## Host hooks` declaration for `direction-lock`; this file defines no host action.
+
 
 - **ACTIVE**：registration journal 写 `{HARNESS_DIR}/store.db` 的 workflow / Todo plan 行、`execution_registry` 与 catalog delta；使用 `--expect <root-execution-token> --operation <id>`，token 经 `mstar status validate` 获取。注册不授权实现。store-pinning / 写入顺序 / rollback 语义 → **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md` §4a。输入与 flags 以 `mstar iteration register --help` 为准。
 - 分支锚点在 ACTIVE workflow 执行行：`base`（= `iteration_base_branch`，创建 integration 的祖先 ref，**不是**隐式 `main`）、`integration`（= `spec_integration_branch`）、`target`（= PR 目标分支）。

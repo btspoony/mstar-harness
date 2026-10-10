@@ -60,7 +60,7 @@ Execute **`mstar-host`** → active host **plan-mode bridge**, especially the sh
 Command-only supplements:
 
 - **Carrier fields**: Direction / prototype path and current revision / Feedback log / design approval disposition / recommended Delivery Branch Policy / pending preparation todos. Formal Scope / Decisions / Acceptance Criteria / Plans derive from the approved design, not before it.
-- **Preparation todos**: `harness-init` → `direction-lock-arm` → `prototype-design` → `prototype-confirmation` → `finalize-compass-plans` → selected review-edit seats → mandatory `review-edit-writing-specialist` → `pm-lock` → `integration-branch`. Complete a todo only when its semantic gate **and** actual host permissions allow it. If Plan mode cannot persist/show the package prototype or invoke a needed role, use the bridge's documented permission-resume path; never bypass restrictions with another tool or silently create a second plan.
+- **Preparation todos**: `harness-init` → `prototype-design` → `prototype-confirmation` → `finalize-compass-plans` → `workflow-register` → `coordinator-bind` → `direction-lock-arm` → selected review-edit seats → mandatory `review-edit-writing-specialist` → `pm-lock` → `integration-branch`. Complete a todo only when its semantic gate **and** actual host permissions allow it. If Plan mode cannot persist/show the package prototype or invoke a needed role, use the bridge's documented permission-resume path; never bypass restrictions with another tool or silently create a second plan.
 
 ## 非 Plan 路径从这里继续 ↓
 
@@ -80,9 +80,9 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 **Before this step:** Read `skills/grill-me/SKILL.md`. Run **grill-me** to stress-test candidate directions with the user: walk through trade-offs, converge on a **single iteration direction** with shared understanding, document locked direction + success criteria + non-goals。**If `direction` arg given** — seed grill-me with it (still interactive; the hint does **not** skip grill-me)。Confirm delivery branch policy（`iteration_base_branch` / `target_branch`）per **`mstar-iteration/references/phase-1-prepare.md` §1.2** — **Do not default to `main`/`master` just because those names exist.**
 
-## 3.5 Arm the coordinator model handoff — `direction-lock`
+## 3.5 Direction-lock hook — after registration, before review
 
-The `direction-lock` anchor (`mstar-iteration/references/phase-1-prepare.md` §1.2 tail) fires **here**: the direction is locked and the compass/plans draft has **not** been written yet. Execute the active host reference's `## Host hooks` declaration for that anchor; this command declares no host action. Do **not** defer it into §4 — the draft is the context carrier the dispatched review roles read, so the anchor must precede it.
+The ACTIVE `direction-lock` action is not a pre-draft reservation. Complete §4 (including workflow registration) and acquire this session's coordinator seat first; then execute the active host reference's `## Host hooks` declaration before §5's Review & Edit chain.
 
 ## 3.6 Prototype Design & Confirmation
 
@@ -109,9 +109,9 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6** (SSOT): PM rec
 PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + deferred grill log；非 Plan：grill-me）
-- [ ] `direction-lock` anchor executed **before** the draft was written（§3.5；未登记/无 compass 属预期）
 - [ ] Current HTML prototype persisted in the iteration package, presented, and explicitly approved; feedback revisions and approval disposition retained
-- [ ] Draft compass + authored plans 经 `mstar iteration register` 注册（ACTIVE: store.db）
+- [ ] Running ACTIVE workflow registered from the ready compass + authored plans, with branch anchors present (no draft is created after this registration)
+- [ ] This session acquired the workflow's coordinator seat, then executed the `direction-lock` host action
 - [ ] product-manager / architect include/skip reasons recorded; every selected invoke returned; mandatory writing-specialist returned last; no skipped-role markers / blocking questions or fake receipts; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass + workflow execution authority（ACTIVE: store.db）
