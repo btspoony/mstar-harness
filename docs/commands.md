@@ -134,7 +134,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 /amazing-pr-review [pr|branch|scope] [quick|default|deep]
 ```
 
-**Purpose** — a read-only, evidence-first review of a PR / branch / diff that decides whether a change is safe to ship: one verdict — `ship it` / `needs fixes` / `blocked`, computed from the finding tally, never chosen — plus the findings, and a posted GitHub review whenever a PR number is given (posting is mandatory then). It never auto-approves, never requests changes and never merges.
+**Purpose** — a read-only, evidence-first review of a PR / branch / diff that decides whether a change is safe to ship: one verdict — `ship it` / `needs fixes` / `blocked`, computed from the finding tally, never chosen, with a display-only score band (`mergeable` / `good` / `pass` / `fail`) — plus the findings, and a posted GitHub review whenever a PR number is given (posting is mandatory then). It never auto-approves, never requests changes and never merges.
 
 **When** — assessing a change you did not author. Do not use it to self-check your own work.
 

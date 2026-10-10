@@ -96,11 +96,12 @@ describe("mstar pr-review tally", () => {
       writeFileSync(findings, JSON.stringify([{ mergeClass: "should-fix" }, { mergeClass: "nit" }, { mergeClass: "nit" }]));
       const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", "1"]);
       expect(result.exitCode).toBe(0);
-      // § Display contract verbatim two-liner: 100 - 15 - 6 - 10 = 69.
+      // § Display contract verbatim two-liner: should-fix 12 + nit (2+1) + unverified 5 = 20 → 80.
       const resultData = data(result);
       expect(resultData.verdict).toBe("needs fixes");
-      expect(resultData.scorePct).toBe(69);
-      expect(resultData.chatHeader).toBe("needs fixes · 69%\nmust-fix=0 should-fix=1 nit=2 unverified=1");
+      expect(resultData.scorePct).toBe(80);
+      expect(resultData.band).toBe("good");
+      expect(resultData.chatHeader).toBe("needs fixes · 80% (good)\nmust-fix=0 should-fix=1 nit=2 unverified=1");
     });
   });
 
@@ -119,10 +120,10 @@ describe("mstar pr-review tally", () => {
         "2",
       ]);
       expect(result.exitCode).toBe(0);
-      // blocked · 60% (unsafe AC → must_fix), safe ACs × 15 → score floor at 0+... 100-40-30 = 30
+      // blocked · 34% (unsafe AC → must-fix 45), safe ACs → should-fix 12 + 9 = 21; 100 - 66.
       const resultData = data(result);
       expect(resultData.verdict).toBe("blocked");
-      expect(resultData.scorePct).toBe(30);
+      expect(resultData.scorePct).toBe(34);
       expect((resultData.tally as { mustFix: number; shouldFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, nit: 0, unverified: 0 });
     });
   });
@@ -278,7 +279,7 @@ function report(frontmatter: string): string {
   return `---
 type: pr-review
 verdict: needs fixes
-score_pct: 79
+score_pct: 85
 tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }
 comments: posted
 review_url: https://github.com/example/repo/pull/134#pullrequestreview-1
@@ -303,7 +304,7 @@ describe("mstar pr-review validate-report", () => {
   test("score-mismatch report fails with violations printed (exit 1)", () => {
     withTempDir((dir) => {
       const file = join(dir, "report.md");
-      writeFileSync(file, report("").replace("score_pct: 79", "score_pct: 90"));
+      writeFileSync(file, report("").replace("score_pct: 85", "score_pct: 90"));
       const result = runCli(["pr-review", "validate-report", file]);
       expect(envelope(result).status).toBe("refused");
       expect(violationCodes(result)).toContain("prreview.report.score-mismatch");
