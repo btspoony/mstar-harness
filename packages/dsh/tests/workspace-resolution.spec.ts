@@ -262,23 +262,7 @@ describe('agent/pre-step — the watermark harness dir resolves from the session
  * ========================================================================== */
 
 describe('fs/write-intent — the status gate follows the session workspace (no config)', () => {
-  it('actor carrying the session agent → invalid workspace status.json is flagged', async () => {
-    const ws = await makeWorkspace('dsh-ws-gate-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': '{ "version": 2, "updated_at": "2026-08-19", "workflows": "not-an-array" }' })
-    booted = await bootApp({ harnessDir: null })
-    const advisories = captureStatusAdvisories(booted.ctx)
-
-    const intent = await booted.ctx.waterfall(
-      'fs/write-intent',
-      target(join(ws, '.agents', 'status.json')),
-      { agent: { session: { header: { cwd: ws } } } },
-      () => undefined,
-    )
-
-    expect(intent).toBeUndefined()
-    expect(advisories).toHaveLength(1)
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('status.invalid-workflows')
-  })
+  // Disposition: status.json validation assertions are retired with the file-route gate; workspace resolution and inert-session behavior remain tested.
 
   it('agent-less actor → inert (no workspace, no harness dir — nothing to gate)', async () => {
     const ws = await makeWorkspace('dsh-ws-gate-inert-')
