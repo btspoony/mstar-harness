@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import type { Plugin as EffectPlugin } from "@opencode/plugin/effect";
 import type { Context } from "@opencode/plugin/effect/plugin";
 
-import plugin from "../src/entry";
+import plugin from "./entry";
 
 const makeContext = (userPreseed: Record<string, Record<string, unknown>> = {}) => {
   const agents = new Map<string, Record<string, unknown>>([

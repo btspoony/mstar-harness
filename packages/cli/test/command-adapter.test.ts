@@ -1260,6 +1260,29 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     expect(result.exitCode).not.toBe(0);
   });
 
+  test("REAL init v2 migrates a V1-flat mcp row under mcp.servers instead of writing a mixed config", () => {
+    const root = tempProject();
+    // Pre-seed a V1-flat mcp row (V1 dialect: mcp.<server> at the top level).
+    writeFileSync(join(root, "opencode.json"), JSON.stringify({
+      "$schema": "https://opencode.ai/config.json",
+      "mcp": { "context7": { "type": "remote", "url": "https://mcp.context7.com/mcp" } },
+    }, null, 2), "utf8");
+    const binDir = stubOpencode("opencode v2.0.24");
+    const result = runInit(
+      ["--target", "opencode", "--yes", "--scope", "project", "--no-global-cli", "--opencode-generation", "v2"],
+      `${binDir}:${ISOLATED_PATH}`,
+      root,
+    );
+    expect(result.exitCode).toBe(0);
+    const config = JSON.parse(readFileSync(join(root, "opencode.json"), "utf8")) as Record<string, unknown>;
+    const mcp = recordValue(config, "mcp");
+    const servers = recordValue(mcp, "servers");
+    // The flat row migrated under mcp.servers (V2-decodable) and the flat key is gone.
+    expect(recordValue(servers, "context7")).toEqual({ type: "remote", url: "https://mcp.context7.com/mcp" });
+    expect(mcp["context7"]).toBeUndefined();
+    expect(recordValue(servers, "morning-star")).toBeDefined();
+  });
+
   test("REAL init with a stub opencode applies the explicit v2 write set; JSON readback passes", () => {
     const root = tempProject();
     const binDir = stubOpencode("opencode v2.0.24");

@@ -292,10 +292,14 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const projectOpencodeMcpPath = input.target === "opencode" && input.scope === "project"
           ? path.join(resolveProjectRoot(), "opencode.json")
           : undefined;
+        const resolvedGenerations = result.generations ?? [];
+        const resolvedGeneration = input.generation ?? (resolvedGenerations.length === 1 ? resolvedGenerations[0] : undefined);
         const mcpHealth = input.target === "dsh"
           ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
-          : diagnoseMcpTarget(input.target, os.homedir(), undefined,
-            projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath });
+          : diagnoseMcpTarget(input.target, os.homedir(), undefined, {
+            ...(projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath }),
+            ...(resolvedGeneration === "v2" ? { requireNestedV2Shape: true } : {}),
+          });
         const errors = [...result.errors, ...mcpHealth.errors];
         const data = {
           ...result,

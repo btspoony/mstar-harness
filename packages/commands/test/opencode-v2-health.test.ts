@@ -251,6 +251,30 @@ describe("OpenCode MCP doctor health", () => {
     expect(v1Health.errors).toEqual([]);
   });
 
+  test("a resolved V2 generation requires the nested mcp.servers shape in doctor", () => {
+    const root = mkdtempSync(join(tmpdir(), "opencode-v2-mcp-gen-"));
+    roots.push(root);
+    // Legacy flat row only: the V1-tolerant fallback would read it aligned,
+    // but a resolved V2 generation must never accept it (OpenCode V2 decodes
+    // the server only from `mcp.servers`).
+    writeMcpConfig(root, {
+      mcp: { "morning-star": { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] } },
+    });
+    const flat = diagnoseMcpTarget("opencode", root, MCP_RUNTIME, { requireNestedV2Shape: true });
+    expect(flat.status).toBe("mismatch");
+    expect(flat.errors.join("\n")).toContain("legacy flat `mcp.<server>` shape");
+
+    // The same nested shape under a resolved V2 generation stays aligned.
+    const nestedRoot = mkdtempSync(join(tmpdir(), "opencode-v2-mcp-gen-nested-"));
+    roots.push(nestedRoot);
+    writeMcpConfig(nestedRoot, {
+      mcp: { servers: { "morning-star": { type: "local", command: ["npx", "@mstar-harness/cli", "mcp"] } } },
+    });
+    const nested = diagnoseMcpTarget("opencode", nestedRoot, MCP_RUNTIME, { requireNestedV2Shape: true });
+    expect(nested.status).toBe("aligned");
+    expect(nested.errors).toEqual([]);
+  });
+
   test("broken entries in either config shape are mismatches", () => {
     for (const mcp of [
       { servers: { "morning-star": { type: "local", command: ["node", "wrong"] } } },

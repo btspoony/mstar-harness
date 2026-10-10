@@ -5,9 +5,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { Tool } from "@opencode/schema/tool";
 
-import { writeBefore } from "../src/gates/write";
-import { loadWriteGateApi } from "../src/engine-seams";
-import type { WriteBeforeEvent, WriteGateEngineApi } from "../src/gates/write";
+import { writeBefore } from "./write";
+import { loadWriteGateApi } from "../engine-seams";
+import type { WriteBeforeEvent, WriteGateEngineApi } from "./write";
 const roots: string[] = [];
 
 afterEach(() => {

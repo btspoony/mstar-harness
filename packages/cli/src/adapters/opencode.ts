@@ -143,10 +143,27 @@ function applyV2Assignments(config: Record<string, unknown>, assignments: Record
  * other `mcp` keys survive untouched, and an existing morning-star entry
  * (user-modified or not) is never rewritten.
  */
+/** The pinned V2 MCP schema allows only `timeout` and `servers` at the `mcp`
+ * level; a V1-flat `mcp.<server>` row is not decodable by OpenCode V2. */
+const V2_MCP_TOP_LEVEL_KEYS = new Set(["timeout", "servers"]);
+
+/** Migrate V1-flat `mcp.<server>` rows under `mcp.servers` so a V2 config is
+ * decodable instead of mixed; the flat keys are removed after migration. */
+function migrateFlatMcpEntries(mcp: Record<string, unknown>): void {
+ const servers = ensureObject(mcp.servers);
+ mcp.servers = servers;
+ for (const [key, value] of Object.entries(mcp)) {
+  if (V2_MCP_TOP_LEVEL_KEYS.has(key)) continue;
+  servers[key] = value;
+  delete mcp[key];
+ }
+}
+
 function mergeV2McpServer(config: Record<string, unknown>) {
  const next = ensureObject(config);
  const mcp = ensureObject(next.mcp);
  next.mcp = mcp;
+ migrateFlatMcpEntries(mcp);
  const servers = ensureObject(mcp.servers);
  mcp.servers = servers;
  if (servers["morning-star"] === undefined) servers["morning-star"] = { ...MORNING_STAR_MCP_SERVER };
