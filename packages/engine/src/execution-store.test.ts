@@ -786,10 +786,12 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("initializes an empty active execution authority and bumps the epoch once", async () => {
     const { context, epoch } = await freshStore("initialize-empty");
-    const initialized = await initializeExecutionAuthority(context);
+    // The store initializer creates the schema and the ACTIVE EMPTY execution
+    // authority together; the activated token is read, never minted again.
+    const initialized = await readExecutionState(context);
     expect(initialized.storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(initialized.epoch).toBe(epoch + 1);
-    expect(String(initialized.token)).toBe(`exec-v1:root:${initialized.storeId}:${epoch + 1}:W10K:2`);
+    expect(initialized.epoch).toBe(epoch);
+    expect(String(initialized.token)).toBe(`exec-v1:root:${initialized.storeId}:${epoch}:W10K:1`);
     expect(initialized.data).toEqual({
       root: { version: 2, updated_at: initialized.data.root.updated_at, workflows: [] },
       workflows: [],
@@ -800,14 +802,14 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     try {
       expect(one(raw, "select authority_state, revision, manifest_id from execution_meta where id = 1")).toEqual({
         authority_state: "active",
-        revision: 2,
+        revision: 1,
         manifest_id: null,
       });
       expect(String(scalar(raw, "select activated_at from execution_meta where id = 1"))).toMatch(/Z$/);
       expect(one(raw, "select authority_state, authority_epoch, revision from store_meta where id = 1")).toEqual({
         authority_state: "active",
-        authority_epoch: epoch + 1,
-        revision: 1,
+        authority_epoch: epoch,
+        revision: 0,
       });
     } finally {
       raw.close();
@@ -817,8 +819,8 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
     const unchanged = rawDb(storePath(context));
     try {
-      expect(scalar(unchanged, "select revision from execution_meta where id = 1")).toBe(2);
-      expect(scalar(unchanged, "select authority_epoch from store_meta where id = 1")).toBe(epoch + 1);
+      expect(scalar(unchanged, "select revision from execution_meta where id = 1")).toBe(1);
+      expect(scalar(unchanged, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
     } finally {
       unchanged.close();
     }
@@ -857,6 +859,11 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
   });
 
   test("refuses a live legacy execution source without touching the store", async () => {
+    // Disposition: the pre-activation file route is retired (§4.3), so a
+    // status.json / snapshot tree is no longer an authority source that
+    // initialization converts. A second initialization of the ACTIVE store
+    // created by `initializeStore` is refused create-only, and leftover file
+    // state changes nothing about that refusal.
     const { context, epoch } = await freshStore("initialize-legacy-source");
     writeFileSync(
       join(context.harnessDir, "status.json"),
@@ -870,11 +877,12 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     writeFileSync(join(context.harnessDir, "workflows", "wf-1", "snapshot.json"), "{}");
     await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
 
-    // Neither refusal committed anything.
+    // Neither refusal committed anything: the authority stays ACTIVE and at
+    // its activation revision.
     const raw = rawDb(storePath(context));
     try {
       expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
-        authority_state: "legacy",
+        authority_state: "active",
         revision: 1,
       });
       expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
@@ -882,9 +890,10 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
       raw.close();
     }
 
-    // An EMPTY workflow tree is not a source: the empty workspace still initializes.
+    // Removing the leftover files does not re-open initialization either: the
+    // live ACTIVE authority is never reset.
     rmSync(join(context.harnessDir, "workflows"), { recursive: true, force: true });
-    expect((await initializeExecutionAuthority(context)).epoch).toBe(epoch + 1);
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
   });
 
   test("refuses a nonempty execution domain without clearing it", async () => {
@@ -902,7 +911,7 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
       expect(scalar(raw, "select count(*) as n from execution_workflows")).toBe(1);
       expect(scalar(raw, "select count(*) as n from execution_plans")).toBe(2);
       expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
-        authority_state: "legacy",
+        authority_state: "active",
         revision: 1,
       });
       expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
@@ -946,7 +955,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
     const raw = rawDb(storePath(context));
     try {
-      expect(scalar(raw, "select authority_state from execution_meta where id = 1")).toBe("legacy");
+      // The staged issue/catalog flag refuses initialization; the execution
+      // authority itself stays at the ACTIVE state the store init created.
+      expect(scalar(raw, "select authority_state from execution_meta where id = 1")).toBe("active");
       expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
     } finally {
       raw.close();
@@ -978,7 +989,7 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
     // The boundary is released afterwards: sequential transactions are not nested.
     const storeId = await withExecutionTransaction(context, (tx) => {
-      expect(tx.execution.authorityState).toBe("legacy");
+      expect(tx.execution.authorityState).toBe("active");
       return tx.storeId;
     });
     expect(storeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -986,18 +997,18 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("reads the active authority as one assembled state graph", async () => {
     const { context, epoch } = await freshStore("read-populated");
-    const initialized = await initializeExecutionAuthority(context);
+    const initialized = await readExecutionState(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
     } finally {
       writer.close();
     }
 
     const state = await readExecutionState(context);
     expect(state.storeId).toBe(initialized.storeId);
-    expect(state.epoch).toBe(epoch + 1);
-    expect(state.token).toBe(executionToken("root", initialized.storeId, epoch + 1, [], 2));
+    expect(state.epoch).toBe(epoch);
+    expect(state.token).toBe(executionToken("root", initialized.storeId, epoch, [], 1));
     expect(state.data.root).toEqual({
       version: 2,
       updated_at: initialized.data.root.updated_at,
@@ -1005,13 +1016,13 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     });
     expect(state.data.workflows).toHaveLength(1);
     const [workflow] = state.data.workflows;
-    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch + 1, ["wf-1"], 4));
+    expect(workflow.workflowToken).toBe(executionToken("workflow", initialized.storeId, epoch, ["wf-1"], 4));
     expect(workflow.planTokens).toEqual({
-      "p-1": executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-1"], 6),
+      "p-1": executionToken("plan", initialized.storeId, epoch, ["wf-1", "p-1"], 6),
     });
     expect(workflow.coordinator).toMatchObject({
       storeId: initialized.storeId,
-      epoch: epoch + 1,
+      epoch,
       workflowId: "wf-1",
       role: "coordinator",
       sessionId: "s-1",
@@ -1030,10 +1041,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses to serve a workflow whose stored state does not describe its own key", async () => {
     const { context, epoch } = await freshStore("read-foreign-state");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1, { stateId: "wf-other" });
+      seedAuthorityGraph(writer.db, epoch, { stateId: "wf-other" });
     } finally {
       writer.close();
     }
@@ -1042,10 +1052,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses a plan whose stored state does not describe its own key", async () => {
     const { context, epoch } = await freshStore("read-foreign-plan");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
       writer.db
         .prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
         .run(JSON.stringify({ id: "p-other", status: "InProgress" }));
@@ -1057,10 +1066,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses a frozen pin that is not a complete catalog execution identity", async () => {
     const { context, epoch } = await freshStore("read-malformed-pin");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
       writer.db
         .prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
         .run(JSON.stringify({ ...FROZEN_PIN, document_hash: "" }));
@@ -1072,10 +1080,9 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
 
   test("refuses a session row that contradicts the session identity contract", async () => {
     const { context, epoch } = await freshStore("read-malformed-session");
-    await initializeExecutionAuthority(context);
     const writer = await openStore(context, "write");
     try {
-      seedAuthorityGraph(writer.db, epoch + 1);
+      seedAuthorityGraph(writer.db, epoch);
       writer.db
         .prepare("update execution_sessions set session_id = '' where workflow_id = 'wf-1' and session_id = 's-1'")
         .run();
