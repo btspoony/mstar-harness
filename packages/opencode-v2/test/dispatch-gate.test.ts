@@ -5,6 +5,7 @@ import type { Context } from "@opencode/plugin/effect/plugin";
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
 
 import { registerDispatchGate } from "../src/hooks/mod";
+import { dispatchBefore } from "../src/gates/dispatch";
 import { loadDispatchGateApi } from "../src/engine-seams";
 
 type ExecuteBeforeEvent = ToolHooks["execute.before"];
@@ -176,6 +177,16 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     expect(hard.bodyCalls()).toBe(0);
   });
 
+
+  test("null engine seam fails closed with typed engine-unavailable refusal", async () => {
+    await expect(Effect.runPromise(dispatchBefore(
+      makeEvent("project-manager", "fullstack-dev", validAssignment()),
+      { loadEngine: async () => null },
+    ))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[dispatch.engine-unavailable]"),
+    });
+  });
   test("missing prompt refuses as typed schema drift instead of skipping validation", async () => {
     const harness = await fixture();
     const event = makeEvent("project-manager", "fullstack-dev", undefined);

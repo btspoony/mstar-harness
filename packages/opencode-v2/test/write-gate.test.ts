@@ -292,4 +292,14 @@ describe("OpenCode V2 structured-write gate", () => {
     await expect(run(event("write", { content: "no path" }))).rejects.toMatchObject({ _tag: "Tool.Error", message: expect.stringContaining("input.path") });
     await expect(run(event("edit", { path: 42 }))).rejects.toMatchObject({ _tag: "Tool.Error", message: expect.stringContaining("input.path") });
   });
+
+  test("null engine seam refuses writes with typed engine-unavailable error", async () => {
+    await expect(Effect.runPromise(writeBefore(
+      event("write", { path: "/tmp/unavailable-engine-target", content: "unauthorized" }),
+      { loadEngine: async () => null },
+    ))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[write.engine-unavailable]"),
+    });
+  });
 });
