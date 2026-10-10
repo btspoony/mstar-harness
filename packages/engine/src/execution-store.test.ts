@@ -1641,7 +1641,7 @@ type CreatedWorkflowFixture = {
 /** An active store holding ONE created workflow (`wf-1`, plans `p-1`/`p-2`). */
 async function createdWorkflow(label: string, creatorSessionId = "host-coord"): Promise<CreatedWorkflowFixture> {
   const { context } = await freshStore(label);
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   await registerPlan(context, "p-1");
   await registerPlan(context, "p-2");
   const { entry, snapshot } = creationInput("wf-1", [planRow("p-1"), planRow("p-2")]);
@@ -1733,11 +1733,13 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
       expect(String(session.bound_at)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
       // A session is a child of the workflow: the workflow revision advances
       // once, root membership does not, and the store revision advances once.
+      // The ACTIVE store's own activation already wrote execution_meta once,
+      // so the bind is the second revision, not the third.
       expect(one(db, "select revision, updated_at from execution_workflows")).toEqual({
         revision: 2,
         updated_at: session.bound_at,
       });
-      expect(one(db, "select revision from execution_meta where id = 1")).toEqual({ revision: 3 });
+      expect(one(db, "select revision from execution_meta where id = 1")).toEqual({ revision: 2 });
       expect(
         one(db, "select epoch, workflow_id, plan_id from execution_operations where operation_id = 'bind-coordinator'"),
       ).toEqual({ epoch, workflow_id: "wf-1", plan_id: null });
@@ -2102,13 +2104,23 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     await expect(
       attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch, ["wf-9"], 1), "other-workflow")),
     ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
-    // A superseded epoch, and a superseded revision of the same address.
-    await expect(
-      attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch - 1, ["wf-1"], 1), "stale-epoch")),
-    ).rejects.toMatchObject({ code: "store.stale-epoch" });
+    // A superseded revision of the same address, then a superseded epoch: the
+    // live authority generation advances past the presented token (a fresh
+    // ACTIVE store is at epoch 1, so the stale epoch must be produced by
+    // advancing the live store, not by minting epoch 0 — the token grammar
+    // refuses a non-positive epoch before any store read).
     await expect(
       attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch, ["wf-1"], 9), "stale-revision")),
     ).rejects.toMatchObject({ code: "execution.stale-token" });
+    const bump = rawDb(storePath(context));
+    try {
+      bump.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      bump.close();
+    }
+    await expect(
+      attempt(sessionBind("wf-1", executionToken("workflow", storeId, epoch, ["wf-1"], 1), "stale-epoch")),
+    ).rejects.toMatchObject({ code: "store.stale-epoch" });
 
     expect(sessionRows(context)).toEqual([]);
     expect(executionFootprint(context)).toEqual(footprint);
@@ -2126,9 +2138,6 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     // A reference whose store, epoch or identity the live row does not back.
     await expect(read(coordinator, { ...bound.data, storeId: OTHER_STORE }, "p-1")).rejects.toMatchObject({
       code: "execution.scope-mismatch",
-    });
-    await expect(read(coordinator, { ...bound.data, epoch: epoch - 1 }, "p-1")).rejects.toMatchObject({
-      code: "store.stale-epoch",
     });
     await expect(
       read(sessionCaller("wf-1", "host-ghost"), { ...bound.data, sessionId: "host-ghost" }, "p-1"),
@@ -2149,6 +2158,18 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
       db.close();
     }
     await expect(read(coordinator, bound.data, "p-1")).rejects.toMatchObject({ code: "execution.session-unavailable" });
+
+    // A reference from a superseded authority generation is stale, not absent:
+    // the live epoch advances past the generation the session was bound in
+    // (a fresh ACTIVE store is at epoch 1, so the stale generation is produced
+    // by advancing the live store rather than by presenting epoch 0).
+    const bump = rawDb(storePath(context));
+    try {
+      bump.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      bump.close();
+    }
+    await expect(read(coordinator, bound.data, "p-1")).rejects.toMatchObject({ code: "store.stale-epoch" });
     expect(storeId).toBe(bound.storeId);
   });
 
