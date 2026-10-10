@@ -35,7 +35,7 @@ import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
 import { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
-import { bootApp, fakeChild, FakeLoaderRegistry, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, fakeChild, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
 import { HarnessResolver } from '../src/index.ts'
 import {
@@ -93,11 +93,19 @@ async function settleInjectChild(): Promise<void> {
   setTimeout(resolve, 0)
   await promise
 }
+async function assembleWithEngineStatus(ctx: BootResult['ctx']) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const assembly = await ctx.systemPrompt.assemble()
+    if (assembly.contexts.some((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)) return assembly
+    await settleInjectChild()
+  }
+  throw new Error('mstar:engine-status context did not register')
+}
 
 describe('mstar:harness-rules global section + mstar:engine-status context ', () => {
   it('(a) global registration — the root assembly carries the mstar:harness-rules section (name/order/minimal pointer content)', async () => {
     booted = await bootApp()
-    const assembly = await booted.ctx.systemPrompt.assemble()
+    const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
     // Order 2: after the deployment persona slot (0) and the child role
@@ -121,7 +129,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
 
   it('(b) engine-status context — idle default boot (no status.json seeded) injects exactly the version watermark line (D1)', async () => {
     booted = await bootApp()
-    const assembly = await booted.ctx.systemPrompt.assemble()
+    const assembly = await assembleWithEngineStatus(booted.ctx)
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(context).toBeDefined()
     expect(context!.text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
@@ -129,11 +137,46 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(context!.text).not.toContain('enforcement')
   })
 
-  // Disposition: legacy status.json/snapshot.json digest assertions are removed with the retired file-route reader; live prompt registration, enforcement and persona behavior remain exercised.
+  // Disposition: only legacy status.json/snapshot.json transport assertions were removed; the ACTIVE graph's consumer rendering rules remain tested below.
+  async function activeDigest(plans: Array<{ id: string; title: string; status: string }>): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-active-'))
+    await seedActiveWorkflow(join(root, 'harness'), 'prompt-digest', plans, {}, 'seed-prompt-digest', root)
+    booted = await bootApp({ root })
+    const assembly = await assembleWithEngineStatus(booted.ctx)
+    return assembly.contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+  }
+
+  it('(c) filters Done rows from the active workflow digest', async () => {
+    const text = await activeDigest([
+      { id: 'todo-plan', title: 'Todo plan', status: 'Todo' },
+      { id: 'done-plan', title: 'Done plan', status: 'Done' },
+    ])
+    expect(text).toContain('workflow prompt-digest (plan) running | plans: todo-plan(Todo)')
+    expect(text).not.toContain('done-plan')
+  })
+
+  it('(c2) renders plans: none when every active plan is Done', async () => {
+    const text = await activeDigest([
+      { id: 'done-a', title: 'Done A', status: 'Done' },
+      { id: 'done-b', title: 'Done B', status: 'Done' },
+    ])
+    expect(text).toContain('workflow prompt-digest (plan) running | plans: none')
+  })
+
+  it('(c3) caps active plan rendering at eight and reports the overflow count', async () => {
+    const plans = Array.from({ length: 9 }, (_, index) => ({
+      id: `plan-${index + 1}`,
+      title: `Plan ${index + 1}`,
+      status: 'Todo',
+    }))
+    const text = await activeDigest(plans)
+    expect(text).toContain('workflow prompt-digest (plan) running | plans: plan-1(Todo) plan-2(Todo) plan-3(Todo) plan-4(Todo) plan-5(Todo) plan-6(Todo) plan-7(Todo) plan-8(Todo) +1 more')
+    expect(text).not.toContain('plan-9')
+  })
 
   it('(d) interpolation safety — neither injected text carries a complete {{...}} group and both render without throwing', async () => {
     booted = await bootApp()
-    const assembly = await booted.ctx.systemPrompt.assemble()
+    const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(section).toBeDefined()
@@ -187,6 +230,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // harness-rules section must keep reaching dispatched children (the
     // regression this case originally pinned, minus the removed section).
     const app = booted = await bootApp({ agentsService: 'fake', rolePersonas: { 'fullstack-dev': 'You are a fullstack-dev executor for the Morning Star harness.' } })
+    await assembleWithEngineStatus(app.ctx)
     const { agent, scopeKey } = await fakeChild(app.ctx, '**Execute as**: fullstack-dev\n\nImplement the assigned work.')
     app.ctx.get('agents')!.register(agent)
 
@@ -211,7 +255,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
     })
     booted = await bootApp({ root })
-    const assembly = await booted.ctx.systemPrompt.assemble()
+    const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
     expect(section!.text).toContain('enforcement: hard')
@@ -219,14 +263,14 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
 
   it('(i) mid-session enforcement flip switches the section word on the next assembly without re-registration', async () => {
     booted = await bootApp()
-    const before = await booted.ctx.systemPrompt.assemble()
+    const before = await assembleWithEngineStatus(booted.ctx)
     expect(before.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain('enforcement: soft')
     // Flip the compass to hard mid-session — same boot, same registration
     // (the section text provider re-reads the compass per assembly).
     await seedHarness(booted.harnessDir, {
       'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
     })
-    const after = await booted.ctx.systemPrompt.assemble()
+    const after = await assembleWithEngineStatus(booted.ctx)
     const section = after.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
     expect(section!.text).toContain('enforcement: hard')
