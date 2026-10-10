@@ -263,7 +263,7 @@ describe("OpenCode MCP doctor health", () => {
     const flat = diagnoseMcpTarget("opencode", root, MCP_RUNTIME, { requireNestedV2Shape: true });
     expect(flat.status).toBe("mismatch");
     expect(flat.errors.join("\n")).toContain("legacy flat");
-    expect(flat.errors.join("\n")).toContain("Supported recovery (CLI)");
+    expect(flat.errors.join("\n")).toContain("mstar doctor --target opencode --scope global --opencode-generation v2");
     expect(flat.errors.join("\n")).toContain("--scope global|project");
 
     // The same nested shape under a resolved V2 generation stays aligned.
