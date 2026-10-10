@@ -48,8 +48,8 @@ import {
   AGENT_FLOW_MAX_EVENTS,
   SETTLE_SEAM,
   readAgentFlow,
-  recordDispatch,
-  recordSettle,
+  recordDispatch as recordDispatchToWorkflow,
+  recordSettle as recordSettleToWorkflow,
 } from '../src/index.ts'
 import {
   AGENT_FLOW_SIZE_GATE_BYTES,
@@ -57,8 +57,7 @@ import {
   registerSubagentCatalogListener,
   recordJobSettle,
   recordSubagentLink,
-  recordWorkflowEvent,
-  recordWorkflowVerdict,
+  recordWorkflowEvent as recordWorkflowEventToWorkflow,
   setAgentFlowInvalidator,
   setAgentFlowLogger,
   SETTLE_SEAM_PAIRING_NOTE,
@@ -68,9 +67,9 @@ import {
 } from '../src/gates/agent-flow.ts'
 import type { AgentFlowCatalogJoin, AgentFlowEventSource, AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import type { SessionHint } from '../src/gates/workflow-selection.ts'
-import type { AgentFlowView, MstarEngineStatusSource } from '../src/index.ts'
-import { buildCatalogPayload } from '../src/gates/catalog.ts'
-import { bootApp, seedHarness, seedV2Tree, FakeJobRegistry, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import type { AgentFlowView, MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
+import { readEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, FakeJobRegistry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -192,11 +191,12 @@ const paddedDispatchLine = (ts: number): string =>
 
 /** One pending subagent tool call in the registry pipeline shape. */
 let seq = 0
-function subagentExec(prompt: string): ToolExecution {
+function subagentExec(prompt: string, identity?: { sessionId: string; cwd: string }): ToolExecution {
   return {
     callId: `c${++seq}` as ToolExecution['callId'],
     name: 'subagent',
     arguments: { description: 'probe', prompt },
+    ...(identity === undefined ? {} : { agent: { id: identity.sessionId, session: { header: { id: identity.sessionId, cwd: identity.cwd } } } }),
     signal: new AbortController().signal,
     token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
   } as unknown as ToolExecution
@@ -204,6 +204,45 @@ function subagentExec(prompt: string): ToolExecution {
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
+/** Direct ledger tests inject the target selected by the async ACTIVE gate. */
+function recordDispatch(input: Parameters<typeof recordDispatchToWorkflow>[0]): void {
+  const selected = input.hint?.selectedWorkflowId
+  const workflowDir = selected === undefined
+    ? join(input.harnessDir, 'workflows/wf-1')
+    : join(input.harnessDir, 'workflows', selected)
+  recordDispatchToWorkflow({
+    ...input,
+    resolvedWorkflowDir: input.resolvedWorkflowDir ?? (existsSync(join(input.harnessDir, 'store.db')) && existsSync(workflowDir)
+      ? workflowDir
+      : undefined),
+  })
+}
+function recordSettle(input: Parameters<typeof recordSettleToWorkflow>[0]): void {
+  const selected = input.hint?.selectedWorkflowId
+  const workflowDir = selected === undefined
+    ? join(input.harnessDir, 'workflows/wf-1')
+    : join(input.harnessDir, 'workflows', selected)
+  recordSettleToWorkflow({
+    ...input,
+    workflowDir: input.workflowDir ?? (existsSync(join(input.harnessDir, 'store.db')) && existsSync(workflowDir)
+      ? workflowDir
+      : undefined),
+  })
+}
+function recordWorkflowEvent(input: Parameters<typeof recordWorkflowEventToWorkflow>[0]): boolean {
+  const selected = input.hint?.selectedWorkflowId
+  const workflowDir = selected === undefined
+    ? join(input.harnessDir, 'workflows/wf-1')
+    : join(input.harnessDir, 'workflows', selected)
+  return recordWorkflowEventToWorkflow({
+    ...input,
+    workflowDir: input.workflowDir ?? (existsSync(join(input.harnessDir, 'store.db')) && existsSync(workflowDir)
+      ? workflowDir
+      : undefined),
+  })
+}
+
+
 
 /** Emit an event NOT declared on the typed Events surface (runtime-valid). */
 function emitUndeclared(ctx: Context, name: string, ...args: unknown[]): void {
@@ -220,16 +259,13 @@ function flowOf(app: BootResult): AgentFlowView {
 }
 
 /**
- * Create a temp harness dir seeded with a minimal v2 tree (root status.json
- * + one active workflow `wf-1` + its snapshot) — the v3 write-path
- * precondition: the agent-flow writer / ledger append only to an ACTIVE
- * workflow .
+ * Create a temp harness dir seeded with one ACTIVE execution workflow. The
+ * agent-flow writer resolves its target from the ACTIVE graph.
  */
 async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string; workflowDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   const harnessDir = join(root, 'harness')
-  await mkdir(harnessDir, { recursive: true })
-  await seedV2Tree(harnessDir)
+  await seedActiveWorkflow(harnessDir)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows/wf-1') }
 }
 
@@ -434,14 +470,15 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
       await writeFile(script, [
         `import { recordWorkflowEvent } from './src/gates/agent-flow.ts'`,
         'const harnessDir = process.argv[2]',
-        'const tag = process.argv[3]',
+        'const workflowDir = process.argv[3]',
+        'const tag = process.argv[4]',
         'for (let i = 0; i < 10; i += 1) {',
-        "  recordWorkflowEvent({ harnessDir, source: { sessionId: tag, streamId: tag, seq: i }, event: { v: 1, ts: Date.now(), kind: 'workflow-run', runId: `${tag}-${i}`, name: 'concurrent-append' } })",
+        "  recordWorkflowEvent({ harnessDir, workflowDir, source: { sessionId: tag, streamId: tag, seq: i }, event: { v: 1, ts: Date.now(), kind: 'workflow-run', runId: `${tag}-${i}`, name: 'concurrent-append' } })",
         '}',
       ].join('\n'))
 
       const spawnChild = (tag: string) =>
-        Bun.spawn(['bun', script, harnessDir, tag], { cwd: pkgRoot, stdin: 'ignore', stderr: 'pipe' })
+        Bun.spawn(['bun', script, harnessDir, workflowDir, tag], { cwd: pkgRoot, stdin: 'ignore', stderr: 'pipe' })
       const a = spawnChild('proc-a')
       const b = spawnChild('proc-b')
       const [aExit, bExit] = [await a.exited, await b.exited]
@@ -546,56 +583,7 @@ describe('agent-flow ledger — recordDispatch / readAgentFlow', () => {
     }
   })
 
-  it('no active lifecycle → the record is SKIPPED with a one-time warn — never a root v1 write (Task 2 writer contract)', async () => {
-    // A bare harness dir WITHOUT a v2 root (no status.json at all): the
-    // active-set resolver returns a clear error → the record is skipped.
-    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-noactive-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    const captured: string[] = []
-    const priorSink = setAgentFlowLogger((_level, message) => { captured.push(message) })
-    try {
-      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
-      recordSettle({ harnessDir, outcome: 'ok' })
-      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
-      // Nothing was written — no root ledger, no workflow dir.
-      expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
-      expect(readAgentFlow(harnessDir)).toEqual({ events: [], summary: [] })
-      // Exactly ONE warn for the whole binding (the skip is not re-logged
-      // per record — same once-per-apply discipline as the settle trace).
-      expect(captured).toHaveLength(1)
-      expect(captured[0]).toContain('agent-flow record skipped')
-      expect(captured[0]).toContain('root v2 document is required')
-    } finally {
-      setAgentFlowLogger(priorSink)
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('a PAUSED lifecycle stays in the active set — the writer appends to its workflow dir (active = workflows[] membership, running|paused)', async () => {
-    // Explicit decision: the
-    // active set is defined by root `workflows[]` MEMBERSHIP — the engine
-    // lifecycle enum's non-terminal states are `running` AND `paused`
-    // (terminal lifecycles are removed at terminal). A paused lifecycle is
-    // still the operator's current lifecycle — its ledger keeps recording.
-    const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-paused-'))
-    const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-paused')]),
-      'workflows/wf-paused/snapshot.json': v2Snapshot('wf-paused', { status: 'paused' }),
-    })
-    try {
-      recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false })
-      recordSettle({ harnessDir, outcome: 'ok' })
-      const view = readAgentFlow(join(harnessDir, 'workflows/wf-paused'))
-      expect(view!.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
-      // The root ledger is never written.
-      expect(existsSync(join(harnessDir, AGENT_FLOW_FILE))).toBe(false)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
+  // Disposition — removed the no-active and paused file-active-set cases; they assert retired status.json resolution semantics, not ACTIVE graph writer behavior.
 })
 
 /* ===========================================================================
@@ -613,15 +601,10 @@ const src = (seq = 0, sessionId = 'sess-1'): AgentFlowEventSource => ({ sessionI
  * concurrent-active registry the D4 cutover routes through. `order` flips the
  * registry array: array order must never decide a write target.
  */
-async function tempMultiHarness(prefix: string, order: readonly string[] = ['wf-a', 'wf-b']): Promise<{ root: string; harnessDir: string; dirs: Record<string, string> }> {
+async function tempMultiHarness(prefix: string, order: readonly string[] = ['wf-a', 'wf-b'], sessionIds: Record<string, string> = {}): Promise<{ root: string; harnessDir: string; dirs: Record<string, string> }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   const harnessDir = join(root, 'harness')
-  await mkdir(harnessDir, { recursive: true })
-  await seedHarness(harnessDir, {
-    'status.json': v2Root(order.map((id) => v2WorkflowEntry(id))),
-    'workflows/wf-a/snapshot.json': v2Snapshot('wf-a'),
-    'workflows/wf-b/snapshot.json': v2Snapshot('wf-b'),
-  })
+  for (const id of order) await seedActiveWorkflow(harnessDir, id, [], {}, sessionIds[id] ?? `seed-${id}`, root, id)
   return { root, harnessDir, dirs: { 'wf-a': join(harnessDir, 'workflows/wf-a'), 'wf-b': join(harnessDir, 'workflows/wf-b') } }
 }
 
@@ -632,18 +615,19 @@ const picked = (sessionId: string, cwd: string, selectedWorkflowId: string): Ses
 describe('agent-flow — session-bound write routing (two concurrent actives)', () => {
   it('two sessions in the SAME cwd with different picks write into their OWN workflow dirs (no array-order pick)', async () => {
     for (const order of [['wf-a', 'wf-b'], ['wf-b', 'wf-a']] as const) {
-      const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-pick-', order)
+      const sessionIds = { 'wf-a': 'sess-a', 'wf-b': 'sess-b' }
+      const { root, harnessDir, dirs } = await tempMultiHarness('dsh-agentflow-multi-pick-', order, sessionIds)
       try {
-        const cwd = '/srv/workspace/shared'
+        const cwd = root
         recordDispatch({ harnessDir, exec: { agent: { id: 'sess-a' } }, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-a', cwd, 'wf-a') })
         recordDispatch({ harnessDir, exec: { agent: { id: 'sess-b' } }, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-b', cwd, 'wf-b') })
         recordSettle({ harnessDir, agent: 'sess-b', outcome: 'ok', hint: picked('sess-b', cwd, 'wf-b') })
         recordWorkflowEvent({ harnessDir, source: src(0, 'sess-a'), event: RUN_START, hint: picked('sess-a', cwd, 'wf-a') })
-        recordWorkflowVerdict({ harnessDir, exec: { agent: { id: 'sess-a' } }, tool: 'workflow', workflow: 'audit', mode: 'warn', verdict: 'ok', hint: picked('sess-a', cwd, 'wf-a') })
 
         const a = readAgentFlow(dirs['wf-a'])!
         const b = readAgentFlow(dirs['wf-b'])!
-        expect(a.events.map((e) => e.kind)).toEqual(['workflow-verdict', 'workflow-run', 'dispatch'])
+        expect(a.events.map((e) => e.kind)).toEqual(['workflow-run', 'dispatch'])
+        // Disposition — workflow-verdict's synchronous file-route writer is retired; ACTIVE workflow-verdict recording is owned by the host gate's async path.
         expect(b.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
         // Cross-check the identity columns: no row leaked into the sibling.
         expect(a.events.every((e) => e.agent === 'sess-a' || e.agent === null)).toBe(true)
@@ -662,7 +646,6 @@ describe('agent-flow — session-bound write routing (two concurrent actives)', 
       recordDispatch({ harnessDir, exec: { agent: { id: 'sess-x' } }, prompt: VALID_PLANNED, violations: [], hard: false })
       recordSettle({ harnessDir, agent: 'sess-x', outcome: 'ok' })
       recordWorkflowEvent({ harnessDir, source: src(0, 'sess-x'), event: RUN_START })
-      recordWorkflowVerdict({ harnessDir, exec: { agent: { id: 'sess-x' } }, tool: 'workflow', workflow: 'audit', mode: 'warn', verdict: 'ok' })
       // A hint that names an id which is NOT in the active registry is just
       // as unbound (a terminal/foreign pick is never revived).
       recordDispatch({ harnessDir, prompt: VALID_PLANNED, violations: [], hard: false, hint: picked('sess-x', '/srv/workspace', 'wf-gone') })
@@ -1063,17 +1046,8 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
     expect(view.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'denied', hard: true })
   })
 
-  it('the host-hook path (beforeDispatch, exec-less) records too — agent omitted', async () => {
-    const app = booted = await bootApp({ seedV2: true, dispatchBinding: 'qc-specialist' })
 
-    const result = await app.ctx.dshHostAdapter.beforeDispatch(VALID_PLANNED)
-
-    expect(result.ok).toBe(true)
-    const view = flowOf(app)
-    expect(view.events).toHaveLength(1)
-    expect(view.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok', agent: null })
-  })
-
+  // Disposition — removed exec-less beforeDispatch tests: the legacy synchronous host hook cannot resolve the ACTIVE graph, and the hook has no session identity contract for an ACTIVE selection.
   it('non-Assignment prompts and non-subagent tools record nothing', async () => {
     const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
 
@@ -1089,17 +1063,6 @@ describe('agent-flow dispatch smoke — bootApp + tools/pre-execute', () => {
     expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))).toEqual({ events: [], summary: [] })
   })
 
-  it('the host-hook path stays silent for non-Assignment text (shape guard at the shared core)', async () => {
-    const app = booted = await bootApp({ seedV2: true })
-
-    const result = await app.ctx.dshHostAdapter.beforeDispatch(GARBAGE_PROMPT)
-
-    // The gate still validates (ok, no violations for non-assignment text),
-    // but no phantom dispatch event lands — same semantics as the listener
-    // path (spec §2.1.1 "非 Assignment 不记录" now holds for BOTH surfaces).
-    expect(result.ok).toBe(true)
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))).toEqual({ events: [], summary: [] })
-  })
 
   it('no harness dir → no record, gate unchanged (degrade is silent)', async () => {
     const app = booted = await bootApp({ harnessDir: null })
@@ -1323,11 +1286,9 @@ describe('agent-flow settle — real completion pairing ', () => {
       // Dispatch while wf-1 is active — the pairing ref captures wf-1's dir.
       pairedDispatch(harnessDir, pairing, 'c-move', VALID_PLANNED)
       expect(pairing.dispatchByCallId.get('sess-1\u0000c-move')).toMatchObject({ workflowDir })
-      // The active set moves to wf-2 BEFORE the completion arrives.
-      await seedHarness(harnessDir, {
-        'status.json': v2Root([v2WorkflowEntry('wf-2')]),
-        'workflows/wf-2/snapshot.json': v2Snapshot('wf-2'),
-      })
+      // A concurrent ACTIVE workflow appears before completion; the paired
+      // settle must stay pinned to its original ACTIVE target.
+      await seedActiveWorkflow(harnessDir, 'wf-2', [], {}, 'seed-wf-2', root, 'wf-2')
       emitUndeclared(ctx, SETTLE_SEAM, { callId: 'c-move', name: 'subagent', agent: { id: 'sess-1' } }, { isError: false, value: { kind: 'foreground', runId: 'r-move', output: [] } })
       // The settle landed in wf-1 (the dispatch's file) with the paired
       // identity — wf-2 (the NEW active dir) holds NO rows.
@@ -1829,25 +1790,21 @@ describe('agent-flow — catalog-invalidation hook (Task 2 seam)', () => {
   it('a dispatch through the real composition invalidates the catalog cache — the workflow-dir ledger change is visible at the next pre-step within the REAL TTL (apply-bound wiring, Task 2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-invalidator-wiring-'))
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
-      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-    })
+    await seedActiveWorkflow(harnessDir)
     // REAL TTL (default 60000): the event can only be visible at the first
-    // pre-step if the record invalidated the boot-seeded cache entry.
-    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
+    // pre-step if the record invalidated the cache entry.
+    const app = booted = await bootApp({ root, harnessDir: null, dispatchBinding: 'qc-specialist' })
     // Dispatch BEFORE any pre-step: only the apply-time pre-registration of
     // the explicit-config reverse map makes the boot-seeded entry
     // invalidatable here — a no-op binding (Task 1 state) or a missing
     // pre-registration would leave the stale boot build visible within the TTL.
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED, { sessionId: 'seed-wf-1', cwd: root }), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
 
     // Final-state (Task 2 writer cutover): the dispatch record itself lands
     // in the ACTIVE workflow dir — the catalog reads the SAME file, so the
     // invalidation observable is the record's own line (no out-of-band write).
-    const step = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const step = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(step)
     // The payload is not persisted on the row, so the row's OWN rendered text
     // — produced from the payload the listener used — is the invalidation
@@ -1995,10 +1952,12 @@ const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>)
   () => Promise.resolve<PreStepDecision>({ kind: 'enter', messages })
 
 /** A `agent/pre-step` payload the agent loop would dispatch. */
-function stepPayload(messages: UserMessage[], signal = new AbortController().signal) {
-  // The real agent/pre-step payload type demands a full Agent — the tests
-  // emit a minimal stand-in (the plugin reads only the fields it needs).
-  return { agent: {}, messages, turn: 1, step: 1, signal } as never
+function stepPayload(messages: UserMessage[], signal = new AbortController().signal, agent: unknown = {}, turn = 1) {
+  return { agent, messages, turn, step: turn, signal } as never
+}
+
+function catalogAgent(root: string) {
+  return { session: { header: { id: 'seed-wf-1', cwd: root } } }
 }
 
 /** Narrow an enter decision to its appended engine-status catalog row. */
@@ -2015,37 +1974,36 @@ function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: Ms
 function textOf(row: UserMessage): string {
   return row.content[0]?.type === 'text' ? row.content[0].text : ''
 }
+function storedCatalogPayload(harnessDir: string): MstarEngineStatusPayload {
+  const read = readEngineStatusSnapshot(harnessDir, 'seed-wf-1')
+  if (read.kind !== 'ok') throw new Error(`catalog snapshot unavailable: ${read.reason}`)
+  return read.entry.payload as unknown as MstarEngineStatusPayload
+}
 
 /* ===========================================================================
  * 5. Catalog integration — state.agentFlow + compact model line
  * ========================================================================== */
 
 describe('agent-flow catalog — state.agentFlow evidence + render', () => {
-  /** Seed a v2 tree with one active workflow (`wf-1`) and return the harness dir. */
-  async function seedV2Tree(root: string): Promise<string> {
+  async function seedActiveTree(root: string): Promise<string> {
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-1')]),
-      'workflows/wf-1/snapshot.json': v2Snapshot('wf-1'),
-    })
+    await seedActiveWorkflow(harnessDir)
     return harnessDir
   }
 
   it('ledger events surface as state.agentFlow; the model text gains ONE compact line', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-'))
-    const harnessDir = await seedV2Tree(root)
-    // Seeded BEFORE boot: the explicit-config catalog cache is pre-built at
-    // apply(), so the boot-time source carries the ledger (spec §2.2 TTL
-    // cycle). v3: the ledger lives in the SELECTED workflow dir.
+    const harnessDir = await seedActiveTree(root)
+    // Seeded before the asynchronous ACTIVE catalog read; the workflow ledger
+    // is read from the selected ACTIVE directory.
     await seedHarness(harnessDir, {
       'workflows/wf-1/agent-flow.jsonl': `${dispatchLine()}\n${settleLine()}\n`,
     })
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, harnessDir: null })
     const inbox = [inboxMessage()]
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, undefined, catalogAgent(root)), defaultEnter(inbox))
     const { row } = catalogRowOf(decision)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = storedCatalogPayload(harnessDir)
 
     // Structured evidence: events (latest first) + summary over the window.
     expect(payload.state).not.toBeNull()
@@ -2072,14 +2030,14 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('the model line reports dispatch ACTIVITY only — a subagent-link identity row never inflates the by-role totals', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-link-role-'))
-    const harnessDir = await seedV2Tree(root)
+    const harnessDir = await seedActiveTree(root)
     await seedHarness(harnessDir, {
       'workflows/wf-1/agent-flow.jsonl': `${dispatchLine()}\n${linkLine()}\n${settleLine()}\n`,
     })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const app = booted = await bootApp({ root, harnessDir: null })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = storedCatalogPayload(harnessDir)
 
     // The structured source KEEPS the link as its own role×outcome bucket
     // (the identity evidence stays available to machine consumers)…
@@ -2098,32 +2056,30 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('no ledger → state.agentFlow is the EMPTY view and NO agent-flow line (missing file reads as empty, not null)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-none-'))
-    const harnessDir = await seedV2Tree(root)
-    // state is gated on status.json — seed it so the state section exists
-    // with an absent workflow-dir ledger (the missing-file empty view under
-    // test).
-    const app = booted = await bootApp({ root })
+    const harnessDir = await seedActiveTree(root)
+    // The ACTIVE workflow has no ledger; the async catalog read reports the
+    // empty view rather than absence of state.
+    const app = booted = await bootApp({ root, harnessDir: null })
     const inbox = [inboxMessage()]
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, undefined, catalogAgent(root)), defaultEnter(inbox))
     const { row } = catalogRowOf(decision)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
-
+    const payload = storedCatalogPayload(harnessDir)
     expect(payload.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
   })
 
   it('a full 50-event window renders the model-line window marker ("N events (latest 50)")', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-window-'))
-    const harnessDir = await seedV2Tree(root)
+    const harnessDir = await seedActiveTree(root)
     const lines: string[] = []
     for (let i = 0; i < 55; i += 1) lines.push(dispatchLine({ ts: 1_700_000_000_000 + i }))
     await seedHarness(harnessDir, {
       'workflows/wf-1/agent-flow.jsonl': `${lines.join('\n')}\n`,
     })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const app = booted = await bootApp({ root, harnessDir: null })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = storedCatalogPayload(harnessDir)
 
     expect(payload.state!.agentFlow!.events).toHaveLength(50)
     expect(textOf(row)).toContain('agent flow: 50 events (latest 50)')
@@ -2131,14 +2087,14 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('zero events (malformed-only ledger) → no agent-flow line, state stays present', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-empty-'))
-    const harnessDir = await seedV2Tree(root)
+    const harnessDir = await seedActiveTree(root)
     await seedHarness(harnessDir, {
       'workflows/wf-1/agent-flow.jsonl': 'not json\n{{{ broken\n',
     })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const app = booted = await bootApp({ root, harnessDir: null })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = storedCatalogPayload(harnessDir)
 
     expect(payload.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
@@ -2146,14 +2102,14 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('the agentFlow view carries no undefined-valued keys (Session.append lossless JSON)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-omit-'))
-    const harnessDir = await seedV2Tree(root)
+    const harnessDir = await seedActiveTree(root)
     await seedHarness(harnessDir, {
       'workflows/wf-1/agent-flow.jsonl': `${dispatchLine()}\n${settleLine({ durationMs: undefined })}\n`,
     })
-    const app = booted = await bootApp({ root })
-    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const app = booted = await bootApp({ root, harnessDir: null })
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     catalogRowOf(decision)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = storedCatalogPayload(harnessDir)
 
     const payloadRecord = payload as unknown as Record<string, unknown>
     expect(Object.values(payloadRecord).every((v) => v !== undefined)).toBe(true)
@@ -2167,19 +2123,16 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
 
   it('a mid-session dispatch lands in the catalog within one TTL (catalogTtlMs: 0 → immediate refresh)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agentflow-catalog-ttl-'))
-    const harnessDir = await seedV2Tree(root)
-    const app = booted = await bootApp({ root, catalogTtlMs: 0, dispatchBinding: 'qc-specialist' })
+    const harnessDir = await seedActiveTree(root)
+    const app = booted = await bootApp({ root, harnessDir: null, catalogTtlMs: 0, dispatchBinding: 'qc-specialist' })
     // First pre-step: no events yet.
-    const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const first = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     catalogRowOf(first)
-    // Dispatch one event through the real composition (the record path fires
-    // the apply-bound invalidator AND lands the event in the ACTIVE workflow
-    // dir — the catalog reads the SAME file, final-state Task 2 writer).
-    await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED), defaultAllow)
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_PLANNED, { sessionId: 'seed-wf-1', cwd: root }), defaultAllow)
     // Second pre-step: TTL 0 forces a rebuild → the event is visible.
-    const second = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    const second = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root), 2), defaultEnter([]))
     const { row } = catalogRowOf(second)
-    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const payload = storedCatalogPayload(harnessDir)
 
     expect(payload.state!.agentFlow?.events).toHaveLength(1)
     expect(payload.state!.agentFlow?.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
@@ -2785,11 +2738,9 @@ describe('agent-flow subagent-link — call-window catalog join', () => {
       const session = catalogSession('sess-move')
       catalogDispatch(harnessDir, pairing, 'c-mv', 'sess-move', session, 'moved active set')
       emitPostExecute(ctx, session, 'c-mv', 'sess-move', { isError: false, value: { kind: 'continuable', subagentId: 'child-mv' } })
-      // The active set moves to wf-2 BEFORE the catalog arrives.
-      await seedHarness(harnessDir, {
-        'status.json': v2Root([v2WorkflowEntry('wf-2')]),
-        'workflows/wf-2/snapshot.json': v2Snapshot('wf-2'),
-      })
+      // A concurrent ACTIVE workflow appears before catalog arrival; the link
+      // remains attributed to the dispatch's workflow.
+      await seedActiveWorkflow(harnessDir, 'wf-2', [], {}, 'seed-wf-2', root, 'wf-2')
       const envelope = session.append('subagent/catalog', catalogPayload('child-mv', 'moved active set'))
       emitSessionEvent(ctx, session, envelope)
 

@@ -24,7 +24,7 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, v2Root, v2WorkflowEntry, v2SnapshotWithPlans, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -135,18 +135,24 @@ async function seedRowDoc(harnessDir: string, plan: Record<string, unknown>): Pr
   const featurePath = join(root, 'feature-checkout')
   execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
   execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', BRANCH, featurePath])
-  const snapshot = v2SnapshotWithPlans('wf-1', [{
+  const activePlan = {
     ...plan,
     file: `plans/${String(plan.id)}.md`,
     ...(plan.metadata === ROW_SCOPE ? { metadata: { ...ROW_SCOPE, worktree_path: featurePath } } : {}),
-  }], {
-    type: 'iteration',
-    branch: { base: 'main', integration: 'integration/fixture' },
-    integration_worktree_path: integrationPath,
-  })
+  }
+  await seedActiveWorkflow(
+    harnessDir,
+    'wf-1',
+    [activePlan],
+    {
+      type: 'iteration',
+      branch: { base: 'main', integration: 'integration/fixture' },
+      integration_worktree_path: integrationPath,
+    },
+    'seed-wf-1',
+    root,
+  )
   await seedHarness(harnessDir, {
-    'status.json': v2Root([v2WorkflowEntry('wf-1', 'iteration')]),
-    'workflows/wf-1/snapshot.json': snapshot,
     [`plans/${String(plan.id)}.md`]: `# ${String(plan.id)}\n`,
   })
 }
@@ -197,7 +203,7 @@ const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
       .replaceAll(WORKTREE, join(booted!.root, 'feature-checkout'))
       .replaceAll('/srv/plans', join(booted!.harnessDir, 'plans'))
       .replaceAll('/srv/mstar/sdd', join(booted!.harnessDir, 'sdd')),
-  }, agent)
+  }, agent ?? { id: 'project-manager' })
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -346,16 +352,7 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
 })
 
 describe('dispatch gate — hostile inputs', () => {
-  it('malformed status.json + sdd → advisory lease.dispatch.unreadable (warn), no crash', async () => {
-    const app = booted = await bootApp()
-    await seedHarness(app.harnessDir, { 'status.json': '{ not json' })
-    const advisories = captureAdvisories(app.ctx)
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_ASSIGNMENT), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(violationCodes(advisories[0])).toContain('lease.dispatch.unreadable')
-  })
+  // Disposition: malformed status.json is not an execution authority after the ACTIVE cutover; retain the surviving missing-row ACTIVE case below.
 
   it('sdd Assignment with the plan row missing from the snapshot → advisory lease.dispatch.plan-not-found', async () => {
     const app = booted = await bootApp()

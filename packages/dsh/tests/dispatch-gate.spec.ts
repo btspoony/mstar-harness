@@ -24,7 +24,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
-import { bootApp, seedFileWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { planIdOf, preExecuteListener } from '../src/gates/dispatch.ts'
@@ -787,7 +787,7 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
     const featurePath = join(root, 'feature-checkout')
     execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
     execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', ROW_BRANCH, featurePath])
-    await seedFileWorkflow(app.harnessDir, 'wf-a', [{
+    await seedActiveWorkflow(app.harnessDir, 'wf-a', [{
       id: LEASE_PLAN_ID,
       title: 'scoped plan',
       file: `plans/${LEASE_PLAN_ID}.md`,
@@ -797,8 +797,8 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
       type: 'iteration',
       branch: { base: 'main', integration: 'integration/fixture' },
       integration_worktree_path: integrationPath,
-    })
-    await seedFileWorkflow(app.harnessDir, 'wf-b')
+    }, 'seed-wf-a', root, 'wf-a')
+    await seedActiveWorkflow(app.harnessDir, 'wf-b', [], {}, 'seed-wf-b', root, 'wf-b')
     return featurePath
   }
 

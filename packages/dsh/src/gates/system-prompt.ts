@@ -35,18 +35,12 @@
  *   compass soft/hard flip lands on the next assembly without
  *   re-registration, in zero-config and explicit-config deployments alike.
  * - The context provider reuses the catalog's unified machine-summary
- *   payload (`buildCatalogPayload` — the SAME builder the engine-status
- *   pre-step catalog row uses) and projects the SLIM digest: the version watermark
- *   ALWAYS, plus ONE `workflow … | plans: …` line only when the active set
- *   selects a lifecycle (`state.selection.kind === 'active'`). Harness dir
- *   and enforcement live in `mstar:harness-rules`; residuals / leases /
- *   direction / iteration-gate detail stay exclusive to the pre-step row.
- *   v3 : the
- *   digest reads ONLY the catalog row (`state` — itself aggregated from the
- *   ACTIVE execution graph + project registers) — no direct status.json /
- *   snapshot-file reads. The build is TTL-memoized PER RESOLVED HARNESS DIR
- *   (`DEFAULT_CATALOG_TTL_MS`) so the per-assembly hot path does not re-read
- *   the compass / ledger on every prompt assembly (the documented tradeoff).
+ *   payload (`buildCatalogPayloadWithStore` — the same ACTIVE graph-backed
+ *   builder used by the pre-step catalog row) and projects the SLIM digest.
+ *   The prompt API's provider is synchronous, so the configured workspace is
+ *   resolved once when the service is injected; additional per-assembly
+ *   workspaces are loaded asynchronously and cached for their next assembly.
+ *   The cache is TTL-refreshed per resolved harness dir.
  *
  * Degradation (boot is never affected — the persona channel's contained-degrade
  * discipline):
@@ -79,7 +73,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload } from './catalog.ts'
+import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore } from './catalog.ts'
 import { joinCapped, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
@@ -207,7 +201,7 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
   // does not depend on the cordis traceable-proxy `this.ctx` rebind : on a re-apply the child fiber disposal runs the
   // disposers FIRST, so the fresh apply registers without a duplicate-name
   // throw and no stale closure (old resolver/harness dir) lingers.
-  ctx.inject(['systemPrompt'], (systemPromptCtx) => {
+  ctx.inject(['systemPrompt'], async (systemPromptCtx) => {
     try {
       const view = systemPromptCtx.systemPrompt as unknown as SystemPromptView
       const disposeSection = view.section({
@@ -227,7 +221,7 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
       const disposeContext = view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
         order: ENGINE_STATUS_CONTEXT_ORDER,
-        text: engineStatusProvider(ctx, options.resolver, bootHarnessDir),
+        text: await engineStatusProvider(ctx, options.resolver, bootHarnessDir),
       })
       systemPromptCtx.effect(function* () {
         yield () => {
@@ -282,32 +276,52 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
 }
 
 /**
- * The apply-scoped engine-status provider: a TTL-memoized bounded projection
- * over `buildCatalogPayload` (the catalog's unified machine-summary builder
- * — the same payload the pre-step engine-status row renders from). The harness dir resolves
- * PER ASSEMBLY from the assembly context's agent , and the memo is keyed by the resolved harness dir so
- * distinct session workspaces keep independent bounded rows instead of
- * sharing one stale boot row. The memo keeps one bounded disk read per
- * `DEFAULT_CATALOG_TTL_MS` per resolved dir instead of rereading the compass
- * / ledger on every prompt assembly.
+ * The apply-scoped engine-status provider. The system-prompt API requires a
+ * synchronous text provider, so hydrate its cache asynchronously when the
+ * service is injected and refresh in the background when a workspace's TTL
+ * expires. The configured workspace is ready for its first assembly; a new
+ * per-agent workspace starts its bounded read on first use.
  */
-// simplify: separate per-provider TTL cache — a ledger-change invalidation
-// clears the CATALOG's entry but not this memo, so the provider serves up to
-// one TTL of staleness after a ledger change (same documented tradeoff as the
-// catalog). Upgrade path: share the apply-scoped catalog cache + invalidation
-// hook with the provider.
-function engineStatusProvider(ctx: Context, resolver: HarnessResolver, bootHarnessDir: string | null): (context: object) => string {
+function engineStatusProvider(
+  ctx: Context,
+  resolver: HarnessResolver,
+  bootHarnessDir: string | null,
+): Promise<(context: object) => string> {
   const memo = new Map<string | null, { payload: MstarEngineStatusPayload; builtAt: number }>()
-  return (context) => {
-    const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
-    const now = Date.now()
-    let entry = memo.get(harnessDir)
-    if (entry === undefined || now - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) {
-      entry = { payload: buildCatalogPayload(ctx, harnessDir), builtAt: now }
-      memo.set(harnessDir, entry)
-    }
-    return engineStatusSummary(entry.payload)
+  const pending = new Map<string | null, Promise<void>>()
+  const refresh = (harnessDir: string | null): Promise<void> => {
+    const active = pending.get(harnessDir)
+    if (active !== undefined) return active
+    const request = (harnessDir === null
+      ? Promise.resolve(buildCatalogPayload(ctx, null))
+      : buildCatalogPayloadWithStore(ctx, harnessDir)
+    ).then((payload) => {
+      memo.set(harnessDir, { payload, builtAt: Date.now() })
+    }).catch((error: unknown) => {
+      log('warn', `mstar:engine-status ACTIVE catalog read failed: ${errorMessage(error)}`)
+      if (!memo.has(harnessDir)) {
+        memo.set(harnessDir, { payload: buildCatalogPayload(ctx, harnessDir), builtAt: Date.now() })
+      }
+    }).finally(() => {
+      pending.delete(harnessDir)
+    })
+    pending.set(harnessDir, request)
+    return request
   }
+
+  return (async () => {
+    await refresh(bootHarnessDir)
+    return (context: object): string => {
+      const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
+      const entry = memo.get(harnessDir)
+      if (entry === undefined) {
+        void refresh(harnessDir)
+        return engineStatusSummary(buildCatalogPayload(ctx, harnessDir))
+      }
+      if (Date.now() - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) void refresh(harnessDir)
+      return engineStatusSummary(entry.payload)
+    }
+  })()
 }
 
 /**
