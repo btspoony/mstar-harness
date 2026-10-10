@@ -1474,8 +1474,10 @@ describe("workflowEntryPreDispatchCheck", () => {
       expect(codes).toContain("worktree.entry.integration-dirty");
       expect(codes).toContain("lease.merge-lease.missing-holder");
       expect(result.lease).toEqual({ claimed: true, lease: {} });
-      expect(result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix).toContain("mstar iteration register");
-      expect(result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix).toContain("mstar status validate");
+      const branchRecovery = result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix ?? "";
+      expect(branchRecovery).toContain("workflow lifecycle --workflow wf --status failed");
+      expect(branchRecovery).toContain("replacement workflow with an explicitly new workflow id");
+      expect(branchRecovery).toContain("--workflow <new-id> --entry");
       expect(result.violations.find((entry) => entry.code === "worktree.entry.integration-branch-mismatch")?.fix).toContain(`git -C '${integration}' checkout 'wrong'`);
       const dirtyFix = result.violations.find((entry) => entry.code === "worktree.entry.integration-dirty")?.fix ?? "";
       expect(dirtyFix).toContain(`git -C '${integration}' status --short`);
