@@ -36,7 +36,7 @@ const HOST_PRESENCE_INSTALL_HINTS: Partial<Record<Target, string>> = {
   omp: "Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install @mstar-harness/omp",
   codex: "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
   dsh: "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
-  cursor: "Install Cursor (https://cursor.com) \u2014 the Cursor IDE / cursor-agent CLI \u2014 then re-run init",
+  cursor: "Install the Cursor CLI with `curl https://cursor.com/install -fsS | bash`, confirm `cursor-agent` is available on PATH, then re-run init.",
   kimi: "Install the Kimi Code CLI (https://www.kimi.com/code/docs/kimi-code-cli/), then re-run: npx @mstar-harness/cli init --target kimi --scope <global|project>",
 };
 
