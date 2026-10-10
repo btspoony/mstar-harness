@@ -1242,6 +1242,14 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
   }
 
+  function stubNode(version: string): string {
+    const binDir = mkdtempSync(join(tmpdir(), "node-fake-"));
+    tempRoots.push(binDir);
+    const script = join(binDir, "node");
+    writeFileSync(script, `#!/bin/sh\necho "v${version}"\n`, { mode: 0o755 });
+    return binDir;
+  }
+
   function stubOpencode(versionLine: string): string {
     const binDir = mkdtempSync(join(tmpdir(), "opencode-fake-"));
     tempRoots.push(binDir);
@@ -1334,10 +1342,13 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
       "mcp": { "servers": { "morning-star": { "type": "local", "command": ["npx", "@mstar-harness/cli", "mcp"] } } },
     }, null, 2), "utf8");
     const binDir = stubOpencode("opencode v2.0.24");
+    // The V2 plugin's Node floor is checked against the PATH node; provide a
+    // deterministic stub above the floor.
+    const nodeDir = stubNode("24.18.0");
 
     const flatProject = runDoctorCli(
       ["doctor", "--target", "opencode", "--scope", "project", "--opencode-generation", "v2"],
-      `${binDir}:${ISOLATED_PATH}`,
+      `${binDir}:${nodeDir}:${ISOLATED_PATH}`,
       home,
       projectRoot,
     );
@@ -1346,7 +1357,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
 
     const globalDoctor = runDoctorCli(
       ["doctor", "--target", "opencode", "--scope", "global", "--opencode-generation", "v2"],
-      `${binDir}:${ISOLATED_PATH}`,
+      `${binDir}:${nodeDir}:${ISOLATED_PATH}`,
       home,
       projectRoot,
     );
@@ -1356,6 +1367,29 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     // resolved v2 generation while the project file keeps its flat row.
     expect(globalOut).toContain('"status":"ok"');
     expect(globalOut).toContain('MCP config aligned for opencode');
+  });
+
+  test("a PATH node below the V2 plugin floor is refused naming the requirement", () => {
+    const projectRoot = tempProject();
+    const home = tempProject();
+    const globalConfigDir = join(home, ".config", "opencode");
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(join(globalConfigDir, "opencode.json"), JSON.stringify({
+      "plugins": ["@mstar-harness/opencode-v2@latest"],
+      "mcp": { "servers": { "morning-star": { "type": "local", "command": ["npx", "@mstar-harness/cli", "mcp"] } } },
+    }, null, 2), "utf8");
+    const binDir = stubOpencode("opencode v2.0.24");
+    const nodeDir = stubNode("20.0.0");
+
+    const result = runDoctorCli(
+      ["doctor", "--target", "opencode", "--scope", "global", "--opencode-generation", "v2"],
+      `${binDir}:${nodeDir}:${ISOLATED_PATH}`,
+      home,
+      projectRoot,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("Node >=24.18.0");
+    expect(`${result.stdout}\n${result.stderr}`).toContain("20.0.0");
   });
 
   test("the scope-split recovery is real: the same flat row does not block a global-scope v2 init", () => {

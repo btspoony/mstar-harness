@@ -41,10 +41,12 @@ import {
   classifyOpencodeProbeError,
   diagnoseOpencodeV2Host,
   OPENCODE_VERSION_TIMEOUT_MS,
+  OPENCODE_V2_NODE_FLOOR,
   opencodeProbeFailureMessage,
   parseOpencodeVersionOutput,
   type OpencodeGeneration,
 } from "../host-health/opencode-v2.js";
+import { compareSemver } from "../host-health/version-compare.js";
 
 const doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"] as const;
 const hostSignals = [
@@ -298,13 +300,34 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // stays on whenever v2 is among the resolved generations.
         const resolvedGeneration = input.generation ?? (resolvedGenerations.length === 1 ? resolvedGenerations[0] : undefined);
         const v2AmongResolved = resolvedGenerations.includes("v2") || input.generation === "v2";
+        const v1AmongResolved = resolvedGenerations.includes("v1") || input.generation === "v1";
         const mcpHealth = input.target === "dsh"
           ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
           : diagnoseMcpTarget(input.target, os.homedir(), undefined, {
             ...(projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath }),
             ...(v2AmongResolved ? { requireNestedV2Shape: true } : {}),
+            ...(v1AmongResolved ? { requireFlatV1Shape: true } : {}),
           });
-        const errors = [...result.errors, ...mcpHealth.errors];
+        // The published V2 plugin runs in OpenCode's Node process and needs
+        // node:sqlite (Node >=24.18.0) — INSTALL.md:70 promises doctor checks
+        // it. Probe the PATH node independently of the MCP runtime (the CLI
+        // itself is Bun-hosted, so process.versions cannot certify Node).
+        const pluginRuntimeErrors: string[] = [];
+        if (input.target === "opencode" && v2AmongResolved) {
+          try {
+            const nodeVersion = runBin("node")(["--version"]).trim().replace(/^v/, "");
+            if (compareSemver(nodeVersion, OPENCODE_V2_NODE_FLOOR) < 0) {
+              pluginRuntimeErrors.push(
+                "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeVersion + ".",
+              );
+            }
+          } catch {
+            pluginRuntimeErrors.push(
+              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); no node executable was found.",
+            );
+          }
+        }
+        const errors = [...result.errors, ...mcpHealth.errors, ...pluginRuntimeErrors];
         const data = {
           ...result,
           errors,

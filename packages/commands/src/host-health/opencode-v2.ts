@@ -23,6 +23,10 @@ export const OPENCODE_V2_CONFIG_SCHEMA: string | null = null;
 /** The single canonical V2 plugin slot this harness writes (owned-slot dedupe target). */
 export const OPENCODE_V2_PLUGIN = "@mstar-harness/opencode-v2@latest";
 
+/** The published V2 plugin runs in OpenCode's Node process and needs node:sqlite
+ * (packages/opencode-v2/INSTALL.md:8); doctor promises to check this floor. */
+export const OPENCODE_V2_NODE_FLOOR = "24.18.0";
+
 export type OpencodeGeneration = "v1" | "v2";
 
 /**
