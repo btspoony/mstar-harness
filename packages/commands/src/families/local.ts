@@ -178,7 +178,10 @@ function diagnoseOpencodeTarget(root: string, generation: OpencodeGeneration | u
 
 async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation?: OpencodeGeneration): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
   if (target === "opencode") {
-    return diagnoseOpencodeTarget(resolveProjectRoot(), generation);
+    const root = scope === "global"
+      ? path.join(os.homedir(), ".config", "opencode")
+      : resolveProjectRoot();
+    return diagnoseOpencodeTarget(root, generation);
   }
   if (target === "cursor") {
     const result = diagnoseCursorHost(scope);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -242,6 +242,52 @@ describe("opencode host health", () => {
     });
   });
 });
+describe("doctor OpenCode scope", () => {
+  test("validates the OpenCode config root selected by project or global scope", async () => {
+    const home = fixture();
+    const projectRoot = fixture();
+    const homedir = spyOn(os, "homedir").mockReturnValue(home);
+    process.env.MSTAR_CLI_PROJECT_ROOT = projectRoot;
+    const config = {
+      $schema: "https://opencode.ai/config.json",
+      plugin: ["@mstar-harness/opencode@latest"],
+      mcp: {
+        servers: {
+          "morning-star": { type: "local", command: ["npx", "-y", "@mstar-harness/cli", "mcp"] },
+        },
+      },
+    };
+    writeJson(home, path.join(".config", "opencode", "opencode.json"), config);
+    writeJson(projectRoot, "opencode.json", config);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "doctor");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const context = {
+      cwd: projectRoot,
+      controlRoot: projectRoot,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    };
+    try {
+      const global = await definition.execute({ target: "opencode", scope: "global", generation: "v1" }, context);
+      const project = await definition.execute({ target: "opencode", scope: "project", generation: "v1" }, context);
+      expect(global).toMatchObject({
+        status: "ok",
+        data: { location: path.join(home, ".config", "opencode", "opencode.json") },
+      });
+      expect(project).toMatchObject({ status: "ok", data: { location: path.join(projectRoot, "opencode.json") } });
+    } finally {
+      homedir.mockRestore();
+    }
+  });
+});
+
 
 describe("omp host health", () => {
   test("validates the selected installed omp plugin tree", () => {
