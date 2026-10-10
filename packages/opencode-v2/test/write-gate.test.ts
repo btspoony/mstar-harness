@@ -122,6 +122,27 @@ describe("OpenCode V2 structured-write gate", () => {
     expect(readFileSync(path, "utf8")).toBe(current);
   });
 
+  test("edit replacement strings preserve substitution tokens literally in post-state", async () => {
+    const { harnessDir } = harness("hard");
+    const path = join(harnessDir, "status.json");
+    const current = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
+    writeFileSync(path, current);
+    const api = await loadWriteGateApi();
+    const inputs: unknown[] = [];
+    const testApi = {
+      ...api!,
+      validateStatusWriteDoc: (content: unknown, filePath: string, kind: "status" | "snapshot" | "register") => {
+        inputs.push(content);
+        return api!.validateStatusWriteDoc(content, filePath, kind);
+      },
+    } as WriteGateEngineApi;
+
+    await expect(
+      run(event("edit", { path, oldString: "\"version\":2", newString: "$&", replaceAll: false }), testApi),
+    ).rejects.toBeInstanceOf(Tool.Error);
+    expect(inputs).toEqual([expect.stringContaining("$&")]);
+  });
+
   test("non-composable edits validate the existing document and benign writes do not read or refuse", async () => {
     const { harnessDir, root } = harness("hard");
     const valid = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });

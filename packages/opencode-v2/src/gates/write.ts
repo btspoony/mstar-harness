@@ -178,7 +178,7 @@ function prospectiveEdit(current: string, input: Record<string, unknown>): strin
   if (typeof oldString !== "string" || oldString === "" || typeof newString !== "string" || typeof replaceAll !== "boolean") return undefined;
   const hits = countOccurrences(current, oldString);
   if (hits === 0 || (hits !== 1 && replaceAll !== true)) return undefined;
-  return replaceAll ? current.replaceAll(oldString, newString) : current.replace(oldString, newString);
+  return current.split(oldString).join(newString);
 }
 
 async function validateDocument(
