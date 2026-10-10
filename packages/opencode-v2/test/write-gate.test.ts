@@ -38,7 +38,7 @@ async function run(
   }));
 }
 
-function makeBody() {
+function makeBody(onAllowed: () => void = () => {}) {
   let calls = 0;
   return {
     run: async (
@@ -48,6 +48,7 @@ function makeBody() {
     ) => {
       await run(value, api, logger);
       calls++;
+      onAllowed();
     },
     calls: () => calls,
   };
@@ -60,9 +61,12 @@ describe("OpenCode V2 structured-write gate", () => {
       const db = join(harnessDir, "store.db");
       const original = "protected bytes";
       writeFileSync(db, original);
-      const body = makeBody();
+      const body = makeBody(() => writeFileSync(db, "replacement"));
 
-      await expect(body.run(event("write", { path: db, content: "replacement" }))).rejects.toBeInstanceOf(Tool.Error);
+      await expect(body.run(event("write", { path: db, content: "replacement" }))).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("[store.direct-write-refused]"),
+      });
       expect(body.calls()).toBe(0);
       expect(readFileSync(db, "utf8")).toBe(original);
     }
@@ -78,26 +82,73 @@ describe("OpenCode V2 structured-write gate", () => {
     } as WriteGateEngineApi;
     const body = makeBody();
 
-    await expect(body.run(event("write", { path: join(harnessDir, "Store.db"), content: "x" }))).rejects.toBeInstanceOf(Tool.Error);
-    await expect(body.run(event("write", { path: join(harnessDir, "Store.db-wal"), content: "x" }))).rejects.toBeInstanceOf(Tool.Error);
-    await expect(body.run(event("write", { path: join(harnessDir, "projects", "_default", "RESIDUALS.json"), content: "{}" }), activeApi)).rejects.toBeInstanceOf(Tool.Error);
-    expect(body.calls()).toBe(0);
+    await expect(body.run(event("write", { path: join(harnessDir, "Store.db"), content: "x" }))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[store.direct-write-refused]"),
+    });
+    await expect(body.run(event("write", { path: join(harnessDir, "Store.db-wal"), content: "x" }))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[store.direct-write-refused]"),
+    });
+    await expect(body.run(event("write", { path: join(harnessDir, "projects", "_default", "RESIDUALS.json"), content: "{}" }), activeApi)).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[project.register.retired]"),
+    });
   });
 
-  test("hard mode refuses invalid coordination writes; soft mode logs and proceeds", async () => {
+  test("refuses ACTIVE execution documents in both enforcement modes without mutating them", async () => {
+    const api = await loadWriteGateApi();
+    expect(api).not.toBeNull();
+    const activeApi = {
+      ...api!,
+      resolveExecutionReadRoute: async () => "execution",
+    } as WriteGateEngineApi;
+
+    for (const mode of ["hard", "soft"] as const) {
+      const { harnessDir } = harness(mode);
+      const statusPath = join(harnessDir, "status.json");
+      const original = readFileSync(statusPath, "utf8");
+      const body = makeBody(() => writeFileSync(statusPath, "unauthorized"));
+      await expect(body.run(event("write", { path: statusPath, content: "unauthorized" }), activeApi)).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("[execution.direct-write-refused]"),
+      });
+      expect(body.calls()).toBe(0);
+      expect(readFileSync(statusPath, "utf8")).toBe(original);
+    }
+  });
+
+  test("hard mode refuses invalid coordination writes; soft mode warns and proceeds", async () => {
     const hard = harness("hard");
+    const hardPath = join(hard.harnessDir, "status.json");
+    const hardOriginal = readFileSync(hardPath, "utf8");
     const invalid = "not-json";
-    const hardBody = makeBody();
-    await expect(hardBody.run(event("write", { path: join(hard.harnessDir, "status.json"), content: invalid }))).rejects.toBeInstanceOf(Tool.Error);
+    const hardBody = makeBody(() => writeFileSync(hardPath, invalid));
+    await expect(hardBody.run(event("write", { path: hardPath, content: invalid }))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[status.invalid-json]"),
+    });
     expect(hardBody.calls()).toBe(0);
+    expect(readFileSync(hardPath, "utf8")).toBe(hardOriginal);
 
     const soft = harness("soft");
-    const softBody = makeBody();
+    const softPath = join(soft.harnessDir, "status.json");
     const messages: string[] = [];
+    const levels: string[] = [];
+    const softBody = makeBody(() => writeFileSync(softPath, invalid));
     const api = await loadWriteGateApi();
-    await softBody.run(event("write", { path: join(soft.harnessDir, "status.json"), content: invalid }), api!, (_level, message) => messages.push(message));
+    await softBody.run(
+      event("write", { path: softPath, content: invalid }),
+      api!,
+      (level, message) => {
+        levels.push(level);
+        messages.push(message);
+      },
+    );
     expect(softBody.calls()).toBe(1);
-    expect(messages.join("\n")).toContain("status.invalid-json");
+    expect(levels).toContain("warn");
+    expect(messages.join("\\n")).toContain("status.invalid-json");
+    expect(readFileSync(softPath, "utf8")).toBe(invalid);
   });
 
   test("post-state synthesis rejects an edit that corrupts an otherwise valid document", async () => {
