@@ -144,26 +144,33 @@ function applyV2Assignments(config: Record<string, unknown>, assignments: Record
  * (user-modified or not) is never rewritten.
  */
 /** The pinned V2 MCP schema allows only `timeout` and `servers` at the `mcp`
- * level; a V1-flat `mcp.<server>` row is not decodable by OpenCode V2. */
+ * level, while the V1 host decodes servers only from flat `mcp.<server>` rows.
+ * A single config file therefore cannot serve both generations' MCP dialects:
+ * V1-flat rows and V2 `mcp.servers` rows are irreconcilable in one place, and
+ * silently rewriting either side would break the other host's loading. */
 const V2_MCP_TOP_LEVEL_KEYS = new Set(["timeout", "servers"]);
 
-/** Migrate V1-flat `mcp.<server>` rows under `mcp.servers` so a V2 config is
- * decodable instead of mixed; the flat keys are removed after migration. */
-function migrateFlatMcpEntries(mcp: Record<string, unknown>): void {
- const servers = ensureObject(mcp.servers);
- mcp.servers = servers;
- for (const [key, value] of Object.entries(mcp)) {
-  if (V2_MCP_TOP_LEVEL_KEYS.has(key)) continue;
-  servers[key] = value;
-  delete mcp[key];
- }
+/** Detect V1-flat `mcp.<server>` rows that a V2 write cannot represent. The
+ * caller refuses with recovery instead of writing a config either host cannot
+ * fully load. */
+function flatV1McpRows(mcp: Record<string, unknown>): string[] {
+ return Object.keys(mcp).filter((key) => !V2_MCP_TOP_LEVEL_KEYS.has(key));
 }
 
 function mergeV2McpServer(config: Record<string, unknown>) {
  const next = ensureObject(config);
  const mcp = ensureObject(next.mcp);
+ const flatRows = flatV1McpRows(mcp);
+ if (flatRows.length > 0) {
+  throw new Error(
+   'This opencode.json carries V1-flat MCP rows (' + flatRows.map((row) => 'mcp.' + row).join(', ') + ') that the V2 MCP dialect'
+   + ' (mcp.servers only) cannot represent alongside them. The file was not modified. Supported recovery: separate the'
+   + ' generations across scopes \u2014 project and global init resolve to different config files, so run this init with the'
+   + ' --scope whose file has no V1-flat MCP rows (the V1 host keeps serving the flat rows from its own file), or move those'
+   + ' servers off the flat dialect manually. Then re-run mstar init --target opencode --opencode-generation v2.',
+ );
+}
  next.mcp = mcp;
- migrateFlatMcpEntries(mcp);
  const servers = ensureObject(mcp.servers);
  mcp.servers = servers;
  if (servers["morning-star"] === undefined) servers["morning-star"] = { ...MORNING_STAR_MCP_SERVER };
