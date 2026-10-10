@@ -49,7 +49,7 @@ export type ProbeCommandRunner = (
 export type MutateConfigForInitOptions = {
   /** Explicit `--opencode-generation` selection; always wins over probe and markers. */
   generation?: OpencodeGeneration;
-  /** `--dry-run`: presence/generation probes never run — pure preview (D15). */
+  /** `--dry-run`: presence/generation probes never run — pure preview. */
   dryRun?: boolean;
   /** Test seam overriding executable-PATH lookup; absent in production. */
   presenceRunner?: ProbeCommandRunner;
