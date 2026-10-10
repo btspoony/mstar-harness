@@ -295,17 +295,11 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("retired workflow verbs refuse with cause and supported replacement", () => {
-    for (const [verb, replacement] of [
-      ["show-prepare", "mstar plan prepare"],
-      ["amend-prepare", "mstar plan prepare"],
-      ["recover-coordinator", "mstar session recover"],
-    ] as const) {
-      const result = runCli(["workflow", verb, "--json"]);
-      expect(result.exitCode).toBe(1);
-      expect(commandOutput(result)).toMatchObject({ status: "refused", code: "workflow.verb-retired" });
-      expect(commandMessage(result).toLowerCase()).toContain("pre-activation");
-      expect(commandMessage(result)).toContain(replacement);
+  test("retired workflow verbs are absent from CLI help", () => {
+    const result = runCli(["workflow", "--help"]);
+    expect(result.exitCode).toBe(0);
+    for (const verb of ["show-prepare", "amend-prepare", "recover-coordinator"]) {
+      expect(result.stdout).not.toContain(verb);
     }
   });
 

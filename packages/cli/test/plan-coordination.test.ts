@@ -125,13 +125,11 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
     const legacy = cli(["plan", "bind", "--coordinator", "--workflow", WF, "--session-id", "legacy"], f); expect(legacy.code).toBe(2); expect(legacy.json.status).toBe("usage");
     const retired = cli(["plan", "handoff"], f, identity()); expect(retired.code).not.toBe(0); expect(retired.stdout + retired.stderr).toMatch(/unknown|retired|usage/i);
   });
-  test.each([
-    ["show-prepare", "`mstar plan prepare`", "workflow show-prepare: removed"],
-    ["amend-prepare", "`mstar plan prepare`", "workflow amend-prepare: removed"],
-    ["recover-coordinator", "`mstar session recover`", "workflow recover-coordinator: removed"],
-  ])("workflow %s retirement states its supported recovery", (verb, recovery, prefix) => {
-    const result = Bun.spawnSync([process.execPath, "run", ENTRY, "workflow", verb], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
-    expect(result.exitCode).toBe(1); const response = JSON.parse(result.stdout.toString()) as Record<string, any>;
-    expect(response.code).toBe("workflow.verb-retired"); expect(response.message).toContain(prefix); expect(response.message).toContain(recovery);
+  test("retired workflow verbs are absent from CLI help", () => {
+    const result = Bun.spawnSync([process.execPath, "run", ENTRY, "workflow", "--help"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    for (const verb of ["show-prepare", "amend-prepare", "recover-coordinator"]) {
+      expect(result.stdout.toString()).not.toContain(verb);
+    }
   });
 });
