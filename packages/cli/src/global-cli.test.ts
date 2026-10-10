@@ -241,6 +241,13 @@ describe("init wiring (end-to-end CLI harness)", () => {
     writeFakeBin("dsh", `printf '%s\\n' "$*" >> "${dshLog}"\nexit 0`);
   }
 
+  /** Fake opencode reporting a V2 version so the D14 presence gate and the
+   * generation probe resolve deterministically in tests that run a real
+   * config-mode init for the opencode target. */
+  function fakeOpencode(): void {
+    writeFakeBin("opencode", `echo "opencode v2.0.26"\nexit 0`);
+  }
+
   /** Fake mstar-harness reporting a version; default non-matching so the
    * install path is always taken deterministically. */
   function fakeMstarHarness(version = "0.0.0-test"): void {
@@ -267,6 +274,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
   test("config-mode success installs the exact pinned spec", () => {
     fakeNpm(0);
     fakeMstarHarness();
+    fakeOpencode();
     const configPath = path.join(tmp, "opencode.json");
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
     expect(result.status).toBe(0);
@@ -279,6 +287,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
   test("config-mode stays exit 0 when the global install fails", () => {
     fakeNpm(1);
     fakeMstarHarness();
+    fakeOpencode();
     const configPath = path.join(tmp, "opencode.json");
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
     expect(result.status).toBe(0);
@@ -309,6 +318,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
 
   test("--no-global-cli skips the global install entirely", () => {
     fakeNpm(0);
+    fakeOpencode();
     const configPath = path.join(tmp, "opencode.json");
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath, "--no-global-cli"], cliEnv());
     expect(result.status).toBe(0);
@@ -319,6 +329,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
   test("a stalled npm install times out and fail-softs with exit 0 (F-201)", () => {
     fakeNpmHang();
     fakeMstarHarness();
+    fakeOpencode();
     const configPath = path.join(tmp, "opencode.json");
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], {
       ...cliEnv(),
@@ -334,6 +345,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
   test("a matching PATH version skips the install (repeated-init idempotency, F-203)", () => {
     fakeNpm(0);
     fakeMstarHarness(PACKAGE_VERSION);
+    fakeOpencode();
     const configPath = path.join(tmp, "opencode.json");
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
     expect(result.status).toBe(0);

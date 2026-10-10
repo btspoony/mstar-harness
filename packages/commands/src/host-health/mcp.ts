@@ -298,6 +298,7 @@ export function diagnoseMcpTarget(
   target: HostTarget,
   configRoot: string,
   runtime: McpRuntime = actualRuntime(),
+  options: { configFilePath?: string; requireNestedV2Shape?: boolean } = {},
 ): McpTargetHealth {
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
@@ -309,7 +310,7 @@ export function diagnoseMcpTarget(
   }
 
   const { configFile: relativeConfig, format } = HOST_MCP_CONFIGS[target];
-  const configPath = path.join(configRoot, relativeConfig);
+  const configPath = options.configFilePath ?? path.join(configRoot, relativeConfig);
 
   if (!fs.existsSync(configPath)) {
     return {
@@ -342,13 +343,41 @@ export function diagnoseMcpTarget(
     // array or scalar must read as mismatch, never fall through to aligned.
     if (!parseFailed && parsed === null) errors.push(`MCP config ${relativeConfig} is not a JSON object.`);
     if (parsed !== null) {
-      const servers = format === "mcp" ? parsed.mcp : parsed.mcpServers;
-      const serverRecord = record(servers);
-      if (serverRecord === null) {
-        errors.push(`MCP config ${relativeConfig} has no valid server entries.`);
+      const mcpConfig = format === "mcp" ? record(parsed.mcp) : null;
+      const nestedServers = mcpConfig === null ? null : record(mcpConfig.servers);
+      const serversValueIsLaunchEntry = nestedServers !== null && (
+        typeof nestedServers.command === "string"
+        || Array.isArray(nestedServers.command)
+        || Array.isArray(nestedServers.args)
+      );
+      const hasNestedV2Shape = target === "opencode"
+        && mcpConfig !== null
+        && Object.hasOwn(mcpConfig, "servers")
+        && !serversValueIsLaunchEntry;
+      // A resolved V2 generation must see the nested V2 shape: OpenCode V2
+      // decodes the server only from `mcp.servers`, so a legacy flat
+      // `mcp.<server>` row can never be healthy under v2 even though the
+      // V1-tolerant fallback would read it as aligned.
+      const legacyFlatBlocked = options.requireNestedV2Shape === true
+        && target === "opencode"
+        && !hasNestedV2Shape;
+      const servers = legacyFlatBlocked
+        ? null
+        : format === "mcpServers"
+          ? parsed.mcpServers
+          : hasNestedV2Shape
+            ? mcpConfig!.servers
+            : mcpConfig;
+      if (legacyFlatBlocked) {
+        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Re-run \`mstar init --target opencode\` to migrate the row under \`mcp.servers\`.`);
       } else {
-        const hasMstar = Object.values(serverRecord).some((entry) => isNpxMstarLaunch(entry));
-        if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry launching \`npx @mstar-harness/cli mcp\`.`);
+        const serverRecord = record(servers);
+        if (serverRecord === null) {
+          errors.push(`MCP config ${relativeConfig} has no valid server entries.`);
+        } else {
+          const hasMstar = Object.values(serverRecord).some((entry) => isNpxMstarLaunch(entry));
+          if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry launching \`npx @mstar-harness/cli mcp\`.`);
+        }
       }
     }
   } else if (format === "toml") {

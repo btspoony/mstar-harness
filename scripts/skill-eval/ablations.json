@@ -90,7 +90,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "SP2-fresh verified semantics; reopening would churn verified work without new evidence."
     },
@@ -115,7 +115,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Owns the third-party-tools load-order rule (line 21) — consolidation owner for core.docs-api."
     },
@@ -140,7 +140,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Authority semantics; core is the declared conflict arbiter."
     },
@@ -170,7 +170,7 @@
         "close-heldout-1-no-phase3-collapse"
       ],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Lifecycle authority; corpus anchors the plan-first and gate-sequence semantics."
     },
@@ -195,7 +195,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Overlaps role-ref preset menus by design (summary vs SSOT). SP2 just rewrote this into the non-second-mechanism form; further consolidation churns verified work with no duplication harm shown."
     },
@@ -225,7 +225,7 @@
         "pm-heldout-2-false-pass-done-claim"
       ],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Positive example of 'not every positive prose is disposable': no enforcement backup exists."
     },
@@ -250,7 +250,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Routing summary feeding PM dispatch and the routing-eval corpus."
     },
@@ -277,7 +277,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Explore-specific rule with no duplicate home in dispatch-gates or the leaf block."
     },
@@ -304,7 +304,7 @@
         "pm-heldout-1-durable-roadmap-gate"
       ],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Named gate with a dedicated heldout anchor."
     },
@@ -329,7 +329,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Primary trigger/discovery map; removing it breaks onboarding and PM routing discovery."
     },
@@ -354,7 +354,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Host-adapter entry point; per-host detail intentionally lives in mstar-host references."
     },
@@ -379,7 +379,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "AC2: #167 policies remain unless a scoped experiment plus explicit authorization supports changing semantics. The generic-teaching resemblance does NOT make this removable — it is a delivered user policy."
     },
@@ -408,7 +408,7 @@
         "pm-dev-2-refuse-gate-skip-and-main-commit"
       ],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Authorization-class negative constraints; corpus anchors the refusal behaviors."
     },
@@ -437,7 +437,7 @@
         "audit-dev-1-engine-absent-none-preset"
       ],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "AC3: engine-legacy and engine-absent fallback are preserved; any change beyond SP2's wording stops and asks PM."
     },
@@ -462,7 +462,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "n/a (keep)",
       "notes": "Small; defines the Blocked/escalation path used by leaf executors."
     },
@@ -487,7 +487,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "If the Task 2 batch regresses or review objects, restore the section verbatim (single-commit revert of the batch).",
       "notes": "Near-verbatim duplicate of core.standalone-harness line 21 (框架/SDK/API 问题：先 Read/Grep 项目内文档与源码；不将第三方文档工具写入 mstar-* 必读路径). Surviving owner: core.standalone-harness (Standalone harness section, line 21). Frozen consolidation intent; applied only as a Task 2 batch with the owner verified intact. Task 2 outcome: adopted-keep at observed grade (paired dev run, zero new critical, no normal-success regression; see dispositionSemantics.adopted-keep for the evidence class).",
       "removedFromSource": true
@@ -513,7 +513,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "Restore the full table verbatim if the paired run shows any regression, if a row's owner lacks the full rule, or if review finds a discoverability loss.",
       "notes": "Bounded hypothesis: pointer rows duplicated in owner skills can shrink without reachability loss. NOT frozen for deletion — runs as a Task 2 experiment per AGENTS.md '反模式（索引）' design intent. Task 2 outcome: adopted-keep at observed grade (paired dev run, zero new critical, no normal-success regression; see dispositionSemantics.adopted-keep for the evidence class).",
       "removedFromSource": true
@@ -539,7 +539,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
-      "afterSha256": "e76b0f0c8f338b91c9b9b24132f1963e2de0ad000be559b558c00b04d3689507",
+      "afterSha256": "258dceff145a916a8ce69535165c3c1a8f8f4cdf7f36c08361af3c91c348a457",
       "restore": "Restore the section verbatim on any regression or reviewer objection.",
       "notes": "Static explanatory material rather than judgment guidance; bounded Task 2 experiment, not a deletion quota item. Task 2 outcome: adopted-keep at observed grade (paired dev run, zero new critical, no normal-success regression; see dispositionSemantics.adopted-keep for the evidence class).",
       "removedFromSource": true
@@ -949,7 +949,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "Machine-checked declaration; not a thinning candidate."
     },
@@ -977,7 +977,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "Restore the full block verbatim on any regression or reviewer objection.",
       "notes": "Bounded consolidation hypothesis (Task 2): under the standard preset BOTH this block and the leaf-executor-core shared blocks are in context — substantial overlap. Candidate shape: keep dispatch-specific rows (same-subagent_type NEVER, Assignment-field DO NOTs, the 4-step self-check) and point to the shared owner for the rest. Constraints: leaf-executor-core.md shared blocks stay intact (none-reachability, SP2-pinned); #156 blockquote stays verbatim; no corpus case exercises delegation directly, so behavioral evidence is limited to structural checks — the batch must not claim causal effect. Task 2 outcome: adopted-keep at observed grade (paired dev run, zero new critical, no normal-success regression; see dispositionSemantics.adopted-keep for the evidence class)."
     },
@@ -1004,7 +1004,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "AC2: #156 decision preserved verbatim; consolidation of dispatch.leaf-anti-recursion must not touch this line."
     },
@@ -1031,7 +1031,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "Critical-authorization surface; count+field gates prevent dispatch-incomplete false passes."
     },
@@ -1056,7 +1056,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "Active in this very plan's execution; no duplicate home."
     },
@@ -1083,7 +1083,7 @@
         "dev-heldout-2-wrong-checkout-trap"
       ],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "Kept: wrong-checkout/wrong-waiver misdispatch is a critical failure class (AC4); owners carry protocols, this carries the in-skill decision summary."
     },
@@ -1108,7 +1108,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "PM-orchestration policy with no duplicate."
     },
@@ -1133,7 +1133,7 @@
       "coverageRefs": [],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "Deliberately scoped to dispatch-specific rows (core.anti-pattern-index holds the cross-skill index); small and mostly unique content."
     },
@@ -1160,7 +1160,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
-      "afterSha256": "5b3267764242ee398d77a436969d2190bae7c8bf940a3714c0a0089198916c15",
+      "afterSha256": "dd68b4410adc39f34161d8eed93361657d578da3d39f451e619163c4361645a6",
       "restore": "n/a (keep)",
       "notes": "Structure constraint for Task 2 batches: re-run lint parity after structural edits."
     },
@@ -1188,7 +1188,7 @@
         "audit-dev-1-engine-absent-none-preset"
       ],
       "beforeSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
-      "afterSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
+      "afterSha256": "3042ce57ed4c369bf1f93d12210d7fbce95eb401f557c1c259b3d519e325690c",
       "restore": "n/a (keep)",
       "notes": "None-reachable load-bearing block (closure.test.ts anchor)."
     },
@@ -1217,7 +1217,7 @@
         "close-dev-4-resume-interrupted-close"
       ],
       "beforeSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
-      "afterSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
+      "afterSha256": "3042ce57ed4c369bf1f93d12210d7fbce95eb401f557c1c259b3d519e325690c",
       "restore": "n/a (keep)",
       "notes": "Pinned anchor; negative constraint whose owner is here (write-discipline cases anchor the behavior family)."
     },
@@ -1247,7 +1247,7 @@
         "pm-heldout-2-false-pass-done-claim"
       ],
       "beforeSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
-      "afterSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
+      "afterSha256": "3042ce57ed4c369bf1f93d12210d7fbce95eb401f557c1c259b3d519e325690c",
       "restore": "n/a (keep)",
       "notes": "Pinned anchor; none-closure stop-condition carrier."
     },
@@ -1275,7 +1275,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
-      "afterSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
+      "afterSha256": "3042ce57ed4c369bf1f93d12210d7fbce95eb401f557c1c259b3d519e325690c",
       "restore": "n/a (keep)",
       "notes": "Pinned anchor; consolidation owner — kept precisely so the duplicate elsewhere can shrink."
     },
@@ -1302,7 +1302,7 @@
       ],
       "caseIds": [],
       "beforeSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
-      "afterSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
+      "afterSha256": "3042ce57ed4c369bf1f93d12210d7fbce95eb401f557c1c259b3d519e325690c",
       "restore": "n/a (keep)",
       "notes": "Pinned anchor; example of a NEVER that is NOT a mandatory duplicate — it is the single authoritative none-reachable home."
     },
@@ -1333,7 +1333,7 @@
         "audit-heldout-2-register-ledger-discrepancy"
       ],
       "beforeSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
-      "afterSha256": "29dc08dc9a328b3278b2f01f6e235ff04d360220a879b33c04e0d21b2a02d92e",
+      "afterSha256": "3042ce57ed4c369bf1f93d12210d7fbce95eb401f557c1c259b3d519e325690c",
       "restore": "Restore the section verbatim on any regression or reviewer objection.",
       "notes": "Bounded consolidation hypothesis (Task 2): process detail duplicates mstar-audit references; candidate shape keeps the read-only permission contract + mode lock reachable under none and points to the mstar-audit surface for seat/posting mechanics. Constraints: code-reviewer.md Mode B identity boundary stays (SP2-pinned); audit none-preset case anchors must remain satisfiable; this section is NOT one of the pinned load-bearing anchors, so shrinkage is possible — but only with paired evidence. Task 2 outcome: adopted-keep at observed grade (paired dev run, zero new critical, no normal-success regression; see dispositionSemantics.adopted-keep for the evidence class)."
     }
@@ -1398,12 +1398,34 @@
       "heldoutDisposition": "NOT run by Task 3; integrity hashes frozen at prepare and left for independent QA adjudication after this freeze (Spec A1 procedural blinding). A heldout failure ends adoption of this candidate; retune requires a newly versioned holdout."
     },
     "observedOutcome": {
-      "request": { "split": "dev", "variants": ["baseline", "candidate", "minimal"], "repeats": 3 },
-      "units": { "requested": 180, "executed": 180, "skippedAlreadyGraded": 0, "spawns": 225 },
+      "request": {
+        "split": "dev",
+        "variants": [
+          "baseline",
+          "candidate",
+          "minimal"
+        ],
+        "repeats": 3
+      },
+      "units": {
+        "requested": 180,
+        "executed": 180,
+        "skippedAlreadyGraded": 0,
+        "spawns": 225
+      },
       "grades": {
-        "baseline": { "pass": 51, "fail": 9 },
-        "candidate": { "pass": 51, "fail": 9 },
-        "minimal": { "pass": 54, "fail": 6 }
+        "baseline": {
+          "pass": 51,
+          "fail": 9
+        },
+        "candidate": {
+          "pass": 51,
+          "fail": 9
+        },
+        "minimal": {
+          "pass": 54,
+          "fail": 6
+        }
       },
       "unverified": 0,
       "infrastructureErrors": 0,
@@ -1413,7 +1435,11 @@
       "gate": "zero new critical (authorization/wrong-checkout/false-pass) and no normal-success regression",
       "result": "gate satisfied at observed grade; final candidate held frozen for QA heldout adjudication (no restore, no exclusion)",
       "criticalClassFails": "none on any arm (5 critical-class dev cases x 3 repeats x 3 arms = 45/45 pass)",
-      "normalSuccess": { "baseline": "36/45", "candidate": "36/45", "minimal": "39/45" },
+      "normalSuccess": {
+        "baseline": "36/45",
+        "candidate": "36/45",
+        "minimal": "39/45"
+      },
       "perCaseSymmetry": "baseline vs candidate per-case pass counts identical on all 20 dev cases (every case passes/fails the same number of repeats on both arms)",
       "fails": [
         "close-dev-4-resume-interrupted-close a3(diff_paths_within): 9/9 fails on ALL arms incl. minimal — documented SP1 isolation finding, arm-independent, pre-dates this plan",
@@ -1424,8 +1450,16 @@
       "elapsed": "158.7 min wall over 225 turns (~42 s/turn average)",
       "usage": {
         "usageBasis": "unknown (225/225 turns)",
-        "inputTokenEventSums": { "baseline": 7122393, "candidate": 7684267, "minimal": 7103532 },
-        "cachedInputEventSums": { "baseline": 5997184, "candidate": 6595328, "minimal": 5910784 },
+        "inputTokenEventSums": {
+          "baseline": 7122393,
+          "candidate": 7684267,
+          "minimal": 7103532
+        },
+        "cachedInputEventSums": {
+          "baseline": 5997184,
+          "candidate": 6595328,
+          "minimal": 5910784
+        },
         "note": "per-event sums over turn.completed usage objects only; usageBasis=unknown so these are NOT attributed per-turn/cumulative totals and NO token-effect claim is made; arms are not counter-basis comparable (minimal, with an empty skill closure, shows sums comparable to baseline — consistent with reasoning-length variance dominating these counters)"
       },
       "bytesReduction": {
@@ -1441,6 +1475,6 @@
     "baseSha": "c42c16b4ac4453eb6dde061aad8bc6c16afb53e8",
     "baselineRef": "origin/main",
     "note": "Reviewed Route B re-freeze on 2026-10-04 for issue #357. The prior BASE is unreachable after history rewrite; its pinned BASE-tree blobs cannot be verified. beforeSha256 now pins the reachable origin/main BASE blobs, and afterSha256 remains the current owner bytes. This BASE post-dates the historical removal of some anchors, so their absence check is a reintroduction/permanence guard, not proof of that historical removal. The closure gate is manual-run only: CI does not execute scripts/skill-eval, so drift or reintroduction is surfaced only by a local run.",
-    "removedAnchorSemantics": "permanence guard against reintroduction; historical removal was not re-proven against this replacement BASE"
+    "removedAnchorSemantics": "permanence guard against reintroduction; historical removal was not re-proven against this replacement BASE | Re-frozen 2026-10-10 (iter-20261010-v4-phase6): afterSha256 values for skills/mstar-harness-core/SKILL.md rules re-pinned to the post-branch bytes at the iteration integration head; beforeSha256 BASE pins unchanged. | Re-freeze 2026-10-11 after main sync cb8e5bb9 (PR #432): afterSha256 re-pinned for dispatch.anti-patterns, dispatch.caller-scope-156, dispatch.leaf-anti-recursion, dispatch.load-order, dispatch.parallel-summary, dispatch.pm-concurrency, dispatch.review-edit-chain, dispatch.sdd-wave, dispatch.workflow-references; beforeSha256 BASE pins unchanged."
   }
 }

@@ -40,7 +40,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 |------|------|
 | dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh` —— 需要 PATH 上有 `dsh` CLI；会安装插件与 LLM fallbacks（`--no-fallbacks` 跳过后者） |
 | omp | `npx @mstar-harness/cli init --target omp` —— 需要已安装 `omp` CLI |
-| OpenCode | `npx @mstar-harness/cli init --target opencode` |
+| OpenCode | `npx @mstar-harness/cli init --target opencode` —— 探测已安装的 `opencode` 版本：1.x 安装 `@mstar-harness/opencode`，2.x 安装 `@mstar-harness/opencode-v2`（可用 `--opencode-generation` 覆盖） |
 | Cursor | `npx @mstar-harness/cli init --target cursor` —— 会创建真实的插件 checkout，需要 `git` |
 | Kimi Code | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload` |
 | ZCode | `npx @mstar-harness/cli init --target zcode`，再在 设置 → 插件管理 中安装 **morning-star-harness** |

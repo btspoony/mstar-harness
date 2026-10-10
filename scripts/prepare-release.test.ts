@@ -28,12 +28,15 @@ packages: CLI, Root
   test("single unknown token produces one error naming file + token", () => {
     const errors = validateFragmentPackages(["root", "scripts"], "typo.md");
     expect(errors).toEqual([
-      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
+      'typo.md: unknown packages token "scripts" (expected one of root|cli|opencode|opencode-v2|engine|commands|dsh|omp)',
     ]);
   });
 
   test("accepts published command package token", () => {
     expect(validateFragmentPackages(["commands"], "new-packages.md")).toEqual([]);
+  });
+  test("accepts the OpenCode V2 package token", () => {
+    expect(validateFragmentPackages(["opencode-v2"], "new-packages.md")).toEqual([]);
   });
 
   test("collects every error across files/tokens (not first-error only)", () => {
@@ -42,9 +45,9 @@ packages: CLI, Root
       ...validateFragmentPackages(["engine", "dshh"], "b.md"),
     ];
     expect(errors).toEqual([
-      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
-      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
-      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|engine|commands|dsh|omp)',
+      'a.md: unknown packages token "clii" (expected one of root|cli|opencode|opencode-v2|engine|commands|dsh|omp)',
+      'a.md: unknown packages token "scripts" (expected one of root|cli|opencode|opencode-v2|engine|commands|dsh|omp)',
+      'b.md: unknown packages token "dshh" (expected one of root|cli|opencode|opencode-v2|engine|commands|dsh|omp)',
     ]);
   });
 

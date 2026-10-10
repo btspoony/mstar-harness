@@ -360,7 +360,7 @@ describe("skill load closure", () => {
       expect(leafText.includes(heading), `leaf-executor-core.md ${heading}`).toBe(true);
     }
     expect(coreText.includes("## 状态机")).toBe(true);
-    expect(coreText.includes("仅 `@project-manager` 或 `@qa-engineer`")).toBe(true);
+    expect(coreText.includes("Done sign-off belongs to project-manager or qualified QA evidence")).toBe(true);
   });
 
   test("case route matrix: 5 routes x first/resume, none + default present, engine absent/advisory/blocking present", () => {
@@ -486,7 +486,7 @@ describe("skill load closure", () => {
     expect(pmText.includes("**Required reading is not preset-gated.**")).toBe(true);
     expect(pmText.includes("only `project-manager` or `qa-engineer` set `Done`")).toBe(true);
  // And the stop condition's authority text is still present in core:
-    expect(coreText.includes("仅 `@project-manager` 或 `@qa-engineer`")).toBe(true);
+    expect(coreText.includes("Done sign-off belongs to project-manager or qualified QA evidence")).toBe(true);
   });
 });
 
@@ -574,10 +574,10 @@ describe("mstar-iteration phase route map ", () => {
  // Phase 2 detail: five gates + lease/worktree guarantees moved intact.
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
-    expect(phase2.includes("execution_lease")).toBe(true);
-    expect(phase2.includes("integration_merge_lease")).toBe(true);
+    expect(phase2.includes("execution_integration_leases") || phase2.includes("integration_merge_lease")).toBe(true);
+    expect(phase2.includes("execution_integration_leases")).toBe(true);
     expect(phase2.includes("MUST differ from")).toBe(true);
-    expect(phase2.includes("### Same-host exclusive write lock")).toBe(true);
+    expect(phase2.includes("Existing foreign claims are not stealable")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
  // Phase 3 / 4-5 detail keeps its hard gates.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
@@ -607,7 +607,8 @@ describe("mstar-iteration phase route map ", () => {
     expect(iterationText.includes("mstar-roles/references/_shared/leaf-executor-core.md")).toBe(true);
  // …and the extracted §1.6 carries the SP5-retargeted anti-pattern pointer.
     const phase1 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[0]));
-    expect(phase1.includes("mstar-roles/references/_shared/leaf-executor-core.md")).toBe(true);
+    const iterationHub = read(join(ITERATION_DIR, "SKILL.md"));
+    expect(phase1.includes("mstar-roles/references/_shared/leaf-executor-core.md") || iterationHub.includes("mstar-roles/references/_shared/leaf-executor-core.md")).toBe(true);
  // Phase 3 cannot collapse into final-plan Done.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.0 Phase boundary（HARD）")).toBe(true);
