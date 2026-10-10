@@ -44,6 +44,9 @@ async function expectAuthorityRefusal(promise: Promise<unknown>, code: string) {
   expect(error).toBeInstanceOf(Tool.Error);
   expect((error as Tool.Error).message).toContain(`[${code}]`);
   expect((error as Tool.Error).message).toContain("mstar issue");
+  expect((error as Tool.Error).message).toContain("mstar plan prepare|progress|complete");
+  expect((error as Tool.Error).message).toContain("mstar workflow phase|lifecycle|execution-policy|integration-worktree");
+  expect((error as Tool.Error).message).toContain("mstar status workflow-close");
   expect((error as Tool.Error).message).toContain("mstar catalog");
   expect((error as Tool.Error).message).toContain("mstar store upgrade/migrate");
   expect((error as Tool.Error).message).toContain("project maintainer");
@@ -75,7 +78,7 @@ describe("OpenCode V2 structured-write gate", () => {
         const body = makeBody(() => writeFileSync(target, "unauthorized"));
 
         await expectAuthorityRefusal(
-          body.run(event("write", { path: target, content: "unauthorized" })),
+          body.run(event("write", { filePath: target, content: "unauthorized" })),
           "store.direct-write-refused",
         );
         expect(body.calls()).toBe(0);
@@ -100,7 +103,7 @@ describe("OpenCode V2 structured-write gate", () => {
         writeFileSync(target, original);
         const body = makeBody(() => writeFileSync(target, "unauthorized"));
         await expectAuthorityRefusal(
-          body.run(event("write", { path: target, content: "unauthorized" })),
+          body.run(event("write", { filePath: target, content: "unauthorized" })),
           "store.direct-write-refused",
         );
         expect(body.calls()).toBe(0);
@@ -112,7 +115,7 @@ describe("OpenCode V2 structured-write gate", () => {
       writeFileSync(register, registerBytes);
       const registerBody = makeBody(() => writeFileSync(register, "unauthorized"));
       await expectAuthorityRefusal(
-        registerBody.run(event("write", { path: register, content: "unauthorized" }), activeApi),
+        registerBody.run(event("write", { filePath: register, content: "unauthorized" }), activeApi),
         "project.register.retired",
       );
       expect(registerBody.calls()).toBe(0);
@@ -139,7 +142,7 @@ describe("OpenCode V2 structured-write gate", () => {
         writeFileSync(target, original);
         const body = makeBody(() => writeFileSync(target, "unauthorized"));
         await expectAuthorityRefusal(
-          body.run(event("write", { path: target, content: "unauthorized" }), activeApi),
+          body.run(event("write", { filePath: target, content: "unauthorized" }), activeApi),
           "execution.direct-write-refused",
         );
         expect(body.calls()).toBe(0);
@@ -155,7 +158,7 @@ describe("OpenCode V2 structured-write gate", () => {
     const hardOriginal = readFileSync(hardPath, "utf8");
     const invalid = "not-json";
     const hardBody = makeBody(() => writeFileSync(hardPath, invalid));
-    await expect(hardBody.run(event("write", { path: hardPath, content: invalid }))).rejects.toMatchObject({
+    await expect(hardBody.run(event("write", { filePath: hardPath, content: invalid }))).rejects.toMatchObject({
       _tag: "Tool.Error",
       message: expect.stringContaining("[status.invalid-json]"),
     });
@@ -169,7 +172,7 @@ describe("OpenCode V2 structured-write gate", () => {
     const softBody = makeBody(() => writeFileSync(softPath, invalid));
     const api = await loadWriteGateApi();
     await softBody.run(
-      event("write", { path: softPath, content: invalid }),
+      event("write", { filePath: softPath, content: invalid }),
       api!,
       (level, message) => {
         levels.push(level);
@@ -271,35 +274,67 @@ describe("OpenCode V2 structured-write gate", () => {
         return api!.validateStatusWriteDoc(content, filePath, kind);
       },
     } as WriteGateEngineApi;
-    await expect(run(event("edit", { path: statusPath, oldString: "missing", newString: "replacement", replaceAll: false }), testApi)).resolves.toBeUndefined();
+    await expect(run(event("edit", { filePath: statusPath, oldString: "missing", newString: "replacement", replaceAll: false }), testApi)).resolves.toBeUndefined();
     expect(validated).toEqual([undefined]);
 
     const benign = join(root, "notes.txt");
     const body = makeBody();
-    await body.run(event("write", { path: benign, content: "ok" }), testApi);
+    await body.run(event("write", { filePath: benign, content: "ok" }), testApi);
     expect(body.calls()).toBe(1);
     expect(validated).toEqual([undefined]);
+  });
+
+  test("uses the V2 filePath field for write and edit targets, retaining path as a legacy fallback", async () => {
+    const { harnessDir } = harness("hard");
+    const filePath = join(harnessDir, "status.json");
+    const activeApi = {
+      ...(await loadWriteGateApi())!,
+      resolveExecutionReadRoute: async () => "execution",
+    } as WriteGateEngineApi;
+
+    await expect(run(event("write", { filePath, content: "unauthorized" }), activeApi)).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[execution.direct-write-refused]"),
+    });
+    await expect(run(event("edit", { filePath, oldString: "a", newString: "b" }), activeApi)).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[execution.direct-write-refused]"),
+    });
+    await expect(run(event("write", { path: filePath, content: "legacy" }), activeApi)).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("[execution.direct-write-refused]"),
+    });
   });
 
   test("normal write/edit and missing-path behavior follow the claimed seam contract", async () => {
     const { harnessDir, root } = harness("hard");
     const path = join(harnessDir, "status.json");
     const valid = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
-    await expect(run(event("write", { path, content: valid }))).resolves.toBeUndefined();
-    await expect(run(event("edit", { path, oldString: "missing", newString: "replacement", replaceAll: false }))).resolves.toBeUndefined();
-    await expect(run(event("write", { path: join(root, "ordinary.txt"), content: "ok" }))).resolves.toBeUndefined();
+    await expect(run(event("write", { filePath: path, content: valid }))).resolves.toBeUndefined();
+    await expect(run(event("edit", { filePath: path, oldString: "missing", newString: "replacement", replaceAll: false }))).resolves.toBeUndefined();
+    await expect(run(event("write", { filePath: join(root, "ordinary.txt"), content: "ok" }))).resolves.toBeUndefined();
 
     await expect(run(event("write", { content: "no path" }))).rejects.toMatchObject({ _tag: "Tool.Error", message: expect.stringContaining("input.path") });
-    await expect(run(event("edit", { path: 42 }))).rejects.toMatchObject({ _tag: "Tool.Error", message: expect.stringContaining("input.path") });
+    await expect(run(event("edit", { filePath: 42 }))).rejects.toMatchObject({ _tag: "Tool.Error", message: expect.stringContaining("input.filePath") });
   });
 
   test("null engine seam refuses writes with typed engine-unavailable error", async () => {
     await expect(Effect.runPromise(writeBefore(
-      event("write", { path: "/tmp/unavailable-engine-target", content: "unauthorized" }),
+      event("write", { filePath: "/tmp/unavailable-engine-target", content: "unauthorized" }),
       { loadEngine: async () => null },
     ))).rejects.toMatchObject({
       _tag: "Tool.Error",
-      message: expect.stringContaining("[write.engine-unavailable]"),
+      message: expect.stringMatching(/\[write\.engine-unavailable\][\s\S]*plugin\/host runtime[\s\S]*not a runtime dependency/i),
+    });
+  });
+  test("retains engine import failure cause and directs plugin runtime upgrade", async () => {
+    const cause = "Cannot find package '@mstar-harness/engine'";
+    await expect(Effect.runPromise(writeBefore(
+      event("write", { filePath: "/tmp/unavailable-engine-target", content: "unauthorized" }),
+      { loadEngine: async () => { throw new Error(cause); } },
+    ))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringMatching(/\[write\.engine-unavailable\][\s\S]*Cannot find package[\s\S]*plugin\/host runtime/i),
     });
   });
 });

@@ -44,7 +44,7 @@ const STORE_NAMES: Record<string, true> = {
   "store.db-shm": true,
 };
 const PRE_ACTIVATION_CODES = new Set(["store.not-initialized", "store.not-active"]);
-const AUTHORITY_RECOVERY = "Use supported mstar issue or mstar catalog commands for record changes, or mstar store upgrade/migrate for supported imports; raw database-byte edits have no supported direct-write verb, so escalate repairs to the project maintainer.";
+const AUTHORITY_RECOVERY = "Use supported mstar plan prepare|progress|complete, mstar workflow phase|lifecycle|execution-policy|integration-worktree transitions, or mstar status workflow-close for lifecycle changes; use mstar issue or mstar catalog commands for record changes, or mstar store upgrade/migrate for supported imports. Raw database-byte edits have no supported direct-write verb, so escalate repairs to the project maintainer.";
 
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -60,10 +60,10 @@ function refusal(code: string, message: string): Tool.Error {
   return new Tool.Error({ message: `[${code}] ${message}` });
 }
 
-function malformedPath(): Tool.Error {
+function malformedPath(field: "filePath" | "path"): Tool.Error {
   return refusal(
     "write.input-path-invalid",
-    "input.path must be a non-empty string. Align the OpenCode 2.0.26 tool input schema and retry; no write was authorized.",
+    `input.${field} must be a non-empty string. Align the OpenCode 2.0.26 tool input schema and retry; no write was authorized.`,
   );
 }
 
@@ -227,14 +227,28 @@ async function validateDocument(
 async function executeBefore(event: WriteBeforeEvent, services: WriteGateServices): Promise<void> {
   if (event.tool !== "write" && event.tool !== "edit") return;
   const input = asRecord(event.input);
-  if (input === null || typeof input.path !== "string" || input.path.trim() === "") throw malformedPath();
+  if (input === null) throw malformedPath("filePath");
+  const filePath = typeof input.filePath === "string" && input.filePath.trim() !== ""
+    ? input.filePath
+    : typeof input.path === "string" && input.path.trim() !== ""
+      ? input.path
+      : undefined;
+  if (filePath === undefined) throw malformedPath(input.filePath === undefined ? "path" : "filePath");
 
-  const api = await (services.loadEngine ?? loadWriteGateApi)();
+  let api: WriteGateEngineApi | null;
+  try {
+    api = await (services.loadEngine ?? loadWriteGateApi)();
+  } catch (error) {
+    throw refusal(
+      "write.engine-unavailable",
+      `The bundled engine failed to load (${error instanceof Error ? error.message : String(error)}). Upgrade the OpenCode plugin/host runtime; the engine is bundled with the plugin and is not a runtime dependency. No write was authorized.`,
+    );
+  }
   if (api === null) {
-    throw refusal("write.engine-unavailable", "The required ACTIVE-only engine gate exports are unavailable. Upgrade @mstar-harness/engine and retry; no write was authorized.");
+    throw refusal("write.engine-unavailable", "The required ACTIVE-only engine gate exports are unavailable. Upgrade the OpenCode plugin/host runtime; the engine is bundled with the plugin and is not a runtime dependency. No write was authorized.");
   }
 
-  const requested = resolve(input.path);
+  const requested = resolve(filePath);
   const landed = landedPathOf(requested);
   const logger = services.logger ?? defaultStatusLogger;
   if (isStoreAuthorityTarget(api, requested) || isStoreAuthorityTarget(api, landed)) {
