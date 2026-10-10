@@ -286,6 +286,49 @@ describe("doctor OpenCode scope", () => {
       homedir.mockRestore();
     }
   });
+  test("checks the project OpenCode MCP row in the project config", async () => {
+    const home = fixture();
+    const projectRoot = fixture();
+    const homedir = spyOn(os, "homedir").mockReturnValue(home);
+    process.env.MSTAR_CLI_PROJECT_ROOT = projectRoot;
+    const projectConfigPath = "opencode.json";
+    const host = { $schema: "https://opencode.ai/config.json", plugin: ["@mstar-harness/opencode@latest"] };
+    writeJson(home, path.join(".config", "opencode", "opencode.json"), {
+      mcp: { servers: { unrelated: { type: "local", command: ["other"] } } },
+    });
+    writeJson(projectRoot, projectConfigPath, {
+      ...host,
+      mcp: {
+        servers: {
+          "morning-star": { type: "local", command: ["npx", "-y", "@mstar-harness/cli", "mcp"] },
+        },
+      },
+    });
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "doctor");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const context = {
+      cwd: projectRoot,
+      controlRoot: projectRoot,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    };
+    try {
+      const result = await definition.execute({ target: "opencode", scope: "project", generation: "v1" }, context);
+      expect(result).toMatchObject({
+        status: "ok",
+        data: { mcpHealth: { status: "aligned", location: path.join(projectRoot, projectConfigPath) } },
+      });
+    } finally {
+      homedir.mockRestore();
+    }
+  });
 });
 
 
