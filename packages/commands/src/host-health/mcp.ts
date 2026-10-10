@@ -354,6 +354,16 @@ export function diagnoseMcpTarget(
         && mcpConfig !== null
         && Object.hasOwn(mcpConfig, "servers")
         && !serversValueIsLaunchEntry;
+      // The pinned V2 schema allows only `timeout` and `servers` at the `mcp`
+      // level: a config mixing nested rows with legacy flat rows is rejected
+      // by OpenCode itself, so doctor must never report it aligned.
+      const mixedMcpShapes = target === "opencode"
+        && mcpConfig !== null
+        && Object.keys(mcpConfig).some((key) => key !== "timeout" && key !== "servers");
+      if (mixedMcpShapes) {
+        const flatRows = Object.keys(mcpConfig!).filter((key) => key !== "timeout" && key !== "servers");
+        errors.push(`MCP config ${relativeConfig} mixes legacy flat MCP rows (${flatRows.map((row) => \`mcp.\${row}\`).join(", ")}) with the V2 \`mcp.servers\` shape; OpenCode V2 rejects the mixed config. Move the rows into one dialect (or separate the generations across scopes).`);
+      }
       // A resolved V2 generation must see the nested V2 shape: OpenCode V2
       // decodes the server only from `mcp.servers`, so a legacy flat
       // `mcp.<server>` row can never be healthy under v2 even though the
