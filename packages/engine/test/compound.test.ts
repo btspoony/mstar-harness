@@ -26,7 +26,7 @@ import {
 } from "../src/compound.js";
 import { registerCatalogEntity } from "../src/catalog.js";
 import { createFsStore } from "../src/store.js";
-import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 
 const hasCode = (g: { violations: { code: string }[] }, code: string) =>
   g.violations.some((v) => v.code === code);
@@ -415,16 +415,10 @@ describe("scopeGuard", () => {
     const context: StoreContext = { harnessDir: tmp };
     const initialized = await initializeStore(context);
     initialized.close();
-    const handle = await openStore(context, "write");
-    try {
-      handle.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
-    } finally {
-      handle.close();
-    }
 
     const store = createFsStore(tmp);
     await expect(store.put({ kind: "status", key: "root", payload: {} })).rejects.toMatchObject({
-      code: "execution.direct-write-refused",
+      code: "coordination.direct-write-refused",
     });
   });
 
