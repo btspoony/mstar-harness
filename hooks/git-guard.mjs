@@ -129,27 +129,64 @@ function analyzeGitInvocations(command) {
   return invocations;
 }
 
-// Push options whose following token is a value, not a repository/refspec.
-const PUSH_VALUE_OPTS = new Set(["-o", "--push-option", "--receive-pack", "--exec"]);
+// Keep this table aligned with `git push -h`; unknown options fail closed so
+// unfamiliar flag syntax cannot shift a forced refspec into the repository slot.
+const PUSH_BOOLEAN_OPTS = new Set([
+  "--verbose", "--no-verbose", "--quiet", "--no-quiet", "--all", "--no-all",
+  "--branches", "--no-branches", "--mirror", "--no-mirror", "--delete", "--no-delete",
+  "--tags", "--no-tags", "--dry-run", "--no-dry-run", "--porcelain", "--no-porcelain",
+  "--force", "--force-if-includes", "--thin", "--no-thin", "--set-upstream",
+  "--progress", "--no-progress", "--prune", "--no-prune", "--no-verify", "--verify",
+  "--follow-tags", "--no-follow-tags", "--atomic", "--no-atomic", "--ipv4", "--ipv6",
+  "--force-with-lease", "--no-force-with-lease", "--signed", "--no-signed",
+  "--no-recurse-submodules", "--no-push-option",
+]);
+const PUSH_VALUE_OPTS = new Set([
+  "--repo", "--receive-pack", "--exec", "--push-option", "--recurse-submodules",
+]);
+const PUSH_SHORT_BOOLEAN_OPTS = new Set(["q", "v", "n", "f", "u", "d", "4", "6"]);
 
-/** Force detection distinguishes option values, repository and refspecs. */
-function isBareForcePush(invocation) {
+/** Returns force/unclassifiable state after distinguishing options, repo, and refs. */
+function inspectPush(invocation) {
   let repositorySeen = false;
   for (let i = 1; i < invocation.argv.length; i += 1) {
     const token = invocation.argv[i];
-    if (token === "--force") return true;
-    if (token.startsWith("-")) {
-      if (token !== "--force-with-lease" && /^-[^-]*f/.test(token)) return true;
-      if (PUSH_VALUE_OPTS.has(token)) i += 1;
+    if (token.startsWith("--")) {
+      const equals = token.indexOf("=");
+      const name = equals < 0 ? token : token.slice(0, equals);
+      if (PUSH_BOOLEAN_OPTS.has(name)) {
+        if (name === "--force") return { force: true };
+        if (equals >= 0 && name !== "--force-with-lease" && name !== "--signed") {
+          return { unknown: token };
+        }
+        continue;
+      }
+      if (PUSH_VALUE_OPTS.has(name)) {
+        if (equals < 0) i += 1;
+        if (name === "--repo") repositorySeen = true;
+        continue;
+      }
+      return { unknown: token };
+    }
+    if (token.startsWith("-") && token !== "-") {
+      for (let offset = 1; offset < token.length; offset += 1) {
+        const flag = token[offset];
+        if (flag === "f") return { force: true };
+        if (flag === "o") {
+          if (offset === token.length - 1) i += 1;
+          break; // remainder, if any, is the option's inline value
+        }
+        if (!PUSH_SHORT_BOOLEAN_OPTS.has(flag)) return { unknown: token };
+      }
       continue;
     }
     if (!repositorySeen) {
       repositorySeen = true;
       continue;
     }
-    if (token.startsWith("+")) return true;
+    if (token.startsWith("+")) return { force: true };
   }
-  return false;
+  return { force: false };
 }
 
 const COMMIT_ESCAPE_IN_COMMAND = /MSTAR_ALLOW_DEFAULT_BRANCH_COMMIT=1(\s|$)/;
@@ -212,7 +249,15 @@ try {
     }
   }
 
-  if (pushInvocations.some(isBareForcePush)) {
+  const pushResults = pushInvocations.map(inspectPush);
+  const unknownPushOption = pushResults.find((result) => result.unknown);
+  if (unknownPushOption) {
+    deny(
+      `Morning Star push gate (mstar-branch-worktree): cannot classify unknown git push option ${JSON.stringify(unknownPushOption.unknown)}. ` +
+        "Re-run with recognized git push options; unknown option forms fail closed.",
+    );
+  }
+  if (pushResults.some((result) => result.force)) {
     deny(
       "Morning Star push gate (mstar-branch-worktree): bare `git push --force` is blocked — history rewrites on pushed branches " +
         "must publish with `--force-with-lease=<branch>:<observed-oid>` after fetching the remote OID first " +
