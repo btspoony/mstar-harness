@@ -91,6 +91,31 @@ describe("Codex regular agent installation", () => {
         expect(run(f.root, scope, true).errors).toEqual([]);
       } finally { f.cleanup(); }
     });
+    test(`${scope}: caps retained backups, install survives with and without prior backups`, () => {
+      const f = fixture();
+      try {
+        const dest = path.join(f.root, scope === "project" ? "project" : "", ".codex/agents");
+        const target = path.join(dest, names[0]);
+        // Zero prior backups: a fresh install must succeed and write none.
+        expect(run(f.root, scope).failure).toBeUndefined();
+        expect(fs.readdirSync(dest).some((name) => name.endsWith(".bak"))).toBe(false);
+        fs.writeFileSync(target, "user customization");
+        for (let index = 0; index < 5; index += 1) {
+          const seed = path.join(dest, `${names[0]}.seed-${index}.bak`);
+          fs.writeFileSync(seed, `stale-${index}`);
+          const when = new Date(Date.now() - (index + 1) * 60_000);
+          fs.utimesSync(seed, when, when);
+        }
+        const install = run(f.root, scope);
+        expect(install.failure).toBeUndefined();
+        expect(install.notes.join(" ")).toContain("Backed up");
+        expect(fs.readFileSync(target, "utf8")).not.toBe("user customization");
+        // Newest three: the fresh backup plus the two newest seeds.
+        const remaining = fs.readdirSync(dest).filter((name) => name.endsWith(".bak"));
+        expect(remaining).toHaveLength(3);
+        expect(remaining.filter((name) => name.includes(".seed-")).sort()).toEqual([`${names[0]}.seed-0.bak`, `${names[0]}.seed-1.bak`]);
+      } finally { f.cleanup(); }
+    });
     test(`${scope}: migrates expected legacy links, rejects unrelated and nonregular targets`, () => {
       const f = fixture();
       try {
