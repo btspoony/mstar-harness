@@ -40,7 +40,7 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import ts from "typescript";
+import ts from "typescript5";
 
 export type HashGateClassification =
   | "hash-gate"

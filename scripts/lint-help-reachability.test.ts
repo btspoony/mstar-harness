@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ts from "typescript";
+import ts from "typescript5";
 import { extractCliGrammar } from "./lint-refusal-quality";
 import { applyManualMarkers, run, scanDeclaredCapabilities, scanRecoveryText } from "./lint-help-reachability";
 

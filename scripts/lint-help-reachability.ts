@@ -8,7 +8,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import ts from "typescript";
+import ts from "typescript5";
 import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, findRefusalWrappers, objectAlternatives, recoveryFailure, type AllowlistEntry, type CliGrammar, type RefusalFinding, type RefusalWrapperDescriptor } from "./lint-refusal-quality";
 
 export type HelpReachabilityFinding = RefusalFinding;
