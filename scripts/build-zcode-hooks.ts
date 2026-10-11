@@ -22,6 +22,7 @@ export const HOOK_ENTRIES = [
   { entry: "hooks/src/mstar-write-gate.ts", outfile: "hooks/mstar-write-gate.mjs" },
   { entry: "hooks/src/session-context.ts", outfile: "hooks/session-context.mjs" },
 ] as const;
+export const HOOK_OUTFILE_REL = HOOK_ENTRIES[0].outfile;
 
 /** Banner prepended to each bundle; names the source and regeneration path. */
 export const GENERATED_BANNER = (entry: string) =>
