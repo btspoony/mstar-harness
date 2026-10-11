@@ -10,7 +10,7 @@
  * All runners are injected — no live npm registry calls.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -282,6 +282,19 @@ describe("init wiring (end-to-end CLI harness)", () => {
     expect(result.stdout).toContain("Status: configured");
     expect(readFileSync(npmLog, "utf8").trim()).toBe(`i -g @mstar-harness/cli@${PACKAGE_VERSION}`);
     expect(existsSync(configPath)).toBe(true);
+  });
+  test("OpenCode refuses to replace a symlink config and leaves its target untouched", () => {
+    fakeOpencode();
+    const configPath = path.join(tmp, "linked-opencode.json");
+    const targetPath = path.join(tmp, "user-config.json");
+    const original = '{"user":"config"}';
+    writeFileSync(targetPath, original);
+    symlinkSync(targetPath, configPath);
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath, "--no-global-cli"], cliEnv());
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(configPath);
+    expect(result.stderr).toContain("regular path or resolve the link intentionally");
+    expect(readFileSync(targetPath, "utf8")).toBe(original);
   });
 
   test("config-mode stays exit 0 when the global install fails", () => {

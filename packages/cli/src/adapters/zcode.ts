@@ -14,6 +14,37 @@ import {
   appendHarnessProjectGitignore,
 } from "./shared-install";
 
+export function writeMarketplaceFiles(
+  marketplacePath: string,
+  knownPath: string,
+  marketplace: Record<string, unknown>,
+  known: Record<string, unknown>,
+  write: typeof writeJson = writeJson,
+) {
+  const previous = [marketplacePath, knownPath].map((filePath) => {
+    try {
+      return { filePath, content: fs.readFileSync(filePath) };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { filePath, content: null };
+      throw error;
+    }
+  });
+  try {
+    write(marketplacePath, marketplace);
+    write(knownPath, known);
+  } catch (error) {
+    const restoreErrors: string[] = [];
+    for (const prior of previous) {
+      try {
+        if (prior.content === null) fs.rmSync(prior.filePath, { force: true });
+        else fs.writeFileSync(prior.filePath, prior.content);
+      } catch (restoreError) {
+        restoreErrors.push(`${prior.filePath}: ${String(restoreError)}`);
+      }
+    }
+    throw new Error(`Failed writing ZCode marketplace files: ${String(error)}. ${restoreErrors.length ? `Rollback also failed: ${restoreErrors.join("; ")}` : "Previously existing file contents were restored."}`);
+  }
+}
 const MARKETPLACE_ID = "mstar-local";
 const MARKETPLACE_NAME = "mstar-local";
 const MARKETPLACE_DESCRIPTION = "Morning Star harness marketplace (GitHub source).";
@@ -145,17 +176,14 @@ function runInit(scope: Scope, dryRun: boolean) {
     );
   }
 
-  // Write the marketplace.json (single mstar plugin entry, github source).
-  if (!dryRun) {
-    if (!fs.existsSync(MARKETPLACE_DIR)) fs.mkdirSync(MARKETPLACE_DIR, { recursive: true });
-    writeJson(MARKETPLACE_JSON_PATH, buildMarketplaceJson());
-  }
-  notes.push(`Wrote ZCode marketplace: ${MARKETPLACE_JSON_PATH}`);
-
-  // Upsert the mstar-local entry in known_marketplaces.json.
+  // Prepare both values before the transactional write pair.
   const knownRaw = readJson(KNOWN_MARKETPLACES_PATH);
   const knownNext = upsertKnownMarketplace(knownRaw);
-  if (!dryRun) writeJson(KNOWN_MARKETPLACES_PATH, knownNext);
+  if (!dryRun) {
+    if (!fs.existsSync(MARKETPLACE_DIR)) fs.mkdirSync(MARKETPLACE_DIR, { recursive: true });
+    writeMarketplaceFiles(MARKETPLACE_JSON_PATH, KNOWN_MARKETPLACES_PATH, buildMarketplaceJson(), knownNext);
+  }
+  notes.push(`Wrote ZCode marketplace: ${MARKETPLACE_JSON_PATH}`);
   notes.push(`Registered ${MARKETPLACE_ID} marketplace in ${KNOWN_MARKETPLACES_PATH}`);
 
   notes.push(
