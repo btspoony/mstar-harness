@@ -508,9 +508,10 @@ describe("milestone views", () => {
     expect(standalone.storeRevision).toBe(resolved.storeRevision);
     expect(standalone.data).toEqual(resolvedData.milestones);
     // A milestone-only read needs no projection refresh, so a later
-    // projection-consuming read republishes a new generation and the milestone
-    // grouping is answered from the committed rows either way (issue #428: the
-    // retired file route's status.json is no longer a projection source).
+    // projection-consuming read adopts the unchanged published generation and
+    // the milestone grouping is answered from the committed rows either way
+    // (issue #428: the retired file route's status.json is no longer a
+    // projection source).
     const refreshed = await withStoreRead(context, queryDashboard("workflows"));
     expect(refreshed.projection.freshness).toBe("current");
     const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
@@ -980,9 +981,9 @@ describe("projection views", () => {
     expect(issues.projection.builtAt).toBe(builtAt);
     expect(issues.projection.freshness).toBe("current");
 
-    // A projection read refreshes and republishes the current generation (the
-    // content-fingerprint freeze is gone), so it discloses the store's actual
-    // published generation while the data itself is unchanged.
+    // A projection read refreshes and ADOPTS the current generation when the
+    // source fingerprint is unchanged (no rewrite), so it discloses the store's
+    // actual published generation while the data itself is unchanged.
     const refreshed = await withStoreRead(context, queryDashboard("workflows"));
     expect(refreshed.projection.freshness).toBe("current");
     expect(refreshed.data.items.map((item) => item.id)).toEqual(["wf-read"]);
