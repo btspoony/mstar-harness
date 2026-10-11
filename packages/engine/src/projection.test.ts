@@ -887,6 +887,76 @@ describe("projection publication and last-good handling", () => {
     expect((await projections(f)).compasses[0]).toMatchObject({ generation: rebuilt.generation, iteration_id: "iter-a" });
   });
 
+  test("a partially deleted published generation is rebuilt instead of adopted", async () => {
+    const f = await fixture("partial-delete-");
+    await seedStandard(f);
+    const first = await refreshProjections(f.context);
+    const sources = (await projections(f)).sources.map((row) => row.source_key);
+    expect(sources).toHaveLength(2);
+
+    // ONE of the two published source rows goes missing: the table is still
+    // non-empty, so a presence probe cannot see the gap.
+    const erase = await openStore(f.context, "write");
+    try {
+      erase.db.prepare("delete from projection_sources where source_key like 'compass:%'").run();
+    } finally {
+      erase.close();
+    }
+
+    const rebuilt = await refreshProjections(f.context);
+    expect(rebuilt).toMatchObject({
+      freshness: "current",
+      published: true,
+      generation: first.generation! + 1,
+      changedKeys: ["compass:iterations:iter-a/delivery-compass.md"],
+    });
+    const restored = await projections(f);
+    expect(restored.sources.map((row) => row.source_key)).toEqual(sources);
+    expect(restored.sources.every((row) => row.generation === rebuilt.generation)).toBe(true);
+  });
+
+  test("an in-place edit of a published value is rebuilt instead of adopted", async () => {
+    const f = await fixture("corrupt-value-");
+    await seedStandard(f);
+    const first = await refreshProjections(f.context);
+    const registry = (await projections(f)).sources.find((row) => row.source_key === "root:harness:execution/registry");
+    const recordedSha = registry?.sha256;
+
+    // Same row count, same fingerprint: only a stored VALUE is wrong, so an
+    // adoption would serve the tampered byte until some source moved.
+    const tamper = await openStore(f.context, "write");
+    try {
+      tamper.db.prepare("update projection_compasses set summary = 'tampered' where iteration_id = 'iter-a'").run();
+    } finally {
+      tamper.close();
+    }
+    const rebuilt = await refreshProjections(f.context);
+    expect(rebuilt).toMatchObject({ freshness: "current", published: true, generation: first.generation! + 1, changedKeys: [] });
+    expect((await projections(f)).compasses[0]).toMatchObject({
+      generation: rebuilt.generation,
+      summary: "Narrative summary of the iteration.",
+    });
+
+    // A tampered column of a source row is caught the same way.
+    const retamper = await openStore(f.context, "write");
+    try {
+      retamper.db
+        .prepare("update projection_sources set sha256 = ? where source_key = 'root:harness:execution/registry'")
+        .run("0".repeat(64));
+    } finally {
+      retamper.close();
+    }
+    const second = await refreshProjections(f.context);
+    expect(second).toMatchObject({
+      freshness: "current",
+      published: true,
+      generation: rebuilt.generation! + 1,
+      changedKeys: ["root:harness:execution/registry"],
+    });
+    const restoredSources = (await projections(f)).sources;
+    expect(restoredSources.find((row) => row.source_key === "root:harness:execution/registry")?.sha256).toBe(recordedSha);
+  });
+
   test("a deleted declared source retains the last good generation and reports stale with a diagnostic", async () => {
     const f = await fixture("deleted-");
     await seedStandard(f);
