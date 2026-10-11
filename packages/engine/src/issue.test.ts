@@ -14,6 +14,8 @@ import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
   IssueError,
+  ISSUE_ACTIONS,
+  ISSUE_ACTION_NAMES,
   ISSUE_PAYLOAD_SCHEMAS,
   assertCaptureRequest,
   appendOccurrence,
@@ -1236,5 +1238,27 @@ describe("issue dispositions, revisions, and relations", () => {
     expect(typeof triageIssueFromIndex).toBe("function");
     expect(typeof closeIssueFromIndex).toBe("function");
     expect(typeof linkIssueFromIndex).toBe("function");
+  });
+});
+
+describe("issue action vocabulary", () => {
+  test("one table owns the tokens, the payload registry links and the closure defaults", () => {
+    // Golden list: these tokens are a published surface, so a change here must
+    // be deliberate rather than a copy drifting.
+    expect(ISSUE_ACTION_NAMES).toEqual([
+      "add", "list", "show", "occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link", "export",
+    ]);
+    const registry = Object.keys(ISSUE_PAYLOAD_SCHEMAS);
+    for (const [verb, action] of Object.entries(ISSUE_ACTIONS)) {
+      if (action.payload !== null) expect(registry).toContain(action.payload);
+      else expect(action.read).toBe(true);
+      if (action.disposition !== null) expect(["close", "waive", "duplicate", "supersede"]).toContain(verb);
+    }
+    expect(ISSUE_ACTION_NAMES.filter((verb) => ISSUE_ACTIONS[verb].read)).toEqual(["list", "show", "export"]);
+    expect(ISSUE_ACTION_NAMES.filter((verb) => ISSUE_ACTIONS[verb].cas)).toEqual(["triage", "close", "reopen", "waive", "duplicate", "supersede", "link"]);
+    expect(ISSUE_ACTION_NAMES.flatMap((verb) => {
+      const disposition = ISSUE_ACTIONS[verb].disposition;
+      return disposition === null ? [] : [[verb, disposition]];
+    })).toEqual([["close", "resolved"], ["waive", "waived"], ["duplicate", "duplicate"], ["supersede", "superseded"]]);
   });
 });

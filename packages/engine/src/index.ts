@@ -604,6 +604,8 @@ export type {
   CaptureInput,
   ClosureEvidence,
   Disposition,
+  IssueAction,
+  IssueActionSpec,
   IssueDetail,
   IssueErrorCode,
   IssueFilter,
@@ -633,6 +635,8 @@ export {
   reopenIssueOn,
   triageIssue,
   assignIssueMilestone,
+  ISSUE_ACTIONS,
+  ISSUE_ACTION_NAMES,
   ISSUE_PAYLOAD_SCHEMAS,
 } from "./issue.js";
 // Catalog authority: catalog metadata is
