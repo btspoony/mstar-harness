@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import ts from "typescript";
+import ts from "typescript5";
 import { getCommandDefinitions } from "../packages/commands/src/definitions";
 import { getCommandSchemas } from "../packages/commands/src/families/schema";
 
