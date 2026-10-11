@@ -10,6 +10,7 @@ import {
   readExecutionAuthority,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
+import { getPlanCommandDefinitions } from "../src/families/plan.js";
 
 const roots: string[] = [];
 afterEach(() => {
