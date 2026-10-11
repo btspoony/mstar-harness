@@ -29,8 +29,13 @@ describe("git-guard bare force push", () => {
     (command) => expect(runGuard(command).hookSpecificOutput?.permissionDecision).toBe("deny"),
   );
 
-  test.each(["git push origin main", "git push --force-with-lease origin main"])(
-    "allows %s",
-    (command) => expect(runGuard(command)).toEqual({}),
-  );
+  test.each([
+    "git push origin main",
+    "git push --force-with-lease origin main",
+    "git push -o +audit origin main",
+    "git push +backup main",
+  ])("allows %s", (command) => expect(runGuard(command)).toEqual({}));
+
+  test("denies a single-token forced refspec", () =>
+    expect(runGuard("git push origin +main").hookSpecificOutput?.permissionDecision).toBe("deny"));
 });
