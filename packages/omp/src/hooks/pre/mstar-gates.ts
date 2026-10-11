@@ -14,7 +14,8 @@
  * host paths and the `{ block, reason }` refusal channel.
  *
  * Gate 2 retains the Assignment-header hard-enforcement boundary and the
- * caller-scoped recursion constraints. No handler throws into omp.
+ * caller-scoped recursion constraints. Unexpected gate errors return explicit
+ * block envelopes; intentional refusals keep their existing shape.
  */
 import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -591,30 +592,44 @@ async function gateTaskDispatch(
 export default function mstarGates(pi: ExtensionAPI): void {
   const warnDegraded = (reason: "missing" | "error", error?: unknown): void =>
     warnDispatchGateDegraded(pi.logger, reason, error);
-  pi.on("tool_call", async (event) => {
+  const runGate = async (
+    name: string,
+    gate: () => Promise<{ block: true; reason: string } | undefined>,
+  ): Promise<{ block: true; reason: string } | undefined> => {
     try {
-      const toolName = event?.toolName ?? "";
-      let block: { block: true; reason: string } | undefined;
-      if (toolName === "write" || toolName === "edit") {
-        block = await gateStatusWrite(event?.input);
-      } else if (toolName === "task") {
-        block = await gateTaskDispatch(event?.input, warnDegraded, (line) => {
-          try {
-            (
-              pi.logger as
-                | { warn?: (message: string, context?: Record<string, unknown>) => void }
-                | undefined
-            )?.warn?.(line);
-          } catch {
- // the warn channel must never throw into the fail-closed host path
-          }
-        });
+      return await gate();
+    } catch (error) {
+      let summary: string;
+      try {
+        summary = error instanceof Error ? error.message : String(error);
+      } catch {
+        summary = "unprintable error";
       }
-      return block;
-    } catch {
- // NEVER throw, NEVER block on unexpected errors: omp fails CLOSED when
- // a handler throws — every unexpected failure degrades to silent pass.
-      return undefined;
+      try {
+        return { block: true, reason: `Unexpected error in ${name} gate: ${summary}` };
+      } catch (envelopeError) {
+        throw envelopeError;
+      }
     }
+  };
+  pi.on("tool_call", async (event) => {
+    const toolName = event?.toolName ?? "";
+    if (toolName === "write" || toolName === "edit") {
+      return runGate("status-write", () => gateStatusWrite(event?.input));
+    }
+    if (toolName === "task") {
+      return runGate("task-dispatch", () => gateTaskDispatch(event?.input, warnDegraded, (line) => {
+        try {
+          (
+            pi.logger as
+              | { warn?: (message: string, context?: Record<string, unknown>) => void }
+              | undefined
+          )?.warn?.(line);
+        } catch {
+          // the warn channel must never throw into the fail-closed host path
+        }
+      }));
+    }
+    return undefined;
   });
 }
