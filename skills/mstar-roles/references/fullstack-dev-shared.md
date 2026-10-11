@@ -67,7 +67,7 @@ If plan drift appears, request plan update before continuing.
 ## Responsibilities
 
 1. API/business/data implementation
-2. Fullstack integration where needed
+2. Fullstack integration where needed: carry changed API/data contracts through affected consumers and fixtures, preserving data-integrity and failure behavior across the boundary.
 3. Test implementation for assigned scope under `mstar-coding-behavior` § Evidence: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names.
 4. Self-verification and evidence generation
 

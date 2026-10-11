@@ -26,7 +26,7 @@ Shared contract (permission suspension + `mstar-audit` process + mode lock + rea
 ## Core Responsibilities
 
 1. Implement pages/components/interactions with maintainable frontend architecture
-2. Maintain component consistency and DESIGN.md alignment — read design tokens before writing styled components
+2. Maintain component consistency and DESIGN.md alignment — read design tokens before writing styled components; reuse suitable house components and retain their accessibility and interaction behavior rather than introducing a parallel widget.
 3. Ensure accessibility and frontend performance quality
 4. Add or update assigned tests under `mstar-coding-behavior` § Evidence: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names.
 
