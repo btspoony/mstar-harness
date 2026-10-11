@@ -20,7 +20,10 @@
  *    publication locks; the numeric catalog revision remains a semantic CAS.
  *
  * `refreshProjections(context)` is the read boundary's entry point: capture,
- * publish, and retry only if the numeric catalog revision moved.
+ * publish, and retry only if the numeric catalog revision moved. A capture
+ * whose source fingerprint and rendered rows both match the published
+ * generation is adopted without a rewrite, so a steady-state read writes
+ * nothing at all.
  *
  * Source set (contract §5): resolved `status.json`, the registered workflow
  * snapshot dirs plus the retained known locations from committed
@@ -809,6 +812,156 @@ function changedSourceKeys(previous: SourceFingerprint[], next: ProjectionSource
   return [...keys].filter((key) => before.get(key) !== after.get(key)).sort();
 }
 
+/**
+ * The §5 projected tables plus how a capture renders their rows, keyed by the
+ * STORED column name: the same values `insertGeneration` inserts. The stored
+ * half of an output comparison is read back through this same shape, so a
+ * digest mismatch is exactly "the published bytes are not the bytes a rebuild
+ * would write".
+ */
+const PROJECTION_RENDERS: ReadonlyArray<{
+  table: string;
+  primaryKey: readonly string[];
+  captureRows: (capture: ProjectionCapture) => Array<Record<string, unknown>>;
+}> = [
+  {
+    table: "projection_sources",
+    primaryKey: ["source_key"],
+    captureRows: (capture) =>
+      capture.sources.map((source) => ({
+        source_key: source.sourceKey,
+        kind: source.kind,
+        root_kind: source.rootKind,
+        relative_path: source.relativePath,
+        sha256: source.sha256,
+        state: source.state,
+        diagnostic: source.diagnostic,
+      })),
+  },
+  {
+    table: "projection_workflows",
+    primaryKey: ["id"],
+    captureRows: (capture) =>
+      capture.rows.workflows.map((workflow) => ({
+        id: workflow.id,
+        type: workflow.type,
+        status: workflow.status,
+        phase: workflow.phase,
+        started_at: workflow.startedAt,
+        ended_at: workflow.endedAt,
+        updated_at: workflow.updatedAt,
+        branch_base: workflow.branchBase,
+        branch_source: workflow.branchSource,
+        branch_integration: workflow.branchIntegration,
+        branch_target: workflow.branchTarget,
+        active_registration: workflow.activeRegistration ? 1 : 0,
+      })),
+  },
+  {
+    table: "projection_plans",
+    primaryKey: ["workflow_id", "plan_id"],
+    captureRows: (capture) =>
+      capture.rows.plans.map((plan) => ({
+        workflow_id: plan.workflowId,
+        plan_id: plan.planId,
+        status: plan.status,
+        progress: plan.progress,
+        phase: plan.phase,
+        done_at: plan.doneAt,
+        catalog_pin_revision: plan.catalogPinRevision,
+      })),
+  },
+  {
+    table: "projection_leases",
+    primaryKey: ["workflow_id", "plan_id", "kind"],
+    captureRows: (capture) =>
+      capture.rows.leases.map((lease) => ({
+        workflow_id: lease.workflowId,
+        plan_id: lease.planId,
+        kind: lease.kind,
+        holder: lease.holder,
+        worktree_path: lease.worktreePath,
+        expires_at: lease.expiresAt,
+      })),
+  },
+  {
+    table: "projection_compasses",
+    primaryKey: ["iteration_id"],
+    captureRows: (capture) =>
+      capture.rows.compasses.map((compass) => ({
+        iteration_id: compass.iterationId,
+        summary: compass.summary,
+        milestones_json: compass.milestonesJson,
+        started_at: compass.startedAt,
+        ended_at: compass.endedAt,
+        status: compass.status,
+      })),
+  },
+];
+
+type ProjectionRenderSpec = (typeof PROJECTION_RENDERS)[number];
+type RenderedTable = { table: string; columns: readonly string[]; rows: unknown[][] };
+
+/** One table's columns in schema order, minus the generation key, read from the
+ * schema: a column a migration adds is covered automatically, and a capture
+ * mapper that cannot fill it renders the unrendered sentinel (never `undefined`,
+ * which JSON would flatten onto a stored NULL) so the mismatch rebuilds. */
+function renderedColumns(db: StoreDb, table: string): string[] {
+  return (db.prepare(`pragma table_info(${table})`).all() as Array<Record<string, unknown>>)
+    .map((column) => String(column.name))
+    .filter((name) => name !== "generation");
+}
+
+/**
+ * The canonical bytes of every §5 table for ONE row source (the rows a capture
+ * would write, or the rows stored for a published generation): schema column
+ * order, rows in primary-key order under one comparator applied on both sides,
+ * so the two sources serialize identically exactly when they hold the same
+ * bytes — independent of SQLite collation and of insertion order.
+ */
+function projectionRenders(
+  db: StoreDb,
+  rowsOf: (spec: ProjectionRenderSpec, columns: readonly string[]) => Array<Record<string, unknown>>,
+): RenderedTable[] {
+  return PROJECTION_RENDERS.map((spec) => {
+    const columns = renderedColumns(db, spec.table);
+    const rows = rowsOf(spec, columns).map((row) =>
+      columns.map((column) => (column in row ? row[column] : "\u0000unrendered")),
+    );
+    const keyIndexes = spec.primaryKey.map((key) => columns.indexOf(key));
+    rows.sort((left, right) => {
+      for (const index of keyIndexes) {
+        const a = String(left[index]);
+        const b = String(right[index]);
+        if (a !== b) return a < b ? -1 : 1;
+      }
+      return 0;
+    });
+    return { table: spec.table, columns, rows };
+  });
+}
+
+/** The published output's identity: SHA-256 over the canonical byte render. */
+function renderedDigest(tables: RenderedTable[]): string {
+  return createHash("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
+}
+
+/** The render of the rows this capture would write (the expected bytes). */
+function captureRenders(db: StoreDb, capture: ProjectionCapture): RenderedTable[] {
+  return projectionRenders(db, (spec) => spec.captureRows(capture));
+}
+
+/** The render of the rows actually stored for one published generation. */
+function storedRenders(db: StoreDb, generation: number): RenderedTable[] {
+  return projectionRenders(
+    db,
+    (spec, columns) =>
+      db.prepare(`select ${columns.join(", ")} from ${spec.table} where generation = ?`).all(generation) as Array<
+        Record<string, unknown>
+      >,
+  );
+}
+
 function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCapture): void {
   const sourceStatement = db.prepare(
     "insert into projection_sources(generation, source_key, kind, root_kind, relative_path, sha256, state, diagnostic) " +
@@ -987,12 +1140,47 @@ function movementDiagnostics(movement: Movement | null, attempts: number): Sourc
  * Insert the replacement generation and flip the current one inside ONE short
  * write transaction. The numeric catalog revision is checked inside that
  * transaction because compass paths and pin revisions depend on it.
+ *
+ * An unchanged source set over a published generation that still holds exactly
+ * the rows this capture would write is adopted without a write: the recorded
+ * fingerprint is only the cheap first cut, and the full-row output digest is
+ * what authorizes the skip — a partially deleted table or a wrong stored value
+ * is rebuilt instead of served. The identity is the §5 source fingerprint plus
+ * the §5 row render, which cover every input the derived rows are rendered from
+ * (shortcut: the frozen catalog pin is re-selected in the same transaction that
+ * rewrites the plan row, itself a source — upgrade if a pin ever moves alone).
  */
 function publishGeneration(db: StoreDb, capture: ProjectionCapture, transactionOpen = false): RefreshReport {
   const checkedAt = new Date().toISOString();
   if (!transactionOpen) db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
+    if (
+      meta.generation !== null &&
+      meta.sourceSetHash === capture.sourceSetHash &&
+      renderedDigest(storedRenders(db, meta.generation)) === renderedDigest(captureRenders(db, capture))
+    ) {
+      const healthCurrent = meta.freshness === "current";
+      if (!healthCurrent) {
+        // The output is current; only a retained stale health row must move.
+        db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(
+          checkedAt,
+        );
+      }
+      if (!transactionOpen) db.exec("commit");
+      return reportOf(
+        {
+          generation: meta.generation,
+          freshness: "current",
+          builtAt: meta.builtAt,
+          checkedAt: healthCurrent ? meta.checkedAt : checkedAt,
+          diagnostics: [],
+        },
+        capture,
+        [],
+        false,
+      );
+    }
     const previous = readPublishedFingerprints(db, meta.generation);
     const changedKeys = changedSourceKeys(previous, capture.sources);
  

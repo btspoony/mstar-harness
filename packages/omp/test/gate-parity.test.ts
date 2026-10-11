@@ -265,3 +265,31 @@ describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", 
     expect(mismatches).toEqual([]);
   }, 60_000);
 });
+
+describe("omp gate unexpected errors", () => {
+  test("blocks unexpected gate failures and preserves normal pass behavior", async () => {
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: () => undefined, error: () => undefined },
+    } as never);
+    expect(handler).toBeDefined();
+
+    const failure = new Error("injected gate failure");
+    const throwingEvent = {
+      toolName: "write",
+      get input(): never {
+        throw failure;
+      },
+    };
+    expect(await handler!(throwingEvent)).toEqual({
+      block: true,
+      reason: "Unexpected error in status-write gate: injected gate failure",
+    });
+    expect(
+      await handler!({ toolName: "write", input: { path: "/tmp/ordinary-document.md", content: "ok" } }),
+    ).toBeUndefined();
+  });
+});

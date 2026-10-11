@@ -24,6 +24,7 @@
  * - a rebuild leaves issue/catalog revisions and rows untouched;
  * - a format-version bump discards the old generation and rebuilds.
  */
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -318,6 +319,10 @@ async function projectedRows(f: Fixture): Promise<Omit<Projections, "meta">> {
   const { meta: _health, ...rows } = await projections(f);
   return rows;
 }
+
+/** SHA-256 of the changed-compass render, recorded from the write-always
+ * implementation before this optimization: the byte-identity gate. */
+const LEGACY_CHANGED_RENDER_SHA256 = "05a11a2db1c7591261e236a9122009cc6cf6f858ed209b171a1f52d6dc139d6d";
 
 /** Store facts a projection rebuild must never move (issue/catalog authority). */
 async function authorityFacts(f: Fixture): Promise<Record<string, unknown>> {
@@ -766,7 +771,7 @@ describe("projection publication and last-good handling", () => {
   });
 
 
-  test("each clean refresh publishes a new generation without a fingerprint-equality gate", async () => {
+  test("an unchanged refresh writes nothing at all", async () => {
     const f = await fixture("publish-");
     await seedStandard(f);
 
@@ -809,11 +814,147 @@ describe("projection publication and last-good handling", () => {
       { milestone: "Dev complete", target: "2026-09-20", status: "pending" },
     ]);
 
+    // An unchanged source set must not rewrite the published generation. The
+    // witness is SQLite's own `data_version`: it advances for every commit
+    // another connection makes, so ANY write of ours would move it.
+    const witness = await openStore(f.context, "read");
+    try {
+      const before = witness.db.prepare("pragma data_version").get();
+      const second = await refreshProjections(f.context);
+      expect(second).toMatchObject({
+        freshness: "current",
+        published: false,
+        generation: 1,
+        diagnostics: [],
+        changedKeys: [],
+      });
+      // Nothing moved: not the build time, not the health row, not the bytes.
+      expect(second.builtAt).toBe(first.builtAt);
+      expect(second.checkedAt).toBe(first.checkedAt);
+      expect(second.sourceSetHash).toBe(first.sourceSetHash);
+      expect(witness.db.prepare("pragma data_version").get()).toEqual(before);
+    } finally {
+      witness.close();
+    }
+    expect(await projections(f)).toMatchObject({
+      meta: { generation: 1, built_at: first.builtAt, source_set_hash: first.sourceSetHash, freshness: "current" },
+      compasses: [expect.objectContaining({ generation: 1, iteration_id: "iter-a" })],
+    });
+  });
+
+  test("a changed source rewrites and renders the legacy bytes", async () => {
+    const f = await fixture("changed-");
+    await seedStandard(f);
+    await refreshProjections(f.context);
+
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS.replace("Narrative summary", "Edited summary"));
+    const changed = await refreshProjections(f.context);
+    expect(changed).toMatchObject({
+      freshness: "current",
+      published: true,
+      generation: 2,
+      changedKeys: ["compass:iterations:iter-a/delivery-compass.md"],
+    });
+    // Byte-equality against the pre-change implementation: the digest below
+    // was recorded from the write-always publication of exactly these inputs.
+    const render = JSON.stringify(await projectedRows(f));
+    expect(createHash("sha256").update(render, "utf8").digest("hex")).toBe(LEGACY_CHANGED_RENDER_SHA256);
+  });
+
+  test("a deleted published generation is rebuilt instead of adopted", async () => {
+    const f = await fixture("deleted-output-");
+    await seedStandard(f);
+    const first = await refreshProjections(f.context);
+
+    const erase = await openStore(f.context, "write");
+    try {
+      for (const table of ["projection_sources", "projection_workflows", "projection_plans", "projection_leases", "projection_compasses"]) {
+        erase.db.exec(`delete from ${table}`);
+      }
+    } finally {
+      erase.close();
+    }
+
+    // The source set still matches the recorded fingerprint, but the output it
+    // describes is gone: the refresh must republish exactly as it would have.
+    const rebuilt = await refreshProjections(f.context);
+    expect(rebuilt).toMatchObject({
+      freshness: "current",
+      published: true,
+      generation: first.generation! + 1,
+      changedKeys: rebuilt.sources.map((source) => source.sourceKey),
+    });
+    expect((await projections(f)).compasses[0]).toMatchObject({ generation: rebuilt.generation, iteration_id: "iter-a" });
+  });
+
+  test("a partially deleted published generation is rebuilt instead of adopted", async () => {
+    const f = await fixture("partial-delete-");
+    await seedStandard(f);
+    const first = await refreshProjections(f.context);
+    const sources = (await projections(f)).sources.map((row) => row.source_key);
+    expect(sources).toHaveLength(2);
+
+    // ONE of the two published source rows goes missing: the table is still
+    // non-empty, so a presence probe cannot see the gap.
+    const erase = await openStore(f.context, "write");
+    try {
+      erase.db.prepare("delete from projection_sources where source_key like 'compass:%'").run();
+    } finally {
+      erase.close();
+    }
+
+    const rebuilt = await refreshProjections(f.context);
+    expect(rebuilt).toMatchObject({
+      freshness: "current",
+      published: true,
+      generation: first.generation! + 1,
+      changedKeys: ["compass:iterations:iter-a/delivery-compass.md"],
+    });
+    const restored = await projections(f);
+    expect(restored.sources.map((row) => row.source_key)).toEqual(sources);
+    expect(restored.sources.every((row) => row.generation === rebuilt.generation)).toBe(true);
+  });
+
+  test("an in-place edit of a published value is rebuilt instead of adopted", async () => {
+    const f = await fixture("corrupt-value-");
+    await seedStandard(f);
+    const first = await refreshProjections(f.context);
+    const registry = (await projections(f)).sources.find((row) => row.source_key === "root:harness:execution/registry");
+    const recordedSha = registry?.sha256;
+
+    // Same row count, same fingerprint: only a stored VALUE is wrong, so an
+    // adoption would serve the tampered byte until some source moved.
+    const tamper = await openStore(f.context, "write");
+    try {
+      tamper.db.prepare("update projection_compasses set summary = 'tampered' where iteration_id = 'iter-a'").run();
+    } finally {
+      tamper.close();
+    }
+    const rebuilt = await refreshProjections(f.context);
+    expect(rebuilt).toMatchObject({ freshness: "current", published: true, generation: first.generation! + 1, changedKeys: [] });
+    expect((await projections(f)).compasses[0]).toMatchObject({
+      generation: rebuilt.generation,
+      summary: "Narrative summary of the iteration.",
+    });
+
+    // A tampered column of a source row is caught the same way.
+    const retamper = await openStore(f.context, "write");
+    try {
+      retamper.db
+        .prepare("update projection_sources set sha256 = ? where source_key = 'root:harness:execution/registry'")
+        .run("0".repeat(64));
+    } finally {
+      retamper.close();
+    }
     const second = await refreshProjections(f.context);
-    expect(second).toMatchObject({ freshness: "current", published: true, generation: 2, changedKeys: [] });
-    expect(second.builtAt).not.toBe(first.builtAt);
-    expect(second.checkedAt >= first.checkedAt).toBe(true);
-    expect((await projections(f)).compasses[0]).toMatchObject({ generation: 2, iteration_id: "iter-a" });
+    expect(second).toMatchObject({
+      freshness: "current",
+      published: true,
+      generation: rebuilt.generation! + 1,
+      changedKeys: ["root:harness:execution/registry"],
+    });
+    const restoredSources = (await projections(f)).sources;
+    expect(restoredSources.find((row) => row.source_key === "root:harness:execution/registry")?.sha256).toBe(recordedSha);
   });
 
   test("a deleted declared source retains the last good generation and reports stale with a diagnostic", async () => {
@@ -835,18 +976,23 @@ describe("projection publication and last-good handling", () => {
     expect(retainedHealth).toMatchObject({ generation: first.generation, built_at: first.builtAt, freshness: "stale" });
     expect(JSON.parse(String(retainedHealth.last_error_json))).toMatchObject({ code: "projection.stale" });
 
-    // A later clean refresh publishes a new generation after the missing
-    // source is restored; no content fingerprint adopts the old generation.
+    // A later clean refresh after the missing source is restored ADOPTS the
+    // retained generation: the restored bytes hash to exactly the retained
+    // source set, so the rows a rebuild would insert are identical and only
+    // the health columns move.
     write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS);
     const recovered = await refreshProjections(f.context);
     expect(recovered).toMatchObject({
       freshness: "current",
-      published: true,
-      generation: 2,
+      published: false,
+      generation: first.generation,
+      builtAt: first.builtAt,
       diagnostics: [],
       changedKeys: [],
     });
+    expect(recovered.checkedAt).not.toBe(stale.checkedAt);
     expect((await projections(f)).meta).toMatchObject({ freshness: "current", last_error_json: null });
+    expect(await projectedRows(f)).toEqual(publishedRows);
   });
 
   test("an invalid and an inaccessible declared source each retain the last good generation", async () => {

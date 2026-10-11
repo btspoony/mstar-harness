@@ -16770,6 +16770,105 @@ function changedSourceKeys(previous3, next) {
   const keys = new Set([...before.keys(), ...after.keys()]);
   return [...keys].filter((key) => before.get(key) !== after.get(key)).sort();
 }
+var PROJECTION_RENDERS = [
+  {
+    table: "projection_sources",
+    primaryKey: ["source_key"],
+    captureRows: (capture) => capture.sources.map((source) => ({
+      source_key: source.sourceKey,
+      kind: source.kind,
+      root_kind: source.rootKind,
+      relative_path: source.relativePath,
+      sha256: source.sha256,
+      state: source.state,
+      diagnostic: source.diagnostic
+    }))
+  },
+  {
+    table: "projection_workflows",
+    primaryKey: ["id"],
+    captureRows: (capture) => capture.rows.workflows.map((workflow) => ({
+      id: workflow.id,
+      type: workflow.type,
+      status: workflow.status,
+      phase: workflow.phase,
+      started_at: workflow.startedAt,
+      ended_at: workflow.endedAt,
+      updated_at: workflow.updatedAt,
+      branch_base: workflow.branchBase,
+      branch_source: workflow.branchSource,
+      branch_integration: workflow.branchIntegration,
+      branch_target: workflow.branchTarget,
+      active_registration: workflow.activeRegistration ? 1 : 0
+    }))
+  },
+  {
+    table: "projection_plans",
+    primaryKey: ["workflow_id", "plan_id"],
+    captureRows: (capture) => capture.rows.plans.map((plan) => ({
+      workflow_id: plan.workflowId,
+      plan_id: plan.planId,
+      status: plan.status,
+      progress: plan.progress,
+      phase: plan.phase,
+      done_at: plan.doneAt,
+      catalog_pin_revision: plan.catalogPinRevision
+    }))
+  },
+  {
+    table: "projection_leases",
+    primaryKey: ["workflow_id", "plan_id", "kind"],
+    captureRows: (capture) => capture.rows.leases.map((lease) => ({
+      workflow_id: lease.workflowId,
+      plan_id: lease.planId,
+      kind: lease.kind,
+      holder: lease.holder,
+      worktree_path: lease.worktreePath,
+      expires_at: lease.expiresAt
+    }))
+  },
+  {
+    table: "projection_compasses",
+    primaryKey: ["iteration_id"],
+    captureRows: (capture) => capture.rows.compasses.map((compass) => ({
+      iteration_id: compass.iterationId,
+      summary: compass.summary,
+      milestones_json: compass.milestonesJson,
+      started_at: compass.startedAt,
+      ended_at: compass.endedAt,
+      status: compass.status
+    }))
+  }
+];
+function renderedColumns(db, table) {
+  return db.prepare(`pragma table_info(${table})`).all().map((column) => String(column.name)).filter((name) => name !== "generation");
+}
+function projectionRenders(db, rowsOf) {
+  return PROJECTION_RENDERS.map((spec) => {
+    const columns = renderedColumns(db, spec.table);
+    const rows = rowsOf(spec, columns).map((row) => columns.map((column) => (column in row) ? row[column] : "\x00unrendered"));
+    const keyIndexes = spec.primaryKey.map((key) => columns.indexOf(key));
+    rows.sort((left, right) => {
+      for (const index2 of keyIndexes) {
+        const a = String(left[index2]);
+        const b = String(right[index2]);
+        if (a !== b)
+          return a < b ? -1 : 1;
+      }
+      return 0;
+    });
+    return { table: spec.table, columns, rows };
+  });
+}
+function renderedDigest(tables) {
+  return createHash14("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
+}
+function captureRenders(db, capture) {
+  return projectionRenders(db, (spec) => spec.captureRows(capture));
+}
+function storedRenders(db, generation) {
+  return projectionRenders(db, (spec, columns) => db.prepare(`select ${columns.join(", ")} from ${spec.table} where generation = ?`).all(generation));
+}
 function insertGeneration(db, generation, capture) {
   const sourceStatement = db.prepare("insert into projection_sources(generation, source_key, kind, root_kind, relative_path, sha256, state, diagnostic) values (?, ?, ?, ?, ?, ?, ?, ?)");
   for (const source of capture.sources) {
@@ -16849,6 +16948,21 @@ function publishGeneration(db, capture, transactionOpen = false) {
     db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
+    if (meta.generation !== null && meta.sourceSetHash === capture.sourceSetHash && renderedDigest(storedRenders(db, meta.generation)) === renderedDigest(captureRenders(db, capture))) {
+      const healthCurrent = meta.freshness === "current";
+      if (!healthCurrent) {
+        db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(checkedAt);
+      }
+      if (!transactionOpen)
+        db.exec("commit");
+      return reportOf({
+        generation: meta.generation,
+        freshness: "current",
+        builtAt: meta.builtAt,
+        checkedAt: healthCurrent ? meta.checkedAt : checkedAt,
+        diagnostics: []
+      }, capture, [], false);
+    }
     const previous3 = readPublishedFingerprints(db, meta.generation);
     const changedKeys = changedSourceKeys(previous3, capture.sources);
     const generation = (meta.generation ?? 0) + 1;

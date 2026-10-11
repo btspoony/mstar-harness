@@ -14,6 +14,7 @@
  * transaction runs at a time, and `close()` stops new work and drains
  * in-flight work once, bounded.
  */
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -116,6 +117,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     throw new Error(`--port must be an integer between 0 and 65535 \u2014 got ${JSON.stringify(String(port))}`);
   }
   const context = { harnessDir: options.harnessDir };
+  const token = randomUUID();
   if (options.projectId !== undefined) await assertProjectExists(options.harnessDir, options.projectId);
 
   // Serialized request execution: at most one read transaction runs at a time
@@ -145,7 +147,9 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     const requestHead = req.method === "HEAD";
     const method = requestHead ? "GET" : req.method ?? "";
     const host = req.headers.host ?? "";
-    const expectedHost = `127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const port = (server.address() as AddressInfo).port;
+    const expectedHost = `127.0.0.1:${port}`;
+    const cookieName = `mstar-dashboard-token-${port}`;
     // DNS-rebinding guard: the Host header must be the actual loopback origin.
     if (host !== expectedHost) {
       sendJson(res, 403, fail("forbidden", `Host header must be ${expectedHost}`), requestHead);
@@ -163,8 +167,21 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     try {
       url = new URL(req.url ?? "/", `http://${expectedHost}`);
     } catch {
-      sendJson(res, 400, fail("usage", "the request path is not a valid URL"), requestHead);
+      sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
       return;
+    }
+    const cookieToken = (req.headers.cookie ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${cookieName}=`))
+      ?.slice(cookieName.length + 1);
+    const queryToken = url.searchParams.get("token");
+    if (queryToken !== token && cookieToken !== token) {
+      sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
+      return;
+    }
+    if (queryToken === token) {
+      res.setHeader("set-cookie", `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict`);
     }
     const pathname = url.pathname;
 
@@ -198,7 +215,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
 
       const params: Record<string, string> = {};
       for (const key of new Set(url.searchParams.keys())) {
-        params[key] = url.searchParams.get(key) ?? "";
+        if (key !== "token") params[key] = url.searchParams.get(key) ?? "";
       }
       const envelope = await readDashboardView({ context, view: route.view as DashboardView, params, id: route.id });
       if (envelope.data === null) {
@@ -237,9 +254,11 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       // The selector belongs in the served URL: the shell reads
       // `location.search` as its initial Issues filter, and `--open` opens
       // exactly this URL, so both the list and the flow panel are scoped.
-      const query =
-        options.projectId === undefined ? "" : `?${new URLSearchParams({ project: options.projectId }).toString()}`;
-      const url = `http://127.0.0.1:${actualPort}/${query}`;
+      const query = new URLSearchParams({
+        ...(options.projectId === undefined ? {} : { project: options.projectId }),
+        token,
+      });
+      const url = `http://127.0.0.1:${actualPort}/?${query.toString()}`;
       let closePromise: Promise<void> | null = null;
       resolve({
         url,

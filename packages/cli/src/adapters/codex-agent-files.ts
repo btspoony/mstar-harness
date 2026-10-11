@@ -16,6 +16,37 @@ function checkParent(target: string) {
   if (stat && !stat.isDirectory()) throw new Error(`Agent directory must be a real directory: ${parent}`);
 }
 
+// Installer backups are exactly `${target}.${uuid}.bak`; the uuid carries no
+// ordering, so retention keeps the newest few by mtime.
+const BACKUP_SUFFIX = ".bak";
+const BACKUP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_RETAINED_BACKUPS = 3;
+
+/** Drop this installer's own stale backups of one agent file, keeping the newest
+ *  few plus the one just written. A sibling that merely shares the prefix or the
+ *  suffix — a user-named `.bak`, a symlink — is never a candidate.
+ *  Best-effort: every backup is one refresh away from being pruned again, so a
+ *  prune failure must never fail an install that already succeeded. */
+function pruneBackups(target: string, keep: string): void {
+  try {
+    const dir = path.dirname(target);
+    const prefix = `${path.basename(target)}.`;
+    const stale = fs.readdirSync(dir)
+      .flatMap((name) => {
+        const full = path.join(dir, name);
+        if (full === keep || !name.startsWith(prefix) || !name.endsWith(BACKUP_SUFFIX)) return [];
+        if (!BACKUP_UUID.test(name.slice(prefix.length, -BACKUP_SUFFIX.length))) return [];
+        const stat = statIfPresent(full);
+        return stat?.isFile() ? [{ full, mtimeMs: stat.mtimeMs }] : [];
+      })
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .slice(MAX_RETAINED_BACKUPS - 1);
+    for (const entry of stale) fs.rmSync(entry.full, { force: true });
+  } catch {
+    // Stale backups are disposable; never fail the install for one.
+  }
+}
+
 /** Codex discovers linked TOMLs but cannot apply them with its no-follow loader. */
 export function ensureCodexAgentFile(source: string, target: string, dryRun: boolean): string[] {
   checkParent(target);
@@ -44,9 +75,10 @@ export function ensureCodexAgentFile(source: string, target: string, dryRun: boo
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const notes: string[] = [];
   if (previous) {
-    const backup = `${target}.${randomUUID()}.bak`;
+    const backup = `${target}.${randomUUID()}${BACKUP_SUFFIX}`;
     fs.writeFileSync(backup, previous, { flag: "wx", mode: stat!.mode & 0o777 });
     notes.push(`Backed up differing agent file to ${backup}`);
+    pruneBackups(target, backup);
   }
   // Rename replaces the directory entry itself, never writes through a legacy link.
   const temporary = `${target}.${randomUUID()}.tmp`;

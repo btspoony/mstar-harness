@@ -85,14 +85,25 @@ async function declareWorkflow(context: StoreContext, id: string): Promise<void>
   });
 }
 
-/**
- * One raw request over node:http so the Host header is fully controlled
- * (browser-grade clients refuse to send a spoofed Host; an attacker does not).
- */
+const tokensByPort = new Map<string, string>();
+
+function remember(server: RunningDashboard): RunningDashboard {
+  const url = new URL(server.url);
+  tokensByPort.set(url.port, url.searchParams.get("token")!);
+  return server;
+}
+
 function raw(
-  url: string,
-  options: { method?: string; headers?: Record<string, string> } = {},
+  input: string,
+  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  const url = new URL(input);
+  const suppliedToken = url.searchParams.get("token");
+  if (suppliedToken !== null) tokensByPort.set(url.port, suppliedToken);
+  if (options.authenticated !== false && suppliedToken === null) {
+    const token = tokensByPort.get(url.port);
+    if (token !== undefined) url.searchParams.set("token", token);
+  }
   return new Promise((resolve, reject) => {
     const req = http.request(url, { method: options.method ?? "GET", headers: options.headers }, (res) => {
       const chunks: Buffer[] = [];
@@ -110,9 +121,8 @@ async function start(
   dir: string,
   options: { port?: number; project?: string } = {},
 ): Promise<RunningDashboard> {
-  return startDashboard({ harnessDir: join(dir, ".mstar"), port: options.port, projectId: options.project });
+  return remember(await startDashboard({ harnessDir: join(dir, ".mstar"), port: options.port, projectId: options.project }));
 }
-
 describe("static shell and inlined assets", () => {
   let server: RunningDashboard;
   beforeAll(async () => {
@@ -124,9 +134,64 @@ describe("static shell and inlined assets", () => {
     const res = await raw(server.url);
     expect(res.status).toBe(200);
     expect(res.body).toBe(dashboardHtml);
+    expect(res.headers["set-cookie"]?.[0]).toContain("HttpOnly");
     expect(res.headers["content-security-policy"]).toBe(CSP);
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  test("requests require the per-launch token and the index cookie authorizes API fetches", async () => {
+    const url = new URL(server.url);
+    const token = url.searchParams.get("token");
+    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+    const apiUrl = new URL("/api/issues", server.url);
+    const authorized = new URL(apiUrl);
+    authorized.searchParams.set("token", token!);
+    expect((await raw(authorized.href, { authenticated: false })).status).toBe(200);
+    const unauthenticated = await raw(apiUrl.href, { authenticated: false });
+    expect(unauthenticated.status).toBe(403);
+    expect(unauthenticated.body).not.toContain("data");
+    const wrong = new URL(apiUrl);
+    wrong.searchParams.set("token", "wrong-token");
+    const refused = await raw(wrong.href, { authenticated: false });
+    expect(refused.status).toBe(403);
+
+    const shell = await raw(server.url);
+    const cookie = shell.headers["set-cookie"]?.[0]?.split(";")[0];
+    expect(cookie).toMatch(/^mstar-dashboard-token-\d+=/);
+    const api = await raw(new URL("/api/issues", server.url).href, {
+      authenticated: false,
+      headers: { cookie: cookie! },
+    });
+    expect(api.status).toBe(200);
+  });
+  test("separate dashboard listeners retain their own cookies in one browser jar", async () => {
+    const { dir } = await workspace("shared-cookie-");
+    const first = await start(dir);
+    const second = await start(dir);
+    const jar = new Map<string, string>();
+    const visit = async (server: RunningDashboard) => {
+      const response = await raw(server.url);
+      expect(response.status).toBe(200);
+      const pair = response.headers["set-cookie"]?.[0]?.split(";")[0];
+      expect(pair).toBeDefined();
+      const separator = pair!.indexOf("=");
+      jar.set(pair!.slice(0, separator), pair!.slice(separator + 1));
+    };
+    const cookie = () => [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+    try {
+      await visit(first);
+      await visit(second);
+      for (const server of [first, second]) {
+        const response = await raw(new URL("/api/issues", server.url).href, {
+          authenticated: false,
+          headers: { cookie: cookie() },
+        });
+        expect(response.status).toBe(200);
+      }
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
   });
 
   test("HEAD works for static resources and returns no body", async () => {
@@ -226,7 +291,7 @@ describe("API over a real store", () => {
     // missing, a GET reaches the store (503) while HEAD never does (405).
     const dir = mkdtempSync(join(ROOT, "no-store-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const noStore = await startDashboard({ harnessDir: join(dir, ".mstar") });
+    const noStore = remember(await startDashboard({ harnessDir: join(dir, ".mstar") }));
     try {
       const get = await raw(new URL("/api/issues", noStore.url).href);
       expect(get.status).toBe(503);
@@ -400,7 +465,7 @@ describe("boundary and lifecycle", () => {
   test("a missing store refuses reads with store.not-initialized", async () => {
     const dir = mkdtempSync(join(ROOT, "missing-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const server = await startDashboard({ harnessDir: join(dir, ".mstar") });
+    const server = remember(await startDashboard({ harnessDir: join(dir, ".mstar") }));
     try {
       const res = await raw(new URL("/api/issues", server.url).href);
       expect(res.status).toBe(503);
@@ -419,7 +484,8 @@ describe("boundary and lifecycle", () => {
     const { dir } = await workspace("unscoped-");
     const server = await start(dir);
     try {
-      expect(new URL(server.url).search).toBe("");
+      expect(new URL(server.url).searchParams.get("project")).toBeNull();
+      expect(new URL(server.url).searchParams.get("token")).toMatch(/^[0-9a-f-]{36}$/);
     } finally {
       await server.close();
     }
@@ -431,7 +497,7 @@ describe("boundary and lifecycle", () => {
       kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a",
     }, { actor: "project-manager", operationId: "register-scoped-project" });
     await seedIssue(context, "scoped", "high");
-    const server = await startDashboard({ harnessDir: context.harnessDir, projectId: "proj-a" });
+    const server = remember(await startDashboard({ harnessDir: context.harnessDir, projectId: "proj-a" }));
     try {
       // The selector travels in the served URL: the shell parses
       // `location.search` as its initial Issues filter, and `--open` opens
@@ -450,7 +516,7 @@ describe("boundary and lifecycle", () => {
 
   test("a port conflict refuses with an actionable message and leaves the other server running", async () => {
     const { dir } = await workspace("conflict-");
-    const first = await startDashboard({ harnessDir: join(dir, ".mstar"), port: 0 });
+    const first = remember(await startDashboard({ harnessDir: join(dir, ".mstar"), port: 0 }));
     try {
       const usedPort = new URL(first.url).port;
       await expect(startDashboard({ harnessDir: join(dir, ".mstar"), port: Number(usedPort) })).rejects.toThrow(/already in use/);
@@ -464,7 +530,7 @@ describe("boundary and lifecycle", () => {
 
   test("close() is idempotent and the socket stops accepting", async () => {
     const { dir } = await workspace("close-");
-    const server = await startDashboard({ harnessDir: join(dir, ".mstar") });
+    const server = remember(await startDashboard({ harnessDir: join(dir, ".mstar") }));
     const url = server.url;
     await server.close();
     await expect(server.close()).resolves.toBeUndefined();
@@ -534,6 +600,7 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
           reject(new Error(`dashboard exited early (${code}); output:\n${output}`));
         });
       });
+      expect(new URL(url).searchParams.get("token")).toMatch(/^[0-9a-f-]{36}$/);
 
       try {
         const shell = await raw(url);
