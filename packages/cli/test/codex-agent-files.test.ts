@@ -10,8 +10,15 @@ function fixture() {
   fs.mkdirSync(path.resolve(".tmp"), { recursive: true });
   const root = fs.mkdtempSync(path.resolve(".tmp/codex-agent-test-"));
   const source = path.join(root, ".mstar/harness");
-  fs.mkdirSync(path.join(source, ".git", "refs", "heads"), { recursive: true });
-  fs.writeFileSync(path.join(source, ".git", "HEAD"), `${"0".repeat(40)}\n`);
+  fs.mkdirSync(source, { recursive: true });
+  const initialized = Bun.spawnSync(["git", "-C", source, "init", "--quiet"], { stdout: "pipe", stderr: "pipe" });
+  if (initialized.exitCode !== 0) throw new Error(`Could not initialize fake harness checkout: ${initialized.stderr.toString()}`);
+  const committed = Bun.spawnSync(["git", "-C", source, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "--allow-empty", "-m", "seed"], { stdout: "pipe", stderr: "pipe" });
+  if (committed.exitCode !== 0) throw new Error(`Could not seed fake harness HEAD: ${committed.stderr.toString()}`);
+  const checkoutRoot = Bun.spawnSync(["git", "-C", source, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" });
+  if (checkoutRoot.exitCode !== 0 || checkoutRoot.stdout.toString().trim() !== source) {
+    throw new Error(`Fake harness checkout resolves to an unexpected repository: ${checkoutRoot.stdout.toString().trim()}`);
+  }
   fs.mkdirSync(path.join(source, ".codex-plugin"), { recursive: true });
   fs.writeFileSync(path.join(source, ".codex-plugin/plugin.json"), "{}");
   fs.cpSync(repoAgents, path.join(source, "codex/agents"), { recursive: true });
