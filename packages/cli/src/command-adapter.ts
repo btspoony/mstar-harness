@@ -247,11 +247,21 @@ function optionKey(flags: string): string {
 }
 
 function optionJsonSchema(definition: CommandDefinition, key: string): Record<string, unknown> {
-  const root = definition.input.toJSONSchema() as Record<string, unknown>;
-  const properties = root.properties;
-  return properties !== null && typeof properties === "object"
-    ? ((properties as Record<string, Record<string, unknown>>)[key] ?? {})
-    : {};
+  const schemas: Record<string, unknown>[] = [];
+  const pending: unknown[] = [definition.input.toJSONSchema()];
+  while (pending.length > 0) {
+    const schema = pending.pop();
+    if (schema === null || typeof schema !== "object") continue;
+    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
+      const property = (schema.properties as Record<string, unknown>)[key];
+      if (property !== undefined && typeof property === "object" && property !== null) schemas.push(property as Record<string, unknown>);
+    }
+    if ("anyOf" in schema && Array.isArray(schema.anyOf)) pending.push(...schema.anyOf);
+    if ("oneOf" in schema && Array.isArray(schema.oneOf)) pending.push(...schema.oneOf);
+  }
+  if (schemas.length === 0) return {};
+  const unique = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()];
+  return unique.length === 1 ? unique[0]! : { anyOf: unique };
 }
 
 function hasType(schema: Record<string, unknown>, type: string): boolean {
