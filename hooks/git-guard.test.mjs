@@ -34,8 +34,14 @@ describe("git-guard bare force push", () => {
     "git push --force-with-lease origin main",
     "git push -o +audit origin main",
     "git push +backup main",
+    "git push --repo=origin main",
   ])("allows %s", (command) => expect(runGuard(command)).toEqual({}));
 
-  test("denies a single-token forced refspec", () =>
-    expect(runGuard("git push origin +main").hookSpecificOutput?.permissionDecision).toBe("deny"));
+  test.each([
+    "git push --repo=origin +main:main",
+    "git push --recurse-submodules=check origin +main:main",
+    "git push --unknown-flag origin main",
+    "git push origin +main",
+  ])("denies %s", (command) =>
+    expect(runGuard(command).hookSpecificOutput?.permissionDecision).toBe("deny"));
 });
