@@ -147,7 +147,9 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     const requestHead = req.method === "HEAD";
     const method = requestHead ? "GET" : req.method ?? "";
     const host = req.headers.host ?? "";
-    const expectedHost = `127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const port = (server.address() as AddressInfo).port;
+    const expectedHost = `127.0.0.1:${port}`;
+    const cookieName = `mstar-dashboard-token-${port}`;
     // DNS-rebinding guard: the Host header must be the actual loopback origin.
     if (host !== expectedHost) {
       sendJson(res, 403, fail("forbidden", `Host header must be ${expectedHost}`), requestHead);
@@ -171,15 +173,15 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     const cookieToken = (req.headers.cookie ?? "")
       .split(";")
       .map((part) => part.trim())
-      .find((part) => part.startsWith("mstar-dashboard-token="))
-      ?.slice("mstar-dashboard-token=".length);
+      .find((part) => part.startsWith(`${cookieName}=`))
+      ?.slice(cookieName.length + 1);
     const queryToken = url.searchParams.get("token");
     if (queryToken !== token && cookieToken !== token) {
       sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
       return;
     }
     if (queryToken === token) {
-      res.setHeader("set-cookie", `mstar-dashboard-token=${token}; Path=/; HttpOnly; SameSite=Strict`);
+      res.setHeader("set-cookie", `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict`);
     }
     const pathname = url.pathname;
 
