@@ -100,20 +100,38 @@ describe("Codex regular agent installation", () => {
         expect(run(f.root, scope).failure).toBeUndefined();
         expect(fs.readdirSync(dest).some((name) => name.endsWith(".bak"))).toBe(false);
         fs.writeFileSync(target, "user customization");
+        const sentinel = `${names[0]}.release-notes.bak`;
+        fs.writeFileSync(path.join(dest, sentinel), "release notes, keep me");
+        const sentinelAge = new Date(Date.now() - 30 * 60_000);
+        fs.utimesSync(path.join(dest, sentinel), sentinelAge, sentinelAge);
         for (let index = 0; index < 5; index += 1) {
-          const seed = path.join(dest, `${names[0]}.seed-${index}.bak`);
+          const seed = path.join(dest, `${names[0]}.00000000-0000-4000-8000-00000000000${index}.bak`);
           fs.writeFileSync(seed, `stale-${index}`);
           const when = new Date(Date.now() - (index + 1) * 60_000);
           fs.utimesSync(seed, when, when);
         }
+        // Shapes like an installer backup but is not one: a symlink, and the oldest entry.
+        const linkName = `${names[0]}.00000000-0000-4000-8000-000000000099.bak`;
+        const linkTarget = path.join(f.root, "linked-user-file");
+        fs.writeFileSync(linkTarget, "linked user data");
+        fs.symlinkSync(linkTarget, path.join(dest, linkName));
+        const linkAge = new Date(Date.now() - 60 * 60_000);
+        fs.lutimesSync(path.join(dest, linkName), linkAge, linkAge);
         const install = run(f.root, scope);
         expect(install.failure).toBeUndefined();
         expect(install.notes.join(" ")).toContain("Backed up");
         expect(fs.readFileSync(target, "utf8")).not.toBe("user customization");
-        // Newest three: the fresh backup plus the two newest seeds.
-        const remaining = fs.readdirSync(dest).filter((name) => name.endsWith(".bak"));
-        expect(remaining).toHaveLength(3);
-        expect(remaining.filter((name) => name.includes(".seed-")).sort()).toEqual([`${names[0]}.seed-0.bak`, `${names[0]}.seed-1.bak`]);
+        // Newest three installer backups: the fresh one plus the two newest seeds.
+        const entries = fs.readdirSync(dest);
+        const installerBackups = entries.filter((name) => name.endsWith(".bak") && name !== sentinel && name !== linkName);
+        expect(installerBackups).toHaveLength(3);
+        expect(installerBackups.filter((name) => name.includes(".00000000-")).sort())
+          .toEqual([`${names[0]}.00000000-0000-4000-8000-000000000000.bak`, `${names[0]}.00000000-0000-4000-8000-000000000001.bak`]);
+        // Never deletion candidates: a differently suffixed user backup and a shaped symlink.
+        expect(entries).toContain(sentinel);
+        expect(fs.readFileSync(path.join(dest, sentinel), "utf8")).toBe("release notes, keep me");
+        expect(fs.lstatSync(path.join(dest, linkName)).isSymbolicLink()).toBe(true);
+        expect(fs.readFileSync(linkTarget, "utf8")).toBe("linked user data");
       } finally { f.cleanup(); }
     });
     test(`${scope}: migrates expected legacy links, rejects unrelated and nonregular targets`, () => {
