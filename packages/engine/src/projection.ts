@@ -20,7 +20,9 @@
  *    publication locks; the numeric catalog revision remains a semantic CAS.
  *
  * `refreshProjections(context)` is the read boundary's entry point: capture,
- * publish, and retry only if the numeric catalog revision moved.
+ * publish, and retry only if the numeric catalog revision moved. A capture
+ * whose source fingerprint matches the intact published generation is adopted
+ * without a rewrite, so a steady-state read writes nothing at all.
  *
  * Source set (contract §5): resolved `status.json`, the registered workflow
  * snapshot dirs plus the retained known locations from committed
@@ -809,6 +811,29 @@ function changedSourceKeys(previous: SourceFingerprint[], next: ProjectionSource
   return [...keys].filter((key) => before.get(key) !== after.get(key)).sort();
 }
 
+/**
+ * Cheap intact-ness probe for the published generation (the same five tables
+ * `insertGeneration` fills): every table the capture expects to be non-empty
+ * must still hold a row for that generation. A dropped or truncated output is
+ * caught through the primary-key prefix (`generation` leads every key) without
+ * scanning the rows it guards, so an unchanged refresh never adopts a
+ * generation whose bytes are gone.
+ */
+function publishedGenerationIntact(db: StoreDb, generation: number, capture: ProjectionCapture): boolean {
+  const expectedRows: Array<[string, number]> = [
+    ["projection_sources", capture.sources.length],
+    ["projection_workflows", capture.rows.workflows.length],
+    ["projection_plans", capture.rows.plans.length],
+    ["projection_leases", capture.rows.leases.length],
+    ["projection_compasses", capture.rows.compasses.length],
+  ];
+  for (const [table, rows] of expectedRows) {
+    const present = db.prepare(`select 1 from ${table} where generation = ? limit 1`).get(generation) !== undefined;
+    if (present !== (rows > 0)) return false;
+  }
+  return true;
+}
+
 function insertGeneration(db: StoreDb, generation: number, capture: ProjectionCapture): void {
   const sourceStatement = db.prepare(
     "insert into projection_sources(generation, source_key, kind, root_kind, relative_path, sha256, state, diagnostic) " +
@@ -987,12 +1012,45 @@ function movementDiagnostics(movement: Movement | null, attempts: number): Sourc
  * Insert the replacement generation and flip the current one inside ONE short
  * write transaction. The numeric catalog revision is checked inside that
  * transaction because compass paths and pin revisions depend on it.
+ *
+ * An unchanged source set over an intact published generation writes NOTHING:
+ * the recorded fingerprint decides, and the intact-ness probe refuses to adopt
+ * a generation whose rows were dropped. The identity is the §5 source
+ * fingerprint, which covers every input the derived rows are rendered from
+ * (shortcut: the frozen catalog pin is re-selected in the same transaction that
+ * rewrites the plan row, itself a source — upgrade if a pin ever moves alone).
  */
 function publishGeneration(db: StoreDb, capture: ProjectionCapture, transactionOpen = false): RefreshReport {
   const checkedAt = new Date().toISOString();
   if (!transactionOpen) db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
+    if (
+      meta.generation !== null &&
+      meta.sourceSetHash === capture.sourceSetHash &&
+      publishedGenerationIntact(db, meta.generation, capture)
+    ) {
+      const healthCurrent = meta.freshness === "current";
+      if (!healthCurrent) {
+        // The output is current; only a retained stale health row must move.
+        db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(
+          checkedAt,
+        );
+      }
+      if (!transactionOpen) db.exec("commit");
+      return reportOf(
+        {
+          generation: meta.generation,
+          freshness: "current",
+          builtAt: meta.builtAt,
+          checkedAt: healthCurrent ? meta.checkedAt : checkedAt,
+          diagnostics: [],
+        },
+        capture,
+        [],
+        false,
+      );
+    }
     const previous = readPublishedFingerprints(db, meta.generation);
     const changedKeys = changedSourceKeys(previous, capture.sources);
  
