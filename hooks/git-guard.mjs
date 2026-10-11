@@ -130,11 +130,11 @@ function analyzeGitInvocations(command) {
 }
 
 // Force detection inspects only the tokens of a `git push` invocation: a
-// short-option bundle containing `f` (-f, -uf, …) or the literal --force.
-// Other long flags (--filter, --force-with-lease=…) are never bare force.
+// short-option bundle containing `f` (-f, -uf, …), `--force`, or a forced
+// refspec. Other long flags (--filter, --force-with-lease=…) are never bare force.
 function isBareForcePush(invocation) {
   return invocation.argv.some((token) => {
-    if (token === "--force") return true;
+    if (token === "--force" || token.startsWith("+")) return true;
     if (token.startsWith("-")) return token !== "--force-with-lease" && /^-[^-]*f/.test(token);
     return false;
   });
