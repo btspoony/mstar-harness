@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { summarizeQualification, validateFreezeGroups, validateFreezeLabels, type QualificationRow } from "../src/evaluation.js";
-import { calibrationCliInvocation, loadPreviousDevelopmentState, runEvaluationCommand } from "../scripts/evaluate.js";
+import { loadPreviousDevelopmentState, runEvaluationCommand } from "../scripts/evaluate.js";
 const base: QualificationRow = { groupId: "g1", variantId: "v1", primary: true, gold: "same_cause", outcome: "accepted", rawLabel: "same_cause", accepted: true, lineageId: "lineage-a", causalClusterId: "cluster-a" };
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string | null = "mstar.qualification-manifest/v1"): string {
@@ -154,13 +154,6 @@ async function captureCommand(args: string[]): Promise<{ code: number; stdout: s
 
 
 describe("qualification integrity", () => {
-  test("records the runtime-mounted CLI invocation with container-absolute input paths", () => {
-    expect(calibrationCliInvocation).toEqual([
-      "/usr/local/bin/node", "/mnt/source/.runtime/mstar-harness.js", "judgment", "review-advice",
-      "--file", "/mnt/source/.runtime/pack.json", "--pilot", "/mnt/source/.runtime/pilot.json",
-      "--workspace", "/mnt/source", "--json",
-    ]);
-  });
   test("calibration admits a first run, then discovers the newest per-run state and request hashes", () => {
     const firstRunRoot = fixtureRoot({});
     const expected = { plannedVariants: 2, protocolSha256: sha256("protocol"), splitSha256: sha256("split"), goldSha256: sha256("gold") };
@@ -170,7 +163,7 @@ describe("qualification integrity", () => {
       });
     } finally { rmSync(firstRunRoot, { recursive: true, force: true }); }
     const priorManifest = {
-      runId: "previous-run", plannedVariants: expected.plannedVariants, identity: { cliSha256: sha256("cli") },
+      runId: "previous-run", plannedVariants: expected.plannedVariants, identity: { runtimeSha256: sha256("runtime") },
       protocolSha256: expected.protocolSha256, splitSha256: expected.splitSha256, goldSha256: expected.goldSha256,
     };
     const olderManifest = { ...priorManifest, runId: "older-run" };
@@ -194,7 +187,7 @@ describe("qualification integrity", () => {
   test("partial prior-run state fails closed", () => {
     const root = fixtureRoot({
       "runs/development/partial-run/run-manifest.json": JSON.stringify({
-        runId: "partial-run", plannedVariants: 2, identity: { cliSha256: sha256("cli") },
+        runId: "partial-run", plannedVariants: 2, identity: { runtimeSha256: sha256("runtime") },
         protocolSha256: sha256("protocol"), splitSha256: sha256("split"), goldSha256: sha256("gold"),
       }),
     });
