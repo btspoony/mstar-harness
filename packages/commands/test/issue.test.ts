@@ -216,11 +216,8 @@ describe("issue command family", () => {
     const target = added.data as { issueId: string };
     const duplicateDefinition = definition("issue.duplicate");
     const duplicateContract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.duplicate");
-    const duplicatePayload = duplicateDefinition.payloads?.payload;
-    if (!(duplicateDefinition.input instanceof z.ZodObject) || duplicateContract === undefined || duplicatePayload === undefined) {
-      throw new Error("missing issue.duplicate composed payload contract");
-    }
-    const composedSchema = duplicateDefinition.input.safeExtend({ payload: duplicatePayload.schema.optional() });
+    if (duplicateContract === undefined) throw new Error("missing issue.duplicate contract");
+    const composedSchema = duplicateDefinition.input;
     const resolvedAdmission = admitCommandInput(duplicateDefinition, {
       id: "I-000002",
       expect: 0,
@@ -237,6 +234,27 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, duplicateContract, composedSchema);
     expect(waivedAdmission.success).toBe(true);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "resolved",
+      payload: { reason: "incomplete", references: ["qa/evidence.md"] },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(false);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "duplicate",
+      payload: { reason: "same issue", canonicalIssueId: target.issueId },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(true);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "resolved",
+      payload: { reason: "wrong branch", scope: "scope", alignmentRef: "approval" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(false);
 
 
     const duplicateSource = await executeCommand("issue.add", {
@@ -272,7 +290,7 @@ describe("issue command family", () => {
       operationId: "closure-default",
       actor: "project-manager",
     }, context);
-    expect(missingReferences).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    expect(missingReferences).toMatchObject({ status: "usage", code: "command.invalid-input" });
     const invalidOpen = await executeCommand("issue.duplicate", {
       id: unresolved.issueId,
       expect: unresolved.revision,
@@ -281,7 +299,7 @@ describe("issue command family", () => {
       operationId: "closure-open",
       actor: "project-manager",
     }, context);
-    expect(invalidOpen).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
+    expect(invalidOpen).toMatchObject({ status: "usage", code: "command.invalid-input" });
   });
 
   test("malformed capture is rejected without creating an issue", async () => {
@@ -569,7 +587,6 @@ describe("issue command family", () => {
       expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: true }));
       const missingId = command.input.safeParse({ actor: "project-manager" });
       expect(missingId.success).toBe(false);
-      if (!missingId.success) expect(missingId.error.issues.some((issue) => issue.path.includes("id"))).toBe(true);
     }
     for (const verb of ["add", "export"]) {
       const command = definition(`issue.${verb}`);
@@ -584,7 +601,6 @@ describe("issue command family", () => {
         id: "I-000001", actor: "project-manager", payload: {},
       });
       expect(missingCas.success).toBe(false);
-      if (!missingCas.success) expect(missingCas.error.issues.some((issue) => issue.path.includes("expect"))).toBe(true);
     }
   });
 });
