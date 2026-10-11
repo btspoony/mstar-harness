@@ -66,10 +66,6 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
     properties[selector.key] = { type: "string" };
   }
-  if (definition.id === "judgment.review-advice") {
-    schema = schema.safeExtend({ input: z.string().optional() });
-    properties.input = { type: "string" };
-  }
   for (const [field, value] of Object.entries(descriptor.defaults)) {
     if (properties[field] !== undefined) properties[field] = { ...properties[field], default: value };
   }
@@ -92,10 +88,6 @@ function handlerInput(definition: CommandDefinition, input: unknown): unknown {
   const contextKeys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
   const normalized = { ...record };
   for (const key of contextKeys) delete normalized[key];
-  if (definition.id === "judgment.review-advice" && normalized.input !== undefined) {
-    delete normalized.input;
-    normalized.stdin = true;
-  }
   return normalized;
 }
 

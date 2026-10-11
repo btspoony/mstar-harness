@@ -9,30 +9,25 @@ import { sendNativeRequest } from "../src/typesafe.js";
 import { runShadowSupervisor, type ShadowRunInput } from "../src/shadow-supervisor.js";
 import {
   validateFreezeGroups,
+  selectDevelopmentBand,
   validateFreezeLabels,
   validateFreezeQuarantine,
   summarizeQualification,
-  selectDevelopmentBand,
   developmentPairId,
-  type CalibrationBand,
   type CalibrationObservation,
+  type CalibrationBand,
   type FreezeEligibleDenominators,
   type FreezeQuarantine,
   type QualificationRow,
 } from "../src/evaluation.js";
 
-const actions: Record<string, true> = { "check-protocol": true, "check-corpus": true, "check-annotations": true, "check-freeze": true, "calibrate-preflight": true, calibrate: true, holdout: true, report: true };
-const REVISION = "phase3a-native-20260924";
+const actions: Record<string, true> = { "check-protocol": true, "check-corpus": true, "check-annotations": true, "check-freeze": true, calibrate: true, "calibrate-preflight": true, holdout: true, report: true };
 const CALIBRATION_RUNTIME = "/mnt/source/.runtime";
-export const calibrationCliInvocation = Object.freeze([
-  "/usr/local/bin/node", `${CALIBRATION_RUNTIME}/mstar-harness.js`, "judgment", "review-advice",
-  "--file", `${CALIBRATION_RUNTIME}/pack.json`, "--pilot", `${CALIBRATION_RUNTIME}/pilot.json`,
-  "--workspace", "/mnt/source", "--json",
-]);
+const REVISION = "phase3a-native-20260924";
 function fail(message: string): never { throw new Error(message); }
 function args(argv: readonly string[]): { action: string; root: string; shard?: string; seat?: string } {
   const [action, ...tail] = argv;
-  if (!action || !Object.hasOwn(actions, action)) return fail("Usage: evaluate.ts <check-protocol|check-corpus|check-annotations|check-freeze|calibrate-preflight|calibrate|holdout|report> --root <authorized-view>");
+  if (!action || !Object.hasOwn(actions, action)) return fail("Usage: evaluate.ts <check-protocol|check-corpus|check-annotations|check-freeze|calibrate|calibrate-preflight|holdout|report> --root <authorized-view>");
   let root: string | undefined, shard: string | undefined, seat: string | undefined;
   for (let i = 0; i < tail.length; i++) {
     const flag = tail[i], value = tail[++i];
@@ -206,7 +201,7 @@ export function stageCalibrationSources(
 }
 
 type PreviousDevelopmentManifest = {
-  runId: string; plannedVariants: number; identity: { cliSha256: string };
+  runId: string; plannedVariants: number; identity: { runtimeSha256: string };
   protocolSha256: string; splitSha256: string; goldSha256: string;
 };
 type PreviousDevelopmentState = {
@@ -245,8 +240,7 @@ export function loadPreviousDevelopmentState(
 }
 async function calibrateDevelopment(root: string, protocol: Record<string, unknown>, preflightOnly = false): Promise<{ status: string; attempted: number; succeeded: number; failed: number; firstRun: boolean; runId?: string; checked?: number }> {
   const runIdentity = `q-${randomUUID()}`;
-  const evidence = resolve(root, "runs/development", runIdentity);
-  if (existsSync(evidence)) fail("Development run identity already exists; no replay");
+  const evidence = resolve(root, "runs", "development", runIdentity);
   if (await runEvaluationCommand(["check-protocol", "--root", root]) !== 0 ||
       await runEvaluationCommand(["check-freeze", "--root", root]) !== 0) fail("Development admission checks failed");
   const permission = readJson<Record<string, unknown>>(root, "permission.json");
@@ -297,12 +291,11 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   const spentRequests = new Set(priorState.previousOutcomes.map((outcome) => outcome.requestSha256).filter((hash): hash is string => hash !== null));
 
   const checkout = resolve(fileURLToPath(import.meta.url), "../../../..");
-  const cliPath = resolve(checkout, "packages/cli/dist/mstar-harness.js");
-  const packagePath = resolve(checkout, "packages/cli/package.json");
-  if (!existsSync(cliPath) || !statSync(cliPath).isFile()) fail("Packaged native CLI is absent; build packages/cli first");
-  const cliSha256 = digest(readFileSync(cliPath));
+  const runtimePath = resolve(checkout, "packages/judgment/dist/index.js");
+  const packagePath = resolve(checkout, "packages/judgment/package.json");
+  if (!existsSync(runtimePath) || !statSync(runtimePath).isFile()) fail("Packaged judgment API is absent; build packages/judgment first");
+  const runtimeSha256 = digest(readFileSync(runtimePath));
   const packageVersion = JSON.parse(readFileSync(packagePath, "utf8")).version as string;
-  const cliVersion = execFileSync(process.execPath, [cliPath, "--version"], { encoding: "utf8" }).trim();
   if (typeof process.env.TYPESAFE_API_KEY !== "string" || !process.env.TYPESAFE_API_KEY) fail("jev.credential-unavailable");
   const dockerPath = execFileSync("which", ["docker"], { encoding: "utf8" }).trim();
   const baseImageTag = "jev-shadow-reviewer:iter-20260924-jev-3a";
@@ -313,13 +306,13 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   }).trim();
   if (!/^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
       execFileSync(dockerPath, ["image", "inspect", baseImageTag, "--format", "{{.Id}}"], { encoding: "utf8" }).trim() !== baseImage) {
-    fail("Approved CLI sandbox image changed during build");
+    fail("Approved calibration sandbox image changed during build");
   }
 
   const candidates = (protocol.calibration as { candidates: CalibrationBand[]; selection: string }).candidates;
   if (!Array.isArray(candidates) || candidates.length !== 5 || candidates.some((candidate, index) => candidate.id !== `b${index}`)) fail("Frozen calibration candidates invalid");
   if (!preflightOnly) mkdirSync(evidence, { mode: 0o700 });
-  const identity = { cliPath, cliVersion, packageVersion, cliSha256, builderSha256: cliSha256, imageDigest, model: protocol.requestedModel, revision: REVISION };
+  const identity = { runtimePath, packageVersion, runtimeSha256, builderSha256: runtimeSha256, imageDigest, model: protocol.requestedModel, revision: REVISION };
   const manifest = {
     schema: "mstar.qualification-development-manifest/v1", runId: runIdentity, identity,
     protocolSha256: fileDigest(root, "protocol.json"), permissionSha256: fileDigest(root, "permission.json"),
@@ -331,21 +324,23 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
     knownHoldoutLimitation: "missing-caller-or-branch: 6 eligible groups versus frozen floor 14; Q7 endpoint inconclusive",
     firstRun: priorState.firstRun,
     previousRunId: previousManifest?.runId ?? null,
-    previousBuildSha256: previousManifest?.identity.cliSha256 ?? null,
+    previousBuildSha256: previousManifest?.identity.runtimeSha256 ?? null,
   };
   if (!preflightOnly) writeFileSync(resolve(evidence, "run-manifest.json"), JSON.stringify(manifest), { flag: "wx", mode: 0o600 });
   const observations = new Map<string, CalibrationObservation>();
   const outcomes: Array<Record<string, unknown>> = [];
-  let attempted = 0, succeeded = 0, failed = 0, cliSubmissions = 0, shadowFailures = 0;
-  const worker = `import { spawnSync } from "node:child_process";
-const runId=process.argv[2], start=Date.now(), runtime="${CALIBRATION_RUNTIME}";
+  let attempted = 0, succeeded = 0, failed = 0, runtimeSubmissions = 0, shadowFailures = 0;
+  const worker = `import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { connectEvaluatorChannel } from "./judgment.mjs";
+const runId=process.argv[2], runtime="${CALIBRATION_RUNTIME}", start=Date.now(), controller=new AbortController();
 process.chdir(runtime);
 const event=type=>process.stdout.write(JSON.stringify({type,runId,at:Date.now()-start})+"\\n");
 event("start"); event("baseline-frozen"); event("request");
-const child=spawnSync("/usr/local/bin/node",[runtime+"/mstar-harness.js","judgment","review-advice","--file",runtime+"/pack.json","--pilot",runtime+"/pilot.json","--workspace","/mnt/source","--json"],{encoding:"utf8",timeout:9500,maxBuffer:8192,env:process.env});
-let status; try { status=JSON.parse(child.stdout).status; } catch {}
-event(status==="recorded"?"complete":"error");
-process.exit(status==="recorded"&&child.status===0?0:1);
+const packBytes=readFileSync(runtime+"/pack.json"), pilotBytes=readFileSync(runtime+"/pilot.json");
+const channel=await connectEvaluatorChannel({cwd:runtime,workspace:"/mnt/source"},controller.signal);
+try { const result=await channel.submit({packBytes,pilotDigest:createHash("sha256").update(pilotBytes).digest("hex")},controller.signal); event(result.status==="recorded"?"complete":"error"); process.exitCode=result.status==="recorded"?0:1; }
+finally { await channel.cancel(); }
 `;
   let checked = 0;
   for (let index = 0; index < planned.length; index++) {
@@ -398,7 +393,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
         { id: leftId, kind: "finding", text: pair.left.claim, evidenceIds: leftIds },
         { id: rightId, kind: "finding", text: pair.right.claim, evidenceIds: rightIds },
       ] }, tasks: [{ id: taskId, useCase: "JEV-A05", subjectIds: [leftId, rightId], workUnit: { id: `unit-${runId}`, revision: 0 } }],
-      rubricVersion, builderVersion: cliSha256,
+      rubricVersion, builderVersion: runtimeSha256,
     });
     const packSha256 = digest(canonicalJsonBytes(pack));
     const pilot: JudgmentPilot = validatePilot({
@@ -408,7 +403,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
       policyVersion: (protocol.identities as { policy: { id: string } }).policy.id,
       permission: { ref: "permission.json", purpose: permission.purpose, dataClass: "synthetic-only" },
       isolation: { ref: "run-manifest.json#docker-mount-plan" }, packManifest: [{ packId: pack.packId, packSha256 }],
-      rubricVersion, builderVersion: cliSha256, implementationVersion: `${packageVersion}:${cliSha256}`,
+      rubricVersion, builderVersion: runtimeSha256, implementationVersion: `${packageVersion}:${runtimeSha256}`,
       limits: { timeoutMs: budget.timeoutMsPerOperation, maxRunElapsedMs: budget.maxRunOptionalElapsedMs,
         maxCallsPerRun: 1, maxConcurrentRequests: 1, maxTasksPerPack: 1, maxPacksPerRun: 1, maxPairs: 1,
         maxPackBytes: budget.maxPackBytes, maxRequestBytes: budget.maxOutboundRequestBytes,
@@ -437,11 +432,10 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     stageCalibrationSources(sourceDir, packSources, files);
     const runtimeAssets = resolve(itemRoot, "runtime-assets");
     mkdirSync(runtimeAssets, { mode: 0o700 });
-    const mountedCliPath = resolve(runtimeAssets, "mstar-harness.js");
-    copyFileSync(cliPath, mountedCliPath);
-    if (digest(readFileSync(mountedCliPath)) !== cliSha256) fail("Packaged CLI changed before sandbox invocation");
+    const mountedRuntimePath = resolve(runtimeAssets, "judgment.mjs");
+    copyFileSync(runtimePath, mountedRuntimePath);
+    if (digest(readFileSync(mountedRuntimePath)) !== runtimeSha256) fail("Packaged judgment API changed before sandbox invocation");
     writeFileSync(resolve(runtimeAssets, "worker.mjs"), worker, { mode: 0o400 });
-    writeFileSync(resolve(runtimeAssets, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n", { mode: 0o400 });
     writeFileSync(resolve(runtimeAssets, "pack.json"), canonicalJsonBytes(pack), { mode: 0o400 });
     writeFileSync(resolve(runtimeAssets, "pilot.json"), canonicalJsonBytes(pilot), { mode: 0o400 });
     writeFileSync(resolve(statusPath), JSON.stringify({ schema: "mstar.judgment-status/v1", runId, status: "idle" }), { mode: 0o600 });
@@ -463,7 +457,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
         writeFileSync(resolve(evaluatorDir, "response.bin"), response.responseBytes, { flag: "wx", mode: 0o600 });
         return response;
       } };
-    cliSubmissions++;
+    runtimeSubmissions++;
     let failure: string | null = null, responseSha256: string | null = null;
     try {
       const assessment = await runShadowSupervisor(input);
@@ -496,8 +490,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
       topProbability: answer ? answer.probabilities[answer.choice]! : null,
       confidence: answer?.confidence ?? null });
     outcomes.push({ groupId: group.id, variantId: variant.id, primary: variant.primary, runId,
-      cliInvocation: calibrationCliInvocation,
-      cliVersion, cliSha256, requestSha256: prepared.requestSha256, responseSha256, transportAttempted,
+      runtimeSha256, requestSha256: prepared.requestSha256, responseSha256, transportAttempted,
       usage, costUsd: null, // The frozen pricing declaration covers input only, not the complete bill.
       providerStatus: providerRecorded ? "recorded" : transportAttempted ? "failed" : "unissued",
       status: failure ? providerRecorded ? "recorded-shadow-invalid" : "unavailable" : "recorded",
@@ -519,8 +512,8 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     return tokens;
   }, { input: 0, output: 0 });
   const counts = { providerAvailable: succeeded, providerUnavailable: failed,
-    preProviderUnavailable: cliSubmissions - attempted, cliSubmissions, providerAttempts: attempted,
-    unissued: planned.length - cliSubmissions, shadowLifecycleInvalid: shadowFailures,
+    preProviderUnavailable: runtimeSubmissions - attempted, runtimeSubmissions, providerAttempts: attempted,
+    unissued: planned.length - runtimeSubmissions, shadowLifecycleInvalid: shadowFailures,
     knownInputTokens: recordedUsage.input, knownOutputTokens: recordedUsage.output,
     estimatedInputUsd: recordedUsage.input * budget.pricingEstimate.usdPerMillionInputTokens / 1_000_000,
     actualCostUsd: null,
@@ -540,7 +533,7 @@ process.exit(status==="recorded"&&child.status===0?0:1);
     qualification: selected.band && attempted === planned.length && failed === 0 && shadowFailures === 0 ? "development-only" : "unqualified",
     policy: selected.band && attempted === planned.length && failed === 0 && shadowFailures === 0 ? "frozen-band-shadow-only" : "all-abstain-no-completed-units-no-visible-advice" };
   const runRecord = { schema: "mstar.qualification-development-run/v1", manifest,
-    attempted, succeeded, failed, cliSubmissions, preProviderCliFailures: cliSubmissions - attempted,
+    attempted, succeeded, failed, runtimeSubmissions, preProviderRuntimeFailures: runtimeSubmissions - attempted,
     shadowLifecycleFailures: shadowFailures, counts, outcomes };
   const assessment = { schema: "mstar.qualification-development-assessment/v1", status: bandRecord.qualification,
     reason: selected.band ? failed || attempted !== planned.length || shadowFailures ? "incomplete-or-invalid-shadow-run" : null : "no-admissible-development-band",

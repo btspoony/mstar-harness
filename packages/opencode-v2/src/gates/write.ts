@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 /** Native tool.execute.before coverage is limited to write/edit; patch, shell,
  * and Code Mode remain outside this gate. SDK pin receipt: the installed
  * @opencode/plugin@2.0.26/dist/effect/tool.d.ts:1 imports Tool from
@@ -19,7 +19,10 @@ type EngineModule = typeof Engine;
 export type WriteGateEngineApi = Pick<
  EngineModule,
  | "applyEnforcement"
+ | "caseFoldedDocKind"
  | "harnessDocKindOfTarget"
+ | "isStoreAuthorityTarget"
+ | "landedPathOf"
  | "queryIssueFlow"
  | "resolveExecutionReadRoute"
  | "resolveHarnessDir"
@@ -38,11 +41,6 @@ type WriteGateServices = {
 type GatedDocument = { harnessDir: string; kind: Engine.HarnessDocKind };
 type AuthorityRefusal = { code: string; message: string };
 
-const STORE_NAMES: Record<string, true> = {
- "store.db": true,
- "store.db-wal": true,
- "store.db-shm": true,
-};
 const PRE_ACTIVATION_CODES = new Set(["store.not-initialized", "store.not-active"]);
 const AUTHORITY_RECOVERY = "Use supported mstar plan prepare|progress|complete, mstar workflow phase|lifecycle|execution-policy|integration-worktree transitions, or mstar status workflow-close for lifecycle changes; use mstar issue or mstar catalog commands for record changes, or mstar store upgrade/migrate for supported imports. Raw database-byte edits have no supported direct-write verb, so escalate repairs to the project maintainer.";
 
@@ -67,83 +65,10 @@ function malformedPath(field: "filePath" | "path"): Tool.Error {
  );
 }
 
-/** Resolve the path a write lands on: follow existing aliases and dangling
- * symlink chains, then canonicalize the nearest existing ancestor. */
-function landedPathOf(filePath: string): string {
- let probe = resolve(filePath);
- const suffix: string[] = [];
- let symlinkHops = 0;
- for (;;) {
- try {
- return resolve(realpathSync(probe), ...suffix);
- } catch {
- let linkTarget: string;
- try {
- linkTarget = readlinkSync(probe);
- } catch {
- const parent = dirname(probe);
- if (parent === probe) return resolve(filePath);
- suffix.unshift(basename(probe));
- probe = parent;
- continue;
- }
- if (symlinkHops >= 8) {
- throw refusal("write.symlink-resolution-refused", "Unable to resolve the write target because its symlink chain exceeds the supported limit; no write was authorized.");
- }
- symlinkHops++;
- probe = resolve(dirname(probe), linkTarget);
- }
- }
-}
-
-
-function harnessRootFor(api: WriteGateEngineApi, candidate: string): string | null {
- let dir = dirname(candidate);
- for (;;) {
- const resolved = api.resolveHarnessDir(dir);
- if (resolved !== null) {
- const root = resolve(resolved);
- const rel = relative(root, candidate);
- if (rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) return resolved;
- }
- const parent = dirname(dir);
- if (parent === dir) return null;
- dir = parent;
- }
-}
-function isStoreAuthorityTarget(api: WriteGateEngineApi, candidate: string): boolean {
- const name = basename(candidate).toLowerCase();
- return STORE_NAMES[name] === true && harnessRootFor(api, candidate) !== null;
-}
-
-function caseFoldedDocument(api: WriteGateEngineApi, candidate: string): GatedDocument | null {
- const name = basename(candidate).toLowerCase();
- if (name !== "status.json" && name !== "snapshot.json" && name !== "residuals.json") return null;
- const harnessDir = harnessRootFor(api, candidate);
- if (harnessDir === null) return null;
- const relativeTarget = relative(resolve(harnessDir), resolve(candidate)).split(sep).map((part) => part.toLowerCase());
- if (name === "status.json" && relativeTarget.length === 1) return { harnessDir, kind: "status" };
- if (name === "snapshot.json") {
- const workflowDir = relative(resolve(harnessDir), api.resolveWorkflowDir(harnessDir, { harnessDir })).split(sep).map((part) => part.toLowerCase());
- const rel = relativeTarget.slice(workflowDir.length);
- if (relativeTarget.slice(0, workflowDir.length).join("/") === workflowDir.join("/") && rel.length === 2 && rel[1] === "snapshot.json") {
- return { harnessDir, kind: "snapshot" };
- }
- }
- if (name === "residuals.json") {
- const projectDir = relative(resolve(harnessDir), api.resolveProjectDir(harnessDir, { harnessDir })).split(sep).map((part) => part.toLowerCase());
- const rel = relativeTarget.slice(projectDir.length);
- if (relativeTarget.slice(0, projectDir.length).join("/") === projectDir.join("/") && rel.length === 2 && rel[1] === "residuals.json") {
- return { harnessDir, kind: "register" };
- }
- }
- return null;
-}
-
 function classifyDocument(api: WriteGateEngineApi, inputPath: string, landedPath: string): GatedDocument | null {
  return api.harnessDocKindOfTarget(inputPath)
- ?? caseFoldedDocument(api, inputPath)
- ?? (landedPath === inputPath ? null : api.harnessDocKindOfTarget(landedPath) ?? caseFoldedDocument(api, landedPath));
+ ?? api.caseFoldedDocKind(inputPath)
+ ?? (landedPath === inputPath ? null : api.harnessDocKindOfTarget(landedPath) ?? api.caseFoldedDocKind(landedPath));
 }
 
 function authorityError(code: string, message: string): AuthorityRefusal {
@@ -269,9 +194,18 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
  }
 
  const requested = resolve(filePath);
- const landed = landedPathOf(requested);
+ let landed: string;
+ try {
+ landed = api.landedPathOf(requested);
+ } catch (error) {
+ // The engine's chained resolver refuses a symlink cycle/overflow
+ // fail-closed; keep its code + message in this host's envelope.
+ const code = errorCode(error);
+ if (code !== "write.symlink-resolution-refused") throw error;
+ throw refusal(code, error instanceof Error ? error.message : String(error));
+ }
  const logger = services.logger ?? defaultStatusLogger;
- if (isStoreAuthorityTarget(api, requested) || isStoreAuthorityTarget(api, landed)) {
+ if (api.isStoreAuthorityTarget(requested) || api.isStoreAuthorityTarget(landed)) {
  throw refusal(
  "store.direct-write-refused",
  `store.db and its WAL/SHM files are store authority and cannot be written by a tool. ${AUTHORITY_RECOVERY}`,

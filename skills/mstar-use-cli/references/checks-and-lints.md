@@ -4,7 +4,7 @@ This file indexes the check commands — the ones skill engine-check callouts ci
 
 Behavior that the check's own contract does not cover is owned elsewhere: field schemas by `mstar-artifacts`, phase semantics by `mstar-iteration`, checkout rules by `mstar-branch-worktree`, dispatch fields by `mstar-dispatch-gates`.
 
-Payload discovery is read-only: mstar-harness schema <type> describes supported runtime inputs such as CaptureInput, OccurrenceInput, IssueTriage, ClosureEvidence, IssueLink and PlanProgress; current command help owns flags and completion payload lookup. Schema output never validates the operator's evidence/authority. Historical submit maps only to bounded judgment review-advice, never acceptance.
+Payload discovery is read-only: mstar-harness schema <type> describes supported runtime inputs such as CaptureInput, OccurrenceInput, IssueTriage, ClosureEvidence, IssueLink and PlanProgress; current command help owns flags and completion payload lookup. Schema output never validates the operator's evidence/authority. Historical `judgment submit` is retired; no command route is registered.
 
 ## Reading a result
 

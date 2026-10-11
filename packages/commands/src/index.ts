@@ -26,8 +26,6 @@ export { getCommandSchemas, getPayloadSchema, getSchemaCommandDefinitions } from
 export { getValidationCommandDefinitions } from "./families/validation.js";
 export { getAuditCommandDefinitions } from "./families/audit.js";
 export { getPrReviewCommandDefinitions } from "./families/pr-review.js";
-export { getJudgmentCommandDefinitions } from "./families/judgment.js";
-export type { JudgmentProvider } from "./families/judgment.js";
 export { getDashboardCommandDefinitions } from "./families/dashboard.js";
 export { getExecutionLedgerCommandDefinitions } from "./families/execution-ledgers.js";
 export { DASHBOARD_CSP, startDashboard } from "./dashboard/index.js";

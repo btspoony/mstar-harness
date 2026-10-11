@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync, readlinkSync, realpathSync, statSync as statSync5, writeSync } from "node:fs";
-import { basename as basename3, dirname as dirname8, isAbsolute as isAbsolute3, join as join6, relative as relative5, resolve as resolve5 } from "node:path";
+import { readFileSync, statSync as statSync5, writeSync } from "node:fs";
+import { dirname as dirname8, isAbsolute as isAbsolute3, join as join6, relative as relative5, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
@@ -55,6 +55,8 @@ import { closeSync, existsSync as existsSync16, fstatSync, lstatSync as lstatSyn
 import { join as join20, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname14, join as join22, relative as relative7, resolve as resolve17 } from "node:path";
+import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
+import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve18 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
 import { readFileSync as readFileSync22 } from "node:fs";
 import { join as join29 } from "node:path";
@@ -16063,6 +16065,12 @@ function hasHarnessRootMarkers(dir) {
     return false;
   }
 }
+function isHarnessRootDir(dir) {
+  if (hasHarnessRootMarkers(dir))
+    return true;
+  const parentResolved = resolveHarnessDir(dirname14(dir));
+  return parentResolved !== null && resolve17(parentResolved) === dir;
+}
 function resolveHarnessRootOf(target) {
   let dir = resolve17(target);
   for (;; ) {
@@ -16195,6 +16203,99 @@ function validateDocByKind(doc, kind) {
 function formatStatusWriteBlockReason(violations, skillPointer) {
   return violations.map((v) => `${violationLine(v)} (${skillPointer})`).join(`
 `);
+}
+init_path();
+var STORE_AUTHORITY_FILES = ["store.db", "store.db-wal", "store.db-shm"];
+var STORE_AUTHORITY_NAMES = STORE_AUTHORITY_FILES.map((name) => name.toLowerCase());
+var SYMLINK_RESOLUTION_REFUSED_CODE = "write.symlink-resolution-refused";
+var MAX_SYMLINK_HOPS = 8;
+var SYMLINK_RESOLUTION_REFUSED_MESSAGE = "Unable to resolve the write target because its symlink chain exceeds the supported limit; no write was authorized.";
+
+class SymlinkResolutionError extends Error {
+  code = SYMLINK_RESOLUTION_REFUSED_CODE;
+  constructor(message = SYMLINK_RESOLUTION_REFUSED_MESSAGE) {
+    super(message);
+    this.name = "SymlinkResolutionError";
+  }
+}
+function isStoreAuthorityName(name) {
+  return STORE_AUTHORITY_NAMES.includes(name.toLowerCase());
+}
+var CASE_FOLDED_SHAPES = {
+  status: /^status\.json$/i,
+  snapshot: /^[^/]+\/snapshot\.json$/i,
+  register: /^[^/]+\/residuals\.json$/i
+};
+function caseFoldedKindOf(name) {
+  const folded = name.toLowerCase();
+  if (folded === "status.json")
+    return "status";
+  if (folded === "snapshot.json")
+    return "snapshot";
+  if (folded === "residuals.json")
+    return "register";
+  return null;
+}
+function landedPathOf(filePath) {
+  let probe = resolve18(filePath);
+  const suffix = [];
+  let symlinkHops = 0;
+  for (;; ) {
+    try {
+      return resolve18(realpathSync9(probe), ...suffix);
+    } catch {
+      let linkTarget;
+      try {
+        linkTarget = readlinkSync(probe);
+      } catch {
+        const parent = dirname15(probe);
+        if (parent === probe)
+          return resolve18(filePath);
+        suffix.unshift(basename13(probe));
+        probe = parent;
+        continue;
+      }
+      if (symlinkHops >= MAX_SYMLINK_HOPS)
+        throw new SymlinkResolutionError;
+      symlinkHops++;
+      probe = resolve18(dirname15(probe), linkTarget);
+    }
+  }
+}
+function isStoreAuthorityTarget(target) {
+  if (!isStoreAuthorityName(basename13(target)))
+    return false;
+  return isHarnessRootDir(dirname15(target));
+}
+function caseFoldedDocKind(candidate) {
+  const target = resolve18(candidate);
+  const name = basename13(target);
+  const kind = caseFoldedKindOf(name);
+  if (kind === null)
+    return null;
+  let dir = dirname15(target);
+  for (;; ) {
+    if (isHarnessRootDir(dir)) {
+      let base = dir;
+      if (kind !== "status") {
+        try {
+          base = kind === "snapshot" ? resolveWorkflowDir(dir, { harnessDir: dir }) : resolveProjectDir(dir, { harnessDir: dir });
+        } catch {
+          base = resolve18(dir, kind === "snapshot" ? "workflows" : "projects");
+        }
+      }
+      if (CASE_FOLDED_SHAPES[kind].test(relative8(base, target)))
+        return { harnessDir: dir, kind };
+    }
+    const parent = dirname15(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function caseFoldedRegisterRoot(candidate) {
+  const doc = caseFoldedDocKind(candidate);
+  return doc?.kind === "register" ? doc.harnessDir : null;
 }
 init_core();
 init_iteration();
@@ -17939,14 +18040,6 @@ init_recovery_intent();
 var SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";
 var ENFORCEMENT_LINE = "Enforcement: hard — this repo opts in via .mstarc/compass; disable for this session with MSTAR_WRITE_GATE=off.";
 var AUTHORITY_LINE = "Authority invariant (not the enforcement flag) — the issue/catalog authority is not hand-writable; disable for this session with MSTAR_WRITE_GATE=off.";
-var STORE_DB_FILE = "store.db";
-var STORE_AUTHORITY_FILES = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
-var STORE_AUTHORITY_NAMES = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
-var REGISTER_BASENAME = /residuals\.json/i;
-var REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
-var STATUS_FILE2 = "status.json";
-var WORKFLOW_DIR_NAME = "workflows";
-var PROJECT_DIR_NAME = "projects";
 var STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 var STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
 var REGISTER_RETIRED_CODE = "project.register.retired";
@@ -17970,75 +18063,6 @@ async function readAuthorityRoute(harnessDir) {
   } catch (error) {
     const refusal = refusalOf(error);
     return PRE_ACTIVATION_CODES.includes(refusal.code) ? { kind: "legacy" } : { kind: "unavailable", ...refusal };
-  }
-}
-function hasEntry2(dir, name) {
-  try {
-    statSync5(join6(dir, name));
-    return true;
-  } catch {
-    return false;
-  }
-}
-function isHarnessRootDir(dir) {
-  if (hasEntry2(dir, STATUS_FILE2)) {
-    if (hasEntry2(dir, WORKFLOW_DIR_NAME) && hasEntry2(dir, PROJECT_DIR_NAME))
-      return true;
-    try {
-      if (hasEntry2(resolveWorkflowDir(dir, { harnessDir: dir }), "") && hasEntry2(resolveProjectDir(dir, { harnessDir: dir }), "")) {
-        return true;
-      }
-    } catch {}
-  }
-  const parentResolved = resolveHarnessDir(dirname8(dir));
-  return parentResolved !== null && resolve5(parentResolved) === dir;
-}
-function landedPathOf(resolved) {
-  try {
-    return realpathSync(resolved);
-  } catch {
-    try {
-      return resolve5(dirname8(resolved), readlinkSync(resolved));
-    } catch {
-      let dir = dirname8(resolved);
-      for (;; ) {
-        try {
-          return join6(realpathSync(dir), relative5(dir, resolved));
-        } catch {
-          const parent = dirname8(dir);
-          if (parent === dir)
-            return resolved;
-          dir = parent;
-        }
-      }
-    }
-  }
-}
-function isStoreAuthorityTarget(target) {
-  if (!STORE_AUTHORITY_NAMES.includes(basename3(target).toLowerCase()))
-    return false;
-  return isHarnessRootDir(dirname8(target));
-}
-function caseFoldedRegisterRoot(candidate) {
-  const target = resolve5(candidate);
-  if (!REGISTER_BASENAME.test(basename3(target)))
-    return null;
-  let dir = dirname8(target);
-  for (;; ) {
-    if (isHarnessRootDir(dir)) {
-      let projectDir;
-      try {
-        projectDir = resolveProjectDir(dir, { harnessDir: dir });
-      } catch {
-        projectDir = join6(dir, PROJECT_DIR_NAME);
-      }
-      if (REGISTER_SHAPE.test(relative5(projectDir, target)))
-        return dir;
-    }
-    const parent = dirname8(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
   }
 }
 function aliasedRegisterDir(resolved, landed) {
@@ -18164,7 +18188,17 @@ try {
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
     const targetPath = resolve5(isAbsolute3(rawPath) ? rawPath : join6(cwd, rawPath));
-    const landed = landedPathOf(targetPath);
+    let landed;
+    try {
+      landed = landedPathOf(targetPath);
+    } catch (error) {
+      if (error instanceof SymlinkResolutionError) {
+        blockAuthorityWrite(toolName, displayTarget(targetPath, dirname8(targetPath)), [
+          authorityViolation(error.code, error.message)
+        ]);
+      }
+      throw error;
+    }
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
       blockAuthorityWrite(toolName, displayTarget(targetPath, dirname8(storeTarget)), [
