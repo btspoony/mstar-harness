@@ -515,6 +515,9 @@ function spawnBounded(request: ProcessRequest, allowTruncation = false, maxStrea
         spawnError: null,
       });
     });
+    // A child that exits before draining stdin makes this write fail with EPIPE;
+    // that race is expected, so the stream error must not reach the process-level handler.
+    child.stdin?.on("error", () => {});
     if (request.stdin !== undefined) child.stdin?.end(request.stdin);
   });
 }

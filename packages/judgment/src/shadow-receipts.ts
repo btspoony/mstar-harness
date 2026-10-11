@@ -69,8 +69,10 @@ export type FrozenShadowEvidence = Readonly<{
   failures?: readonly string[];
 }>;
 
-const MAX_ARTIFACT_BYTES = 1_048_576;
-const digest = (value: unknown): string => createHash("sha256").update(canonicalJsonBytes(value)).digest("hex");
+/** Canonical-JSON byte ceiling shared by the shadow receipt and supervisor paths. */
+export const MAX_ARTIFACT_BYTES = 1_048_576;
+/** Stable content identity over canonical JSON bytes; one definition for both shadow modules. */
+export const digest = (value: unknown): string => createHash("sha256").update(canonicalJsonBytes(value)).digest("hex");
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 function consumedOutputFor(value: unknown, unitId: string): Readonly<{ unitId: string; outputId: string; consumed: true; consumedAt: number }> | undefined {
   if (!value || typeof value !== "object" || !("consumedOutputs" in value) || !Array.isArray(value.consumedOutputs)) return undefined;

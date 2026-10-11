@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import cliManifest from "../package.json" with { type: "json" };
 import engineManifest from "../../engine/package.json" with { type: "json" };
-import { select } from "@inquirer/prompts";
 import { getCommandDefinitions } from "@mstar-harness/commands";
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { Command, CommanderError, Option } from "commander";
@@ -11,8 +10,7 @@ import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
 import { ensureGlobalCli } from "./global-cli";
-import type { InitOptions, Target } from "./types";
-import { SUPPORTED_TARGETS } from "./types";
+import type { InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 import { registerMcpCommand } from "./mcp/command";
 
@@ -28,13 +26,6 @@ const program = new Command();
 
 function logStep(message: string) {
   console.log(pc.cyan(message));
-}
-
-async function pickTargetInteractive() {
-  return select<Target>({
-    message: "Select install target",
-    choices: SUPPORTED_TARGETS.map((target) => ({ name: target, value: target })),
-  });
 }
 
 function hasExplicitModelFlags(options: InitOptions): boolean {
@@ -61,7 +52,7 @@ function resolveExplicitModelAssignments(options: InitOptions) {
 }
 
 async function runInit(options: InitOptions) {
-  const target = options.target || (options.yes ? "opencode" : await pickTargetInteractive());
+  const target = options.target || "opencode";
   const scope = options.scope || "project";
   const adapter = getAdapter(target);
   if (!options.scope && !options.yes) console.log(pc.dim("Scope not provided; defaulting to project."));
