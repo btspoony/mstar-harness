@@ -158,12 +158,40 @@ describe("static shell and inlined assets", () => {
 
     const shell = await raw(server.url);
     const cookie = shell.headers["set-cookie"]?.[0]?.split(";")[0];
-    expect(cookie).toContain("mstar-dashboard-token=");
+    expect(cookie).toMatch(/^mstar-dashboard-token-\d+=/);
     const api = await raw(new URL("/api/issues", server.url).href, {
       authenticated: false,
       headers: { cookie: cookie! },
     });
     expect(api.status).toBe(200);
+  });
+  test("separate dashboard listeners retain their own cookies in one browser jar", async () => {
+    const { dir } = await workspace("shared-cookie-");
+    const first = await start(dir);
+    const second = await start(dir);
+    const jar = new Map<string, string>();
+    const visit = async (server: RunningDashboard) => {
+      const response = await raw(server.url);
+      expect(response.status).toBe(200);
+      const pair = response.headers["set-cookie"]?.[0]?.split(";")[0];
+      expect(pair).toBeDefined();
+      const separator = pair!.indexOf("=");
+      jar.set(pair!.slice(0, separator), pair!.slice(separator + 1));
+    };
+    const cookie = () => [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+    try {
+      await visit(first);
+      await visit(second);
+      for (const server of [first, second]) {
+        const response = await raw(new URL("/api/issues", server.url).href, {
+          authenticated: false,
+          headers: { cookie: cookie() },
+        });
+        expect(response.status).toBe(200);
+      }
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
   });
 
   test("HEAD works for static resources and returns no body", async () => {
