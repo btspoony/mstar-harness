@@ -63,7 +63,7 @@ export function payloadComposedSchema(definition: CommandDefinition, schema: z.Z
   if (!(schema instanceof z.ZodObject)) return schema;
   const composed: Record<string, z.core.$ZodType> = {};
   for (const [field, payload] of Object.entries(definition.payloads ?? {})) {
-    if (isPayloadPlaceholder(schema.shape[field])) composed[field] = payload.schema.optional();
+    if (schema.shape[field] !== undefined) composed[field] = payload.schema.optional();
   }
   return Object.keys(composed).length === 0 ? schema : schema.safeExtend(composed);
 }

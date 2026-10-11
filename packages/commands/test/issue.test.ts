@@ -73,6 +73,29 @@ function capture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issue command family", () => {
+  test("published issue payload schema requires engine-conditional closure evidence", () => {
+    const contracts = getCommandSchemas(getCommandDefinitions());
+    for (const [verb, fields] of [
+      ["close", ["references", "alignmentRef"]],
+      ["waive", ["scope", "alignmentRef"]],
+      ["duplicate", ["canonicalIssueId"]],
+      ["supersede", ["canonicalIssueId"]],
+    ] as const) {
+      const schema = definition(`issue.${verb}`).payloads?.payload?.schema;
+      const contract = contracts.find(({ id }) => id === `issue.${verb}`);
+      const jsonSchema = contract?.payloadSchemas.payload as { required?: string[] } | undefined;
+      expect(schema?.safeParse({ reason: "done" }).success).toBe(false);
+      expect(jsonSchema?.required).toEqual(expect.arrayContaining(fields));
+      const valid = {
+        reason: "done",
+        references: ["evidence"],
+        alignmentRef: "authority",
+        scope: "scope",
+        canonicalIssueId: "issue-canonical",
+      };
+      expect(schema?.safeParse(valid).success).toBe(true);
+    }
+  });
 
   test("public admission and execution preserve numeric CAS and structured issue refusals", async () => {
     const context = await testContext();

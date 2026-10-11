@@ -391,10 +391,11 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
           { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
         ],
       },
-      input: verb === "bind" ? bindInputSchema : inputSchema,
-      payloads: Object.fromEntries(
-        (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
-      ),
+      input: verb === "bind"
+        ? bindInputSchema
+        : verb === "complete"
+          ? inputSchema.extend({ evidence: completionEvidenceSchema.optional() })
+          : inputSchema,
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],
       description: verb === "complete"
