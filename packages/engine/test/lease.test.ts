@@ -23,6 +23,11 @@
  *   success/rollback): status-and-residuals.md § "Same-host exclusive write
  *   lock (control status.json)". The lock guards all coordination writes — the
  *   root `status.json` AND `workflows/<id>/snapshot.json`.
+ * - Crash-leak reclaim (#447): a lockdir whose `holder.pid` names a process
+ *   that is provably dead (`process.kill(pid, 0)` → `ESRCH`) is reclaimed by a
+ *   waiting writer (removed once, logged, mkdir retried); a live pid and an
+ *   absent pid file keep the pre-#447 wait, and the Blocked message names the
+ *   lockdir, the holder pid, the lock age and the recovery for that state.
  *
  * `claimed_at` acceptance: the normative form is RFC 3339 UTC with explicit
  * `Z` (ADR field table).
@@ -49,6 +54,22 @@ function validMergeLease(overrides: Record<string, unknown> = {}): Record<string
 
 function violationCodes(gate: { violations: { code: string }[] }): string[] {
   return gate.violations.map((v) => v.code);
+}
+
+/**
+ * A pid no live process owns (`process.kill(pid, 0)` → `ESRCH`) — the
+ * stand-in for a crashed lock holder (#447). Scanned rather than
+ * spawn-then-exit so the value cannot be a recycled live pid.
+ */
+function deadPid(): number {
+  for (let pid = 50_000; pid < 50_100; pid += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return pid;
+    }
+  }
+  throw new Error("no unowned pid found in the 50000-50099 scan range");
 }
 
 describe("validateIntegrationMergeLease", () => {
@@ -167,18 +188,74 @@ describe("withStatusWriteLock", () => {
     }
   });
 
-  test("existing lockdir blocks a second writer until timeout (another writer holds the lock)", async () => {
-// Spec: § Same-host exclusive write lock (alternative) — existing
-// lockdir → another writer holds the lock; Blocked, no silent bypass.
+  test("a lockdir with a dead holder pid is reclaimed and the waiter proceeds (#447)", async () => {
+// Spec: § Crash-leak reclaim (#447) — ESRCH on the recorded holder pid is a
+// crash leak; the waiter removes the stale lockdir (once) and retries mkdir.
     const dir = makeDir();
     try {
       const statusPath = join(dir, "status.json");
-      mkdirSync(join(dir, ".status-write.lockdir"));
-      await expect(withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 })).rejects.toThrow(
-        /another writer holds/i,
+      const lockDir = join(dir, ".status-write.lockdir");
+      mkdirSync(lockDir);
+      writeFileSync(join(lockDir, "holder.pid"), String(deadPid()));
+      expect(await withStatusWriteLock(statusPath, () => "ok", { timeoutMs: 2_000 })).toBe("ok");
+// The leaked lockdir (and its holder file) is gone after the reclaim.
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a lockdir with a live holder pid is never reclaimed; the refusal names the holder and its recovery (#447)", async () => {
+// Spec: § Crash-leak reclaim (#447) — only ESRCH (provably dead) authorizes
+// reclaim; a live holder keeps the pre-#447 wait/timeout behavior.
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      const sleeper = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+      try {
+        mkdirSync(lockDir);
+        writeFileSync(join(lockDir, "holder.pid"), String(sleeper.pid));
+        const started = Date.now();
+        const error = await withStatusWriteLock(statusPath, () => "never", { timeoutMs: 150 }).catch(
+          (thrown: unknown) => thrown as Error,
+        );
+        expect(error).toBeInstanceOf(Error);
+// It waited the full budget instead of stealing a live lock.
+        expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+        expect(error.message).toContain(lockDir);
+        expect(error.message).toContain(`holder pid ${sleeper.pid} is alive`);
+        expect(error.message).toMatch(/lock age \d+ms/);
+        expect(error.message).toContain(`kill ${sleeper.pid}`);
+// A live holder's lockdir is not removed.
+        expect(existsSync(lockDir)).toBe(true);
+      } finally {
+        sleeper.kill();
+        await sleeper.exited;
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a lockdir without a holder pid is never auto-reclaimed; the refusal names the manual check (#447)", async () => {
+// Spec: § Crash-leak reclaim (#447) — the pid-less narrow crash window is not
+// taken as death; the waiter states the verification the operator must run.
+    const dir = makeDir();
+    try {
+      const statusPath = join(dir, "status.json");
+      const lockDir = join(dir, ".status-write.lockdir");
+      mkdirSync(lockDir);
+      const error = await withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 }).catch(
+        (thrown: unknown) => thrown as Error,
       );
-// The other writer's lockdir is not removed by the blocked waiter.
-      expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(true);
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toContain(lockDir);
+      expect(error.message).toContain("records no holder.pid");
+      expect(error.message).toContain("pgrep -fl mstar");
+      expect(error.message).toContain("never removed automatically");
+// Untouched: no reclaim without a recorded pid.
+      expect(existsSync(lockDir)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -307,19 +384,6 @@ describe("withStatusWriteLock", () => {
       expect(seen).toEqual([process.pid]);
       expect(existsSync(join(lockDir, "holder.pid"))).toBe(false);
       expect(existsSync(lockDir)).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("timeout error message names the recovery step (remove <lockdir> if no writer is alive)", async () => {
-    const dir = makeDir();
-    try {
-      const statusPath = join(dir, "status.json");
-      mkdirSync(join(dir, ".status-write.lockdir"));
-      await expect(withStatusWriteLock(statusPath, () => "never", { timeoutMs: 120 })).rejects.toThrow(
-        /remove .*\.status-write\.lockdir if no writer is alive/,
-      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
