@@ -12,7 +12,7 @@
  *   2. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
  *   3. Inserts a new `## [<version>] - <date>` section into each changelog
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
- *   4. Bumps all version surfaces (including the portable Agent Plugins manifest) + the INSTALL.md marketplace example.
+ *   4. Bumps all version surfaces (including the portable Agent Plugins manifest and both marketplace manifests).
  *   5. Moves consumed fragments to `.changes/archive/<version>/`.
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
