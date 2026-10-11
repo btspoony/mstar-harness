@@ -26,7 +26,7 @@ function assertSafeDirectory(path: string, root: string): string {
 /** Assert the complete supervisor mount set, not a false parent/child relationship between siblings. */
 export function assertSupervisorMountInfo(mountInfo: string): void {
   const expected: Record<string, "ro" | "rw"> = {
-    "/mnt/source": "ro", "/mnt/output": "rw", "/mnt/requests": "rw",
+    "/mnt/source": "ro", "/mnt/source/.runtime": "ro", "/mnt/output": "rw", "/mnt/requests": "rw",
     "/mnt/status.json": "ro", "/mnt/scratch": "rw",
   };
   const found = new Set<string>();

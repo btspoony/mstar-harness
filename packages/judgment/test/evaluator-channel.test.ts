@@ -19,14 +19,16 @@ const invocation = (root: string) => ({ cwd: root, workspace: root, input: { kin
 describe("bounded evaluator mailbox", () => {
   test("attests only the complete sibling mount set with correct access modes", () => {
     const lines = [
-      ["/mnt/source", "ro"], ["/mnt/output", "rw"], ["/mnt/requests", "rw"],
-      ["/mnt/status.json", "ro"], ["/mnt/scratch", "rw"],
+      ["/mnt/source", "ro"], ["/mnt/source/.runtime", "ro"], ["/mnt/output", "rw"],
+      ["/mnt/requests", "rw"], ["/mnt/status.json", "ro"], ["/mnt/scratch", "rw"],
     ] as const;
     const mountInfo = (entries: readonly (readonly [string, string])[]) =>
       entries.map(([path, mode], i) => `${i + 1} 0 0:1 / ${path} ${mode},nosuid - tmpfs tmpfs ${mode}`).join("\n");
     expect(() => assertSupervisorMountInfo(mountInfo(lines))).not.toThrow();
     expect(() => assertSupervisorMountInfo(mountInfo(lines.filter(([path]) => path !== "/mnt/requests")))).toThrow("jev.channel-mount-unconfined");
     expect(() => assertSupervisorMountInfo(mountInfo([...lines, ["/mnt/unexpected", "rw"]]))).toThrow("jev.channel-mount-unconfined");
+    expect(() => assertSupervisorMountInfo(mountInfo([...lines, ["/mnt/source", "ro"]]))).toThrow("jev.channel-mount-unconfined");
+    expect(() => assertSupervisorMountInfo(mountInfo(lines.map(([path, mode]) => [path, path === "/mnt/source/.runtime" ? "rw" : mode] as const)))).toThrow("jev.channel-mount-unconfined");
     expect(() => assertSupervisorMountInfo(mountInfo(lines.map(([path, mode]) => [path, path === "/mnt/requests" ? "ro" : mode])))).toThrow("jev.channel-mount-unconfined");
     expect(() => assertSupervisorMountInfo(mountInfo(lines.map(([path, mode]) => [path, path === "/mnt/status.json" ? "rw" : mode])))).toThrow("jev.channel-mount-unconfined");
   });
