@@ -73,6 +73,18 @@ function capture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issue command family", () => {
+  test("closure input schemas allow optional payloads while admission retains payload requirements", () => {
+    const definitions = getCommandDefinitions();
+    const contracts = getCommandSchemas(definitions);
+    for (const verb of ["close", "supersede", "reopen"] as const) {
+      const command = definition(`issue.${verb}`);
+      const contract = contracts.find(({ id }) => id === command.id);
+      if (contract === undefined) throw new Error(`missing ${command.id} contract`);
+      const actorOnly = { id: "I-000001", actor: "project-manager", expect: 0 };
+      expect(command.input.safeParse(actorOnly).success).toBe(true);
+      expect(admitCommandInput(command, actorOnly, contract).success).toBe(false);
+    }
+  });
   test("published issue payload schema requires engine-conditional closure evidence", () => {
     const contracts = getCommandSchemas(getCommandDefinitions());
     for (const [verb, fields] of [
