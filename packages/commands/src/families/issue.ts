@@ -6,6 +6,8 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  ISSUE_ACTION_NAMES,
+  ISSUE_ACTIONS,
   ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
@@ -14,8 +16,10 @@ import {
   triageIssue,
   type CaptureInput,
   type ClosureEvidence,
+  type IssueActionSpec,
   type IssueFilter,
   type IssueLink,
+  type IssuePayloadName,
   type IssueReopen,
   type IssueTriage,
   type MutationContext,
@@ -49,14 +53,17 @@ const inputSchema = z.object({
 });
 type IssueInput = z.infer<typeof inputSchema>;
 
-const verbs = ["add", "list", "show", "occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link", "export"] as const;
-const terminalDisposition: Record<string, TerminalDisposition> = {
-  close: "resolved",
-  waive: "waived",
-  duplicate: "duplicate",
-  supersede: "superseded",
-};
-const readVerbs: Record<string, true> = { list: true, show: true, export: true };
+/**
+ * The action vocabulary and its domain facts live once, in the engine (#453).
+ * These transport tables are DERIVED from it: adding or renaming an action is
+ * one edit in `ISSUE_ACTIONS`, never a second copy here.
+ */
+const actions = Object.entries(ISSUE_ACTIONS) as [string, IssueActionSpec][];
+const verbs = ISSUE_ACTION_NAMES;
+const terminalDisposition: Record<string, TerminalDisposition> = Object.fromEntries(
+  actions.flatMap(([verb, action]) => (action.disposition === null ? [] : [[verb, action.disposition] as [string, TerminalDisposition]])),
+);
+const readVerbs: Record<string, true> = Object.fromEntries(actions.filter(([, action]) => action.read).map(([verb]) => [verb, true]));
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -218,26 +225,10 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
   }
 }
 
-const payloadType: Record<string, keyof typeof ISSUE_PAYLOAD_SCHEMAS> = {
-  add: "CaptureInput",
-  occurrence: "OccurrenceInput",
-  triage: "IssueTriage",
-  close: "ClosureEvidence",
-  reopen: "IssueReopen",
-  waive: "ClosureEvidence",
-  duplicate: "ClosureEvidence",
-  supersede: "ClosureEvidence",
-  link: "IssueLink",
-};
-const expectedRevisionVerbs: Record<string, true> = {
-  triage: true,
-  close: true,
-  reopen: true,
-  waive: true,
-  duplicate: true,
-  supersede: true,
-  link: true,
-};
+const payloadType: Record<string, IssuePayloadName> = Object.fromEntries(
+  actions.flatMap(([verb, action]) => (action.payload === null ? [] : [[verb, action.payload] as [string, IssuePayloadName]])),
+);
+const expectedRevisionVerbs: Record<string, true> = Object.fromEntries(actions.filter(([, action]) => action.cas).map(([verb]) => [verb, true]));
 function fieldSchema(field: PayloadFieldSchema, condition?: string): z.ZodType {
   let schema: z.ZodType;
   if (field.type === "object") {

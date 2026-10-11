@@ -177,6 +177,45 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
 
 export type IssuePayloadName = keyof typeof ISSUE_PAYLOAD_SCHEMAS;
 
+/**
+ * One member of the issue action vocabulary: which domain facts hang off it.
+ * `payload` names a registry entry above, `read` marks the non-mutating
+ * actions, `cas` mirrors the bodies that enforce the caller's
+ * `expectedRevision`, and `disposition` is the closure default.
+ */
+export type IssueActionSpec = {
+  payload: IssuePayloadName | null;
+  read: boolean;
+  cas: boolean;
+  disposition: TerminalDisposition | null;
+};
+
+/**
+ * The issue action vocabulary (#453): the single production definition of the
+ * `issue.*` action names. The command family derives its transport tables from
+ * this one, so the tokens cannot drift across copies. Declaration order is the
+ * order the commands are published in.
+ */
+export const ISSUE_ACTIONS = {
+  add: { payload: "CaptureInput", read: false, cas: false, disposition: null },
+  list: { payload: null, read: true, cas: false, disposition: null },
+  show: { payload: null, read: true, cas: false, disposition: null },
+  occurrence: { payload: "OccurrenceInput", read: false, cas: false, disposition: null },
+  triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
+  close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
+  reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+  waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
+  duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
+  supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
+  link: { payload: "IssueLink", read: false, cas: true, disposition: null },
+  export: { payload: null, read: true, cas: false, disposition: null },
+} as const satisfies Record<string, IssueActionSpec>;
+
+export type IssueAction = keyof typeof ISSUE_ACTIONS;
+
+/** The vocabulary in declaration order (`Object.keys` keeps literal-key order). */
+export const ISSUE_ACTION_NAMES: readonly IssueAction[] = Object.keys(ISSUE_ACTIONS) as IssueAction[];
+
 export type IssueReceipt = {
   issueId: string;
   occurrenceId?: number;

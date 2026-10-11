@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import { initializeStore, ISSUE_ACTION_NAMES, openStore } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
@@ -602,6 +602,13 @@ describe("issue command family", () => {
       });
       expect(missingCas.success).toBe(false);
     }
+  });
+
+  test("published issue commands are exactly the engine action vocabulary, in order", () => {
+    // The family derives its verbs from the engine table, so this cannot drift;
+    // the assertion pins the published surface to that one source.
+    expect(getCommandDefinitions().filter((command) => command.id.startsWith("issue.")).map((command) => command.id))
+      .toEqual(ISSUE_ACTION_NAMES.map((verb) => `issue.${verb}`));
   });
 });
 
