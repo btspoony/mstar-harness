@@ -13,7 +13,7 @@ import {
   type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
 } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
-import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
+import { decodePayloadInputs, mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 
@@ -94,6 +94,15 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("plan JSON payload options are decoded before command admission", () => {
+    const definition = getCommandDefinitions().find(({ id }) => id === "plan.progress");
+    if (definition === undefined) throw new Error("missing plan.progress definition");
+    expect(definition.payloads?.progress).toBeDefined();
+    const payload = { status: "InProgress", summary: "started", evidence_paths: [] };
+    const decoded = decodePayloadInputs(definition, { progress: JSON.stringify(payload) });
+    expect(decoded.diagnostics).toEqual([]);
+    expect(decoded.input.progress).toEqual(payload);
+  });
   test("registered workflow-note append accepts acquired CLI context identities and rejects unsafe selectors", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "cli-note-identity-"));
     const harnessDir = path.join(root, ".mstar");

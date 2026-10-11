@@ -343,11 +343,16 @@ export function renderCommandContract(
   // on both routes). Kind-keyed contracts (e.g. `persist.write`, whose keys are
   // `kind` values) exist only to publish per-kind domain schemas — they stay
   // neutrally labeled and make no input-field or transport claim.
-  const inputSchema: unknown = descriptor.input;
-  const properties = inputSchema !== null && typeof inputSchema === "object" && "properties" in inputSchema
-    ? inputSchema.properties
-    : undefined;
-  const inputProperties = properties !== null && typeof properties === "object" ? new Set(Object.keys(properties)) : new Set<string>();
+  const inputProperties = new Set<string>();
+  const schemas: unknown[] = [descriptor.input];
+  while (schemas.length > 0) {
+    const schema = schemas.pop();
+    if (schema === null || typeof schema !== "object") continue;
+    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
+      for (const key of Object.keys(schema.properties)) inputProperties.add(key);
+    }
+    if ("anyOf" in schema && Array.isArray(schema.anyOf)) schemas.push(...schema.anyOf);
+  }
   const payloadKeys = Object.keys(descriptor.payloadSchemas);
   const payloadFields = payloadKeys.filter((key) => inputProperties.has(key));
   const payloadContracts = payloadKeys.filter((key) => !inputProperties.has(key));
@@ -448,7 +453,7 @@ function decodeCliOptions(definition: CommandDefinition, input: Record<string, u
   }
   return decoded;
 }
-function decodePayloadInputs(
+export function decodePayloadInputs(
   definition: CommandDefinition,
   input: Record<string, unknown>,
 ): { input: Record<string, unknown>; diagnostics: readonly Record<string, unknown>[] } {

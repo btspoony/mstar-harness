@@ -37,17 +37,18 @@ const completionEvidenceSchema = z.object({
   source_sha: z.string().min(1).optional(),
   review_base: z.string().min(1).optional(),
   review_head: z.string().min(1).optional(),
+  evidence_paths: z.array(z.string()).optional(),
   qc: z.object({
     decision: z.enum(["Approve", "Approve with residuals"]),
-    reports: z.array(z.string().min(1)),
+    reports: z.array(z.string().min(1)).min(1),
     consolidated: z.string().min(1),
-  }),
+  }).passthrough(),
   qa: z.object({
     gate: z.enum(["mandatory", "pm-acceptance"]),
     decision: z.literal("pass"),
     report: z.string().min(1),
-  }),
-});
+  }).passthrough(),
+}).passthrough();
 const inputSchema = z.object({
   sessionRef: z.string().min(1).optional(),
   resumeRef: z.string().min(1).optional(),
@@ -396,6 +397,9 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         : verb === "complete"
           ? inputSchema.extend({ evidence: completionEvidenceSchema.optional() })
           : inputSchema,
+      payloads: Object.fromEntries(
+        (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
+      ),
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],
       description: verb === "complete"
