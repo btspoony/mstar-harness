@@ -9,9 +9,8 @@ import {
   initializeStore,
   readExecutionAuthority,
 } from "@mstar-harness/engine";
-import type { ExecutionToken } from "@mstar-harness/engine";
+import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { getPlanCommandDefinitions } from "../src/families/plan.js";
-import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -103,6 +102,38 @@ function planRowOf(envelope: { status: string; data: unknown }): { id: string } 
 }
 
 describe("plan command family", () => {
+  test("plan.complete publishes a lossless engine-compatible evidence shape", () => {
+    const definition = getCommandDefinitions().find(({ id }) => id === "plan.complete");
+    const contract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "plan.complete");
+    if (definition === undefined || contract === undefined) throw new Error("missing plan.complete contract");
+    const valid = {
+      workflow: "wf-plan",
+      plan: "plan-a",
+      evidence: {
+        evidence_paths: ["/repo/.mstar/plans/plan-a.md"],
+        qc: { decision: "Approve", reports: ["qc.md"], consolidated: "qc-consolidated.md", extraEngineField: true },
+        qa: { gate: "mandatory", decision: "pass", report: "qa.md", extraEngineField: true },
+        extraEngineField: true,
+      },
+    };
+    const parsed = definition.input.safeParse(valid);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect((parsed.data.evidence as Record<string, unknown>).evidence_paths).toEqual(valid.evidence.evidence_paths);
+      expect((parsed.data.evidence as Record<string, unknown>).extraEngineField).toBe(true);
+    }
+    expect(definition.input.safeParse({
+      ...valid,
+      evidence: { ...valid.evidence, qc: { ...valid.evidence.qc, reports: [] } },
+    }).success).toBe(false);
+    expect(definition.input.safeParse({ ...valid, evidence: { qc: {}, qa: {} } }).success).toBe(false);
+    expect(contract.input.properties).toHaveProperty("evidence");
+    expect(contract.payloadSchemas.evidence).toBeDefined();
+
+    for (const verb of ["progress", "issue-add", "issue-close"] as const) {
+      expect(getPlanCommandDefinitions().find(({ id }) => id === `plan.${verb}`)?.payloads).toBeDefined();
+    }
+  });
 
 
   test("plan family payload decode rejects malformed fields with accurate paths", () => {

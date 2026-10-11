@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import fs from "node:fs";
 import cliManifest from "../package.json" with { type: "json" };
 import engineManifest from "../../engine/package.json" with { type: "json" };
 import { getCommandDefinitions } from "@mstar-harness/commands";
@@ -76,6 +77,14 @@ async function runInit(options: InitOptions) {
   const generationOpts = { generation: options.opencodeGeneration, dryRun: !!options.dryRun };
   const configPath = adapter.resolveConfigPath?.(scope, options.output);
   if (!configPath) throw new Error(`Adapter ${target} does not implement config path resolution.`);
+  try {
+    const stat = fs.lstatSync(configPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Refusing to replace non-regular config path ${configPath}. Point the installer at a regular path or resolve the link intentionally.`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const updated = await adapter.mutateConfigForInit?.(readJson(configPath), assignments, generationOpts);
   if (!updated) throw new Error(`Adapter ${target} does not implement init mutation.`);
   const checkErrors = adapter.validateConfig?.(updated, generationOpts) || [];

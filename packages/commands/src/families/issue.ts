@@ -6,6 +6,8 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  ISSUE_ACTION_NAMES,
+  ISSUE_ACTIONS,
   ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
@@ -14,8 +16,10 @@ import {
   triageIssue,
   type CaptureInput,
   type ClosureEvidence,
+  type IssueActionSpec,
   type IssueFilter,
   type IssueLink,
+  type IssuePayloadName,
   type IssueReopen,
   type IssueTriage,
   type MutationContext,
@@ -49,14 +53,17 @@ const inputSchema = z.object({
 });
 type IssueInput = z.infer<typeof inputSchema>;
 
-const verbs = ["add", "list", "show", "occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link", "export"] as const;
-const terminalDisposition: Record<string, TerminalDisposition> = {
-  close: "resolved",
-  waive: "waived",
-  duplicate: "duplicate",
-  supersede: "superseded",
-};
-const readVerbs: Record<string, true> = { list: true, show: true, export: true };
+/**
+ * The action vocabulary and its domain facts live once, in the engine (#453).
+ * These transport tables are DERIVED from it: adding or renaming an action is
+ * one edit in `ISSUE_ACTIONS`, never a second copy here.
+ */
+const actions = Object.entries(ISSUE_ACTIONS) as [string, IssueActionSpec][];
+const verbs = ISSUE_ACTION_NAMES;
+const terminalDisposition: Record<string, TerminalDisposition> = Object.fromEntries(
+  actions.flatMap(([verb, action]) => (action.disposition === null ? [] : [[verb, action.disposition] as [string, TerminalDisposition]])),
+);
+const readVerbs: Record<string, true> = Object.fromEntries(actions.filter(([, action]) => action.read).map(([verb]) => [verb, true]));
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -218,26 +225,10 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
   }
 }
 
-const payloadType: Record<string, keyof typeof ISSUE_PAYLOAD_SCHEMAS> = {
-  add: "CaptureInput",
-  occurrence: "OccurrenceInput",
-  triage: "IssueTriage",
-  close: "ClosureEvidence",
-  reopen: "IssueReopen",
-  waive: "ClosureEvidence",
-  duplicate: "ClosureEvidence",
-  supersede: "ClosureEvidence",
-  link: "IssueLink",
-};
-const expectedRevisionVerbs: Record<string, true> = {
-  triage: true,
-  close: true,
-  reopen: true,
-  waive: true,
-  duplicate: true,
-  supersede: true,
-  link: true,
-};
+const payloadType: Record<string, IssuePayloadName> = Object.fromEntries(
+  actions.flatMap(([verb, action]) => (action.payload === null ? [] : [[verb, action.payload] as [string, IssuePayloadName]])),
+);
+const expectedRevisionVerbs: Record<string, true> = Object.fromEntries(actions.filter(([, action]) => action.cas).map(([verb]) => [verb, true]));
 function fieldSchema(field: PayloadFieldSchema, condition?: string): z.ZodType {
   let schema: z.ZodType;
   if (field.type === "object") {
@@ -274,6 +265,21 @@ function fieldSchema(field: PayloadFieldSchema, condition?: string): z.ZodType {
 function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition?: string): z.ZodType {
   const fields = ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>;
   return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, condition)])));
+}
+
+function closureInputSchema(input: z.ZodObject<Record<string, z.core.$ZodType>>, defaultDisposition: TerminalDisposition): z.ZodType<IssueInput> {
+  const fields = ISSUE_PAYLOAD_SCHEMAS.ClosureEvidence as Record<string, PayloadFieldSchema>;
+  const dispositions = [...new Set(Object.values(fields).flatMap((field) => field.requiredWhen ?? []))] as TerminalDisposition[];
+  return z.union([
+    input.extend({
+      disposition: z.never().optional(),
+      payload: payloadSchema("ClosureEvidence", defaultDisposition).optional(),
+    }),
+    ...dispositions.map((disposition) => input.extend({
+      disposition: z.literal(disposition),
+      payload: payloadSchema("ClosureEvidence", disposition).optional(),
+    })),
+  ]) as z.ZodType<IssueInput>;
 }
 
 /**
@@ -357,13 +363,15 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   return {
     id,
     cli: { path: ["issue", verb], aliases: [], arguments: [], options },
-    input: commandInput,
+    input: terminalDisposition[verb] === undefined
+      ? commandInput
+      : closureInputSchema(commandInput, terminalDisposition[verb]),
     description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. ${requiresIssueId ? "Requires the issue id from `mstar issue show --id <id>`." : ""} ${expectedRevisionVerbs[verb] === true ? "Requires `--expect` with the current revision from `mstar issue show --id <id>`." : ""} Actor vocabulary: project-manager.`,
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     ...(payloadType[verb] !== undefined
-      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb]), registryName: payloadType[verb], help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb], help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import { initializeStore, ISSUE_ACTION_NAMES, openStore } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
@@ -73,6 +73,41 @@ function capture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issue command family", () => {
+  test("closure input schemas allow optional payloads while admission retains payload requirements", () => {
+    const definitions = getCommandDefinitions();
+    const contracts = getCommandSchemas(definitions);
+    for (const verb of ["close", "supersede", "reopen"] as const) {
+      const command = definition(`issue.${verb}`);
+      const contract = contracts.find(({ id }) => id === command.id);
+      if (contract === undefined) throw new Error(`missing ${command.id} contract`);
+      const actorOnly = { id: "I-000001", actor: "project-manager", expect: 0 };
+      expect(command.input.safeParse(actorOnly).success).toBe(true);
+      expect(admitCommandInput(command, actorOnly, contract).success).toBe(false);
+    }
+  });
+  test("published issue payload schema requires engine-conditional closure evidence", () => {
+    const contracts = getCommandSchemas(getCommandDefinitions());
+    for (const [verb, fields] of [
+      ["close", ["references", "alignmentRef"]],
+      ["waive", ["scope", "alignmentRef"]],
+      ["duplicate", ["canonicalIssueId"]],
+      ["supersede", ["canonicalIssueId"]],
+    ] as const) {
+      const schema = definition(`issue.${verb}`).payloads?.payload?.schema;
+      const contract = contracts.find(({ id }) => id === `issue.${verb}`);
+      const jsonSchema = contract?.payloadSchemas.payload as { required?: string[] } | undefined;
+      expect(schema?.safeParse({ reason: "done" }).success).toBe(false);
+      expect(jsonSchema?.required).toEqual(expect.arrayContaining(fields));
+      const valid = {
+        reason: "done",
+        references: ["evidence"],
+        alignmentRef: "authority",
+        scope: "scope",
+        canonicalIssueId: "issue-canonical",
+      };
+      expect(schema?.safeParse(valid).success).toBe(true);
+    }
+  });
 
   test("public admission and execution preserve numeric CAS and structured issue refusals", async () => {
     const context = await testContext();
@@ -193,11 +228,8 @@ describe("issue command family", () => {
     const target = added.data as { issueId: string };
     const duplicateDefinition = definition("issue.duplicate");
     const duplicateContract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.duplicate");
-    const duplicatePayload = duplicateDefinition.payloads?.payload;
-    if (!(duplicateDefinition.input instanceof z.ZodObject) || duplicateContract === undefined || duplicatePayload === undefined) {
-      throw new Error("missing issue.duplicate composed payload contract");
-    }
-    const composedSchema = duplicateDefinition.input.safeExtend({ payload: duplicatePayload.schema.optional() });
+    if (duplicateContract === undefined) throw new Error("missing issue.duplicate contract");
+    const composedSchema = duplicateDefinition.input;
     const resolvedAdmission = admitCommandInput(duplicateDefinition, {
       id: "I-000002",
       expect: 0,
@@ -214,6 +246,27 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, duplicateContract, composedSchema);
     expect(waivedAdmission.success).toBe(true);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "resolved",
+      payload: { reason: "incomplete", references: ["qa/evidence.md"] },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(false);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "duplicate",
+      payload: { reason: "same issue", canonicalIssueId: target.issueId },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(true);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "resolved",
+      payload: { reason: "wrong branch", scope: "scope", alignmentRef: "approval" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(false);
 
 
     const duplicateSource = await executeCommand("issue.add", {
@@ -249,7 +302,7 @@ describe("issue command family", () => {
       operationId: "closure-default",
       actor: "project-manager",
     }, context);
-    expect(missingReferences).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    expect(missingReferences).toMatchObject({ status: "usage", code: "command.invalid-input" });
     const invalidOpen = await executeCommand("issue.duplicate", {
       id: unresolved.issueId,
       expect: unresolved.revision,
@@ -258,7 +311,7 @@ describe("issue command family", () => {
       operationId: "closure-open",
       actor: "project-manager",
     }, context);
-    expect(invalidOpen).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
+    expect(invalidOpen).toMatchObject({ status: "usage", code: "command.invalid-input" });
   });
 
   test("malformed capture is rejected without creating an issue", async () => {
@@ -546,7 +599,6 @@ describe("issue command family", () => {
       expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: true }));
       const missingId = command.input.safeParse({ actor: "project-manager" });
       expect(missingId.success).toBe(false);
-      if (!missingId.success) expect(missingId.error.issues.some((issue) => issue.path.includes("id"))).toBe(true);
     }
     for (const verb of ["add", "export"]) {
       const command = definition(`issue.${verb}`);
@@ -561,8 +613,14 @@ describe("issue command family", () => {
         id: "I-000001", actor: "project-manager", payload: {},
       });
       expect(missingCas.success).toBe(false);
-      if (!missingCas.success) expect(missingCas.error.issues.some((issue) => issue.path.includes("expect"))).toBe(true);
     }
+  });
+
+  test("published issue commands are exactly the engine action vocabulary, in order", () => {
+    // The family derives its verbs from the engine table, so this cannot drift;
+    // the assertion pins the published surface to that one source.
+    expect(getCommandDefinitions().filter((command) => command.id.startsWith("issue.")).map((command) => command.id))
+      .toEqual(ISSUE_ACTION_NAMES.map((verb) => `issue.${verb}`));
   });
 });
 

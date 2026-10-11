@@ -43,27 +43,61 @@ export function runCommand(command: string[], cwd: string, dryRun: boolean): voi
 export function ensureLocalHarnessRepo(dryRun: boolean) {
   const notes: string[] = [];
   if (fs.existsSync(HARNESS_REPO_PATH)) {
-    const errors = validateLocalHarnessRepo();
-    if (errors.length) {
-      throw new Error(errors.join("\n"));
+    const errors = validateLocalHarnessRepo(dryRun);
+    if (!errors.length) {
+      notes.push(`Using existing local harness repo at ${HARNESS_REPO_PATH}`);
+      return notes;
     }
-    notes.push(`Using existing local harness repo at ${HARNESS_REPO_PATH}`);
+    if (dryRun) throw new Error(errors.join("\n"));
+    const brokenPath = `${HARNESS_REPO_PATH}.broken-${Date.now()}`;
+    try {
+      fs.renameSync(HARNESS_REPO_PATH, brokenPath);
+    } catch (error) {
+      throw new Error(`${errors.join("\n")}\nCould not move broken checkout aside: ${String(error)}. Recover by moving ${HARNESS_REPO_PATH} aside manually, then rerun the installer.`);
+    }
+    notes.push(`Moved invalid checkout to ${brokenPath} for diagnosis`);
+    ensureDir(path.dirname(HARNESS_REPO_PATH), false);
+    try {
+      runCommand(["git", "clone", REPO_URL, HARNESS_REPO_PATH], path.dirname(HARNESS_REPO_PATH), false);
+    } catch (error) {
+      throw new Error(`Existing checkout validation failed:\n${errors.join("\n")}\nRe-clone attempt failed: ${String(error)}. The broken checkout is preserved at ${brokenPath}; remove or move the failed ${HARNESS_REPO_PATH} and rerun the installer.`);
+    }
+    const cloneErrors = validateLocalHarnessRepo();
+    if (cloneErrors.length) {
+      throw new Error(`Existing checkout validation failed:\n${errors.join("\n")}\nRe-clone validation failed:\n${cloneErrors.join("\n")}. The broken checkout is preserved at ${brokenPath}; remove or move the failed ${HARNESS_REPO_PATH} and rerun the installer.`);
+    }
+    notes.push(`Cloned ${REPO_URL} to ${HARNESS_REPO_PATH}`);
     return notes;
   }
 
   ensureDir(path.dirname(HARNESS_REPO_PATH), dryRun);
   runCommand(["git", "clone", REPO_URL, HARNESS_REPO_PATH], path.dirname(HARNESS_REPO_PATH), dryRun);
+  if (!dryRun) {
+    const errors = validateLocalHarnessRepo();
+    if (errors.length) throw new Error(`Clone validation failed:\n${errors.join("\n")}. Remove or move ${HARNESS_REPO_PATH} and rerun the installer.`);
+  }
   notes.push(`Cloned ${REPO_URL} to ${HARNESS_REPO_PATH}`);
   return notes;
 }
 
-export function validateLocalHarnessRepo() {
+export function validateLocalHarnessRepo(dryRun = false) {
   const errors: string[] = [];
   if (!fs.existsSync(HARNESS_REPO_PATH)) {
     errors.push(`Missing local harness repo: ${HARNESS_REPO_PATH}`);
     return errors;
   }
   const marker = harnessMarkerPath();
+  if (!fs.existsSync(path.join(HARNESS_REPO_PATH, ".git"))) {
+    errors.push(`Local harness repo is missing .git: ${HARNESS_REPO_PATH}`);
+  } else {
+    if (!dryRun) {
+      try {
+        runCommand(["git", "-C", HARNESS_REPO_PATH, "rev-parse", "--verify", "HEAD"], HARNESS_REPO_PATH, false);
+      } catch {
+        errors.push(`Local harness repo has no resolvable HEAD: ${HARNESS_REPO_PATH}`);
+      }
+    }
+  }
   if (!fs.existsSync(marker)) {
     errors.push(
       `Local harness repo is missing a plugin marker (expected one of: ${HARNESS_MARKERS.join(", ")}).`,
@@ -71,6 +105,7 @@ export function validateLocalHarnessRepo() {
   }
   return errors;
 }
+
 
 /** Cursor cannot load symlinked plugin roots — use a materialized git checkout. */
 export function ensureGitCheckout(repoUrl: string, checkoutPath: string, dryRun: boolean) {

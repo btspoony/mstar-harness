@@ -13913,6 +13913,8 @@ var SEVERITIES;
 var ISSUE_KIND_VALUES;
 var SEVERITY_VALUES;
 var ISSUE_PAYLOAD_SCHEMAS;
+var ISSUE_ACTIONS;
+var ISSUE_ACTION_NAMES;
 var IssueError;
 var DISPOSITIONS2;
 var RELATIONS3;
@@ -14025,6 +14027,21 @@ var init_issue = __esm(() => {
       }
     }
   };
+  ISSUE_ACTIONS = {
+    add: { payload: "CaptureInput", read: false, cas: false, disposition: null },
+    list: { payload: null, read: true, cas: false, disposition: null },
+    show: { payload: null, read: true, cas: false, disposition: null },
+    occurrence: { payload: "OccurrenceInput", read: false, cas: false, disposition: null },
+    triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
+    close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
+    reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+    waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
+    duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
+    supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
+    link: { payload: "IssueLink", read: false, cas: true, disposition: null },
+    export: { payload: null, read: true, cas: false, disposition: null }
+  };
+  ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
   IssueError = class IssueError2 extends Error {
     code;
     details = {};
