@@ -10,8 +10,8 @@ Start from the user's original outcome, not from the machinery already built.
 ## Workflow
 
 1. **Plan from the need.** Identify the requested outcome, current acceptance criteria, non-goals, and actual constraints. Use first principles to separate what must be true from inherited implementation choices. State material assumptions; resolve questions from available evidence before asking for missing decisions.
-2. **Read the affected flow.** Inspect the changed code, direct contracts, nearby behavior tests, and relevant project guidance. Check API signatures against source or documentation. Reuse valid patterns and dependencies; existing artifacts are evidence, not additional requirements.
-3. **Do the smallest complete change.** Choose the simplest durable design that meets the need. Fix the root cause at the narrowest responsible point; update directly affected consumers and remove paths made obsolete by the change. Preserve unrelated work and avoid opportunistic cleanup.
+2. **Read the affected flow.** Inspect the changed code, direct contracts, nearby behavior tests, and relevant project guidance. Before editing, map affected callers, tests, fixtures, configuration, and exports; identify data that could be destroyed or exposed and consumers that could break. Check API signatures against source or documentation. Existing artifacts are evidence, not additional requirements.
+3. **Do the smallest complete change.** Choose the first fully working option in the reuse ladder below. Fix the root cause at the narrowest responsible point; finish affected consumers, tests, fixtures, configuration, exports, and documentation, removing paths made obsolete by the change. Preserve unrelated work and avoid opportunistic cleanup.
 4. **Check the outcome.** Within the authorized verification scope, exercise the affected consumer behavior and meaningful boundaries. For a bug, use the reported failure or a minimal reproduction to guide diagnosis; change one causal factor at a time. Reuse unaffected evidence rather than rerunning unrelated checks.
 5. **Act on evidence.** Compare results with acceptance criteria, diagnose any remaining failure, and refine only what is necessary. Assess review feedback against actual contracts and behavior; apply justified fixes or explain disagreement with evidence. Stop when the requested outcome is evidenced.
 
@@ -19,12 +19,16 @@ Start from the user's original outcome, not from the machinery already built.
 
 ### Requirement-first simplicity
 
-- Apply **Occam's razor and YAGNI**: prefer fewer concepts, moving parts, and assumptions that fully satisfy current requirements. Small does not mean incomplete, temporary, or symptom-only.
+- Apply **Occam's razor and YAGNI**: prefer fewer concepts, moving parts, and assumptions that fully satisfy current requirements. Small does not mean incomplete, temporary, symptom-only, or cleverly compressed; a one-liner that needs decoding is not simpler. Between equally simple options, choose the one correct at the affected boundaries.
 - Do not grow a design from existing layers just because they exist. Keep useful patterns, but replace a bad abstraction when the requested outcome requires it; do not preserve it solely for consistency.
-- Never add imagined future features, extension frameworks, configuration knobs, compatibility wrappers, or speculative error handling. Each addition must answer a current requirement or a demonstrated risk in a supported workflow.
-- Do not add validation, confirmation, or preflight gates for unsupported or hypothetical conditions. Retain required authorization, security, data-loss protection, and project safeguards; simplicity is not permission to bypass them.
-- Prefer direct control flow and existing built-ins or dependencies over needless nesting, indirection, and repeated wrappers. Centralize and reuse sources of truth for prompts, contracts, and data instead of copying them; do not invent a new abstraction framework to do so.
-- Before adding a dependency, check existing code and built-ins, package maintenance and size; state why it is needed in one sentence.
+- Never add imagined future features, extension frameworks, configuration knobs, compatibility wrappers, or speculative error handling. Each addition must answer a current requirement or a demonstrated risk in a supported workflow. Keep values in their existing form unless the contract requires conversion; do not add layers or wrappers merely to reshape them.
+- Do not add validation, confirmation, or preflight gates for unsupported or hypothetical conditions. Retain trust-boundary validation, required authorization, security, data-loss prevention, accessibility, necessary hardware calibration, and requested behavior. Moving or merging code preserves its validation and error handling.
+- Take the **first option that fully works**, not the shortest incomplete diff:
+  1. Reuse a valid project helper, component, service, or pattern as surrounding code does; a suitable house component takes precedence over a native replacement.
+  2. Use a standard-library or platform feature when no suitable house solution exists.
+  3. Use an installed dependency; check its documentation and types before assuming it lacks the capability.
+  4. Otherwise write the minimum readable direct solution. Add an established, well-maintained library only when it reduces overall complexity or improves reliability; check maintenance and size, and state the need in one sentence, not a new package for a few lines.
+- Centralize and reuse sources of truth for prompts, contracts, and data instead of copying them; do not invent an abstraction framework to do so.
 - Mark a deliberate bounded shortcut with `simplify:` and its ceiling/upgrade path. For an unavoidable workaround, explain why, label it `simplify:` or `temporary`, and record its removal path in the existing plan/status artifact before claiming completion. Temporary markers must cite that artifact.
 
 ### Agent-facing products
@@ -51,7 +55,7 @@ Completion means the requested behavior meets its acceptance criteria, supported
 - For executable changes, retain the smallest relevant runnable check protecting consumer-visible behavior or a meaningful invariant. For bugs, demonstrate the regression and its correction when the available evidence and authorized checks permit.
 - Test behavior, not source shape, prompt wording, forwarding echoes, or duplicated producer checks. Do not manufacture tests to satisfy a template.
 - For non-executable policy changes, use scoped static or before/after evidence with observable criteria. Static lint does not establish model compliance or runtime behavior.
-- Report the changed outcome, check command and actual result, and any failures or unverified behavior. Separate observation from inference; a missing prerequisite is not a successful result.
+- Report the changed outcome and actual check commands/results concisely, including failures; never imply an unrun check passed. In the required report, use one or two closing lines for intentionally skipped work, material unverified behavior, and its user-facing risk. Separate observation from inference; a missing prerequisite is not a successful result.
 
 ## References
 

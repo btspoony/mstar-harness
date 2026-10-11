@@ -16,3 +16,43 @@ Third-party provenance for Morning Star harness assets. Runtime skill files stay
 ## `mstar-harness-core`
 
 - The "核心研发守则" (core engineering rules) — seven global engineering invariants: no backward-compatibility layers, simplest implementation, layered growth on a working product, modularity with separated concerns, established well-maintained libraries over reimplementation, existing project dependencies before new packages, and long-term architectural decisions — adapted from a post by Marcos Hernanz ([@MarcosHernanz](https://x.com/MarcosHernanz/status/2083954734487212511) on X).
+
+## Ponytail distillation
+
+Selected decision guidance adapted from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail/tree/9b58c1ffb790c075ca32e70a89cf1d80588f4abf), pinned at `9b58c1ffb790c075ca32e70a89cf1d80588f4abf` (MIT, Copyright (c) 2026 DietrichGebert).
+
+| Source skill and sections | Target surfaces | Adaptation |
+| --- | --- | --- |
+| [`skills/ponytail/SKILL.md`](https://github.com/DietrichGebert/ponytail/blob/9b58c1ffb790c075ca32e70a89cf1d80588f4abf/skills/ponytail/SKILL.md) — Before you write; The smallest complete change; closing disclosure | `skills/mstar-coding-behavior/SKILL.md`; `skills/mstar-roles/references/fullstack-dev-shared.md`, `frontend-dev.md`, `ops-engineer.md` | Affected consumers/tests/fixtures/configuration/exports and data risks; first-working reuse ladder; readable minimal solutions; preserved safeguards on moves; complete integration and concise actual-check/unchecked-risk reporting. Role references apply these decisions to API/data boundaries, house UI components, and operational recovery. |
+| [`skills/ponytail-audit/SKILL.md`](https://github.com/DietrichGebert/ponytail/blob/9b58c1ffb790c075ca32e70a89cf1d80588f4abf/skills/ponytail-audit/SKILL.md) — Map first; Look for; Check before you report | `skills/mstar-audit/SKILL.md`; `skills/mstar-audit/references/audit-playbook.md`, `finding-format.md`, `codebase-audit.md` | Expected-load and entry-to-write/output reasoning, concurrency/growth risks, meaningful missing-test evidence, responsibility-based splits, concrete reachable cases, bounded decisions, and minimal structural remedies; full-audit prompts hand off the canonical rules and finding template to isolated seats. |
+| [`skills/ponytail-review/SKILL.md`](https://github.com/DietrichGebert/ponytail/blob/9b58c1ffb790c075ca32e70a89cf1d80588f4abf/skills/ponytail-review/SKILL.md) — Understand first; Look for; Check before you report | `skills/mstar-audit/SKILL.md`; `skills/mstar-audit/references/audit-playbook.md`, `finding-format.md`, `pr-review.md`; `packages/engine/src/prreview.ts` | Apply connected-flow/caller reasoning and the shared load, evidence, and smallest-fix guidance to changed interfaces within existing review scope; generated PR-seat prompts hand off the canonical investigation rules and concern lenses. |
+
+This is a distillation into existing rule owners, not an imported runtime skill. Morning Star retains its `simplify:` marker, library policy, role presets, authorization, read-only audit boundaries, and report/severity contracts. Upstream mode switches, command/debt ecosystem, whole-tree search mandates, finding caps, report/verdict formats, and savings metrics are not adopted.
+
+### Upstream MIT notice
+
+The following [upstream LICENSE](https://github.com/DietrichGebert/ponytail/blob/9b58c1ffb790c075ca32e70a89cf1d80588f4abf/LICENSE) notice applies to the adapted material above:
+
+```text
+MIT License
+
+Copyright (c) 2026 DietrichGebert
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

@@ -2,7 +2,7 @@
 
 What to look for, per category. Each subagent (or direct audit pass) gets the relevant section plus the **Finding format** at the bottom. Adapt depth to repo size — a 2K-line CLI gets a lighter pass than a 500K-line monorepo.
 
-A finding is only a finding with evidence. "Probably has N+1 queries somewhere" is not a finding; `orders/api.ts:142 issues one query per order item inside a loop` is.
+Apply the shared flow, expected-load, and investigation-order judgments in **`mstar-audit` SKILL.md** §§ Phase 1–2. Reportability and structural fix selection follow **`references/finding-format.md`**.
 
 ---
 
@@ -15,9 +15,9 @@ The highest-trust category — real bugs found by reading, not speculation.
 - Null/undefined flows: non-null assertions (`!`) on values that can be null, optional chaining hiding a value that must exist, unchecked array indexing.
 - Boundary conditions: off-by-one, empty-collection handling, timezone/locale assumptions, integer overflow in counters/IDs.
 - State machines: impossible-state combinations representable in types, status enums with unhandled branches (look for `default:` that silently no-ops).
-- Concurrency: check-then-act on shared resources, missing transactions around multi-write operations, idempotency of retried operations (webhooks, queues).
+- Concurrency: two operations can both pass a check before either writes; inspect the atomic claim/transaction and resulting shared-state effect, multi-write ordering, and retry idempotency (webhooks, queues). Check whether state or one-time work is incorrectly per-process when multiple processes must agree; respect the actual deployment model.
 - Type escape hatches: `any` / `as` casts / `@ts-ignore` clusters — each one is a place the compiler was overruled.
-- Resource leaks: unclosed handles, connections, subscriptions; missing `finally`.
+- Resource lifetime: unclosed handles/connections/subscriptions, missing `finally`, and memory/maps/lists that only grow across requests or jobs; trace cleanup/eviction and the reachable accumulation at expected load.
 - Derived-state drift: every cache, replay, projection, denormalized copy, or UI echo must trace to an authoritative source and an invalidation point; flag retained state with neither.
 - Bounds covering the final operation: who owns the complete emitted/retained result (wrappers and metadata included)? Probe tiny/exact limits, oversized single chunks, and multibyte text against byte limits.
 
@@ -63,7 +63,7 @@ Look for algorithmic and architectural wins, not micro-optimizations.
 
 The goal is not a percentage — it's *which untested code is dangerous*.
 
-- Map the critical paths (money, auth, data mutation, the feature the repo exists for) and check which have zero or trivial coverage.
+- Map risky behavior (branches, parsers, money, auth, data mutation, the feature the repo exists for) to a meaningful check that would fail if it broke. A missing-test finding names the unprotected case, why existing assertions miss it, and the smallest owner-boundary regression check — not a coverage target. Apply the authoring gate in `references/test-audit.md` § 3.
 - Modules with high churn (git log) + no tests = top refactor risk; flag as "characterization-tests-first" candidates.
 - Existing test quality: tests that assert nothing meaningful, heavy mocking that tests the mocks, snapshot tests nobody reads, flaky patterns (real timers, real network, order dependence).
 - Missing test layers: unit-only suites with zero integration coverage on API boundaries, or the inverse.
@@ -77,10 +77,10 @@ For the deep method behind this category — value bar, authoring gate (used bot
 
 ## 5. Tech Debt & Architecture
 
-- Duplication: the same logic re-implemented in 3+ places; divergent copies that have drifted.
+- Duplication: near-copies of the same rule that must change together, even in two places; identify the canonical owner and any meaningful semantic differences before proposing reuse/merge.
 - Layering violations: UI importing from data layer internals, circular dependencies, "utils" modules that became a junk drawer with high fan-in.
 - Dead code: unexported-and-unused modules, feature flags fully rolled out but still branching, commented-out blocks, deps in the manifest no longer imported.
-- God objects/modules: files an order of magnitude larger than the repo median that everything touches; functions with double-digit parameters or deep conditional nesting.
+- Mixed responsibilities: a function/class/module doing unrelated jobs that obscure independent behavior or tests; identify the responsibility boundary, not a length target. Long but cohesive code does not need helpers merely to shorten it.
 - Inconsistent patterns: three ways of doing data fetching / error handling / styling — pick the winner (the one the team converged on most recently) and plan the consolidation.
 - Abstraction mismatches: premature abstractions with a single implementation, or missing abstractions where the same change always requires touching N files in lockstep.
 - Public-but-one-caller: a public method on a generic service with a single internal caller is a private-capability closure candidate.
@@ -155,24 +155,8 @@ Direction findings use the standard format with two adaptations: **Impact** is p
 
 ## Finding format
 
-Every finding, from every category and every subagent, comes back in this shape:
-
-```markdown
-### [CATEGORY-NN] Short imperative title
-
-- **Evidence**: `path/file.ts:123` — one-sentence description. (2–5 strongest locations; note "and ~N similar sites" if widespread.)
-- **Impact**: What goes wrong / what's being paid. Concrete: "every order-list render issues 1+N queries", not "suboptimal".
-- **Effort**: XS | S | M | L | XL — for the *fix*, including tests. (Morning Star effort scale — see `mstar-conventions`.)
-- **Risk**: What the fix could break; LOW/MED/HIGH plus one line why.
-- **Confidence**: HIGH (read the code, certain) / MED (strong signal, needs verification) / LOW (smell, needs investigation). LOW-confidence findings may be reported but get an "investigate" plan, not a "fix" plan.
-- **Fix sketch**: 1–3 sentences. Not the plan — just enough to judge effort honestly.
-```
+Use **`references/finding-format.md`** for the shared template, reportability bar, and structural remedies; read it before returning findings.
 
 ## Prioritization rubric
 
-Order findings by **leverage = impact ÷ effort, discounted by confidence and fix-risk**. Tiebreakers:
-
-1. Anything that unblocks other findings (verification baseline, characterization tests) floats up.
-2. Security findings with HIGH confidence float above equivalent-leverage non-security findings.
-3. Prefer findings whose fix has a clean verification story.
-4. "Not worth doing" is a valid verdict; record it with one line of reasoning.
+Use **`references/finding-format.md`** § Prioritization for the leverage rubric and tiebreakers.
