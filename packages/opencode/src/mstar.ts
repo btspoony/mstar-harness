@@ -64,12 +64,16 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
+  caseFoldedRegisterRoot,
   composeDispatchGate,
   isReadOnlyAssignmentRole,
+  isStoreAuthorityTarget,
+  landedPathOf,
   parseAssignmentFields,
   readJson,
   resolveHarnessDir,
   resolveRepoEnforcement,
+  SymlinkResolutionError,
   validateStatus,
 } from "@mstar-harness/engine";
 import type { EnforcementFlag, GateResult, StatusV2Doc, StoreRuntimeInfo } from "@mstar-harness/engine";
@@ -512,16 +516,6 @@ function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind:
  * channel differs per host.
  */
 
-/** The authority database and its WAL sidecars, directly at a harness root. */
-const STORE_DB_FILE = "store.db";
-const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
-
-/** Case-folded authority-name matching (qc2-F-004, dsh/omp/ZCode parity): the
- * match never hinges on byte case. This host cannot enforce (the decision is
- * the error-log / `hardBlocked` audit trail only), so a case-variant alias
- * (`Store.db`) must not skip even that. */
-const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
-
 /** Refusal codes, in the frozen store / `project.register.*` vocabulary. */
 const STORE_DIRECT_WRITE_CODE = "store.direct-write-refused";
 const STORE_AUTHORITY_UNAVAILABLE_CODE = "store.authority-unavailable";
@@ -650,110 +644,6 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
     return PRE_ACTIVATION_CODES.includes(refusal.code)
       ? { kind: "legacy" }
       : { kind: "unavailable", ...refusal };
-  }
-}
-
-/** True when `dir` itself is a harness root: the v2 markers this plugin
- * classifies documents with (`status.json` + layout dirs), or the root the
- * engine resolves from the directory's PARENT (default `.mstar`-style and
- * `.mstarc harness_dir` roots — `resolveHarnessDir(dir)` probes *inside* a
- * directory, so it never answers for the root itself). */
-function isHarnessRootDir(dir: string): boolean {
-  if (hasHarnessRootMarkers(dir)) return true;
-  const parentResolved = resolveHarnessDir(path.dirname(dir));
-  return parentResolved !== null && path.resolve(parentResolved) === dir;
-}
-
-/** The path a write to `resolved` really lands on (S-G4b-03): authority
- * classification runs on the caller's own path first and on this one when the
- * target is an alias — a symlink outside the harness tree resolving to a
- * harness-root `store.db` / retired `residuals.json` IS that authority file.
- * A dangling symlink resolves to its would-be target: the file a write
- * through the link creates. A fresh (absent) target canonicalizes through its
- * nearest EXISTING ancestor: an ancestor directory symlinked into a harness
- * tree lands the write at the protected destination even though no marker is
- * visible on the textual path, so the classification follows the filesystem
- * there too. One canonicalization per checked target (the document lint keeps
- * the caller's path), mirrored in the omp entries, the dsh authority gate and
- * the ZCode write gate. */
-function landedPathOf(resolved: string): string {
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    try {
-      return path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
-    } catch {
-      // The target does not exist yet and is not itself a dangling link — but
-      // a missing FINAL component can still sit under a symlinked ANCESTOR,
-      // and the filesystem lands the write at the canonical destination
-      // through that alias. Canonicalize the nearest EXISTING ancestor and
-      // rejoin the missing suffix; only a path with no existing ancestor at
-      // all keeps the caller's path (a plain fresh file — the path itself
-      // decides).
-      let dir = path.dirname(resolved);
-      for (;;) {
-        try {
-          return path.join(fs.realpathSync(dir), path.relative(dir, resolved));
-        } catch {
-          const parent = path.dirname(dir);
-          if (parent === dir) return resolved;
-          dir = parent;
-        }
-      }
-    }
-  }
-}
-
-/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
- * sitting directly at a harness root: the runtime's own store location for a
- * harness root is `<harness root>/store.db`, and hand-writing those bytes is
- * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. The name match is case-insensitive (qc2-F-004, dsh/omp/ZCode
- * parity): on a case-insensitive volume (Darwin/APFS) a case-variant basename
- * (`Store.db`) lands on the same authority bytes, so the warn-only audit
- * trail must not hinge on byte case either. */
-function isStoreAuthorityTarget(target: string): boolean {
-  if (!STORE_AUTHORITY_NAMES.includes(path.basename(target).toLowerCase())) return false;
-  return isHarnessRootDir(path.dirname(target));
-}
-
-/** The register file's basename, matched case-insensitively (qc2-F-004). */
-const REGISTER_BASENAME = /residuals\.json/i;
-/** The canonical register shape under the resolved project dir — one project
- * component + the register file — with the file name folded (qc2-F-004). */
-const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
-
-/** The harness root of a register target the exact-case classifiers MISS
- * because its basename is a case variant (`RESIDUALS.json`, qc2-F-004): the
- * canonical register shape (one project component + the register file under
- * the resolved project dir) is matched case-insensitively from the nearest
- * harness root up the tree — the same walk the engine's marker probe runs for
- * exact-case names, so a case-variant register is authority-classified like
- * the file itself and keeps its document validator on the pre-activation
- * fall-through (dsh/omp/ZCode parity). `null` when the basename is not a
- * register name or no ancestor root holds the shape. */
-function caseFoldedRegisterRoot(candidate: string): string | null {
-  const target = path.resolve(candidate);
-  if (!REGISTER_BASENAME.test(path.basename(target))) return null;
-  let dir = path.dirname(target);
-  for (;;) {
-    if (isHarnessRootDir(dir)) {
-      let projectDir: string;
-      const resolvers = classifyDirResolvers;
-      if (resolvers !== null) {
-        try {
-          projectDir = resolvers.resolveProjectDir(dir, { harnessDir: dir });
-        } catch {
-          projectDir = path.join(dir, "projects");
-        }
-      } else {
-        projectDir = path.join(dir, "projects");
-      }
-      if (REGISTER_SHAPE.test(path.relative(projectDir, target))) return dir;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
   }
 }
 
@@ -952,7 +842,15 @@ export async function validateStatusWrite(
  // S-G4b-03: the AUTHORITY decision runs on the path the target really lands
  // on — a symlink alias of the store database or of a project register IS
  // that authority file. Nothing else is canonicalized.
-    const landed = landedPathOf(resolved);
+    let landed: string;
+    try {
+      landed = landedPathOf(resolved);
+    } catch (error) {
+      // A symlink cycle/overflow is an authority refusal, not a degraded
+      // pass: report the engine's code with `hardBlocked` set.
+      if (error instanceof SymlinkResolutionError) return authorityRefusal(error.code, error.message, log);
+      throw error;
+    }
     const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
  // Phase-5 F1: ensure the custom-layout dir resolvers are loaded before
  // classifying — the sync slot feeds `harnessDocKindOfTarget` AND the

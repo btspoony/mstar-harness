@@ -374,6 +374,19 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(await validateStatusWrite(join(outside, "fresh.db"), { doc: "x" })).toBeNull();
   });
 
+  test("a chained symlink alias landing on the authority database is refused (issue #442)", async () => {
+    // One hop is not enough: the outer link points at another link, which
+    // points at the harness store sidecar. The chained resolver follows the
+    // chain to the authority file; the one-hop variant stopped at the middle
+    // link and let the write through.
+    const fixture = makeHarnessProject();
+    symlinkSync(join(fixture.harness, "store.db-wal"), join(fixture.project, "chain-inner"));
+    symlinkSync("chain-inner", join(fixture.project, "chain-outer"));
+    const result = await validateStatusWrite(join(fixture.project, "chain-outer"), { doc: "not a database" });
+    expect(result?.hardBlocked).toBe(true);
+    expect(result?.violations[0]!.code).toBe("store.direct-write-refused");
+  });
+
   test("plugin wiring: a store.db write through tool.execute.before is refused, never silent", async () => {
     const fixture = makeHarnessProject();
     await seedActiveStore(fixture.harness);

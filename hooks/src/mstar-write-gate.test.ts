@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -144,6 +144,28 @@ describe("write gate - hard-mode blocks (exit 2 + stderr, stdout empty)", () => 
     expect(run.stdout).toBe("");
     expect(run.stderr).toContain("\u2014");
     expect(run.stderr).not.toContain("\u00e2"); // latin-1 mojibake marker
+  });
+
+  test("a chained symlink alias landing on the authority database blocks (issue #442)", () => {
+    const { root } = hardRepo();
+    const inner = join(root, "chain-inner");
+    const outer = join(root, "chain-outer");
+    symlinkSync(join(root, ".mstar", "store.db-wal"), inner);
+    symlinkSync("chain-inner", outer);
+    const run = runGate(writeEvent({ file_path: outer, content: "x" }));
+    expect(run.exitCode).toBe(2);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("[high] store.direct-write-refused:");
+  });
+
+  test("a cyclic symlink target refuses fail-closed instead of passing", () => {
+    const { root } = hardRepo();
+    symlinkSync("cycle-b", join(root, "cycle-a"));
+    symlinkSync("cycle-a", join(root, "cycle-b"));
+    const run = runGate(writeEvent({ file_path: join(root, "cycle-a"), content: "x" }));
+    expect(run.exitCode).toBe(2);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("[high] write.symlink-resolution-refused:");
   });
 });
 
