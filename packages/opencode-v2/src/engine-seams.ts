@@ -29,7 +29,10 @@ export type DispatchGateApi = Pick<
 export type WriteGateApi = Pick<
   EngineModule,
   | "applyEnforcement"
+  | "caseFoldedDocKind"
   | "harnessDocKindOfTarget"
+  | "isStoreAuthorityTarget"
+  | "landedPathOf"
   | "queryIssueFlow"
   | "resolveExecutionReadRoute"
   | "resolveHarnessDir"
@@ -121,7 +124,10 @@ export function loadWriteGateApi(): Promise<WriteGateApi | null> {
   writeGateApiPromise ??= import("@mstar-harness/engine").then((engine) => {
     if (
       typeof engine.applyEnforcement !== "function" ||
+      typeof engine.caseFoldedDocKind !== "function" ||
       typeof engine.harnessDocKindOfTarget !== "function" ||
+      typeof engine.isStoreAuthorityTarget !== "function" ||
+      typeof engine.landedPathOf !== "function" ||
       typeof engine.queryIssueFlow !== "function" ||
       typeof engine.resolveExecutionReadRoute !== "function" ||
       typeof engine.resolveHarnessDir !== "function" ||
@@ -133,7 +139,10 @@ export function loadWriteGateApi(): Promise<WriteGateApi | null> {
     ) return null;
     return {
       applyEnforcement: engine.applyEnforcement,
+      caseFoldedDocKind: engine.caseFoldedDocKind,
       harnessDocKindOfTarget: engine.harnessDocKindOfTarget,
+      isStoreAuthorityTarget: engine.isStoreAuthorityTarget,
+      landedPathOf: engine.landedPathOf,
       queryIssueFlow: engine.queryIssueFlow,
       resolveExecutionReadRoute: engine.resolveExecutionReadRoute,
       resolveHarnessDir: engine.resolveHarnessDir,

@@ -30,7 +30,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import mstarGates from "../src/hooks/pre/mstar-gates";
@@ -291,5 +291,41 @@ describe("omp gate unexpected errors", () => {
     expect(
       await handler!({ toolName: "write", input: { path: "/tmp/ordinary-document.md", content: "ok" } }),
     ).toBeUndefined();
+  });
+});
+
+describe("omp Gate-1 authority path resolution (issue #442)", () => {
+  test("refuses a chained symlink alias landing on the authority database", async () => {
+    // Two hops: the outer link points at a link that points at the harness
+    // store sidecar. The engine's chained resolver follows the whole chain;
+    // the previous one-hop copy stopped at the middle link (a non-authority
+    // name) and let the write through.
+    const root = mkdtempSync(join(tmpdir(), "omp-gate-chain-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "workflows"), { recursive: true });
+      mkdirSync(join(harness, "projects"), { recursive: true });
+      writeFileSync(join(harness, "status.json"), VALID_STATUS);
+      symlinkSync(join(harness, "store.db-wal"), join(root, "chain-inner"));
+      symlinkSync("chain-inner", join(root, "chain-outer"));
+
+      let handler: ((event: unknown) => Promise<unknown>) | undefined;
+      mstarGates({
+        on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+          handler = fn;
+        },
+        logger: { warn: () => undefined, error: () => undefined },
+      } as never);
+      expect(handler).toBeDefined();
+
+      const res = (await handler!({
+        toolName: "write",
+        input: { path: join(root, "chain-outer"), content: "unauthorized" },
+      })) as { block: boolean; reason: string } | undefined;
+      expect(res?.block).toBe(true);
+      expect(res?.reason).toContain("store.direct-write-refused");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

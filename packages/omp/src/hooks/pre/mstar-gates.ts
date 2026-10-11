@@ -17,21 +17,22 @@
  * caller-scoped recursion constraints. Unexpected gate errors return explicit
  * block envelopes; intentional refusals keep their existing shape.
  */
-import { readlinkSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
+  caseFoldedRegisterRoot,
   detectStoreRuntime,
   eventTargetPaths,
   harnessDocKindOfTarget,
   isReadOnlyAssignmentRole,
+  isStoreAuthorityTarget,
+  landedPathOf,
   parseAssignmentFields,
   queryDashboard,
   resolveExecutionReadRoute,
   resolveHarnessDir,
-  resolveProjectDir,
   resolveRepoEnforcement,
-  resolveWorkflowDir,
+  SymlinkResolutionError,
   violationLine,
   withStoreRead,
 } from "@mstar-harness/engine";
@@ -77,27 +78,6 @@ function taskDispatchEntries(input: unknown): DispatchEntry[] {
 // ---------------------------------------------------------------------------
 // Gate 1b — issue/catalog authority paths (store.db + retired registers)
 // ---------------------------------------------------------------------------
-
-/** The authority database and its WAL sidecars, directly at a harness root. */
-const STORE_DB_FILE = "store.db";
-const STORE_AUTHORITY_FILES: readonly string[] = [STORE_DB_FILE, `${STORE_DB_FILE}-wal`, `${STORE_DB_FILE}-shm`];
-
-/** Case-folded authority-name matching (plan QC fix wave FW-3, dsh/ZCode
- * parity): on a case-insensitive volume (Darwin/APFS) a case-variant basename
- * (`Store.db`) lands on the same authority bytes, so the match never hinges
- * on byte case. */
-const STORE_AUTHORITY_NAMES: readonly string[] = STORE_AUTHORITY_FILES.map((file) => file.toLowerCase());
-
-/** The register file's basename, matched case-insensitively (FW-3). */
-const REGISTER_BASENAME = /residuals\.json/i;
-/** The canonical register shape under the resolved project dir — one project
- * component + the register file — with the file name folded (FW-3). */
-const REGISTER_SHAPE = /^[^/]+\/residuals\.json$/i;
-
-/** Default v2 layout names of a marker-complete harness root. */
-const STATUS_FILE = "status.json";
-const WORKFLOW_DIR_NAME = "workflows";
-const PROJECT_DIR_NAME = "projects";
 
 /** Refusal codes for the authority paths (G4b). Their vocabulary mirrors the
  * frozen store/register families: `store.*` for the authority database,
@@ -149,118 +129,6 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
     return { kind: "retired", storeRevision: envelope.storeRevision };
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
-  }
-}
-
-/** Directory/entry check (never throws — a missing or unreadable path is
- * simply not a marker). */
-function hasEntry(dir: string, name: string): boolean {
-  try {
-    statSync(join(dir, name));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** True when `dir` itself is a harness root: the v2 coordination-document
- * markers the gates classify documents with (`status.json` + the layout dirs,
- * custom `.mstarc` dirs honored), or the root the engine resolves from the
- * directory's PARENT (default `.mstar`-style and `.mstarc harness_dir`
- * roots — `resolveHarnessDir(dir)` probes *inside* a directory, so it never
- * answers for the root itself). */
-function isHarnessRootDir(dir: string): boolean {
-  if (hasEntry(dir, STATUS_FILE)) {
-    if (hasEntry(dir, WORKFLOW_DIR_NAME) && hasEntry(dir, PROJECT_DIR_NAME)) return true;
-    try {
-      if (
-        hasEntry(resolveWorkflowDir(dir, { harnessDir: dir }), "") &&
-        hasEntry(resolveProjectDir(dir, { harnessDir: dir }), "")
-      ) {
-        return true;
-      }
-    } catch {
-      // unreadable layout config — fall through to the parent resolution
-    }
-  }
-  const parentResolved = resolveHarnessDir(dirname(dir));
-  return parentResolved !== null && resolve(parentResolved) === dir;
-}
-
-/** The path a write to `resolved` really lands on (S-G4b-03): authority
- * classification runs on the caller's own path first and on this one when the
- * target is an alias — a symlink outside the harness tree resolving to a
- * harness-root `store.db` / retired `residuals.json` IS that authority file.
- * A dangling symlink resolves to its would-be target: the file a write
- * through the link creates. A fresh (absent) target canonicalizes through its
- * nearest EXISTING ancestor: an ancestor directory symlinked into a harness
- * tree lands the write at the protected destination even though no marker is
- * visible on the textual path, so the classification follows the filesystem
- * there too. One canonicalization per write target (the document lint below
- * keeps the caller's path), mirrored in the OpenCode and ZCode entries. */
-function landedPathOf(resolved: string): string {
-  try {
-    return realpathSync(resolved);
-  } catch {
-    try {
-      return resolve(dirname(resolved), readlinkSync(resolved));
-    } catch {
-      // The target does not exist yet and is not itself a dangling link — but
-      // a missing FINAL component can still sit under a symlinked ANCESTOR,
-      // and the filesystem lands the write at the canonical destination
-      // through that alias. Canonicalize the nearest EXISTING ancestor and
-      // rejoin the missing suffix; only a path with no existing ancestor at
-      // all keeps the caller's path (a plain fresh file — the path itself
-      // decides).
-      let dir = dirname(resolved);
-      for (;;) {
-        try {
-          return join(realpathSync(dir), relative(dir, resolved));
-        } catch {
-          const parent = dirname(dir);
-          if (parent === dir) return resolved;
-          dir = parent;
-        }
-      }
-    }
-  }
-}
-
-/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
- * sitting directly at a harness root: the runtime's own store location for a
- * harness root is `<harness root>/store.db`, and hand-writing those bytes is
- * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. The name match is case-insensitive (FW-3). */
-function isStoreAuthorityTarget(target: string): boolean {
-  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
-  return isHarnessRootDir(dirname(target));
-}
-
-/** The harness root of a register target the exact-case classifiers MISS
- * because its basename is a case variant (`RESIDUALS.json`, FW-3): the
- * canonical register shape (one project component + the register file under
- * the resolved project dir) is matched case-insensitively from the nearest
- * harness root up the tree — the same walk the engine's marker probe runs for
- * exact-case names, so a case-variant register is authority-classified like
- * the file itself. `null` when the basename is not a register name or no
- * ancestor root holds the shape (dsh/ZCode parity). */
-function caseFoldedRegisterRoot(candidate: string): string | null {
-  const target = resolve(candidate);
-  if (!REGISTER_BASENAME.test(basename(target))) return null;
-  let dir = dirname(target);
-  for (;;) {
-    if (isHarnessRootDir(dir)) {
-      let projectDir: string;
-      try {
-        projectDir = resolveProjectDir(dir, { harnessDir: dir });
-      } catch {
-        projectDir = join(dir, PROJECT_DIR_NAME);
-      }
-      if (REGISTER_SHAPE.test(relative(projectDir, target))) return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
   }
 }
 
@@ -382,7 +250,14 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
     const resolved = resolve(rawPath);
     // S-G4b-03: the AUTHORITY decision is made on the path the write really
     // lands on, so a symlink alias is refused like the authority file itself.
-    const landed = landedPathOf(resolved);
+    let landed: string;
+    try {
+      landed = landedPathOf(resolved);
+    } catch (error) {
+      // A symlink cycle/overflow refuses fail-closed with the engine's code.
+      if (error instanceof SymlinkResolutionError) return authorityRefusal(error.code, error.message);
+      throw error;
+    }
     const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) return storeDirectWriteRefusal(storeTarget); // authority bytes — never writable
     const direct = harnessDocKindOfTarget(resolved);

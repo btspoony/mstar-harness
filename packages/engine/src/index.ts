@@ -26,7 +26,10 @@
  * host from tool shapes, resolves skill roots and defines the type-only
  * `HostAdapter` contract, `gates` is the host-neutral coordination-write
  * gate core (target classification + content/edit validation + reason
- * formatting, shared by the omp and ZCode host gates), and `skill-authoring`
+ * formatting, shared by the omp and ZCode host gates), and
+ * `host-gate-paths` is the single-sourced gate path glue behind both — the
+ * chained landing-path resolver plus the case-folded authority naming and
+ * classification every host write gate imports (#442) — and `skill-authoring`
  * lints frontmatter +
  * 5-question bodies and resolves skill-relative asset paths, and
  * `cleanup` is the pure worktree/branch cleanup planner (immutable facts
@@ -305,9 +308,22 @@ export {
   eventTargetPaths,
   formatStatusWriteBlockReason,
   harnessDocKindOfTarget,
+  isHarnessRootDir,
   validateStatusWriteDoc,
   violationLine,
 } from "./gates.js";
+export {
+  MAX_SYMLINK_HOPS,
+  STORE_AUTHORITY_FILES,
+  STORE_AUTHORITY_NAMES,
+  SYMLINK_RESOLUTION_REFUSED_CODE,
+  SymlinkResolutionError,
+  caseFoldedDocKind,
+  caseFoldedRegisterRoot,
+  isStoreAuthorityName,
+  isStoreAuthorityTarget,
+  landedPathOf,
+} from "./host-gate-paths.js";
 export type {
   MigrateNotesFile,
   MigrateOptions,

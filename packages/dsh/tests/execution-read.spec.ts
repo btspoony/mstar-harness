@@ -31,7 +31,7 @@ import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_STATUS_CONTEXT_NAME } from '../src/gates/system-prompt.ts'
-import { EXECUTION_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
+import { EXECUTION_DIRECT_WRITE_CODE, STORE_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
 import { activeRowsOf, readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
 import { bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 
@@ -380,6 +380,21 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(
       await storeAuthorityRefusals({ resolvedHarnessDir: null, directKind: null, rawPath: join(dirname(harnessDir), 'notes.md') }),
     ).toEqual([])
+  })
+
+  it('refuses a chained symlink alias landing on the authority database (#442)', async () => {
+    // One hop is not enough: the outer link points at a second link, which
+    // points at the harness store sidecar. The chained resolver follows the
+    // chain onto the authority file; the one-hop variant stopped at the middle
+    // link (a non-authority name) and let the write through.
+    const { harnessDir } = await appWithRoot('execution-chain-alias')
+    const aliasDir = await tempDir('execution-chain')
+    const inner = join(aliasDir, 'inner')
+    const outer = join(aliasDir, 'outer')
+    await symlink(join(harnessDir, 'store.db-wal'), inner)
+    await symlink('inner', outer)
+    const refused = await storeAuthorityRefusals({ resolvedHarnessDir: null, directKind: null, rawPath: outer })
+    expect(refused.map((violation) => violation.code)).toEqual([STORE_DIRECT_WRITE_CODE])
   })
 
   it('refuses a PRE-ACTIVATION harness document symlinked into another harness ACTIVE authority (both roots probed)', async () => {

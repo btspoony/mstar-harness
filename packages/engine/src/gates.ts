@@ -90,6 +90,20 @@ function hasHarnessRootMarkers(dir: string): boolean {
 }
 
 /**
+ * True when `dir` ITSELF is a harness root: the v2 coordination-document
+ * markers above, or the root `resolveHarnessDir` answers from the
+ * directory's PARENT (a declared `.mstarc harness_dir` / `MSTAR_HARNESS_DIR`
+ * root is never answered by a probe INSIDE the root). The authority gates
+ * ask this of a candidate's parent directory — "does this file sit directly
+ * at a harness root?" — which the doc-kind probe above cannot answer.
+ */
+export function isHarnessRootDir(dir: string): boolean {
+  if (hasHarnessRootMarkers(dir)) return true;
+  const parentResolved = resolveHarnessDir(dirname(dir));
+  return parentResolved !== null && resolve(parentResolved) === dir;
+}
+
+/**
  * Resolve the harness root containing `startDir` by marker probe: the nearest ancestor holding the v2 coordination-document
  * markers — a `status.json` root file plus the layout directories — IS the
  * harness root. Unlike `resolveHarnessDir`'s rung-3 `plans/` probe, this
