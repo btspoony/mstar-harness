@@ -9,9 +9,8 @@ import {
   initializeStore,
   readExecutionAuthority,
 } from "@mstar-harness/engine";
-import type { ExecutionToken } from "@mstar-harness/engine";
+import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { getPlanCommandDefinitions } from "../src/families/plan.js";
-import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -103,6 +102,22 @@ function planRowOf(envelope: { status: string; data: unknown }): { id: string } 
 }
 
 describe("plan command family", () => {
+  test("plan.complete publishes and validates completion evidence", () => {
+    const definition = getCommandDefinitions().find(({ id }) => id === "plan.complete");
+    const contract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "plan.complete");
+    if (definition === undefined || contract === undefined) throw new Error("missing plan.complete contract");
+    const valid = {
+      workflow: "wf-plan",
+      plan: "plan-a",
+      evidence: {
+        qc: { decision: "Approve", reports: ["qc.md"], consolidated: "qc-consolidated.md" },
+        qa: { gate: "mandatory", decision: "pass", report: "qa.md" },
+      },
+    };
+    expect(definition.input.safeParse(valid).success).toBe(true);
+    expect(definition.input.safeParse({ ...valid, evidence: { qc: {}, qa: {} } }).success).toBe(false);
+    expect(contract.input.properties).toHaveProperty("evidence");
+  });
 
 
   test("plan family payload decode rejects malformed fields with accurate paths", () => {
