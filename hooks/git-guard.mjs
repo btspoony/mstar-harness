@@ -129,15 +129,27 @@ function analyzeGitInvocations(command) {
   return invocations;
 }
 
-// Force detection inspects only the tokens of a `git push` invocation: a
-// short-option bundle containing `f` (-f, -uf, …), `--force`, or a forced
-// refspec. Other long flags (--filter, --force-with-lease=…) are never bare force.
+// Push options whose following token is a value, not a repository/refspec.
+const PUSH_VALUE_OPTS = new Set(["-o", "--push-option", "--receive-pack", "--exec"]);
+
+/** Force detection distinguishes option values, repository and refspecs. */
 function isBareForcePush(invocation) {
-  return invocation.argv.some((token) => {
-    if (token === "--force" || token.startsWith("+")) return true;
-    if (token.startsWith("-")) return token !== "--force-with-lease" && /^-[^-]*f/.test(token);
-    return false;
-  });
+  let repositorySeen = false;
+  for (let i = 1; i < invocation.argv.length; i += 1) {
+    const token = invocation.argv[i];
+    if (token === "--force") return true;
+    if (token.startsWith("-")) {
+      if (token !== "--force-with-lease" && /^-[^-]*f/.test(token)) return true;
+      if (PUSH_VALUE_OPTS.has(token)) i += 1;
+      continue;
+    }
+    if (!repositorySeen) {
+      repositorySeen = true;
+      continue;
+    }
+    if (token.startsWith("+")) return true;
+  }
+  return false;
 }
 
 const COMMIT_ESCAPE_IN_COMMAND = /MSTAR_ALLOW_DEFAULT_BRANCH_COMMIT=1(\s|$)/;
