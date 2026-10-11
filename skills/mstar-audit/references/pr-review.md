@@ -106,7 +106,7 @@ Discipline that stays with the agent (behavior, not git mechanics):
 
 - Review the diff basis vs base: changed files plus what the change touches.
 - Read changed files **in full** — diffs hide context — **scoped to the seat's domain files** (§ Review pipeline domain split); full-repo reading is not the contract — the pack is (pinned diff pack first, bounded follow-ups — § Seat prompts).
-- Inspect adjacent behavior when risk leaks past the named diff (importers, callers, dependent contracts).
+- Apply **`mstar-audit` SKILL.md** § Phase 1's real-flow, affected-consumer, and expected-load judgments to adjacent behavior (importers, callers, dependent contracts), within the pinned pack's domain and bounded follow-ups.
 - When the diff touches tests, read the tests before the implementation — they carry intent.
 - Verification claims in the PR description must be reproducible from the diff/CI; a claim that cannot be checked is an `unverified` lead, not evidence.
 - **Domains** — review is split by domain (**business domain / change surface / tech stack**; § Review pipeline). Each domain seat concludes **only on its own domain**.
@@ -115,7 +115,7 @@ Discipline that stays with the agent (behavior, not git mechanics):
 ## Sizing & change shape
 
 - **Sizing bands:** ~100 changed lines → reviewable; ~300 → acceptable as one logical change; ~1000 → too large — advise a split (a `should-fix` finding with split advice, or a verdict note; never auto-`blocked`). Whole-file deletions and mechanical/automated refactors are exempt — verify intent, not every line.
-- **File-size watch:** a small diff that materially grows a file past ~1000 *total* lines → advise extract/decompose first ("decompose, then add").
+- **File-size watch:** a small diff that materially grows a file past ~1000 *total* lines → advise extract/decompose first ("decompose, then add"). This remains a review trigger; choose the actual decomposition by responsibility per `references/finding-format.md` § Structural remedies, not line-count-only helpers.
 - **Split strategies:** stack · by file group · horizontal (shared code first) · vertical (full-stack slices); refactoring and feature work travel in separate changes.
 - **Escalation by change shape:**
 
@@ -132,6 +132,8 @@ Discipline that stays with the agent (behavior, not git mechanics):
 These shapes get deeper review, not automatic severity — name the escalation in the review body.
 
 ## Concern lenses
+
+Apply the shared investigation order in **`mstar-audit` SKILL.md** § Phase 2; use **`references/audit-playbook.md`** §§ 1, 4, 5 for concurrency/lifetime, meaningful missing-test, and simplification judgments as relevant. All follow-ups remain scoped by § Scoping and the seat budget.
 
 Generic lenses:
 
@@ -161,6 +163,8 @@ Conditional lenses:
 - Refused Bequest — subclass inherits more than it wants → replace with composition.
 
 Three binding rules: repo-documented standards override the baseline — a standards finding cites the standard's file + rule; anything tooling already enforces is skipped (existing `general` rule); smells are judgement calls — a smell alone is never `must-fix`, and a LOW-confidence smell without evidence is not a finding (existing disqualify rule): it goes on `- unverified:` per the § Merge class rule, never `nit`; an **evidenced** judgement-call smell may surface as `nit` with the smell label. No new lens row: repo-guidance conformance stays the `general` lens's job.
+
+Smell remedies are candidates, not automatic demands for new abstractions; select the smallest evidenced repair per **`references/finding-format.md`** § Structural remedies.
 
 **Selection by change shape** (UI / API / migration / refactor / doc / tiny mechanical). Default set = `general` + `technical-coverage` + `silent-failures`. Never spawn all lenses blindly; tiny mechanical diffs → `general` only.
 

@@ -43,8 +43,10 @@ For an explicitly scoped early codebase survey, map the territory before judging
 
 - Read `README`, `AGENTS.md` / `CLAUDE.md`, `CONTRIBUTING`, root config (`package.json`, `pyproject.toml`, `go.mod`, etc.), CI config, directory structure.
 - Identify: language(s), framework(s), package manager, **available build / test / lint / typecheck commands** (capability inventory only; each plan selects only checks mapped to its actual changes, with exact paths/selectors), test coverage shape, deployment target.
+- Establish expected load from the scoped README, deployment config, and entry points: users/processes, input size, and operation lifetime. Cite the source in the existing coverage/notes surface; when missing, declare the load assumption and uncertainty. Judge reliability and cost against that context, not imaginary internet-scale traffic.
 - Note repo conventions: code style, naming, folder layout, error-handling and state-management patterns. Plans must tell the executor to *match* these, with examples.
-- Ingest intent and design docs where present — ADRs (`docs/adr/`, `docs/decisions/`), specs, `CONTEXT.md`, `DESIGN.md`, `STRATEGY.md`, `PRODUCT.md`. These record decided tradeoffs; a tradeoff recorded in an ADR is by-design, not a finding.
+- Trace the relevant real input → validation → state/write → output flow. For changed signatures, return values, or behavior, follow directly affected consumers beyond the diff and confirm how they use the result; a fix in one caller can leave the shared owner broken. Stay within the variant's scope and budget; disclose missing direct context rather than restarting a whole-tree search.
+- Ingest intent and design docs where present — ADRs (`docs/adr/`, `docs/decisions/`), specs, `CONTEXT.md`, `DESIGN.md`, `STRATEGY.md`, `PRODUCT.md`. Apply the documented-decision bar in **`references/finding-format.md`** § What disqualifies a finding.
 - Check git signal (`git log --oneline -30`, churn hotspots) for what is actively evolving vs. frozen.
 - Read `{KNOWLEDGE_DIR}/README.md` if present and follow only relevant Active entries — crystallized decisions inform what is settled; do not load the entire knowledge corpus.
 
@@ -53,6 +55,8 @@ If a relevant verification entry is missing or has a known failure, record that 
 ### Phase 2 — Audit (per variant)
 
 Full codebase audit: nine-category fan-out across **`references/audit-playbook.md`** with the effort table (`quick` / `standard` / `deep`) and "state what was not audited" → **`references/codebase-audit.md`** § Phase 2. PR review: scoping + concern lenses → **`references/pr-review.md`** § Scoping / Concern lenses.
+
+Investigate correctness, security, and data-loss paths before reliability at expected load, risky untested behavior, performance, and leanness. This is an investigation order, not a replacement for the existing leverage rubric, severity, merge classes, or verdict derivation.
 
 **Test assertions (all variants, including `pr`):** keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. On finding a non-product assertion, the auditor must report its non-product-assertion class and conclude **"delete, or replace with a product-behaviour assertion"**. Calibrate against the PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge the assertion and production-owner contract, not the example name alone. Detailed candidate evidence and retention safeguards → **`references/test-audit.md`** §§ 2–7.
 
