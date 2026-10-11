@@ -86,7 +86,6 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Migrate a v1 status tree to v2 (one-shot, not a routine step) | `mstar migrate` | `mstar-artifacts` |
 | Discover one command or payload contract | `mstar schema` | `mstar-use-cli`; bounded schema/help is the input-shape authority |
 | Draft an offline redacted issue report | `mstar report` | `mstar-use-cli`; no automatic external submission |
-| Request explicitly enabled bounded review advice | `mstar judgment review-advice` | `mstar-review-qc`; current help owns the pilot/pack contract |
 
 Per-family detail — refusal codes, JSON envelopes, sequence walkthroughs — is in the references listed at the end. Validator and lint families are indexed in `references/checks-and-lints.md`.
 Retired, never live alternatives: `status archive-residuals` / `backlog-register` / `backlog-close` → `status.verb-retired`; removed plan verbs (including `plan residual-add` / `residual-close`) → exit `2`, `command.invalid-input`; `persist … residuals` → `persist.kind-retired`. Capture and disposition use issue verbs, not aliases.

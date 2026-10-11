@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import test from "node:test";
 import {
   CONTRACT_REVISION,
@@ -18,15 +14,11 @@ import {
   TOKEN_RESERVATION_PER_ATTEMPT,
   buildA05Request,
   canonicalJsonBytes,
-  connectEvaluatorChannel,
   evaluateNative,
   validatePack,
   validatePilot,
 } from "../../judgment/dist/index.js";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(HERE, "../../..");
-const BUNDLE = join(REPO, "packages/cli/dist/mstar-harness.js");
 const roots = [];
 test.after(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -38,11 +30,6 @@ function temporaryRoot(label) {
   return root;
 }
 
-function envWithoutHarness() {
-  const env = { ...process.env };
-  for (const key of ["MSTAR_HARNESS_DIR", "MSTAR_CONTROL_ROOT", "SDD_DIR", "JEV_REQUESTS_DIR", "JEV_STATUS_PATH"]) delete env[key];
-  return env;
-}
 
 function judgmentFixture(runId = "run-1") {
   const hash = "a".repeat(64);
@@ -119,134 +106,6 @@ function judgmentFixture(runId = "run-1") {
 async function expectCode(promise, code) {
   await assert.rejects(promise, (error) => error?.code === code);
 }
-
-test("unpacked CLI emits a provider error envelope without creating a mailbox when no channel is mounted", async () => {
-  assert.ok(existsSync(BUNDLE), "build the CLI bundle before the packaging proof");
-  const packageRoot = temporaryRoot("unpacked");
-  const workspace = join(packageRoot, "workspace");
-  mkdirSync(join(packageRoot, "package", "dist"), { recursive: true });
-  mkdirSync(workspace, { recursive: true });
-  const judgmentPackage = join(packageRoot, "package", "node_modules", "@mstar-harness", "judgment");
-  mkdirSync(judgmentPackage, { recursive: true });
-  cpSync(join(REPO, "packages/judgment/package.json"), join(judgmentPackage, "package.json"));
-  cpSync(join(REPO, "packages/judgment/dist"), join(judgmentPackage, "dist"), { recursive: true });
-  const unpacked = join(packageRoot, "package", "dist", "mstar-harness.js");
-  cpSync(BUNDLE, unpacked);
-  writeFileSync(join(packageRoot, "package", "package.json"), JSON.stringify({ type: "module", bin: { "mstar-harness": "dist/mstar-harness.js" } }));
-  const proc = spawnSync(process.execPath, [unpacked, "judgment", "review-advice", "--file", "missing-pack.json", "--pilot", "missing-pilot.json"], {
-    cwd: workspace,
-    env: envWithoutHarness(),
-    encoding: "utf8",
-  });
-  assert.equal(proc.status, 0, proc.stderr);
-  assert.deepEqual(JSON.parse(proc.stdout), {
-    version: 1,
-    command: "judgment.review-advice",
-    status: "ok",
-    code: "judgment.review-advice.ok",
-    exitCode: 0,
-    data: {
-      schema: "mstar.judgment-cli/v1",
-      contractRevision: CONTRACT_REVISION,
-      status: "disabled",
-      advice: null,
-    },
-  });
-  assert.equal(existsSync(join(workspace, ".jev-mailbox")), false);
-  assert.equal(proc.stdout.trim().split("\n").length, 1);
-
-  const attackerRoot = join(packageRoot, "attacker");
-  const attackerWorkspace = join(attackerRoot, "workspace");
-  const requestDirectory = join(attackerRoot, "requests");
-  const statusPath = join(attackerRoot, "status.json");
-  mkdirSync(attackerWorkspace, { recursive: true });
-  mkdirSync(requestDirectory, { recursive: true });
-  writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId: "run-1", status: "idle" }));
-  const originalRealpathSync = fs.realpathSync;
-  const previousRequestsDir = process.env.JEV_REQUESTS_DIR;
-  const previousStatusPath = process.env.JEV_STATUS_PATH;
-  fs.realpathSync = (path, ...args) => {
-    if (path === "/mnt/requests") path = requestDirectory;
-    if (path === "/mnt/status.json") path = statusPath;
-    return originalRealpathSync.call(fs, path, ...args);
-  };
-  syncBuiltinESMExports();
-  process.env.JEV_REQUESTS_DIR = "/mnt/requests";
-  process.env.JEV_STATUS_PATH = "/mnt/status.json";
-  try {
-    const invocation = {
-      cwd: attackerWorkspace,
-      workspace: attackerWorkspace,
-      input: { kind: "file", path: "pack.json" },
-      pilotPath: "pilot.json",
-    };
-    // Caller-forged mount markers and paths must not attest a channel at all. The
-    // supervisor-mount check refuses at connection time, which is stricter than
-    // handing back an unattested channel for a later refusal, so no advice path —
-    // and therefore no pilot or pack collection — can be reached.
-    await assert.rejects(
-      () => connectEvaluatorChannel(invocation, new AbortController().signal),
-      /jev\.channel-supervisor-unattested/,
-      "caller-forged mount markers must not attest a channel",
-    );
-    // No channel means no advice path, so no pilot or pack read can occur.
-  } finally {
-    if (previousRequestsDir === undefined) delete process.env.JEV_REQUESTS_DIR;
-    else process.env.JEV_REQUESTS_DIR = previousRequestsDir;
-    if (previousStatusPath === undefined) delete process.env.JEV_STATUS_PATH;
-    else process.env.JEV_STATUS_PATH = previousStatusPath;
-    fs.realpathSync = originalRealpathSync;
-    syncBuiltinESMExports();
-  }
-});
-
-test("packaged CLI refuses caller-forged mounted mailbox without request writes", () => {
-  const { pack, pilot } = judgmentFixture();
-  const workspace = temporaryRoot("untrusted-worker");
-  const requestDirectory = join(workspace, "supervisor", "requests");
-  const statusPath = join(workspace, "supervisor", "status.json");
-  const preloadPath = join(workspace, "supervisor-mounts.cjs");
-  mkdirSync(requestDirectory, { recursive: true });
-  writeFileSync(statusPath, JSON.stringify({ schema: "mstar.judgment-status/v1", runId: "run-1", status: "idle" }));
-  writeFileSync(preloadPath, [
-    'const fs = require("node:fs");',
-    'const { syncBuiltinESMExports } = require("node:module");',
-    'const realpathSync = fs.realpathSync;',
-    'fs.realpathSync = function (path, ...args) {',
-    '  if (path === "/mnt/requests") path = process.env.JEV_TEST_REQUESTS_DIR;',
-    '  if (path === "/mnt/status.json") path = process.env.JEV_TEST_STATUS_PATH;',
-    '  return realpathSync.call(this, path, ...args);',
-    '};',
-    'syncBuiltinESMExports();',
-  ].join("\n"));
-  writeFileSync(join(workspace, ".mstarc"), "[config]\njev_mode=shadow\njev_transport=typesafe\n");
-  writeFileSync(join(workspace, "pack.json"), JSON.stringify(pack));
-  writeFileSync(join(workspace, "pilot.json"), JSON.stringify(pilot));
-  const proc = spawnSync(process.execPath, [BUNDLE, "judgment", "review-advice", "--file", "pack.json", "--pilot", "pilot.json"], {
-    cwd: workspace,
-    env: {
-      ...envWithoutHarness(),
-      JEV_REQUESTS_DIR: "/mnt/requests",
-      JEV_STATUS_PATH: "/mnt/status.json",
-      JEV_TEST_REQUESTS_DIR: requestDirectory,
-      JEV_TEST_STATUS_PATH: statusPath,
-      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadPath}`].filter(Boolean).join(" "),
-    },
-    encoding: "utf8",
-    timeout: 5_000,
-  });
-  assert.equal(proc.status, 1, proc.stderr);
-  assert.deepEqual(JSON.parse(proc.stdout), {
-    version: 1,
-    command: "judgment.review-advice",
-    status: "error",
-    code: "judgment.provider-failed",
-    exitCode: 1,
-    message: "Judgment provider is unavailable",
-    details: { boundary: "jev.channel-unavailable" },
-  });
-  assert.deepEqual(readdirSync(requestDirectory), []);
-});
 
 
 test("native evaluator context reports missing credentials and provider failure without returning advice", async () => {

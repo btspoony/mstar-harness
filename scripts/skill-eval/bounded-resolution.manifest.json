@@ -1404,9 +1404,6 @@
       "pr-review.worktree-setup": {
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"
       },
-      "judgment.review-advice": {
-        "excluded": "external provider/service; explicit unverified route (no external authorization)"
-      },
       "dashboard": {
         "excluded": "external provider/service; explicit unverified route (no external authorization)"
       },
