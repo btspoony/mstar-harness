@@ -90,6 +90,7 @@ jobs:
           bun run --cwd packages/commands build
           bun run cli:build
           bun run opencode:build
+          bun run opencode-v2:build
           bun run dsh:build
           bun run omp:build
       - name: Publish @mstar-harness/engine
@@ -104,6 +105,8 @@ jobs:
 
       - name: Publish @mstar-harness/opencode
         run: npm publish --workspace @mstar-harness/opencode --access public --tag ${{ steps.disttag.outputs.tag }}
+      - name: Publish @mstar-harness/opencode-v2
+        run: npm publish --workspace @mstar-harness/opencode-v2 --access public --tag ${{ steps.disttag.outputs.tag }}
 
       - name: Publish @mstar-harness/dsh
         run: npm publish --workspace @mstar-harness/dsh --access public --tag ${{ steps.disttag.outputs.tag }}

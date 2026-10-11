@@ -293,12 +293,30 @@ function diagnoseDshMcp(profileDir: string, runtimeFloor: string, runtimeError: 
   };
 }
 
+/** Flat V1 MCP rows: top-level `mcp.<server>` keys (the V1 dialect). */
+const flatV1Rows = (mcp: Record<string, unknown>): string[] =>
+  Object.keys(mcp).filter((key) => key !== "timeout" && key !== "servers");
+
 /** Inspect one target's MCP configuration without starting a process. */
 export function diagnoseMcpTarget(
   target: HostTarget,
   configRoot: string,
   runtime: McpRuntime = actualRuntime(),
+  options: {
+    configFilePath?: string;
+    requireNestedV2Shape?: boolean;
+    requireFlatV1Shape?: boolean;
+    /** Exact, executable recovery commands for the other scope's config file.
+     * Direct callers that don't know the current scope get both concrete
+     * scope commands spelled out (the in-function defaults below). */
+    otherScopeDoctorCommand?: string;
+    otherScopeInitCommand?: string;
+  } = {},
 ): McpTargetHealth {
+  const otherScopeDoctorCommand = options.otherScopeDoctorCommand
+    ?? "mstar doctor --target opencode --opencode-generation v2 --scope global (global file) or mstar doctor --target opencode --opencode-generation v2 --scope project (project file)";
+  const otherScopeInitCommand = options.otherScopeInitCommand
+    ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or mstar init --target opencode --opencode-generation v2 --scope project (project file)";
   const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
     ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
@@ -309,7 +327,7 @@ export function diagnoseMcpTarget(
   }
 
   const { configFile: relativeConfig, format } = HOST_MCP_CONFIGS[target];
-  const configPath = path.join(configRoot, relativeConfig);
+  const configPath = options.configFilePath ?? path.join(configRoot, relativeConfig);
 
   if (!fs.existsSync(configPath)) {
     return {
@@ -342,13 +360,62 @@ export function diagnoseMcpTarget(
     // array or scalar must read as mismatch, never fall through to aligned.
     if (!parseFailed && parsed === null) errors.push(`MCP config ${relativeConfig} is not a JSON object.`);
     if (parsed !== null) {
-      const servers = format === "mcp" ? parsed.mcp : parsed.mcpServers;
-      const serverRecord = record(servers);
-      if (serverRecord === null) {
-        errors.push(`MCP config ${relativeConfig} has no valid server entries.`);
+      const mcpConfig = format === "mcp" ? record(parsed.mcp) : null;
+      const nestedServers = mcpConfig === null ? null : record(mcpConfig.servers);
+      const serversValueIsLaunchEntry = nestedServers !== null && (
+        typeof nestedServers.command === "string"
+        || Array.isArray(nestedServers.command)
+        || Array.isArray(nestedServers.args)
+      );
+      const hasNestedV2Shape = target === "opencode"
+        && mcpConfig !== null
+        && Object.hasOwn(mcpConfig, "servers")
+        && !serversValueIsLaunchEntry;
+      // The pinned V2 schema allows only `timeout` and `servers` at the `mcp`
+      // level: a config mixing nested rows with legacy flat rows is rejected
+      // by OpenCode itself, so doctor must never report it aligned.
+      const mixedMcpShapes = target === "opencode"
+        && hasNestedV2Shape
+        && Object.keys(mcpConfig!).some((key) => key !== "timeout" && key !== "servers");
+            if (mixedMcpShapes) {
+        const flatRows = Object.keys(mcpConfig!).filter((key) => key !== "timeout" && key !== "servers");
+        const flatList = flatRows.map((row) => `mcp.${row}`).join(", ");
+        errors.push(`MCP config ${relativeConfig} mixes legacy flat MCP rows (${flatList}) with the V2 ` + "`mcp.servers`" + ' shape; OpenCode V2 rejects the mixed config. Move the rows into one dialect (or separate the generations across scopes).');
+      }
+      // A resolved V2 generation must see the nested V2 shape: OpenCode V2
+      // decodes the server only from `mcp.servers`, so a legacy flat
+      // `mcp.<server>` row can never be healthy under v2 even though the
+      // V1-tolerant fallback would read it as aligned.
+      const legacyFlatBlocked = options.requireNestedV2Shape === true
+        && target === "opencode"
+        && !hasNestedV2Shape;
+      const servers = legacyFlatBlocked
+        ? null
+        : format === "mcpServers"
+          ? parsed.mcpServers
+          : hasNestedV2Shape
+            ? mcpConfig!.servers
+            : mcpConfig;
+      // A resolved V1 generation must see the flat dialect: the V1 host
+      // decodes servers only from flat `mcp.<server>` rows, so a nested-only
+      // config can never be healthy under v1.
+      const nestedOnlyBlocked = options.requireFlatV1Shape === true
+        && target === "opencode"
+        && hasNestedV2Shape
+        && !flatV1Rows(mcpConfig!);
+      if (nestedOnlyBlocked) {
+        errors.push(`MCP config ${relativeConfig} carries only the nested \`mcp.servers\` shape; the OpenCode V1 host reads the server only from flat \`mcp.<server>\` rows. Supported recovery (CLI): run the V1 checks against the other scope's config file, or author the flat row in this file by hand (\`init --opencode-generation v1\` refuses to touch V2-nested configs).`);
+      }
+      if (legacyFlatBlocked) {
+        errors.push(`MCP config ${relativeConfig} uses the legacy flat \`mcp.<server>\` shape; OpenCode V2 reads the server only from \`mcp.servers\`. Supported recovery (CLI), executable as printed: run "${otherScopeDoctorCommand}" to validate the other scope's config file, or "${otherScopeInitCommand}" to init there (init refuses to write mixed configs in this file by design).`);
       } else {
-        const hasMstar = Object.values(serverRecord).some((entry) => isNpxMstarLaunch(entry));
-        if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry launching \`npx @mstar-harness/cli mcp\`.`);
+        const serverRecord = record(servers);
+        if (serverRecord === null) {
+          errors.push(`MCP config ${relativeConfig} has no valid server entries.`);
+        } else {
+          const hasMstar = Object.values(serverRecord).some((entry) => isNpxMstarLaunch(entry));
+          if (!hasMstar) errors.push(`MCP config ${relativeConfig} has no mstar server entry launching \`npx @mstar-harness/cli mcp\`.`);
+        }
       }
     }
   } else if (format === "toml") {

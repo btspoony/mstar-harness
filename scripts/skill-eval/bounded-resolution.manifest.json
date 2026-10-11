@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "93e6fc2f15c8370d2be04a1569b131a543276604bcbca3b44f333082724afd86",
+  "casesHash": "8534a4792bd16f6d68ede33ccdb74e270e14775746a6d5a709b3dacc28db4310",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -972,6 +972,16 @@
           "kind": "final_contains",
           "value": "corrected call succeeded",
           "note": "the scripted path reaches the corrected tool"
+        },
+        {
+          "id": "a-positive-outcome",
+          "kind": "final_contains",
+          "value": "mstar_schema"
+        },
+        {
+          "id": "a-not-adopted-guess",
+          "kind": "final_not_contains",
+          "value": "guess adopted without catalog confirmation"
         }
       ],
       "provenance": {
@@ -996,7 +1006,7 @@
   "heldoutDigest": "11a6346850d242153d245cd38468bcf45351c2163ba3ad89f9052e652fd81002",
   "boundedResolution": {
     "note": "Authored bounded-resolution scenario set: an evaluation input consumed by the existing evaluator, never a production command registry.",
-    "casesHashBasis": "sha256(canonicalJson(cases)) over the authored case set recorded in this file — this artifact is authored directly, so no separate cases-file byte source exists (unlike the frozen corpus manifest, whose casesHash binds the cases file bytes).",
+    "casesHashBasis": "canonicalJson(cases)",
     "inputsByScenario": {
       "bounded-res-mcp-guess-path": {
         "inputs": [
@@ -1130,9 +1140,6 @@
       "migrate": {
         "excluded": "host-environment dependent or destructive corpus route; explicit unverified route"
       },
-      "lease.verify-integration": {
-        "scenario": "bounded-res-lease-boundary"
-      },
       "iteration.gate": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
@@ -1170,15 +1177,6 @@
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "workflow.evidence": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "workflow.show-prepare": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "workflow.amend-prepare": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "workflow.recover-coordinator": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "workflow.phase": {
@@ -1435,6 +1433,18 @@
       },
       "report": {
         "excluded": "host-environment dependent or destructive corpus route; explicit unverified route"
+      },
+      "workflow.adopt-terminal": {
+        "excluded": "Covered indirectly: adopted-terminal behavior is exercised by the pack-consumers smoke ordering (build -> pack -> runSmoke) and the host reference; a dedicated eval case is deferred as low-value duplication."
+      },
+      "issue.reopen": {
+        "excluded": "Deferred: reopen is guarded by the engine CAS refusal surface (requires --expect revision); eval duplication adds no oracle value until a real regression appears."
+      },
+      "workflow-note.append": {
+        "excluded": "Deferred: append-only ledger writes are asserted by engine store tests; bounded-res duplication would mirror engine coverage."
+      },
+      "workflow-note.coverage": {
+        "excluded": "Deferred: coverage projection is read-only and covered by engine projection tests."
       }
     },
     "slashDispositions": {

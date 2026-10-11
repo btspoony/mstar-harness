@@ -7,6 +7,8 @@
 
 ## Installation
 
+**OpenCode 2.x hosts:** install [`@mstar-harness/opencode-v2`](../opencode-v2/INSTALL.md) instead — this package targets the OpenCode 1.x plugin API (`@opencode-ai/plugin` 1.4.8). The installer selects the generation from your host version (`opencode --version`); pass `--opencode-generation <v1|v2>` to override.
+
 Add Morning Star to the `plugin` array in your `opencode.json` (global or project-level):
 
 ```json

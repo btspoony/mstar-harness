@@ -12,6 +12,7 @@ import {
   appendHarnessProjectGitignore,
   missingHarnessProcessGitignoreEntries,
 } from "./shared-install";
+import { ensureHostPresent } from "./host-presence";
 
 const CURSOR_PLUGIN_LINK = ".cursor/plugins/morning-star-harness";
 
@@ -60,7 +61,8 @@ function projectDoctor() {
 export const cursorAdapter: AgentAdapter = {
   target: "cursor",
   mode: "install",
-  runInstallInit: (scope, dryRun) => {
+  runInstallInit: async (scope, dryRun) => {
+    if (!dryRun) await ensureHostPresent("cursor");
     if (scope === "global") return globalInit(dryRun);
     return projectInit(dryRun);
   },

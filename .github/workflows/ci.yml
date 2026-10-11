@@ -147,21 +147,33 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: OpenCode dep tree (no commander/inquirer)
+      - name: OpenCode V1 dep tree (no commander/inquirer)
         run: |
-          # --omit=dev: engine is a workspace:* devDependency (bundled at build
-          # time); npm ls cannot validate workspace: edges against a
-          # bun-installed tree, and the guard only covers runtime deps.
           TREE="$(npm ls --workspace @mstar-harness/opencode --omit=dev 2>&1)" || {
             echo "::error::npm ls failed for @mstar-harness/opencode (unresolved dep tree)"
             echo "$TREE"
             exit 1
           }
           echo "$TREE"
-          if echo "$TREE" | bun run ci:dep-guard; then
+          if echo "$TREE" | bun run ci:dep-guard -- @mstar-harness/opencode; then
             echo "OK — opencode dep tree has no commander/inquirer"
           else
             echo "::error::@mstar-harness/opencode dep tree must not contain commander or inquirer (roadmap §8.7 item 5)"
+            exit 1
+          fi
+
+      - name: OpenCode V2 dep tree (no commander/inquirer)
+        run: |
+          TREE="$(npm ls --workspace @mstar-harness/opencode-v2 --omit=dev 2>&1)" || {
+            echo "::error::npm ls failed for @mstar-harness/opencode-v2 (unresolved dep tree)"
+            echo "$TREE"
+            exit 1
+          }
+          echo "$TREE"
+          if echo "$TREE" | bun run ci:dep-guard -- @mstar-harness/opencode-v2; then
+            echo "OK — opencode-v2 dep tree has no commander/inquirer"
+          else
+            echo "::error::@mstar-harness/opencode-v2 dep tree must not contain commander or inquirer"
             exit 1
           fi
 
@@ -284,6 +296,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Build dsh
         run: bun run dsh:build
@@ -352,6 +366,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Build dsh
         run: bun run dsh:build
@@ -410,6 +426,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Build dsh
         run: bun run dsh:build
@@ -484,6 +502,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Build dsh
         run: bun run dsh:build
@@ -597,6 +617,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Build dsh
         run: bun run dsh:build
@@ -695,6 +717,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Build dsh
         run: bun run dsh:build
@@ -772,6 +796,10 @@ jobs:
       # package publishes, then bundles src/mstar.ts into dist/mstar.js.
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
+      - name: Test OpenCode V2
+        run: bun run --cwd packages/opencode-v2 test
 
       - name: Test OpenCode
         run: bun run --cwd packages/opencode test
@@ -1015,7 +1043,7 @@ jobs:
         run: bun run cli:build
 
       - name: Test scripts
-        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/prepare-release.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/opencode-v2-smoke.test.ts scripts/prepare-release.test.ts
 
       # ZCode write-gate source tests: spawn the TS entry with synthetic
       # PreToolUse stdin fixtures (engine dist is built above).
@@ -1078,6 +1106,8 @@ jobs:
 
       - name: Build OpenCode
         run: bun run opencode:build
+      - name: Build OpenCode V2
+        run: bun run opencode-v2:build
 
       - name: Pack CLI tarball
         run: bun run cli:pack
@@ -1085,12 +1115,15 @@ jobs:
       - name: Pack OpenCode tarball
         run: bun run opencode:pack
 
-      # The root package.json is the manifest git/hosted installs resolve
-      # (`omp plugin install github:…`, `bun add github:…`): a `workspace:`
-      # spec in a shipped dependency section breaks every hosted install at
-      # resolve time (20260829 hotfix). Guard raw + packed root manifests.
-      - name: "Packed manifest guard (no workspace: in shipped deps)"
-        run: bun run ci:packed-manifest-guard
+      - name: Pack OpenCode V2 tarball
+        run: bun run opencode-v2:pack
+      - name: Smoke-test packed OpenCode V2 artifact
+        run: bun run scripts/opencode-v2-smoke.ts
+
+      # Check each published surface's own manifest rather than only the root
+      # manifest's workspace dependencies.
+      - name: "Packed manifest guard (root + OpenCode V2)"
+        run: bun run ci:packed-manifest-guard && bun run ci:packed-manifest-guard -- packages/opencode-v2/package.json
 
   # Roadmap §8.7 item 2 (risk R2): skills must load without the engine.
   # Deliberately NO `bun install` — this job runs in a checkout where

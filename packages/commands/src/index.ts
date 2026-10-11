@@ -40,3 +40,4 @@ export { createReport, reportInputSchema } from "./report.js";
 export { getReportCommandDefinitions } from "./families/report.js";
 export type { ReportData, ReportInput } from "./report.js";
 export * from "./host-health.js";
+export * from "./host-health/opencode-v2.js";

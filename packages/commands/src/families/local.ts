@@ -29,7 +29,6 @@ import {
   diagnoseKimiHost,
   diagnoseMcpTarget,
   diagnoseOmpHost,
-  diagnoseOpencodeHost,
   diagnoseZcodeHost,
   formatPluginVersionDoctorNote,
   parseOmpPluginList,
@@ -38,6 +37,16 @@ import {
   validateAgentPlugin,
 } from "../host-health.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import {
+  classifyOpencodeProbeError,
+  diagnoseOpencodeV2Host,
+  OPENCODE_VERSION_TIMEOUT_MS,
+  OPENCODE_V2_NODE_FLOOR,
+  opencodeProbeFailureMessage,
+  parseOpencodeVersionOutput,
+  type OpencodeGeneration,
+} from "../host-health/opencode-v2.js";
+import { compareSemver } from "../host-health/version-compare.js";
 
 const doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"] as const;
 const hostSignals = [
@@ -73,6 +82,17 @@ function runBin(bin: string): (args: string[]) => string {
       throw error;
     }
   };
+}
+
+/** Bounded variant for probes: a wedged PATH wrapper is force-killed at the
+ * deadline (SIGTERM ignore-safe) instead of blocking the doctor run. */
+function runBinBounded(bin: string, args: string[], timeoutMs: number): string {
+  return execFileSync(bin, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
 }
 
 function localHarnessErrors(): string[] {
@@ -112,10 +132,72 @@ function pluginRoot(explicit: string | undefined): string {
   return candidate;
 }
 
-async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project"): Promise<{ location: string; errors: string[]; notes: string[] }> {
+/**
+ * Bounded `opencode --version` probe for the doctor's generation resolution
+ * (same precedence as init: explicit flag → probe → fail-closed refusal).
+ * The parse and refusal wording are shared with the CLI's probe module via
+ * `host-health/opencode-v2`; only the subprocess boundary lives here.
+ * Failures refuse with the failure mode and the `--opencode-generation
+ * <v1|v2>` recovery — never a guess.
+ */
+function probeOpencodeGenerationForDoctor(): OpencodeGeneration {
+  let output = "";
+  try {
+    output = execFileSync("opencode", ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: OPENCODE_VERSION_TIMEOUT_MS,
+      // A host that ignores SIGTERM must not keep the doctor waiting past
+      // the advertised bound: escalate straight to an unignorable kill.
+      killSignal: "SIGKILL",
+    });
+  } catch (error) {
+    const mode = classifyOpencodeProbeError(error);
+    const stdoutField = error !== null && typeof error === "object" && "stdout" in error ? error.stdout : undefined;
+    const text = typeof stdoutField === "string" ? stdoutField : Buffer.isBuffer(stdoutField) ? stdoutField.toString("utf8") : "";
+    const detail = text.trim() === "" ? undefined : text.trim().split(/\r?\n/, 1)[0]?.slice(0, 120);
+    throw new Error(opencodeProbeFailureMessage(mode, detail));
+  }
+  const generation = parseOpencodeVersionOutput(output);
+  if (generation === null) {
+    throw new Error(opencodeProbeFailureMessage("unparseable", output.trim().split(/\r?\n/, 1)[0]?.slice(0, 120)));
+  }
+  return generation;
+}
+
+function diagnoseOpencodeTarget(root: string, generation: OpencodeGeneration | undefined): {
+  location: string;
+  errors: string[];
+  notes: string[];
+  generations?: OpencodeGeneration[];
+  generationSource?: string;
+} {
+  if (generation !== undefined) {
+    // Explicit selection scopes the doctor to one generation and skips the probe entirely.
+    const result = diagnoseOpencodeV2Host(root, [], { resolved: generation, explicitSelection: true });
+    return { location: result.location, errors: result.errors, notes: result.warnings, generations: result.generations, generationSource: result.generationSource };
+  }
+  try {
+    const probed = probeOpencodeGenerationForDoctor();
+    const result = diagnoseOpencodeV2Host(root, [], { resolved: probed });
+    return { location: result.location, errors: result.errors, notes: result.warnings, generations: result.generations, generationSource: result.generationSource };
+  } catch (error) {
+    // Probe failure is the doctor's fail-closed refusal: no generation is
+    // guessed, the message names the failure mode and the flag recovery.
+    return {
+      location: path.join(root, "opencode.json"),
+      errors: [error instanceof Error ? error.message : String(error)],
+      notes: [],
+    };
+  }
+}
+
+async function diagnose(target: (typeof doctorTargets)[number], scope: "global" | "project", generation?: OpencodeGeneration): Promise<{ location: string; errors: string[]; notes: string[]; generations?: OpencodeGeneration[]; generationSource?: string }> {
   if (target === "opencode") {
-    const result = diagnoseOpencodeHost(resolveProjectRoot(), []);
-    return { location: result.location, errors: result.errors, notes: result.warnings };
+    const root = scope === "global"
+      ? path.join(os.homedir(), ".config", "opencode")
+      : resolveProjectRoot();
+    return diagnoseOpencodeTarget(root, generation);
   }
   if (target === "cursor") {
     const result = diagnoseCursorHost(scope);
@@ -205,24 +287,74 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           { key: "target", flags: "--target <target>", required: false, defaultValue: "opencode" },
           { key: "scope", flags: "--scope <scope>", required: false, defaultValue: "project" },
           { key: "output", flags: "--output <path>", required: false },
+          { key: "generation", flags: "--opencode-generation <generation>", required: false },
         ],
       },
       input: z.object({
         target: z.enum(doctorTargets).default("opencode"),
         scope: z.enum(["global", "project"]).default("project"),
         output: z.string().optional(),
+        generation: z.enum(["v1", "v2"]).optional(),
       }),
       effects: ["read"],
       description: "Validate Morning Star setup for one supported host target.",
       async execute(input, context) {
-        const result = await diagnose(input.target, input.scope);
-        // Host MCP configs live under the USER's config root (~/.cursor/mcp.json,
-        // ~/.codex/config.toml, ...), not inside the harness checkout; dsh composes
-        // its Cordis rows under the profile dir instead.
+        const result = await diagnose(input.target, input.scope, input.generation);
+        // MCP configs are global by default; project-scoped OpenCode uses the
+        // project's own opencode.json, while dsh composes rows in its profile.
+        const projectOpencodeMcpPath = input.target === "opencode" && input.scope === "project"
+          ? path.join(resolveProjectRoot(), "opencode.json")
+          : undefined;
+        const resolvedGenerations = result.generations ?? [];
+        // A dual-host config resolves to ["v1","v2"]; the V2 host in that set
+        // still cannot read legacy flat MCP rows, so the V2 shape requirement
+        // stays on whenever v2 is among the resolved generations.
+        const resolvedGeneration = input.generation ?? (resolvedGenerations.length === 1 ? resolvedGenerations[0] : undefined);
+        const v2AmongResolved = resolvedGenerations.includes("v2") || input.generation === "v2";
+        const v1AmongResolved = resolvedGenerations.includes("v1") || input.generation === "v1";
+        // Concrete, executable recovery commands for the OTHER scope's file.
+        const otherScope = input.scope === "project" ? "global" : "project";
+        const generationSuffix = input.generation ? ` --opencode-generation ${input.generation}` : "";
+        const otherScopeDoctorCommand = `mstar doctor --target opencode --scope ${otherScope}${generationSuffix}`;
+        const otherScopeInitCommand = `mstar init --target opencode --opencode-generation v2 --scope ${otherScope}`;
         const mcpHealth = input.target === "dsh"
           ? diagnoseMcpTarget("dsh", resolveDshProfileDir())
-          : diagnoseMcpTarget(input.target, os.homedir());
-        const errors = [...result.errors, ...mcpHealth.errors];
+          : diagnoseMcpTarget(input.target, os.homedir(), undefined, {
+            ...(projectOpencodeMcpPath === undefined ? {} : { configFilePath: projectOpencodeMcpPath }),
+            ...(v2AmongResolved ? { requireNestedV2Shape: true } : {}),
+            ...(v1AmongResolved ? { requireFlatV1Shape: true } : {}),
+            otherScopeDoctorCommand,
+            otherScopeInitCommand,
+          });
+        // The published V2 plugin runs in OpenCode's Node process and needs
+        // node:sqlite (Node >=24.18.0) — INSTALL.md:70 promises doctor checks
+        // it. Probe the PATH node independently of the MCP runtime (the CLI
+        // itself is Bun-hosted, so process.versions cannot certify Node).
+        const pluginRuntimeErrors: string[] = [];
+        if (input.target === "opencode" && v2AmongResolved) {
+          try {
+            const nodeVersion = runBinBounded("node", ["--version"], 5_000).trim().replace(/^v/, "");
+            if (compareSemver(nodeVersion, OPENCODE_V2_NODE_FLOOR) < 0) {
+              pluginRuntimeErrors.push(
+                "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeVersion + ".",
+              );
+            }
+          } catch (probeError) {
+            const caught = probeError as { code?: string; killed?: boolean; signal?: string; message?: string };
+            // Distinguish the recovery facts: ENOENT means install Node; a
+            // killed/hung probe means the wrapper is wedged and the operator
+            // should fix PATH; anything else is an unprobeable environment.
+            const cause = caught.code === "ENOENT"
+              ? "no node executable was found on PATH"
+              : caught.killed === true || caught.signal !== undefined
+                ? "the node --version probe did not complete within the bounded window (a PATH wrapper may be wedged)"
+                : "the node --version probe failed (" + (caught.message ?? "unknown") + ")";
+            pluginRuntimeErrors.push(
+              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); " + cause + ".",
+            );
+          }
+        }
+        const errors = [...result.errors, ...mcpHealth.errors, ...pluginRuntimeErrors];
         const data = {
           ...result,
           errors,

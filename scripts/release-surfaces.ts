@@ -161,6 +161,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "@mstar-harness/opencode", path: "packages/opencode/package.json" },
   { label: "@mstar-harness/engine", path: "packages/engine/package.json" },
   { label: "@mstar-harness/commands", path: "packages/commands/package.json" },
+  { label: "@mstar-harness/opencode-v2", path: "packages/opencode-v2/package.json" },
   { label: "@mstar-harness/dsh", path: "packages/dsh/package.json" },
   { label: "@mstar-harness/omp", path: "packages/omp/package.json" },
   { label: "Cursor plugin", path: ".cursor-plugin/plugin.json" },
@@ -180,7 +181,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
 export type ChangelogTarget = {
   path: string;
   lang: "en" | "cn";
-  pkg: "root" | "cli" | "opencode" | "engine" | "commands" | "dsh" | "omp";
+  pkg: "root" | "cli" | "opencode" | "opencode-v2" | "engine" | "commands" | "dsh" | "omp";
 };
 
 export const CHANGELOGS: readonly ChangelogTarget[] = [
@@ -188,6 +189,7 @@ export const CHANGELOGS: readonly ChangelogTarget[] = [
   { path: "CHANGELOG_CN.md", lang: "cn", pkg: "root" },
   { path: "packages/cli/CHANGELOG.md", lang: "en", pkg: "cli" },
   { path: "packages/opencode/CHANGELOG.md", lang: "en", pkg: "opencode" },
+  { path: "packages/opencode-v2/CHANGELOG.md", lang: "en", pkg: "opencode-v2" },
   { path: "packages/engine/CHANGELOG.md", lang: "en", pkg: "engine" },
   { path: "packages/commands/CHANGELOG.md", lang: "en", pkg: "commands" },
   { path: "packages/dsh/CHANGELOG.md", lang: "en", pkg: "dsh" },

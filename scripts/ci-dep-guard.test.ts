@@ -27,6 +27,12 @@ describe("ci-dep-guard — opencode dep-tree forbidden packages ", () => {
     expect(hits.some((h) => h.includes("@inquirer/core@10.1.1"))).toBe(true);
     expect(hits.some((h) => h.includes("@inquirer/type@3.1.1"))).toBe(true);
   });
+  test("the V2 runtime tree is scanned with the same forbidden-package rule", () => {
+    const tree = `@mstar-harness/opencode-v2@3.11.2 /repo/packages/opencode-v2
+└── commander@14.0.3
+`;
+    expect(findForbiddenDeps(tree)).toEqual(["└── commander@14.0.3"]);
+  });
 
   test("bare inquirer and commander lines are caught (unchanged slice-3 behavior)", () => {
     const tree = `@mstar-harness/opencode@1.8.8 /repo/packages/opencode
