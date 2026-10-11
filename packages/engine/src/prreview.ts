@@ -1361,16 +1361,19 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
       ? tier === "quick"
         ? "Scoping, Evidence rules"
         : "Review pipeline, Worktree isolation, Scoping, Evidence rules"
-      : "Merge class, Attack and vet, Evidence rules, Sizing & change shape";
+      : "Scoping, Concern lenses, Merge class, Attack and vet, Evidence rules, Sizing & change shape";
   lines.push(`1. \`${prReviewRef}\` \u2014 read at least these sections: ${sections}.`);
   lines.push(`2. The review worktree: \`${worktreePath}\` \u2014 your ONLY working directory this session; read-only (no edits, no fixes, no stash, no commits, no posts).`);
   if (opts.diffFile) {
     lines.push(`- Read the pinned diff snapshot FIRST: \`${opts.diffFile}\` \u2014 it is the review's diff basis (already computed at setup); read it before opening files.`);
   }
   if (opts.stage === 2) {
-    lines.push(`3. \`${join(skillRoot, "references", "finding-format.md")}\` \u2014 the template every finding follows.`);
+    let readFirstNumber = 3;
+    lines.push(`${readFirstNumber++}. \`${join(skillRoot, "SKILL.md")}\` \u2014 read \`## Hard Rules (Read-Only)\` and \`### Phase 1 \u2014 Recon\` for shared review boundaries and investigation rules.`);
+    lines.push(`${readFirstNumber++}. \`${join(skillRoot, "references", "audit-playbook.md")}\` \u2014 read \`## Finding format\` for the shared evidence/reporting contract.`);
+    lines.push(`${readFirstNumber++}. \`${join(skillRoot, "references", "finding-format.md")}\` \u2014 the template every finding follows.`);
     if (opts.securitySeat === true) {
-      lines.push(`4. \`${join(skillRoot, "references", "security-review.md")}\` \u2014 the security lens.`);
+      lines.push(`${readFirstNumber}. \`${join(skillRoot, "references", "security-review.md")}\` \u2014 the security lens.`);
     }
   }
   const budget = PR_REVIEW_TIER_BUDGETS[tier];
