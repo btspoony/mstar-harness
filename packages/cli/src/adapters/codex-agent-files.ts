@@ -16,6 +16,30 @@ function checkParent(target: string) {
   if (stat && !stat.isDirectory()) throw new Error(`Agent directory must be a real directory: ${parent}`);
 }
 
+// Backup names carry a uuid, so age is only readable from mtime; keep the newest few.
+const MAX_RETAINED_BACKUPS = 3;
+
+/** Drop stale backups of one agent file, always keeping the one just written.
+ *  Best-effort: every backup is one refresh away from being pruned again, so a
+ *  prune failure must never fail an install that already succeeded. */
+function pruneBackups(target: string, keep: string): void {
+  try {
+    const dir = path.dirname(target);
+    const prefix = `${path.basename(target)}.`;
+    const stale = fs.readdirSync(dir)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".bak") && path.join(dir, name) !== keep)
+      .map((name) => {
+        const full = path.join(dir, name);
+        return { full, mtimeMs: statIfPresent(full)?.mtimeMs ?? 0 };
+      })
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .slice(MAX_RETAINED_BACKUPS - 1);
+    for (const entry of stale) fs.rmSync(entry.full, { force: true });
+  } catch {
+    // Stale backups are disposable; never fail the install for one.
+  }
+}
+
 /** Codex discovers linked TOMLs but cannot apply them with its no-follow loader. */
 export function ensureCodexAgentFile(source: string, target: string, dryRun: boolean): string[] {
   checkParent(target);
@@ -47,6 +71,7 @@ export function ensureCodexAgentFile(source: string, target: string, dryRun: boo
     const backup = `${target}.${randomUUID()}.bak`;
     fs.writeFileSync(backup, previous, { flag: "wx", mode: stat!.mode & 0o777 });
     notes.push(`Backed up differing agent file to ${backup}`);
+    pruneBackups(target, backup);
   }
   // Rename replaces the directory entry itself, never writes through a legacy link.
   const temporary = `${target}.${randomUUID()}.tmp`;
