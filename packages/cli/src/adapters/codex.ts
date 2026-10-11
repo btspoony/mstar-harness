@@ -191,6 +191,10 @@ function validateIterationSkillLinks() {
 function runInit(scope: Scope, dryRun: boolean) {
   const notes: string[] = [];
 
+  if (!dryRun && !codexAvailable()) {
+    throw new Error(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
+  }
+
   // The shared local checkout stays: codex agent .toml copies (and the Cursor
   // / omp adapters) materialize from it.
   notes.push(...ensureLocalHarnessRepo(dryRun));
@@ -199,9 +203,6 @@ function runInit(scope: Scope, dryRun: boolean) {
   if (dryRun) {
     notes.push(`Would run: ${CODEX_BIN} ${marketplaceArgs.join(" ")}`);
   } else {
-    if (!codexAvailable()) {
-      throw new Error(`${CODEX_BIN} CLI not found on PATH. ${CODEX_INSTALL_HINT}`);
-    }
     // Idempotent: re-adding an already-configured marketplace is a no-op
     // (verified locally — output carries alreadyAdded=true, exit 0).
     try {

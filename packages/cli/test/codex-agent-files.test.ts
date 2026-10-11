@@ -10,6 +10,8 @@ function fixture() {
   fs.mkdirSync(path.resolve(".tmp"), { recursive: true });
   const root = fs.mkdtempSync(path.resolve(".tmp/codex-agent-test-"));
   const source = path.join(root, ".mstar/harness");
+  fs.mkdirSync(path.join(source, ".git", "refs", "heads"), { recursive: true });
+  fs.writeFileSync(path.join(source, ".git", "HEAD"), `${"0".repeat(40)}\n`);
   fs.mkdirSync(path.join(source, ".codex-plugin"), { recursive: true });
   fs.writeFileSync(path.join(source, ".codex-plugin/plugin.json"), "{}");
   fs.cpSync(repoAgents, path.join(source, "codex/agents"), { recursive: true });
