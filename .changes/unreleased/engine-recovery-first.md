@@ -16,7 +16,7 @@ packages: root, cli, engine, commands
 - **Cancellation during a dashboard start stops the listener it created** instead of leaking a connection-scoped service; a handle another call already owns is reused and left running.
 - **`plan issue-add` derives plan-owned project association per finding** and reports independently invalid entries with their array indexes before capture; DB capture and plan linking stay composed in one transaction with occurrence keys as stable event identities.
 - **Declared per-kind `persist.write` payload schemas**; aggregate status validation failures surface through the persist command while coordinated replacement/version-conflict handling is preserved.
-- **Documented `judgment review-advice` as the supported route** for the historical, unregistered `judgment submit` intent; ReviewDecisionPack-owned fields are derived and multiple missing pack paths surface together.
+- **Retired the `judgment review-advice` route**; the historical `judgment submit` intent has no registered command. ReviewDecisionPack-owned fields are derived and multiple missing pack paths surface together only in the retained judgment APIs.
 - **Documented `mstar-harness schema` discovery** for issue capture/occurrence/triage/closure/link and plan progress payloads; disposition-specific fields are checked before writing, not guessed through repeated refusals.
 - **Test corpus cleanup.** Every inventoried package corpus (engine, cli, commands, omp, opencode, judgment) was swept under one written keep/delete rule: assertions pinning source shape, wording/help prose, forwarding echoes, duplicated registry copies, exported arity or environment constants were deleted, not renamed or re-pinned; consumer-visible behavior, boundaries, atomicity, authority, replay and actionable diagnostics were retained.
 - **Development acceptance stays isolated.** Acceptance language aligned with isolated product-behavior proof rather than live provider, authenticated host, installed artifact or device receipts; separately authorized operational verification remains independent.
@@ -38,7 +38,7 @@ packages: root, cli, engine, commands
 - **仪表板启动期间取消会停止其创建的监听器**，不再泄漏 connection 作用域服务；已被其他调用持有的句柄复用并保持运行。
 - **`plan issue-add` 为每条发现推导计划所属项目**，并在开始捕获前按数组索引汇总独立无效项；DB 捕获与计划关联仍在同一事务中完成，occurrence key 作为稳定事件身份。
 - **声明按 kind 区分的 `persist.write` payload schema**；persist 命令聚合呈现 status 校验错误，保留协调式替换与版本冲突处理。
-- **明确 `judgment review-advice` 是历史未注册 `judgment submit` 意图的受支持路由**；ReviewDecisionPack 契约字段自动补全，多个缺失路径一并指出。
+- **移除 `judgment review-advice` 命令路由**；历史 `judgment submit` 意图不再注册命令。ReviewDecisionPack 契约字段自动补全与多个缺失 pack 路径聚合诊断仅保留在 judgment API 中。
 - **补充 `mstar-harness schema` 查询指引**（issue 捕获/复现/分诊/关闭/关联及 plan progress 载荷）；按处置类型预先核对字段，不再逐项试错。
 - **测试语料清理。** 所有登记在册的包语料（engine、cli、commands、omp、opencode、judgment）按同一条书面保留/删除规则完成清扫：仅固定源码形态、措辞/帮助文案、转发回声、重复注册表副本、导出元数或环境常量的断言一律删除而非重新固化；面向使用者的行为、边界、原子性、授权、重放与可操作诊断均予保留。
 - **开发验收保持隔离。** 验收语言对齐隔离的产品行为证据，不要求真实供应商、已认证宿主、已安装产物或设备收据；另行授权的运维验证保持独立。

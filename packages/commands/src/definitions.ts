@@ -18,7 +18,6 @@ import { getSddCommandDefinitions } from "./families/sdd.js";
 import { getValidationCommandDefinitions } from "./families/validation.js";
 import { getAuditCommandDefinitions } from "./families/audit.js";
 import { getPrReviewCommandDefinitions } from "./families/pr-review.js";
-import { getJudgmentCommandDefinitions } from "./families/judgment.js";
 import { getProcessCommandDefinitions } from "./families/process.js";
 import { getExecutionLedgerCommandDefinitions } from "./families/execution-ledgers.js";
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
@@ -156,9 +155,8 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getValidationCommandDefinitions(),
   ...getPrReviewCommandDefinitions(),
   ...getProcessCommandDefinitions(),
-  ...getJudgmentCommandDefinitions(),
-  ...getDashboardCommandDefinitions(),
   ...getLocalCommandDefinitions(),
+  ...getDashboardCommandDefinitions(),
   ...getSchemaCommandDefinitions(),
   ...getReportCommandDefinitions(),
 ];
