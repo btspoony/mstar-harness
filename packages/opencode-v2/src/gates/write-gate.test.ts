@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -89,7 +89,7 @@ describe("OpenCode V2 structured-write gate", () => {
   test("resolves a dangling symlink to a protected sidecar while allowing benign paths", async () => {
     const { root, harnessDir } = harness();
     const protectedTarget = join(harnessDir, "store.db-wal");
-    writeFileSync(protectedTarget, "protected bytes");
+    expect(existsSync(protectedTarget)).toBe(false);
     const danglingLink = join(root, "outside-harness-dangle");
     symlinkSync(protectedTarget, danglingLink);
     const blocked = makeBody();
@@ -99,7 +99,7 @@ describe("OpenCode V2 structured-write gate", () => {
       "store.direct-write-refused",
     );
     expect(blocked.calls()).toBe(0);
-    expect(readFileSync(protectedTarget, "utf8")).toBe("protected bytes");
+    expect(existsSync(protectedTarget)).toBe(false);
 
     const fresh = join(root, "fresh.txt");
     const freshBody = makeBody(() => writeFileSync(fresh, "fresh"));
