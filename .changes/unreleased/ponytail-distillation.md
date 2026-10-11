@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root
+packages: root, engine
 ---
 
 - **Smallest complete implementation:** distilled Ponytail's affected-consumer/data-risk scope, first-working reuse ladder, readable minimal solutions, preserved safeguards, and concise actual-check/unchecked-risk reporting into `mstar-coding-behavior`, with small API/data, house-component, and recovery responsibilities in developer/ops roles; existing presets and `simplify:` conventions remain unchanged.
