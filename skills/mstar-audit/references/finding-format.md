@@ -1,6 +1,6 @@
 # Finding Format
 
-The structured shape every audit finding must take — whether produced by a subagent or by a direct audit pass. Extracted from `audit-playbook.md` for quick reference and subagent dispatch.
+The structured shape every audit finding must take — whether produced by a subagent or by a direct audit pass. Shared authority for the playbook and variant finding judgments.
 
 ## Why structure matters
 
@@ -26,7 +26,7 @@ Findings flow into a prioritization table and then into self-contained plans. Wi
 
 ## Structural remedies
 
-When the finding is structural, the Fix sketch names the restructuring move — e.g. replace a conditional chain with a typed dispatcher · collapse duplicate branches · separate orchestration from business logic · move feature logic to its owning layer · reuse the canonical helper · make the type boundary explicit · delete the pass-through wrapper · extract/split the oversized file. Prefer the remedy that removes moving pieces over one that relocates the same complexity.
+Choose the smallest fix that preserves required behavior and safeguards. Name the deletion, canonical helper to reuse, duplicate branches/near-copies to merge, or responsibility to move/split; preserve meaningful differences. Split by independent responsibility, never line count or helpers that only shorten a function. Prefer removing moving pieces over relocating complexity; do not add a layer, dispatcher, type, dependency, or config merely because a smell suggests one.
 
 ## Category codes
 
@@ -97,8 +97,8 @@ Plans for selected direction findings are usually *design/spike plans* (investig
 
 ## What disqualifies a finding
 
-- **No evidence**: "probably has N+1 queries" without a `file:line` is not a finding.
-- **By-design behavior**: standard platform conventions (honoring `https_proxy`, reading `~/.netrc`) or tradeoffs explicitly recorded in an ADR. Flag only when the implementation adds risk beyond the convention.
+- **No concrete case**: a location or suspicious shape alone is not enough. A defect claim names a reachable input/situation → resulting wrong behavior and cites what the code read or authorized check establishes; distinguish static inference from an executed observation. A test/structural finding names the concrete unprotected behavior or maintenance cost, not an invented product failure. Unsupported vague worries remain leads under the variant's evidence rules.
+- **Documented decision within its bounds**: platform conventions or explicit ADR/knowledge/local-comment tradeoffs are not findings merely for being deliberate limits. Recognize existing bounded local decisions; retain the `simplify:` convention from `mstar-coding-behavior`, without requiring a new marker. Reopen only with evidence that expected use/load exceeds the stated ceiling, implementation drifts from the decision, or the choice is independently unsafe (security/data loss/required behavior). A comment is not immunity from a reachable defect.
 - **Secret value reproduced**: never. Reference `file:line` and credential type only.
 - **Could apply to any project**: direction suggestions without repo-specific grounding ("add dark mode", "add AI") are noise.
 
