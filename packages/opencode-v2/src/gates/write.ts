@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 /** Native tool.execute.before coverage is limited to write/edit; patch, shell,
  * and Code Mode remain outside this gate. SDK pin receipt: the installed
@@ -67,6 +67,8 @@ function malformedPath(field: "filePath" | "path"): Tool.Error {
  );
 }
 
+/** Resolve the path a write lands on: follow existing aliases, including a
+ * dangling final symlink, then canonicalize the nearest existing ancestor. */
 function landedPathOf(filePath: string): string {
  let probe = resolve(filePath);
  const suffix: string[] = [];
@@ -74,10 +76,14 @@ function landedPathOf(filePath: string): string {
  try {
  return resolve(realpathSync(probe), ...suffix);
  } catch {
+ try {
+ return resolve(dirname(probe), readlinkSync(probe));
+ } catch {
  const parent = dirname(probe);
  if (parent === probe) return resolve(filePath);
  suffix.unshift(basename(probe));
  probe = parent;
+ }
  }
  }
 }
