@@ -148,6 +148,19 @@ describe("process command family", () => {
     const result = await spawnProcess({ argv: [process.execPath, "-e", "process.stdout.write(process.argv[1]); process.stderr.write('err'); process.exit(124)", "literal;value"], cwd: process.cwd(), env: {}, signal: new AbortController().signal });
     expect(result).toMatchObject({ stdout: "literal;value", stderr: "err", exitCode: 124, signal: null });
   });
+  test("survives a child that exits before draining the piped stdin payload", async () => {
+    // Issue #441: a child that exits first closes the pipe read end, so the
+    // buffered stdin write raises EPIPE; unhandled it killed the caller.
+    const result = await spawnProcess({
+      argv: [process.execPath, "-e", "process.exit(0)"],
+      cwd: process.cwd(),
+      env: {},
+      stdin: "x".repeat(1024 * 1024),
+      signal: new AbortController().signal,
+    });
+    expect(result).toMatchObject({ exitCode: 0, signal: null });
+  });
+
   test("operator child inherits the caller stdin descriptor when no payload is supplied", async () => {
     const parent = fstatSync(0);
     const result = await spawnProcess({

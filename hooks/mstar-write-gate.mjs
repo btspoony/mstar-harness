@@ -11,17 +11,17 @@ import { basename as basename3, dirname as dirname8, isAbsolute as isAbsolute3, 
 import { createRequire as createRequire2 } from "node:module";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync as readFileSync2, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { dirname as dirname3, join as join3, sep } from "node:path";
-import { readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { readFileSync as readFileSync3, statSync as statSync2 } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync4, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename as basename2, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
-import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync as readdirSync2, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync2, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname6, isAbsolute as isAbsolute4, join as join7, resolve as resolve6, sep as sep3 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 import {
@@ -29,7 +29,7 @@ import {
   existsSync as existsSync8,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync4,
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   readdirSync as readdirSync6,
   realpathSync as realpathSync4,
   renameSync as renameSync2,
@@ -41,13 +41,13 @@ import {
 import { basename as basename6, dirname as dirname7, join as join11, relative as relative2, resolve as resolve9, sep as sep6 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync10, mkdirSync as mkdirSync5, readdirSync as readdirSync9, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync10, mkdirSync as mkdirSync5, readdirSync as readdirSync9, readFileSync as readFileSync11, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve10 } from "node:path";
 import { basename as basename8, isAbsolute as isAbsolute7, join as join16, relative as relative4, resolve as resolve11, sep as sep8 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync14, realpathSync as realpathSync6 } from "node:fs";
-import { existsSync as existsSync15, readFileSync as readFileSync14, readdirSync as readdirSync10, statSync as statSync6 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync15, readdirSync as readdirSync10, statSync as statSync6 } from "node:fs";
 import { dirname as dirname10, isAbsolute as isAbsolute10, join as join19, resolve as resolve14, sep as sep10 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { setTimeout as sleep2 } from "node:timers/promises";
@@ -56,7 +56,7 @@ import { join as join20, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname14, join as join22, relative as relative7, resolve as resolve17 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
-import { readFileSync as readFileSync21 } from "node:fs";
+import { readFileSync as readFileSync22 } from "node:fs";
 import { join as join29 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
@@ -417,6 +417,35 @@ function validateIntegrationMergeLease(lease) {
   }
   return { ok: violations.length === 0, violations };
 }
+function readHolderPid(lockDir) {
+  try {
+    const value = Number(readFileSync2(join2(lockDir, LOCKDIR_HOLDER_PID), "utf8").trim());
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+function probeHolderPid(lockDir) {
+  const pid = readHolderPid(lockDir);
+  if (pid === null)
+    return null;
+  try {
+    process.kill(pid, 0);
+    return { pid, dead: false };
+  } catch (error) {
+    return { pid, dead: error.code === "ESRCH" };
+  }
+}
+function lockBlockedMessage(lockDir, probe, ageMs) {
+  const header = `${lockDir} already exists — Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock): `;
+  if (probe === null) {
+    return header + `the lockdir records no holder.pid (crash between mkdir and pid write). After verifying no mstar writer is running (pgrep -fl mstar), removing ${lockDir} is safe. It is not removed automatically.`;
+  }
+  if (probe.dead) {
+    return header + `holder pid ${probe.pid} no longer exists — the lockdir is stale. After confirming no mstar writer process is running (pgrep -fl mstar), removing ${lockDir} is safe and unblocks writers. It is not removed automatically.`;
+  }
+  return header + `holder pid ${probe.pid} is alive, lock age ${ageMs === null ? "unknown" : `${Math.round(ageMs)}ms`} — wait for it or stop that holder (kill ${probe.pid})`;
+}
 async function withStatusWriteLock(statusPath, fn, opts = {}) {
   const lockDir = join2(dirname2(resolve2(statusPath)), STATUS_WRITE_LOCKDIR);
   const held = heldLockDirs.getStore();
@@ -437,7 +466,13 @@ async function withStatusWriteLock(statusPath, fn, opts = {}) {
       if (error.code !== "EEXIST")
         throw error;
       if (Date.now() >= deadline) {
-        throw new Error(`${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock). ` + `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`);
+        let ageMs = null;
+        try {
+          ageMs = Date.now() - statSync(lockDir).mtimeMs;
+        } catch {
+          ageMs = null;
+        }
+        throw new Error(lockBlockedMessage(lockDir, probeHolderPid(lockDir), ageMs));
       }
       await sleep(pollMs);
     }
@@ -612,7 +647,7 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname4(file), config: parseMstarc(readFileSync2(file, "utf8")) };
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
@@ -10595,7 +10630,7 @@ var init_micromark_extension_gfm = __esm(() => {
 function readJson(filePath) {
   if (!existsSync3(filePath))
     return {};
-  const content3 = readFileSync3(filePath, "utf8").trim();
+  const content3 = readFileSync4(filePath, "utf8").trim();
   if (!content3)
     return {};
   try {
@@ -10963,7 +10998,7 @@ function resolveCompassEnforcement(harnessDir) {
       continue;
     let content3;
     try {
-      content3 = readFileSync4(compassPath, "utf8");
+      content3 = readFileSync5(compassPath, "utf8");
     } catch {
       continue;
     }
@@ -11669,7 +11704,7 @@ function sha256Bytes2(bytes) {
 }
 function readIfExists(path2) {
   try {
-    return readFileSync8(path2);
+    return readFileSync9(path2);
   } catch {
     return;
   }
@@ -11845,7 +11880,7 @@ function checkpointRetainedBody(root, relativeBodyPath, selection) {
   if (info.isSymbolicLink() || !info.isFile()) {
     throw new StoreActivationError("store.activation-stale", `the retained body ${relativeBodyPath} is not a regular file (a symlink or a non-file is not a retained accepted body); the inventory cannot be frozen over it.`);
   }
-  const bytes = readFileSync8(absolute);
+  const bytes = readFileSync9(absolute);
   const records = [];
   let start = 0;
   for (let index2 = 0;index2 < bytes.length; index2 += 1) {
@@ -16194,7 +16229,7 @@ class ProjectionError extends Error {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync21(spec.absolutePath, "utf8");
+    content3 = readFileSync22(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {

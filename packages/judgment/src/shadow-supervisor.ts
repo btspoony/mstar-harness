@@ -7,7 +7,7 @@ import { buildA05Request, canonicalJsonBytes } from "./review-advice.js";
 import { createEvaluatorMailbox } from "./evaluator-channel.js";
 import { evaluateNative, type EvaluatorContext, type JudgmentResult } from "./runtime.js";
 import { validatePack, validatePilot, type JudgmentPilot, type ReviewDecisionPack } from "./contracts.js";
-import { assessShadowRun, freezeBaseline, recordWorkUnitDisposition } from "./shadow-receipts.js";
+import { MAX_ARTIFACT_BYTES, assessShadowRun, digest, freezeBaseline, recordWorkUnitDisposition } from "./shadow-receipts.js";
 import type { EvidenceClass, FrozenBaseline, FrozenShadowEvidence, ProbeEvent, ShadowRunAssessment, WorkUnitReceipt } from "./shadow-receipts.js";
 import type { NativeTransportInput, NativeTransportResult } from "./typesafe.js";
 export { assessShadowRun, freezeBaseline, recordWorkUnitDisposition } from "./shadow-receipts.js";
@@ -60,8 +60,6 @@ export type ShadowRunInput = Readonly<{
 export type ProbeLauncher = (child: ApprovedChild, runId: string, plan: ShadowMountPlan) => ChildProcessByStdio<null, Readable, Readable>;
 
 const encoder = new TextEncoder();
-const MAX_ARTIFACT_BYTES = 1_048_576;
-const digest = (value: unknown): string => createHash("sha256").update(canonicalJsonBytes(value)).digest("hex");
 const within = (root: string, path: string): boolean => {
   const rel = relative(root, path);
   return rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel);

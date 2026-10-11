@@ -86,10 +86,12 @@ async function summarizeExecutionAuthority(harnessDir) {
     const { readExecutionAuthority } = await import("@mstar-harness/engine");
     authority = await readExecutionAuthority({ harnessDir });
   } catch (error) {
+    // shortcut: standalone source deployments cannot resolve the engine package; bundle this hook when build tooling is available.
     const code = typeof error?.code === "string" ? error.code : "engine-unavailable";
     const detail = typeof error?.message === "string"
       ? error.message.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 1200)
       : "the authority read failed without a diagnostic";
+    console.error(`Morning Star session context: ACTIVE execution authority unavailable (${code}): ${detail}`);
     const recovery = code === "engine-unavailable"
       ? "restore the plugin's required engine runtime, then restart the session"
       : "follow the supported recovery named in the engine diagnostic";

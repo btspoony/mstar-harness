@@ -4,7 +4,7 @@
  * The mutex protects serial integration; absence means unclaimed and release
  * deletes the key rather than writing a null or tombstone.
  */
-import { mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -143,6 +143,64 @@ const LOCKDIR_HOLDER_PID = "holder.pid";
  */
 const heldLockDirs = new AsyncLocalStorage<Set<string>>();
 
+/** The lockdir's recorded holder pid, or `null` when that file is absent/unreadable. */
+function readHolderPid(lockDir: string): number | null {
+  try {
+    const value = Number(readFileSync(join(lockDir, LOCKDIR_HOLDER_PID), "utf8").trim());
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Holder probe outcome (`null` = no readable pid file, which is never taken
+ * as death): the recorded pid plus whether `process.kill(pid, 0)` proved it
+ * gone. ONLY `ESRCH` (definitively dead) sets `dead`; success and `EPERM`
+ * both mean a live pid (`EPERM` = exists but not ours).
+ */
+type HolderProbe = { pid: number; dead: boolean };
+
+/** {@link HolderProbe} for the lockdir's recorded holder pid (#447). */
+function probeHolderPid(lockDir: string): HolderProbe | null {
+  const pid = readHolderPid(lockDir);
+  if (pid === null) return null;
+  try {
+    process.kill(pid, 0);
+    return { pid, dead: false };
+  } catch (error) {
+    return { pid, dead: (error as NodeJS.ErrnoException).code === "ESRCH" };
+  }
+}
+
+/**
+ * Blocked/refusal text — which state holds and the verified recovery for it,
+ * so a leaked lockdir is never a bare "wait forever" (and never a silent
+ * takeover): (a) live holder → wait or stop the named pid; (b) holder
+ * confirmed dead (`ESRCH`) → the lockdir is stale, removable once no `mstar`
+ * writer runs; (c) no recordable pid file → same check, crash window named.
+ */
+function lockBlockedMessage(lockDir: string, probe: HolderProbe | null, ageMs: number | null): string {
+  const header =
+    `${lockDir} already exists \u2014 Blocked (same-host exclusive lock; status-and-residuals.md \u00a7 Same-host exclusive write lock): `;
+  if (probe === null) {
+    return (
+      header +
+      `the lockdir records no holder.pid (crash between mkdir and pid write). After verifying no mstar writer is running (pgrep -fl mstar), removing ${lockDir} is safe. It is not removed automatically.`
+    );
+  }
+  if (probe.dead) {
+    return (
+      header +
+      `holder pid ${probe.pid} no longer exists \u2014 the lockdir is stale. After confirming no mstar writer process is running (pgrep -fl mstar), removing ${lockDir} is safe and unblocks writers. It is not removed automatically.`
+    );
+  }
+  return (
+    header +
+    `holder pid ${probe.pid} is alive, lock age ${ageMs === null ? "unknown" : `${Math.round(ageMs)}ms`} \u2014 wait for it or stop that holder (kill ${probe.pid})`
+  );
+}
+
 /**
  * Same-host exclusive write lock around coordination writes — the root
  * `status.json` AND `workflows/<id>/snapshot.json` (status-and-residuals.md
@@ -154,7 +212,8 @@ const heldLockDirs = new AsyncLocalStorage<Set<string>>();
  * Acquires by atomic `mkdir` on `<status dir>/.status-write.lockdir/`
  * (success acquires; existing dir → another writer holds the lock). While
  * another writer holds it, wait up to `timeoutMs` (default 30s) and then
- * throw (Blocked) — the lockdir is never removed for another holder.
+ * throw (Blocked) — the lockdir is never removed for another holder, and no
+ * waiter reclaims one: stale diagnosis is a report, not a takeover.
  *
  * Ownership guard (double-unlock safety): the lockdir's `(dev, ino)` is
  * captured at acquisition; `finally` re-stats the path and removes the
@@ -167,11 +226,18 @@ const heldLockDirs = new AsyncLocalStorage<Set<string>>();
  * async context (i.e. `fn` calling `withStatusWriteLock` on the same
  * status.json) throws immediately instead of waiting out the timeout.
  *
- * Crash diagnosis: a `holder.pid` file (acquiring process id) is written
- * inside the lockdir on acquisition and removed on release. A hard crash
- * between `mkdirSync` and release leaks the lockdir; the timeout error
- * message names the recovery step (remove the lockdir when no writer is
- * alive).
+ * Crash diagnosis (#447): a `holder.pid` file (acquiring process id) is
+ * written inside the lockdir on acquisition and removed on release. A hard
+ * crash between `mkdirSync` and release leaks the lockdir, which used to
+ * leave only a hand-edit as recovery; the timeout error now diagnoses it —
+ * lockdir, holder pid, lock age, and the verified recovery per state: a live
+ * holder pid to wait for or stop; a holder pid proven gone
+ * (`process.kill(pid, 0)` → `ESRCH`) or an absent pid file, both removable
+ * only after confirming no `mstar` writer is running (`pgrep -fl mstar`).
+ * The stale lockdir is never removed automatically: a safe takeover needs an
+ * atomic primitive the runtime does not expose yet.
+ *
+ * shortcut: stale locks are diagnosed but never auto-reclaimed — safe takeover needs an atomic primitive (flock); swap when the runtime provides it.
  *
  * simplify: mkdir lockdir is the SSOT-documented alternative to `flock`
  * (`{HARNESS_DIR}/.status-write.lock`) — Bun 1.2 exposes no `node:fs`
@@ -204,10 +270,14 @@ export async function withStatusWriteLock<T>(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (Date.now() >= deadline) {
-        throw new Error(
-          `${lockDir} already exists \u2014 another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md \u00a7 Same-host exclusive write lock). ` +
-            `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`,
-        );
+        let ageMs: number | null = null;
+        try {
+          ageMs = Date.now() - statSync(lockDir).mtimeMs;
+        } catch {
+          ageMs = null;
+        }
+        // Diagnosis only: the lockdir is never removed by a waiter (#447).
+        throw new Error(lockBlockedMessage(lockDir, probeHolderPid(lockDir), ageMs));
       }
       await sleep(pollMs);
     }

@@ -232,8 +232,3 @@ export function appendHarnessProjectGitignore(projectRoot: string, dryRun: boole
   if (hasHarnessRootDeclaration(current)) return [] as string[];
   return appendGitignore(projectRoot, HARNESS_PROCESS_GITIGNORE, dryRun);
 }
-
-export function homeRelativeSourcePath(targetPath: string) {
-  const rel = path.relative(os.homedir(), targetPath).split(path.sep).join("/");
-  return rel.startsWith("..") ? targetPath : `./${rel}`;
-}

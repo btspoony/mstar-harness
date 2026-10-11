@@ -75,6 +75,9 @@ export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
     stdout: Buffer.concat(stdout).toString("utf8"),
     stderr: Buffer.concat(stderr).toString("utf8"),
   }));
+  // A child that exits before draining stdin makes this write fail with EPIPE;
+  // that race is expected, so the stream error must not reach the process-level handler.
+  child.stdin?.on("error", () => {});
   if (request.stdin !== undefined) child.stdin?.end(request.stdin);
   return promise;
 }

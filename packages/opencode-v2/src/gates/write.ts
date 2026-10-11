@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 /** Native tool.execute.before coverage is limited to write/edit; patch, shell,
  * and Code Mode remain outside this gate. SDK pin receipt: the installed
@@ -67,17 +67,31 @@ function malformedPath(field: "filePath" | "path"): Tool.Error {
  );
 }
 
+/** Resolve the path a write lands on: follow existing aliases and dangling
+ * symlink chains, then canonicalize the nearest existing ancestor. */
 function landedPathOf(filePath: string): string {
  let probe = resolve(filePath);
  const suffix: string[] = [];
+ let symlinkHops = 0;
  for (;;) {
  try {
  return resolve(realpathSync(probe), ...suffix);
+ } catch {
+ let linkTarget: string;
+ try {
+ linkTarget = readlinkSync(probe);
  } catch {
  const parent = dirname(probe);
  if (parent === probe) return resolve(filePath);
  suffix.unshift(basename(probe));
  probe = parent;
+ continue;
+ }
+ if (symlinkHops >= 8) {
+ throw refusal("write.symlink-resolution-refused", "Unable to resolve the write target because its symlink chain exceeds the supported limit; no write was authorized.");
+ }
+ symlinkHops++;
+ probe = resolve(dirname(probe), linkTarget);
  }
  }
 }

@@ -28,7 +28,6 @@
     "node": ">=24.18.0"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.4.2",
     "@modelcontextprotocol/server": "2.1.0",
     "commander": "^14.0.3",
     "picocolors": "^1.1.1",

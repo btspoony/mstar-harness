@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -86,6 +86,64 @@ describe("OpenCode V2 structured-write gate", () => {
       }
     }
   });
+  test("resolves a dangling symlink to a protected sidecar while allowing benign paths", async () => {
+    const { root, harnessDir } = harness();
+    const protectedTarget = join(harnessDir, "store.db-wal");
+    expect(existsSync(protectedTarget)).toBe(false);
+    const danglingLink = join(root, "outside-harness-dangle");
+    symlinkSync(protectedTarget, danglingLink);
+    const blocked = makeBody();
+
+    await expectAuthorityRefusal(
+      blocked.run(event("write", { filePath: danglingLink, content: "unauthorized" })),
+      "store.direct-write-refused",
+    );
+    expect(blocked.calls()).toBe(0);
+    expect(existsSync(protectedTarget)).toBe(false);
+
+    const fresh = join(root, "fresh.txt");
+    const freshBody = makeBody(() => writeFileSync(fresh, "fresh"));
+    await freshBody.run(event("write", { filePath: fresh, content: "fresh" }));
+    expect(readFileSync(fresh, "utf8")).toBe("fresh");
+
+    const existing = join(root, "existing.txt");
+    const existingAlias = join(root, "existing-alias.txt");
+    writeFileSync(existing, "before");
+    symlinkSync(existing, existingAlias);
+    const aliasBody = makeBody(() => writeFileSync(existingAlias, "after"));
+    await aliasBody.run(event("write", { filePath: existingAlias, content: "after" }));
+    expect(readFileSync(existing, "utf8")).toBe("after");
+  });
+  test("resolves dangling symlink chains to protected targets", async () => {
+    const { root, harnessDir } = harness();
+    const protectedTarget = join(harnessDir, "store.db-wal");
+    const inner = join(root, "inner");
+    const outer = join(root, "outer");
+    symlinkSync(protectedTarget, inner);
+    symlinkSync("inner", outer);
+    const body = makeBody();
+
+    await expectAuthorityRefusal(
+      body.run(event("write", { filePath: outer, content: "unauthorized" })),
+      "store.direct-write-refused",
+    );
+    expect(body.calls()).toBe(0);
+    expect(existsSync(protectedTarget)).toBe(false);
+  });
+
+  test("refuses cyclic symlink targets instead of allowing or hanging", async () => {
+    const { root } = harness();
+    const first = join(root, "cycle-a");
+    const second = join(root, "cycle-b");
+    symlinkSync("cycle-b", first);
+    symlinkSync("cycle-a", second);
+    const body = makeBody();
+
+    await expect(body.run(event("write", { filePath: first, content: "unauthorized" }))).rejects.toBeInstanceOf(Tool.Error);
+    expect(body.calls()).toBe(0);
+  });
+
+
 
   test("classifies case-variant store sidecars and retired registers in both modes", async () => {
     const api = await loadWriteGateApi();
