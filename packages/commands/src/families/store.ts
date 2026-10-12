@@ -165,7 +165,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           ? undefined
           : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
         const invalidAck = input.ackSkipDsh?.filter((selector) => {
-          if (selector === "dsh-status") return false;
+          if (selector === "dsh-status" || selector === "dsh-workflows") return false;
           const match = /^dsh-(?:ledger|bounds):(.+)$/.exec(selector);
           return !match || match[1] === "." || match[1] === ".." || match[1]!.includes("/");
         }) ?? [];
@@ -259,7 +259,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
-    ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, or dsh-status. The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
+    ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, dsh-status, or dsh-workflows (a symlinked workflows tree). The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
   };
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
   const options = optionKeys.map((key) => ({

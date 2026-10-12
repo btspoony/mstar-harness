@@ -298,7 +298,10 @@ export function readDshStatusEmission(
     return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) };
   }
 }
-export type DshFactCategory = "registry" | "tail" | "identity" | "bounds" | "status";
+/** `workflows` is the source-tree-level category: the `dsh-workflows`
+ *  selector refuses the whole legacy workflow tree (a symlinked `workflows/`
+ *  root) before any per-workflow fact is evaluated. */
+export type DshFactCategory = "registry" | "tail" | "identity" | "bounds" | "status" | "workflows";
 /** One refused legacy fact group: the selector, the actual fact category, the
  *  displayed facts, the exact discarded scope, and the reason. */
 export type DshHostStateRefusal = { selector: string; category: DshFactCategory; facts: string; discarded: string; reason: string; source: string };
