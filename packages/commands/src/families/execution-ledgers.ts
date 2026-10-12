@@ -185,7 +185,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         { name: "sessionId", ownership: "caller", route: "cli", required: true, constraint: "acquired coordinator identity via flag or MSTAR_HOST_SESSION_ID" },
         { name: "sessionId", ownership: "caller", route: "mcp", required: true, constraint: "host-supplied acquired coordinator identity per call" },
       ],
-      description: "Append one note to the addressed workflow's retained notes ledger, or replay an already accepted record id. Requires acquired coordinator identity and a matching active coordinator session reference; the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written.",
+      description: "Append one note to the addressed workflow's retained notes ledger, or replay an already accepted record id. Requires acquired coordinator identity and a matching active coordinator session reference; the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written. The ledger is append-only and grows linearly with the notes recorded; each append scans the retained bytes to deduplicate on record id, so its cost is O(file).",
       async execute(raw, context) {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
           return usage(APPEND_ID, "appending a workflow note requires an acquired coordinator identity (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call).", "sessionId");
@@ -245,7 +245,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         { name: "file", ownership: "caller", route: "cli", required: false, constraint: "must be absolute when supplied; defaults to the workflow's canonical notes.jsonl" },
         { name: "file", ownership: "caller", route: "mcp", required: false, constraint: "must be absolute when supplied; defaults to the workflow's canonical notes.jsonl" },
       ],
-      description: "Project one workflow's retained notes ledger into normalized coverage facts (canonical path, format, file hash, ordered historical and accepted records, duplicate ids, unterminated tail, counts). Optional file must be absolute; omitted means workflow's canonical ledger path. Read-only; nothing is written.",
+      description: "Project one workflow's retained notes ledger into normalized coverage facts (canonical path, format, file hash, ordered historical and accepted records, duplicate ids, unterminated tail, counts). Optional file must be absolute; omitted means workflow's canonical ledger path. Read-only; nothing is written. The ledger is append-only and grows linearly, and coverage hashes the whole retained file for its identity, so its cost is O(file).",
       async execute(raw, context) {
         const parsed = coverageInput.safeParse(raw);
         if (!parsed.success) return decodeUsage(COVERAGE_ID, parsed.error, raw);

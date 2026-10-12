@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { z } from "zod";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +33,20 @@ async function strandedTerminal(): Promise<StrandedFixture> {
       updated_at: "2026-10-01T01:00:00.000Z", stop_reason: "fixture terminal stop",
     }), "2026-10-01T00:00:00.000Z", "2026-10-01T01:00:00.000Z");
   } finally { handle.close(); }
+  const receiptDb = await openStore(context, "write");
+  try {
+    const storeRow = receiptDb.db.prepare("select store_id from store_meta where id = 1").get();
+    const storeIdValue = typeof storeRow === "object" && storeRow !== null && "store_id" in storeRow
+      ? storeRow.store_id
+      : undefined;
+    if (typeof storeIdValue !== "string") throw new Error("fixture: missing store id");
+    const insertReceipt = receiptDb.db.prepare(
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, '{}', ?)",
+    );
+    insertReceipt.run(authority.epoch, "prior-addressed-receipt", "fixture-hash", storeIdValue, "wf-stranded", "2026-10-01T00:30:00.000Z");
+    insertReceipt.run(authority.epoch, "prior-sibling-receipt", "fixture-hash", storeIdValue, "wf-sibling", "2026-10-01T00:30:00.000Z");
+  } finally { receiptDb.close(); }
   return { context, caller: { sessionId: "adopter-session", role: "coordinator", workflowId: "wf-stranded" }, epoch: authority.epoch };
 }
 
@@ -69,10 +82,17 @@ async function footprint(context: StoreContext) {
 }
 
 describe("terminal workflow adoption", () => {
-  test("CAS-records adoption, preserves terminal state and registry absence, and replays idempotently", async () => {
+  test("records adoption, prunes prior receipts, and replays the retained terminal receipt", async () => {
     const { context, caller } = await strandedTerminal();
     const execution = { harnessDir: context.harnessDir, caller };
     const request = { workflowId: "wf-stranded", expectedRevision: 1, reason: "close the imported terminal record", operationId: "adopt-op-1" };
+    const prior = await openStore(context, "read");
+    try {
+      expect(prior.db.prepare("select workflow_id, operation_id from execution_operations order by operation_id").all()).toEqual([
+        { workflow_id: "wf-stranded", operation_id: "prior-addressed-receipt" },
+        { workflow_id: "wf-sibling", operation_id: "prior-sibling-receipt" },
+      ]);
+    } finally { prior.close(); }
     const applied = await adoptTerminalWorkflow(execution, request);
     expect(applied.replayed).toBe(false);
     expect(applied.data.terminalUnregistered).toBeUndefined();
@@ -87,11 +107,21 @@ describe("terminal workflow adoption", () => {
       expect(db.db.prepare("select revision, json_extract(state_json, '$.status') as status, json_extract(state_json, '$.stop_reason') as stop_reason from execution_workflows where workflow_id = ?").get("wf-stranded")).toEqual({
         revision: 2, status: "stopped", stop_reason: "fixture terminal stop",
       });
-      expect((db.db.prepare("select count(*) as n from execution_operations where operation_id = ?").get(request.operationId) as { n: number }).n).toBe(1);
+      expect(db.db.prepare("select workflow_id, operation_id from execution_operations order by operation_id").all()).toEqual([
+        { workflow_id: "wf-stranded", operation_id: request.operationId },
+        { workflow_id: "wf-sibling", operation_id: "prior-sibling-receipt" },
+      ]);
     } finally { db.close(); }
-    const replay = await adoptTerminalWorkflow(execution, request);
-    expect(replay.replayed).toBe(true);
-    expect(replay.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
+    // The explicit revision is stale after commit, but the retained receipt is
+    // consulted first and returns the exact committed result.
+    const retry = await adoptTerminalWorkflow(execution, request);
+    expect(retry.replayed).toBe(true);
+    expect(retry.data).toEqual(applied.data);
+    const changedOperation = await refusalOf(() => adoptTerminalWorkflow(execution, {
+      workflowId: request.workflowId, reason: request.reason, operationId: "adopt-op-different",
+    }));
+    expect(changedOperation.code).toBe("execution.adoption-refused");
+    expect(changedOperation.message).toContain("already has a terminal-adoption record");
     expect((await readExecutionState(context)).data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
     const dashboard = await withStoreRead(context, queryDashboard("workflows"));
     expect(dashboard.data.terminalUnregistered).toBeUndefined();
@@ -249,34 +279,16 @@ describe("terminal adoption session settlement", () => {
     } finally { db.close(); }
   });
 
-  test("replays the identical settlement and conflicts on changed proof under the same operation id", async () => {
+  test("post-prune same-id adoption retries replay the retained terminal receipt", async () => {
     const stranded = await strandedWithHolder("active-holder");
     const proof = attestation(["active-holder"]);
     const applied = await adopt(stranded, { attestation: proof });
-    const replay = await adopt(stranded, { attestation: proof });
-    expect(replay.replayed).toBe(true);
-    expect(applied).toHaveProperty("recovery", expect.objectContaining({ outcome: "applied" }));
-    expect(applied).not.toHaveProperty("operationRecovery");
-    expect(replay).not.toHaveProperty("operationRecovery");
-    expect({ ...replay, replayed: false }).toEqual(applied);
-    const db = await openStore(stranded.context, "read");
-    try {
-      // A replay never revokes twice: the settled row keeps its committed revision.
-      expect(db.db.prepare("select state, revision from execution_sessions where session_id = ?").get("active-holder"))
-        .toEqual({ state: "revoked", revision: 2 });
-      const stored = db.db.prepare("select result_json from execution_operations where operation_id = ?")
-        .get("adopt-settle-1") as { result_json: string };
-      const storedReceipt = z.record(z.string(), z.unknown()).parse(JSON.parse(stored.result_json));
-      expect(storedReceipt).toHaveProperty("operationRecovery", expect.objectContaining({ outcome: "applied" }));
-      expect(storedReceipt).not.toHaveProperty("recovery");
-    } finally { db.close(); }
-
-    const beforeChangedProof = await footprint(stranded.context);
-    const changed = await refusalOf(() => adopt(stranded, {
-      attestation: attestationVariant({ attestedAt: "2026-10-08T09:00:00.000Z" }),
-    }));
-    expect(changed).toMatchObject({ code: "execution.operation-conflict" });
-    await expect(footprint(stranded.context)).resolves.toEqual(beforeChangedProof);
+    expect(applied.replayed).toBe(false);
+    const retry = await adopt(stranded, { attestation: proof });
+    expect(retry.replayed).toBe(true);
+    expect(retry.data).toEqual(applied.data);
+    expect(retry.recovery).toEqual(applied.recovery);
+    expect((await readExecutionState(stranded.context)).data.terminalAdoptions).toHaveLength(1);
   });
 
   test("refuses a holder with no proof, an incomplete proof and stale CAS without any mutation footprint", async () => {
@@ -342,10 +354,9 @@ describe("terminal adoption session settlement", () => {
 
     const unneeded = await strandedTerminal();
     const supplied = await adopt(unneeded, { attestation: attestation([]) });
-    const unneededReplay = await adopt(unneeded, { attestation: attestation([]) });
-    expect(supplied).not.toHaveProperty("operationRecovery");
-    expect(unneededReplay).not.toHaveProperty("operationRecovery");
-    expect({ ...unneededReplay, replayed: false }).toEqual(supplied);
+    const retry = await adopt(unneeded, { attestation: attestation([]) });
+    expect(retry.replayed).toBe(true);
+    expect(retry.data).toEqual(supplied.data);
     expect(supplied.replayed).toBe(false);
     // A valid document naming nothing ACTIVE is never silently dropped: the
     // receipt records that no settlement was required.

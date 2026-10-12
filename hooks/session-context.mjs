@@ -13145,6 +13145,7 @@ async function initializeExecutionAuthority(context) {
       const now = new Date().toISOString();
       tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1").run(now, now);
       tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+      tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
       assertNoLegacyExecutionSources(context);
     });
     return readExecutionState(context);
@@ -13460,6 +13461,7 @@ async function adoptTerminalWorkflow(context, input) {
       ...settlement === undefined ? {} : { operationRecovery: settlement }
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now });
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
       ...publicReceipt,
@@ -13803,6 +13805,9 @@ function writePlanOperationReceipt(tx, input) {
 }
 function writeOperationReceipt(tx, input) {
   tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.receipt), input.now);
+}
+function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
+  tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
 }
 function resolvePlanRead(caller, session, planId) {
   if (!isPlainObject(session))
@@ -27125,9 +27130,9 @@ async function mutateExecutionWorkflow(context, request) {
       throw prerequisiteCause(error, { workflowId, operation, stage: "revalidate" });
     }
     advanceWorkflowHeaderRevision(tx, { workflowId: witness.workflowId, now: at });
-    let receipt;
+    let applied;
     try {
-      receipt = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
+      applied = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
@@ -27136,11 +27141,13 @@ async function mutateExecutionWorkflow(context, request) {
       requestHash: requestHash4,
       workflowId: witness.workflowId,
       planId: null,
-      receipt,
+      receipt: applied.receipt,
       now: at
     });
+    if (applied.membershipLost)
+      pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
-      ...receipt,
+      ...applied.receipt,
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -27190,7 +27197,7 @@ function applyWorkflowOperation(input) {
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost)
     recordRootMembershipLoss(tx, { workflowId, now: at });
-  return readExecutionStateGraph(tx);
+  return { receipt: readExecutionStateGraph(tx), membershipLost };
 }
 function requireCompassEvidence(evidence) {
   if (evidence.compass === undefined) {

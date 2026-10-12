@@ -1467,6 +1467,7 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
         )
         .run(now, now);
       tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+      tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
       assertNoLegacyExecutionSources(context);
     });
     return readExecutionState(context);
@@ -1946,13 +1947,14 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
  * whose `stoppedSessions` name EVERY addressed ACTIVE session as
  * stopped/reloaded, revoking exactly those rows, never the identity making the
  * call. The attested stop is the trust boundary (the engine cannot observe a
- * dead process), so an unattested holder is never silently revoked, an
- * explicitly supplied malformed proof refuses before any store access, and a
- * changed proof under a committed operation id is an operation conflict rather
- * than a silent replay. An omitted expectedRevision is resolved from the
- * addressed row inside this transaction; an explicit expectedRevision remains
- * a strict CAS. The committed receipt records the settled targets and the
- * approving operator/attestation provenance.
+ * dead process), so an unattested holder is never silently revoked, and an
+ * explicitly supplied malformed proof refuses before any store access. A changed
+ * proof under a committed operation id conflicts only while its receipt remains
+ * (`execution.operation-conflict`). Adoption prunes all workflow receipts on
+ * commit, so later retries reach the terminal header: stale explicit revisions
+ * refuse `execution.header-revision-conflict`; omitted or current revisions
+ * refuse `execution.adoption-refused` with read-back guidance.
+ * The committed receipt records settled targets and approving provenance.
  */
 export async function adoptTerminalWorkflow(
   context: ExecutionContext,
@@ -1999,9 +2001,9 @@ export async function adoptTerminalWorkflow(
     intent: {
       expectedRevision: input.expectedRevision ?? "current",
       reason: input.reason,
-      // The proof document is part of the request's semantic selection: a retry
-      // carrying a DIFFERENT attestation is a different intent — an operation
-      // conflict, never a silent replay of the first settlement.
+      // The attestation contributes to the fingerprint, so changed proof conflicts
+      // with a retained receipt. Once adoption prunes that receipt, retries are
+      // refused by stale explicit CAS or terminal-adoption read-back instead.
       ...(attestation === undefined ? {} : { attestation }),
     },
   });
@@ -2142,6 +2144,7 @@ export async function adoptTerminalWorkflow(
       ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
       ...publicReceipt,
@@ -2982,6 +2985,18 @@ export function writeOperationReceipt(
       JSON.stringify(input.receipt),
       input.now,
     );
+}
+/**
+ * Terminal workflows retain their header as history; all their operation
+ * receipts EXCEPT the terminal mutation's own are pruned — the retained
+ * terminal receipt is the durable replay anchor that lets a caller that lost
+ * the success response replay the exact close/adoption instead of hitting a
+ * refusal (contract: an exact same request replays its recorded receipt).
+ */
+export function pruneWorkflowOperationReceipts(tx: ExecutionTransaction, workflowId: string, keepOperationId: string): void {
+  tx.db
+    .prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)")
+    .run(workflowId, tx.epoch, keepOperationId);
 }
 
 /** §2.3 the authorization one session-authorized plan address resolves to. */

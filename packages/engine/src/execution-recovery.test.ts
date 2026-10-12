@@ -60,7 +60,7 @@ import {
   type ExecutionSessionRef,
   type ExecutionToken,
 } from "./execution-store.js";
-import { mutateExecutionWorkflow } from "./execution-workflow.js";
+import { recoverExecutionCoordinator, mutateExecutionWorkflow } from "./execution-workflow.js";
 import { captureIssue } from "./issue.js";
 import { withStatusWriteLock } from "./lease.js";
 import {
@@ -71,6 +71,8 @@ import {
   readRetainedBodyInventory,
   retainedInventoryPath,
   type BackupReceipt,
+  ACTIVATION_PROTOCOL_VERSION,
+  type ActivationAttestation,
 } from "./store-activation.js";
 import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
@@ -1047,6 +1049,146 @@ describe("execution-restore", () => {
 
     expect(liveState()).toEqual(before);
   });
+
+  test("execution-restore-preview-declares-receipt-retention-as-backup-only-operation-rows", async () => {
+    const world = await recoveryWorld("pruned-receipts");
+    const tokenNow = async (): Promise<ExecutionToken> =>
+      (await readExecutionState(world.context)).data.workflows[0]!.workflowToken;
+    // A committed receipt of a still-live lifecycle, so the point below holds a
+    // receipt set larger than the create/bind pair.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-pause-retained",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "retention fixture" },
+    });
+    const point = await recoveryPoint(world, "pruned-receipts-point");
+    const retained = rawAll<{ epoch: number; operation_id: string }>(
+      point.backupPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by operation_id`,
+    );
+    expect(retained.map((row) => row.operation_id)).toEqual(["op-pause-retained", "pruned-receipts-bind", "pruned-receipts-create"]);
+
+    // While the lifecycle is live the point is current: those receipt rows are
+    // on BOTH sides, so nothing about them is listed.
+    const live = await previewExecutionRestore(world.context, point.backupPath);
+    expect(live.authorityDifferences).toEqual([]);
+    expect(live.lostOperationIds).toEqual([]);
+
+    // The terminal close prunes the earlier receipts but retains its own durable
+    // replay anchor.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-close-pruned",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "retention fixture close" },
+    });
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}'`,
+    )).toEqual([{ epoch: retained[0]!.epoch, operation_id: "op-close-pruned" }]);
+
+    // The pruned rows are DECLARED, not silent: each one is now a backup-only
+    // execution-domain row, listed with `liveRevision: null`.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    for (const row of retained) {
+      const key = `operation:${row.epoch}/${row.operation_id}`;
+      const entry = preview.authorityDifferences.find((difference) => difference.domain === "execution" && difference.key === key);
+      expect(entry).toBeDefined();
+      expect(entry!.liveRevision).toBeNull();
+      // The presence marker of a row whose table carries no revision of its own.
+      expect(entry!.backupRevision).toBe(1);
+      // Resurrected, never lost: retention removes replay/recovery state, not work.
+      expect(preview.lostOperationIds).not.toContain(`execution:${row.epoch}:${row.operation_id}`);
+    }
+    // The terminal receipt was committed after this backup, so it is live-only
+    // and will not survive restoring the earlier point.
+    expect(preview.lostOperationIds).toEqual([`execution:${retained[0]!.epoch}:op-close-pruned`]);
+    // `previewExecutionRestore` carries the resurrected-receipt fact only
+    // through `lossDigest` (the preview shape and its protocol version are
+    // frozen), so the same fact is read from the two store files: the point's
+    // committed receipt ids the live store no longer holds are exactly the
+    // pruned set.
+    const receiptIds = (dbPath: string): string[] =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        "select epoch, operation_id from execution_operations order by epoch, operation_id",
+      ).map((row) => `execution:${row.epoch}:${row.operation_id}`);
+    const liveIds = new Set(receiptIds(world.dbPath));
+    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id)).sort()).toEqual(
+      retained.map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
+    );
+    expect(preview.lossDigest).not.toBe(live.lossDigest);
+  });
+
+  test("terminal prune keeps only the current-epoch row when a restored old receipt reuses its operation id", async () => {
+    const world = await recoveryWorld("restore-terminal-reused-id");
+    const operationId = "op-terminal-reused-after-restore";
+    rawRun(
+      world.dbPath,
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, '{}', ?)",
+      world.epoch, operationId, "prior-epoch-fixture", world.storeId, WF, TS,
+    );
+    const point = await recoveryPoint(world, "terminal-reused-id-point");
+    const pause = await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-before-reused-id-restore",
+      session: world.sessionRef,
+      expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "advance beyond recovery point" },
+    });
+    expect(pause.replayed).toBe(false);
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const restored = await restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(restored.epoch).toBe(world.epoch + 1);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' and operation_id = '${operationId}'`,
+    )).toEqual([{ epoch: world.epoch, operation_id: operationId }]);
+
+    const afterRestore = await readExecutionState(world.context);
+    const reboundCaller = callerOf(WF, "post-restore-coordinator");
+    const recovered = await recoverExecutionCoordinator(contextOf(world.context, reboundCaller), {
+      expected: afterRestore.data.workflows.find((workflow) => workflow.state.id === WF)!.workflowToken,
+      operationId: "op-recover-after-restore",
+      priorSessionId: world.caller.sessionId,
+      reason: "replace the pre-restore coordinator",
+      attestation: {
+        version: ACTIVATION_PROTOCOL_VERSION,
+        attestedAt: TS,
+        operator: { actor: OPERATOR, authorizationRef: AUTHORIZATION },
+        consumers: [{
+          entryId: "coordinator-test",
+          kind: "coordinator",
+          entrypoint: "/opt/mstar/coordinator",
+          runtime: "bun",
+          runtimeVersion: "99.0.0",
+          version: "test",
+          current: true,
+          disposition: "reloaded",
+        }],
+        stoppedSessions: [{ sessionId: world.caller.sessionId, host: "omp", state: "stopped" }],
+      } satisfies ActivationAttestation,
+    });
+    const terminal = await mutateExecutionWorkflow(contextOf(world.context, reboundCaller), {
+      operationId,
+      session: recovered.data,
+      expected: (await readExecutionState(world.context)).data.workflows.find((workflow) => workflow.state.id === WF)!.workflowToken,
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "terminal receipt reuses prior epoch id" },
+    });
+    expect(terminal.replayed).toBe(false);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by epoch, operation_id`,
+    )).toEqual([{ epoch: restored.epoch, operation_id: operationId }]);
+  });
+
 
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
     const world = await recoveryWorld("restore-malformed-row");

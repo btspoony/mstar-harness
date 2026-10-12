@@ -109,6 +109,7 @@ import {
   serializeExecutionValue,
   withExecutionTransaction,
   withRecoveryDetails,
+  pruneWorkflowOperationReceipts,
   writeOperationReceipt,
   writeWorkflowState,
   type ExecutionCaller,
@@ -1037,11 +1038,9 @@ export async function mutateExecutionWorkflow(
           },
         ];
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
-    // after the CURRENT authority is revalidated (a revoked or epoch-invalidated
-    // coordinator never replays a receipt it may no longer own). The receipt
-    // addresses the whole graph, so its token is the ROOT token. Looking the
-    // receipt up before the registry witness is what lets a terminal close's own
-    // retry answer, instead of "workflow not found".
+    // while the receipt is retained and after CURRENT authority is revalidated.
+    // Terminal close prunes its workflow's receipts, so later retries fall
+    // through to the registry witness and receive actionable read-back guidance.
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -1082,9 +1081,9 @@ export async function mutateExecutionWorkflow(
     // registry membership loss adds the ROOT advance without a second store
     // bump, so the accepted operation advances the store revision exactly once.
     advanceWorkflowHeaderRevision(tx, { workflowId: witness.workflowId, now: at });
-    let receipt: ExecutionRead<ExecutionState>;
+    let applied: AppliedWorkflowOperation;
     try {
-      receipt = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
+      applied = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
@@ -1093,11 +1092,13 @@ export async function mutateExecutionWorkflow(
       requestHash,
       workflowId: witness.workflowId,
       planId: null,
-      receipt,
+      receipt: applied.receipt,
       now: at,
     });
+    if (applied.membershipLost)
+      pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
-      ...receipt,
+      ...applied.receipt,
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -1132,6 +1133,7 @@ export async function mutateExecutionWorkflow(
  * integration claim here, and the terminal decision then judges exactly the
  * ownership this transaction leaves behind.
  */
+type AppliedWorkflowOperation = { receipt: ExecutionRead<ExecutionState>; membershipLost: boolean };
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
   witness: ExecutionWorkflowWitness;
@@ -1139,7 +1141,7 @@ function applyWorkflowOperation(input: {
   operation: WorkflowExecutionOperation;
   evidence: WorkflowEvidence;
   at: string;
-}): ExecutionRead<ExecutionState> {
+}): AppliedWorkflowOperation {
   const { tx, witness, read, operation, evidence, at } = input;
   const workflowId = witness.workflowId;
   const current = witness.view.state as unknown as WorkflowSnapshot;
@@ -1196,7 +1198,7 @@ function applyWorkflowOperation(input: {
   assertHeaderValid(workflowId, header);
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
-  return readExecutionStateGraph(tx);
+  return { receipt: readExecutionStateGraph(tx), membershipLost };
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */
