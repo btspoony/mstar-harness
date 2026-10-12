@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readDshScanBound } from '@mstar-harness/engine'
-import { readAgentFlow, digestOfLedgerLine, recordWorkflowEvent, workflowEventId } from '../src/gates/agent-flow.ts'
+import { openStore, readDshScanBound } from '@mstar-harness/engine'
+import { readAgentFlow, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger } from '../src/gates/workflow-ledger.ts'
@@ -95,6 +95,286 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['live-run', 'cold-run'])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
+  it('refuses a source event when the resolved original generation is superseded before commit', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_020 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? {
+        type: 'tool-workflow/run-start',
+        seq: 0,
+        time: 1_700_000_000_021,
+        data: { runId: 'stale-run', name: 'stale' },
+      } : undefined,
+    }
+    let changed = false
+    const resolveThenSupersede = async (sessionId: string, cwd: string) => {
+      const selected = await resolveExecutionLedgerTarget(sessionId, cwd)
+      if (selected !== null && !changed) {
+        changed = true
+        const handle = await openStore({ harnessDir }, 'write')
+        try {
+          handle.db.prepare('update store_meta set authority_epoch = authority_epoch + 1 where id = 1').run()
+        } finally {
+          handle.close()
+        }
+      }
+      return selected
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [session], get: () => session } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveThenSupersede)
+    await awaitWorkflowLedgerIdle()
+    expect(changed).toBe(true)
+    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
+  })
+  it('leaves a valid source row eligible when native target resolution returns no target', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const session = {
+      header: { id: 'unbound-session', cwd: root, createdAt: 1_700_000_000_030 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? {
+        type: 'tool-workflow/run-start',
+        seq: 0,
+        time: 1_700_000_000_031,
+        data: { runId: 'unbound-run', name: 'unbound' },
+      } : undefined,
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [session], get: () => session } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'unbound-session')).toBeUndefined()
+  })
+  it('re-registers created-session backfill idempotently and keeps live intake healthy after list/read failures', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_040 },
+      seq: 2,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => {
+        if (seq === 0) throw new Error('fixture read failure')
+        if (seq === 1) return {
+          type: 'tool-workflow/run-start',
+          seq: 1,
+          time: 1_700_000_000_041,
+          data: { runId: 'replayed-run', name: 'healthy-after-read-error' },
+        }
+        return undefined
+      },
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', {
+      list: () => { throw new Error('fixture list failure') },
+      get: (id: string) => id === 'session-1' ? session : undefined,
+    } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    ctx.events.emit({}, 'session/event', session, {
+      type: 'tool-workflow/run-end',
+      seq: 2,
+      time: 1_700_000_000_042,
+      data: { runId: 'replayed-run', stopReason: 'completed' },
+    })
+    await awaitWorkflowLedgerIdle()
+    const events = readAgentFlow(workflowDir)?.events ?? []
+    expect(events.map((event) => event.kind)).toEqual(['workflow-run-end', 'workflow-run'])
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 3 })
+  })
+  it('accepts an empty session first event, then rescans a shorter rebuilt incarnation from its creation stamp', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const empty = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_050 },
+      seq: 0,
+      inheritedEventCount: 0,
+      eventAt: () => undefined,
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [empty], get: () => empty } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    await awaitWorkflowLedgerIdle()
+    ctx.events.emit({}, 'session/event', empty, {
+      type: 'tool-workflow/run-start',
+      seq: 0,
+      time: 1_700_000_000_051,
+      data: { runId: 'first-run', name: 'first' },
+    })
+    await awaitWorkflowLedgerIdle()
+    const oldBound = readDshScanBound({ harnessDir }, 'wf-1', 'session-1')
+    expect(oldBound).toMatchObject({ next: 1 })
+
+    const rebuilt = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_052 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? {
+        type: 'tool-workflow/run-start',
+        seq: 0,
+        time: 1_700_000_000_053,
+        data: { runId: 'rebuilt-run', name: 'rebuilt' },
+      } : undefined,
+    }
+    ctx.events.emit({}, 'session/created', rebuilt)
+    await awaitWorkflowLedgerIdle()
+    const rebuiltBound = readDshScanBound({ harnessDir }, 'wf-1', 'session-1')
+    expect(rebuiltBound).toMatchObject({ next: 1 })
+    expect(rebuiltBound?.stream).not.toBe(oldBound?.stream)
+    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual([
+      'rebuilt-run',
+      'first-run',
+    ])
+
+    const missingStamp = { header: { id: 'session-1', cwd: root }, seq: 2 }
+    ctx.events.emit({}, 'session/event', missingStamp, {
+      type: 'tool-workflow/run-start',
+      seq: 1,
+      time: 1_700_000_000_054,
+      data: { runId: 'unverified-run', name: 'unverified' },
+    })
+    await awaitWorkflowLedgerIdle()
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toEqual(rebuiltBound)
+    expect(readAgentFlow(workflowDir)?.events).toHaveLength(2)
+  })
+
+  it('isolates two bound workflows while an unbound fork and foreign-session target remain ineligible', async () => {
+    const { root, harnessDir } = await activeFixture()
+    await seedActiveWorkflow(harnessDir, 'wf-2', [], {}, 'session-2', root)
+    const workflows = {
+      first: join(harnessDir, 'workflows', 'wf-1'),
+      second: join(harnessDir, 'workflows', 'wf-2'),
+    }
+    const session = (id: string, createdAt: number, rows: unknown[], inheritedEventCount = 0) => ({
+      header: { id, cwd: root, createdAt },
+      seq: rows.length,
+      inheritedEventCount,
+      eventAt: (seq: number) => rows[seq],
+    })
+    const first = session('session-1', 1_700_000_000_060, [{
+      type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_061,
+      data: { runId: 'only-first', name: 'first' },
+    }])
+    const second = session('session-2', 1_700_000_000_062, [{
+      type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_063,
+      data: { runId: 'only-second', name: 'second' },
+    }])
+    const fork = session('unbound-fork', 1_700_000_000_064, [
+      { type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_065, data: { runId: 'inherited', name: 'inherited' } },
+      { type: 'tool-workflow/run-start', seq: 1, time: 1_700_000_000_066, data: { runId: 'unbound-own', name: 'own' } },
+    ], 1)
+    const foreign = session('foreign-session', 1_700_000_000_067, [{
+      type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_068,
+      data: { runId: 'foreign-run', name: 'foreign' },
+    }])
+    let markFirstStarted!: () => void
+    let releaseFirst!: () => void
+    let markSecondResolved!: () => void
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve })
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const secondResolved = new Promise<void>((resolve) => { markSecondResolved = resolve })
+    const resolveTarget = async (sessionId: string, cwd: string) => {
+      if (sessionId === 'session-1') {
+        markFirstStarted()
+        await firstGate
+      }
+      if (sessionId === 'foreign-session') {
+        const target = await resolveExecutionLedgerTarget('session-2', cwd)
+        return target === null ? null : { ...target, sessionId: 'not-the-carrying-session' }
+      }
+      const target = await resolveExecutionLedgerTarget(sessionId, cwd)
+      if (sessionId === 'session-2') markSecondResolved()
+      return target
+    }
+    const ctx = new Context()
+    const sessions = [first, second, fork, foreign]
+    ctx.provide('sessions', {
+      list: () => sessions,
+      get: (id: string) => sessions.find((entry) => entry.header.id === id),
+    } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveTarget)
+    await firstStarted
+    await secondResolved
+    for (let attempt = 0; attempt < 20 && readDshScanBound({ harnessDir }, 'wf-2', 'session-2') === undefined; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    expect(readDshScanBound({ harnessDir }, 'wf-2', 'session-2')).toMatchObject({ next: 1 })
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
+    expect(readAgentFlow(workflows.second)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['only-second'])
+    releaseFirst()
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflows.first)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['only-first'])
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'unbound-fork')).toBeUndefined()
+    expect(readDshScanBound({ harnessDir }, 'wf-2', 'foreign-session')).toBeUndefined()
+  })
+  it('classifies, validates, bounds, and sanitizes mixed native workflow events', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const long = 'x'.repeat(1_300)
+    const rows = [
+      { type: 'tool-workflow/run-start', seq: 0, time: 10, data: { runId: 'control-only', name: '\u0007' } },
+      { type: 'tool-workflow/run-start', seq: 1, time: 11, data: { runId: 'run-a', name: 'pre\u0007sanitized' } },
+      { type: 'tool-workflow/agent-start', seq: 2, time: 12, data: { runId: 'run-a', seq: 1.5, label: 'invalid-member-seq', childId: 'bad-child' } },
+      { type: 'tool-workflow/agent-start', seq: 3, time: 13, data: { runId: 'run-a', seq: 1, label: 'plain-member', childId: 'child-a' } },
+      { type: 'tool-workflow/agent-start', seq: 4, time: 14, data: { runId: 'run-a', seq: 2, label: long, phase: long, childId: 'child-b' } },
+      { type: 'tool-workflow/run-end', seq: 5, time: 15, data: { runId: 'run-a', stopReason: 'unknown' } },
+      { type: 'tool-workflow/run-end', seq: 6, time: 16, data: { runId: 'run-a', stopReason: 'cancelled' } },
+      { type: 'tool-workflow/run-start', seq: 7.5, time: 17, data: { runId: 'fractional-envelope', name: 'invalid' } },
+      { type: 'tool-workflow/run-start', seq: 8, time: 18, data: { runId: 'run-b', name: long } },
+      { type: 'tool-workflow/run-start', seq: 9, time: 19, data: { runId: '', name: 'missing-identity' } },
+      { type: 'tool-workflow/agent-start', seq: 10, time: 20, data: { runId: 'run-b', seq: 1, label: 'invalid-child', childId: 'c'.repeat(4_100) } },
+      { type: 'tool-workflow/run-end', seq: 11, time: 21, data: { runId: 'run-b', stopReason: 'error' } },
+    ]
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_080 },
+      seq: rows.length,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => rows[seq],
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [session], get: () => session } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    await awaitWorkflowLedgerIdle()
+    const view = readAgentFlow(workflowDir)
+    expect(view?.events.map((event) => event.kind)).toEqual([
+      'workflow-run-end', 'workflow-run', 'workflow-run-end', 'workflow-agent', 'workflow-agent', 'workflow-run',
+    ])
+    expect(view?.events).toContainEqual(expect.objectContaining({ kind: 'workflow-run', runId: 'run-a', name: 'presanitized' }))
+    expect(view?.events).toContainEqual(expect.objectContaining({ kind: 'workflow-agent', label: 'plain-member', childId: 'child-a' }))
+    expect(view?.events).toContainEqual(expect.objectContaining({ kind: 'workflow-agent', seq: 2, childId: 'child-b' }))
+    const longMember = view?.events.find((event) => event.kind === 'workflow-agent' && event.childId === 'child-b')
+    expect(longMember?.kind).toBe('workflow-agent')
+    if (longMember?.kind === 'workflow-agent') {
+      expect(longMember.label).toBeDefined()
+      expect(longMember.phase).toBeDefined()
+      expect(longMember.label?.length ?? 0).toBeLessThanOrEqual(512)
+      expect(longMember.phase?.length ?? 0).toBeLessThanOrEqual(512)
+    }
+    const longRun = view?.events.find((event) => event.kind === 'workflow-run' && event.runId === 'run-b')
+    expect(longRun?.kind).toBe('workflow-run')
+    if (longRun?.kind === 'workflow-run') expect(longRun.name?.length ?? 0).toBeLessThanOrEqual(1_024)
+    expect(view?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(6)
+    expect(view?.summary.map((bucket) => bucket.outcome)).toEqual(expect.arrayContaining([
+      'workflow-run', 'workflow-agent', 'workflow-run-end',
+    ]))
+    expect(readAgentFlow(workflowDir, 0)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 4)?.events).toHaveLength(4)
+    expect(readAgentFlow(workflowDir, 4)?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(4)
+    ctx.events.emit({}, 'session/event', session, {
+      type: 'tool-workflow/run-start',
+      seq: 12.5,
+      time: 22,
+      data: { runId: 'invalid-live', name: 'invalid' },
+    })
+    await awaitWorkflowLedgerIdle()
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 12 })
+    expect(readAgentFlow(workflowDir)?.events).toHaveLength(6)
+  })
+
   it('accepts, replays, and refuses conflicting source identity atomically', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const source = { sessionId: 'session-1', streamId: 'stream-a', seq: 4 }
@@ -114,19 +394,9 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toEqual({ next: 3, stream: 'new' })
   })
 
-  it('does not read, rewrite, or remove retained legacy event bytes', async () => {
-    const { harnessDir, workflowDir } = await activeFixture()
-    const legacyPath = join(workflowDir, 'agent-flow.jsonl')
-    await mkdir(join(harnessDir, 'workflows', 'wf-1'), { recursive: true })
-    const legacy = '{"v":1,"ts":1,"kind":"dispatch","role":"fullstack-dev","verdict":"ok","hard":false}\n'
-    await writeFile(legacyPath, legacy)
-    const before = await Bun.file(legacyPath).arrayBuffer()
-    const event: AgentFlowWorkflowEvent = { v: 1, ts: 10, kind: 'workflow-run', runId: 'run-1', name: 'audit' }
-    const line = JSON.stringify(event)
-    const eventId = workflowEventId(event, { sessionId: 'session-1', streamId: 'stream-a', seq: 0 })
-    expect(digestOfLedgerLine(line)).toHaveLength(32)
-    expect(recordWorkflowEvent({ harnessDir, workflowDir, event, source: { sessionId: 'session-1', streamId: 'stream-a', seq: 0 }, selectedGeneration: selectedGenerationFor(harnessDir) })).toBe(true)
-    expect(Buffer.from(await Bun.file(legacyPath).arrayBuffer())).toEqual(Buffer.from(before))
-    expect(eventId).toContain('wfe1:workflow-run:session-1:stream-a:0')
+  it('does not fabricate an event projection when native authority is unavailable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-events-unavailable-'))
+    roots.push(root)
+    expect(readAgentFlow(join(root, '.agents', 'workflows', 'wf-1'))).toBeNull()
   })
 })

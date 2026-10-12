@@ -1373,6 +1373,7 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
     harnessDir: ref.harnessDir,
     // The dispatch ref retains the native target and exact selected generation.
     workflowDir: ref.workflowDir,
+    ...(ref.callId !== undefined ? { callId: ref.callId } : {}),
     ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
     outcome,
     ...(durationMs !== undefined && Number.isFinite(durationMs) ? { durationMs } : {}),

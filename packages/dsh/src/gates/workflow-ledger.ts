@@ -42,10 +42,9 @@ import {
   WORKFLOW_LEDGER_MAX_SEQ,
 } from './agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
-// The durable session binding (D4) supplies the exclusion floor here. The
-// native target resolver separately selects the workflow and returns its
-// original store id/epoch, which each event write preserves unchanged.
-import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
+// Session bindings may retain an imported exclusion floor. Unresolved native
+// targets remain eligible and never produce a cursor or binding mutation.
+import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The SHARED P-c cache-key normalization : the run-start
@@ -491,38 +490,6 @@ export function registerWorkflowLedger(
     log('warn', `workflow-ledger identity unavailable for session ${sid} — the native log head is not readable, so its rows are not recorded (no fabricated log incarnation)`)
   }
 
-  // The exclusion floor is a per-scan durable fact. Batch observations while a
-  // cold scan is active, then persist the maximum once for each session.
-  const pendingFloors = new Map<string, { harnessDir: string; sessionId: string; cwd: string; floor: number }>()
-  let scanDepth = 0
-
-  /** Write one session's exclusion floor (the max a scan queued for it). */
-  const persistExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
-    const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, { excludedBeforeSeq: floor })
-    if (written.kind === 'degraded') {
-      log('warn', `workflow-ledger exclusion floor not persisted for session ${sessionId} (${written.reason}) — attribution stays paused, the row is re-evaluated at the next scan`)
-    }
-  }
-
-  /** Flush the scan's queued floors: at most one write per session. */
-  const flushExclusionFloors = (): void => {
-    for (const pending of pendingFloors.values()) {
-      persistExclusionFloor(pending.harnessDir, pending.sessionId, pending.cwd, pending.floor)
-    }
-    pendingFloors.clear()
-  }
-
-  /** One unbound observation: queue it while a scan is running, else persist it (the live firehose sees one row per event). */
-  const observeExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
-    if (scanDepth === 0) {
-      persistExclusionFloor(harnessDir, sessionId, cwd, floor)
-      return
-    }
-    const key = `${harnessDir}\u0000${sessionId}`
-    const pending = pendingFloors.get(key)
-    if (pending === undefined) pendingFloors.set(key, { harnessDir, sessionId, cwd, floor })
-    else if (floor > pending.floor) pending.floor = floor
-  }
 
   
   /**
@@ -623,10 +590,7 @@ export function registerWorkflowLedger(
       log('warn', `workflow-ledger target resolution failed for session ${sid} (contained — no ledger write, the row stays eligible): ${errorMessage(error)}`)
       return
     }
-    if (target === null) {
-      observeExclusionFloor(harnessDir, sid, workspace, row.seq + 1)
-      return
-    }
+    if (target === null) return
     const refusal = targetRefusal(target, sid)
     if (refusal !== undefined) {
       log('warn', `workflow-ledger target refused for session ${sid} — ${refusal} (no ledger write, no file-based fallback)`)
@@ -661,10 +625,7 @@ export function registerWorkflowLedger(
       log('warn', `workflow-ledger scan-bound target resolution failed for session ${sid} (contained — the row stays eligible): ${errorMessage(error)}`)
       return
     }
-    if (target === null) {
-      observeExclusionFloor(harnessDir, sid, workspace, seq + 1)
-      return
-    }
+    if (target === null) return
     const refusal = targetRefusal(target, sid)
     if (refusal !== undefined) {
       log('warn', `workflow-ledger scan-bound target refused for session ${sid} — ${refusal}`)
@@ -744,8 +705,15 @@ export function registerWorkflowLedger(
     let seq = startSeq
     const next = (): void | Promise<void> => {
       while (seq < endSeq) {
-        const outcome = consume(session, eventAt(seq))
-        seq += 1
+        const position = seq++
+        let envelope: unknown
+        try {
+          envelope = eventAt(position)
+        } catch (error) {
+          log('warn', `workflow-ledger source read failed for session ${sessionIdOf(session) ?? 'unknown'} at seq ${position} (contained — later rows continue): ${errorMessage(error)}`)
+          continue
+        }
+        const outcome = consume(session, envelope)
         if (outcome !== undefined) return outcome.then(next)
       }
       return undefined
@@ -790,20 +758,9 @@ export function registerWorkflowLedger(
       noteUnverifiedIdentity(sid)
       return
     }
-    scanDepth += 1
-    const settle = (): void => {
-      scanDepth -= 1
-      if (scanDepth === 0) flushExclusionFloors()
-    }
     // Every captured window is serialized against the same session's live
     // events; each row resolves its native target before its cursor check.
-    enqueueStreamTask(sid, async () => {
-      try {
-        await runWalk(session, startSeq, endSeq, eventAt)
-      } finally {
-        settle()
-      }
-    })
+    enqueueStreamTask(sid, async () => { await runWalk(session, startSeq, endSeq, eventAt) })
     return
   }
 
