@@ -35,7 +35,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, type Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   ExecutionPinConflictError,
@@ -53,7 +53,6 @@ import {
 import { storedCoordinationViolations } from "./coordination-transitions.js";
 import {
   validateIntegrationMergeLease,
-  withStatusWriteLock,
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
@@ -88,6 +87,7 @@ import {
   isTerminalSnapshot,
   rowValidationRoute,
   validateWorkflowSnapshot,
+  WORKFLOW_SNAPSHOT_FILE,
   type WorkflowSnapshot,
 } from "./workflow.js";
 
@@ -1351,33 +1351,80 @@ export function readExecutionStateGraph(tx: ExecutionTransaction): ExecutionRead
 
 /**
  * Live legacy execution sources of a control harness. The v2/v1 root register is
- * the file at the harness root; snapshots, `sessions/*.json` envelopes and
- * `notes.jsonl` ledgers all live under the workflow tree. Archived history under
- * `<harness>/archived/` is read-only provenance rather than a live source, so it
- * does not block an empty initialization.
+ * the file at the harness root; snapshots and `sessions/*.json` envelopes live
+ * under the workflow tree. Append-only notes are a separate history ledger, not
+ * execution authority. Archived history under `<harness>/archived/` is read-only
+ * provenance and does not block an empty initialization.
  */
 function assertNoLegacyExecutionSources(context: StoreContext): void {
   const harnessDir = dirname(storeDbPath(context));
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources: string[] = [];
   const statusPath = join(harnessDir, "status.json");
-  if (existsSync(statusPath)) sources.push(statusPath);
-  if (existsSync(workflowDir)) {
-    // Fail closed: a path that exists but cannot be listed is a source too.
-    let entries: string[];
+  try {
+    lstatSync(statusPath);
+    sources.push(statusPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${statusPath} (unreadable)`);
+  }
+  let workflowRootIsDirectory = false;
+  try {
+    const info = lstatSync(workflowDir);
+    workflowRootIsDirectory = info.isDirectory() && !info.isSymbolicLink();
+    if (!workflowRootIsDirectory) sources.push(workflowDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${workflowDir} (unreadable)`);
+  }
+  if (workflowRootIsDirectory) {
+    let entries: Dirent[];
     try {
-      entries = readdirSync(workflowDir);
+      entries = readdirSync(workflowDir, { withFileTypes: true });
     } catch {
-      entries = ["<unreadable>"];
+      entries = [];
+      sources.push(`${workflowDir} (unreadable)`);
     }
-    if (entries.length > 0) sources.push(`${workflowDir} (${entries.length} entr${entries.length === 1 ? "y" : "ies"})`);
+    for (const entry of entries) {
+      const dir = join(workflowDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        sources.push(dir);
+        continue;
+      }
+      if (!entry.isDirectory()) continue;
+      const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+      try {
+        lstatSync(path);
+        sources.push(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${path} (unreadable)`);
+      }
+      const sessionsDir = join(dir, "sessions");
+      try {
+        const info = lstatSync(sessionsDir);
+        if (info.isSymbolicLink() || !info.isDirectory()) {
+          sources.push(sessionsDir);
+        } else {
+          let sessions: Dirent[];
+          try {
+            sessions = readdirSync(sessionsDir, { withFileTypes: true });
+          } catch {
+            sessions = [];
+            sources.push(`${sessionsDir} (unreadable)`);
+          }
+          for (const session of sessions) {
+            if (session.name.endsWith(".json")) sources.push(join(sessionsDir, session.name));
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${sessionsDir} (unreadable)`);
+      }
+    }
   }
   if (sources.length > 0) {
     throw new ExecutionError(
       "execution.not-empty",
       `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. ` +
-        `Execution authority is initialized only for an empty execution workspace \u2014 this workspace belongs on the ` +
-        `staged migration route. Nothing was created or modified.`,
+        `Import these sources with the supported \`mstar store upgrade --operator <name>\` operation; the retired ` +
+        `staged migration writer is unavailable. Nothing was created or modified.`,
     );
   }
 }
@@ -1445,32 +1492,30 @@ function assertExecutionDomainEmpty(db: StoreDb, meta: ExecutionMeta): void {
  * schema upgrade alone never activates execution. This is a real domain
  * initializer for a genuinely empty execution workspace, not a test flag, and it
  * is wired to no CLI.
+ *
+ * Serialization is the store's own: `withExecutionTransaction` opens
+ * `BEGIN IMMEDIATE`, so two concurrent initializers serialize on SQLite and the
+ * loser sees the winner's ACTIVE authority and refuses `execution.not-empty`.
+ * The filesystem witness is re-checked immediately before commit, so a rogue
+ * writer that lands a legacy source while this transaction is open still cannot
+ * produce an ACTIVE authority beside it.
  */
 export async function initializeExecutionAuthority(context: StoreContext): Promise<ExecutionRead<ExecutionState>> {
-  const harnessDir = dirname(storeDbPath(context));
-  const statusPath = join(harnessDir, "status.json");
-  // Same-host exclusive write lock used by status.json / snapshot writers
-  // (`withStatusWriteLock` in lease.ts). File lock first, then the SQLite
-  // transaction — never the other way around. Recheck the filesystem witness
-  // immediately before commit so a rogue writer that skipped the lock still
-  // cannot land an active authority beside a live legacy source.
-  return withStatusWriteLock(statusPath, async () => {
+  assertNoLegacyExecutionSources(context);
+  await withExecutionTransaction(context, (tx) => {
+    assertActiveStoreAuthority(tx.db);
+    assertExecutionDomainEmpty(tx.db, tx.execution);
+    const now = new Date().toISOString();
+    tx.db
+      .prepare(
+        "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
+          "activated_at = ? where id = 1",
+      )
+      .run(now, now);
+    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
     assertNoLegacyExecutionSources(context);
-    await withExecutionTransaction(context, (tx) => {
-      assertActiveStoreAuthority(tx.db);
-      assertExecutionDomainEmpty(tx.db, tx.execution);
-      const now = new Date().toISOString();
-      tx.db
-        .prepare(
-          "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
-            "activated_at = ? where id = 1",
-        )
-        .run(now, now);
-      tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
-      assertNoLegacyExecutionSources(context);
-    });
-    return readExecutionState(context);
   });
+  return readExecutionState(context);
 }
 
 // ---------------------------------------------------------------------------

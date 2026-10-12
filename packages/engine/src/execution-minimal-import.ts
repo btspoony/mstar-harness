@@ -5,10 +5,11 @@ import { readSessionEnvelope, type CoordinationSession } from "./coordination-en
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
+import { convertLegacyV1Tree, MIGRATE_STATUS_FILE, type LegacyV1Conversion } from "./migrate.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
-import { initializeStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
 import { importDshHostStateFiles, type DshHostStateImportReport } from "./host-state-import.js";
 
 export type MinimalImportResult = {
@@ -72,7 +73,68 @@ function verifyBinding(value: Binding, source: { root: string; dir: string; work
   return envelope;
 }
 
-function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string } {
+/**
+ * Convert a recognizable v1 root directly into the same import rows the v2
+ * route produces: `convertLegacyV1Tree` supplies the snapshots in memory (the
+ * legacy tree is never rewritten), and the ordinary projection/plan-row
+ * pipeline below admits them. Registry membership follows the v2 route's own
+ * rule — the registry lists ACTIVE lifecycles, so a terminal v1 lift imports as
+ * unregistered terminal history exactly like an unregistered terminal v2
+ * snapshot.
+ */
+function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string): { rootDoc: StatusV2Doc; rows: Source[]; sourceDigest: string } {
+  const rows: Source[] = [];
+  const entries: WorkflowEntry[] = [];
+  for (const converted of legacy.snapshots) {
+    const raw = converted.data as unknown as Record<string, unknown>;
+    const rawInventory = legacySnapshotInventory(raw);
+    const snapshot = projectLegacySnapshot(raw);
+    const historicalMetadata = snapshot.legacy_metadata;
+    const historicalLease = historicalMetadata?.integration_merge_lease;
+    if (historicalMetadata && historicalLease !== undefined) {
+      const holder = isPlainObject(historicalLease) && isNonEmptyString(historicalLease.holder)
+        ? historicalLease.holder
+        : "unidentified holder";
+      delete historicalMetadata.integration_merge_lease;
+      if (Object.keys(historicalMetadata).length === 0) delete snapshot.legacy_metadata;
+      legacy.dispositions.push(
+        `workflow ${converted.id}: historical v1 integration merge lease for ${holder} was not imported as a live lease; operator ${JSON.stringify(operator)} requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`,
+      );
+    }
+    const plans: Plan[] = [];
+    for (const rawPlan of snapshot.plans ?? []) {
+      const id = rowPlanId(rawPlan);
+      if (id === undefined || id === "") conflict(`workflow ${converted.id} produced an unnamed plan row; the conversion must identify every row`);
+      const rowGate = validatePlanRow(rawPlan);
+      if (!rowGate.ok) conflict(`plan ${id} of workflow ${converted.id} is invalid (${rowGate.violations.map((v) => v.code).join(", ")}).`);
+      const planRow: Record<string, unknown> = { ...(rawPlan as unknown as Record<string, unknown>), id };
+      delete planRow.plan_id;
+      const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
+      plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, converted.id, id), ...rawFlags });
+    }
+    // `workflows/<id>` is the canonical harness-relative registration dir —
+    // an imported v1 lifecycle has no on-disk workflow directory to point at.
+    const entry: WorkflowEntry = {
+      id: converted.id,
+      type: converted.type,
+      started_at: snapshot.started_at,
+      dir: join("workflows", converted.id),
+    };
+    const registered = converted.status === "running" || converted.status === "paused";
+    if (registered) entries.push(entry);
+    rows.push({ entry: registered ? entry : null, id: converted.id, dir: join(root, "workflows", converted.id), snapshot, coordinator: null, plans });
+  }
+  rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // `legacy.sources` are already harness-relative; the digest covers the v1
+  // root plus every compass the conversion read.
+  const sourceDigest = createHash("sha256").update(JSON.stringify([
+    MIGRATE_STATUS_FILE,
+    ...legacy.sources,
+  ].sort().map((rel) => [rel, createHash("sha256").update(readSourceBytes(join(root, rel), `legacy source ${rel}`)).digest("hex")]))).digest("hex");
+  return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
+}
+
+function discover(context: StoreContext, operator: string): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string; dispositions: string[] } {
   const root = rootOf(context);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
@@ -88,6 +150,13 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
       parsed = { version: 2, updated_at: SYNTHESIZED_DATE, workflows: [] };
       skipped.push({ path: "status.json", reason: "unparseable root register; left in place" });
     }
+  }
+  // A recognizable v1 root converts in memory and imports through the same
+  // native rows; the legacy bytes stay on disk untouched.
+  if (isPlainObject(parsed) && parsed.version === 1) {
+    const legacy = convertLegacyV1Tree(root);
+    const converted = discoverV1(root, legacy, operator);
+    return { root, ...converted, skipped, dispositions: legacy.dispositions };
   }
   const entries = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : null;
   const safeEntries: unknown[] = [];
@@ -238,7 +307,7 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
     relative(root, path).split(/[\\/]+/).join("/"),
     createHash("sha256").update(readSourceBytes(path, `workspace source ${relative(root, path)}`)).digest("hex"),
   ]))).digest("hex");
-  return { root, rootDoc, rows, skipped, sourceDigest };
+  return { root, rootDoc, rows, skipped, sourceDigest, dispositions: [] };
 }
 
 
@@ -246,7 +315,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   const { context, operator, operationId } = input;
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
-  const source = discover(context);
+  const source = discover(context, operator);
   const requestHash = createHash("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,
@@ -261,7 +330,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     }
     const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
     let imported = 0;
-    const dispositions: string[] = [];
+    const dispositions: string[] = [...source.dispositions];
     for (const row of source.rows) {
       if (existing.has(row.id)) continue;
       writeImportedExecutionWorkflow(tx, row);
@@ -325,7 +394,31 @@ export async function upgradeStoreMinimal(input: {
     schemaVersion = initialized.schemaVersion;
     initialized.close();
   } else schemaVersion = (await upgradeStore(context, { attestation })).schemaVersion;
-  const result = await importExecutionMinimal(input);
+  let result: MinimalImportResult;
+  try {
+    result = await importExecutionMinimal(input);
+  } catch (error) {
+    let authority = "authority state could not be read";
+    try {
+      const store = await openStore(context, "read");
+      try {
+        const rows = store.db.prepare(
+          "select s.authority_state as store_state, e.authority_state as execution_state " +
+            "from store_meta s cross join execution_meta e where s.id = 1 and e.id = 1",
+        ).get() as { store_state?: unknown; execution_state?: unknown } | undefined;
+        authority = `issue/catalog authority ${String(rows?.store_state ?? "missing")}, execution authority ${String(rows?.execution_state ?? "missing")}`;
+      } finally {
+        store.close();
+      }
+    } catch {
+      // Keep the original import failure and disclose that state could not be observed.
+    }
+    const cause = error instanceof Error ? error.message : String(error);
+    const detail = `Schema version ${schemaVersion} was committed before legacy execution import failed; ${authority}. The failed import transaction committed no rows, and existing execution rows remain unchanged. Resolve the reported cause through its source owner, then retry \`mstar store upgrade --operator <name>\`. Original refusal: ${cause}`;
+    if (error instanceof ExecutionError) throw new ExecutionError(error.code, detail);
+    if (error instanceof StoreError) throw new StoreError(error.code, detail, error.details);
+    throw new ExecutionError("execution.migration-conflict", detail);
+  }
   let dsh: DshHostStateImportReport;
   try {
     dsh = await importDshHostStateFiles(input);

@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,6 +15,8 @@ import { executionInputHash, executionInputSelection, resolveProcessHarnessDir }
 import { previewExecutionRestore, restoreExecutionBackup } from "./execution-recovery.js";
 import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
+import { registerCatalogEntity } from "./catalog.js";
+import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
 afterAll(() => {
@@ -1499,3 +1501,263 @@ test("minimal activation retains a manually constructed legacy registration reco
     expect.objectContaining({ operationId, workflowId, phase: "execution-written", rootVisible: true }),
   );
 });
+
+/* ------------------------------------------------------------------------ *
+ * Direct v1 root conversion
+ * ------------------------------------------------------------------------ */
+
+/** Write a recognizable v1 root tree (version 1 + one standalone Done plan). */
+function legacyV1Workspace(name: string): { context: StoreContext; statusBytes: Buffer } {
+  const harnessDir = join(ROOT, name, ".mstar");
+  const workflowId = `wf-${name}`;
+  mkdirSync(join(harnessDir, "iterations", "iter-v1"), { recursive: true });
+  writeFileSync(join(harnessDir, "iterations", "iter-v1", "delivery-compass.md"), [
+    "---",
+    "iteration_id: iter-v1",
+    "start_date: 2026-10-01",
+    "status: active",
+    "plans:",
+    `  - ${workflowId}`,
+    "---",
+    "",
+  ].join("\n"));
+  const statusBytes = Buffer.from(`${JSON.stringify({
+    version: 1,
+    updated_at: "2026-10-04",
+    plans: [
+      { id: workflowId, title: "Legacy v1 plan", file: `${workflowId}.md`, status: "Done", done_at: "2026-10-02" },
+      { id: "v1-standalone", title: "Standalone v1 plan", file: "v1-standalone.md", status: "Todo" },
+    ],
+    metadata: {
+      iteration_base_branch: "integration/v1",
+      target_branch: "main",
+      harness_root: harnessDir,
+      program_roadmap: { title: "Retained program roadmap", milestones: [{ id: "m1", title: "Keep this fact" }] },
+      integration_merge_lease: {
+        holder: "legacy-coordinator",
+        claimed_at: "2026-10-04T00:00:00Z",
+        source_branch: "feature/legacy",
+        target_branch: "main",
+      },
+    },
+  }, null, 2)}\n`);
+  writeFileSync(join(harnessDir, "status.json"), statusBytes);
+  writeFileSync(join(harnessDir, "plain-doc.md"), "# unrelated document\n");
+  return { context: { harnessDir }, statusBytes };
+}
+
+test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-direct");
+  const compassBytes = readFileSync(join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md"));
+  const docBytes = readFileSync(join(context.harnessDir, "plain-doc.md"));
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-direct" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
+
+  const store = await openStore(context, "read");
+  try {
+    // Both lifecycles land in the native tables, with the v1 metadata lift.
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("iter-v1") as { state_json: string };
+    const iteration = JSON.parse(header.state_json) as Record<string, unknown>;
+    expect(iteration).toMatchObject({
+      type: "iteration",
+      status: "running",
+      branch: { base: "integration/v1", target: "main" },
+      legacy_metadata: { program_roadmap: { title: "Retained program roadmap", milestones: [{ id: "m1", title: "Keep this fact" }] } },
+    });
+    expect(iteration.integration_merge_lease).toBeUndefined();
+    expect(result.dispositions).toContain(
+      "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+    );
+    // The standalone Todo row imports paused and continuable.
+    const standalone = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
+    expect(JSON.parse(standalone.state_json)).toMatchObject({ type: "plan", status: "paused" });
+    const row = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("iter-v1", "wf-v1-direct") as { state_json: string };
+    expect(JSON.parse(row.state_json)).toMatchObject({ id: "wf-v1-direct", status: "Done" });
+    // Registry membership is ACTIVE-lifecycle membership: the running
+    // iteration and the paused (non-terminal) standalone plan are both listed;
+    // a terminal lift would import unregistered.
+    expect(store.db.prepare("select count(*) as n from execution_registry").get()).toEqual({ n: 2 });
+  } finally {
+    store.close();
+  }
+
+  // No JSON authority was recreated: the legacy root, the compass and an
+  // unrelated document are byte-identical, and no snapshot tree appeared.
+  expect([...readFileSync(join(context.harnessDir, "status.json"))]).toEqual([...statusBytes]);
+  expect([...readFileSync(join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md"))]).toEqual([...compassBytes]);
+  expect([...readFileSync(join(context.harnessDir, "plain-doc.md"))]).toEqual([...docBytes]);
+  expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
+  expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
+
+  // Ordinary retry is the same public operation and imports nothing new.
+  const replay = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-direct-2" });
+  expect(replay.imported).toBe(0);
+});
+test("malformed v1 lease metadata is retired with an explicit operator disposition", async () => {
+  const { context } = legacyV1Workspace("v1-malformed-historical-lease");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { metadata: Record<string, unknown> };
+  status.metadata.integration_merge_lease = { holder: "legacy-coordinator" };
+  const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
+  writeFileSync(statusPath, sourceBytes);
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-malformed-lease" });
+  expect(result.imported).toBe(2);
+  expect(result.dispositions).toContain(
+    "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+  );
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+  const store = await openStore(context, "read");
+  try {
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("iter-v1") as { state_json: string };
+    const iteration = JSON.parse(header.state_json) as Record<string, unknown>;
+    expect(iteration.integration_merge_lease).toBeUndefined();
+    expect(iteration.legacy_metadata).not.toHaveProperty("integration_merge_lease");
+  } finally {
+    store.close();
+  }
+});
+test("no-active-iteration metadata is recoverably disclosed while malformed leases do not block import", async () => {
+  const { context } = legacyV1Workspace("v1-no-active-iteration");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as {
+    metadata: Record<string, unknown>;
+  };
+  status.metadata.integration_merge_lease = { holder: "legacy-coordinator" };
+  const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
+  writeFileSync(statusPath, sourceBytes);
+  rmSync(join(context.harnessDir, "iterations", "iter-v1"), { recursive: true, force: true });
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.dispositions).toContain(
+    "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+  );
+  expect(result.dispositions).toContain(
+    "root metadata integration_merge_lease is historical data only and is not converted to a live store lease; the direct store-upgrade import leaves status.json unchanged, and future integration ownership uses the native serial lease operation",
+  );
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+
+  const project = await registerCatalogEntity(
+    context,
+    { kind: "project", id: "_default", title: "Default project", rootKind: "projects", relativePath: "_default/roadmap.md" },
+    { operationId: "op-register-default-roadmap", actor: "store-upgrade-minimal.test" },
+  );
+  expect(project.id).toBe("_default");
+  const current = await readRoadmapAuthority(context, "_default");
+  expect(current).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  const roadmap = [
+    "---",
+    "project_id: _default",
+    "title: Recovered legacy roadmap",
+    "status: active",
+    "created_at: 2026-10-04",
+    "---",
+    "",
+    "## Direction",
+    "",
+    "Recovered from the preserved program_roadmap source.",
+    "",
+    "## Goals",
+    "",
+    "- [ ] Keep the original roadmap goal",
+    "",
+  ].join("\n");
+  await replaceRoadmapAuthority(
+    context,
+    { projectId: "_default", expectedProjectRevision: current.projectRevision, expectedRoadmapRevision: "absent", contentMarkdown: roadmap },
+    { operationId: "op-recover-default-roadmap" },
+  );
+  expect((await readRoadmapAuthority(context, "_default")).roadmap?.contentMarkdown).toBe(roadmap);
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+});
+
+test("a v1 root whose lift is unacceptable reports the committed schema and authority state", async () => {
+  const { context } = legacyV1Workspace("v1-refusal");
+  const statusPath = join(context.harnessDir, "status.json");
+  const doc = JSON.parse(readFileSync(statusPath, "utf8")) as { plans: Array<Record<string, unknown>> };
+  doc.plans.push({ id: "../escape", title: "unsafe", file: "x.md", status: "Todo" });
+  writeFileSync(statusPath, JSON.stringify(doc));
+  const before = readFileSync(statusPath);
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-refusal" })
+    .then(() => { throw new Error("unsafe v1 plan unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.message).toContain("Schema version");
+  expect(refusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(refusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(refusal.message).toContain("retry `mstar store upgrade --operator <name>`");
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect([...readFileSync(statusPath)]).toEqual([...before]);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
+  }
+  expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
+  expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
+});
+
+test("concurrent importer processes serialize through SQLite, not a status directory", async () => {
+  const { context } = legacyV1Workspace("v1-concurrent");
+  const worker = join(ROOT, "upgrade-worker.mjs");
+  writeFileSync(worker, `
+import { upgradeStoreMinimal } from ${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))};
+const [harnessDir, operationId] = process.argv.slice(2);
+// Announce readiness, then block on the parent's release line: every child
+// begins its upgrade only once all of them are waiting, so they truly overlap.
+process.stdout.write("ready\\n");
+const reader = Bun.stdin.stream().getReader();
+await reader.read();
+reader.releaseLock();
+try {
+  const result = await upgradeStoreMinimal({ context: { harnessDir }, operator: "child", operationId });
+  process.stdout.write(JSON.stringify({ imported: result.imported }));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ refused: String(error?.code ?? error?.message ?? error) }));
+}
+`);
+  const children = Array.from({ length: 3 }, (_, index) => {
+    const child = spawn("bun", [worker, context.harnessDir, `op-concurrent-${index}`], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let announced: () => void = () => {};
+    const ready = new Promise<void>((resolve) => { announced = resolve; });
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+      if (stdout.includes("ready\n")) announced();
+    });
+    const closed = new Promise<number | null>((resolve) => child.on("close", resolve));
+    return { index, ready, release: () => child.stdin.write("go\n"), done: closed.then(() => ({ stdout })) };
+  });
+  await Promise.all(children.map((child) => child.ready));
+  for (const child of children) child.release();
+  const results = await Promise.all(children.map((child) => child.done));
+
+  const parsed = results.map(({ stdout }) => {
+    const payload = JSON.parse(stdout.slice("ready\n".length)) as { imported?: number; refused?: string };
+    return { imported: payload.imported ?? 0, refused: payload.refused };
+  });
+  // The importer creates one coherent store and commits the v1 lifecycles once;
+  // competing public attempts receive only the create-only store refusal.
+  expect(parsed.filter(({ imported }) => imported > 0)).toHaveLength(1);
+  expect(parsed.map(({ imported }) => imported).reduce((sum, value) => sum + value, 0)).toBe(2);
+  for (const { refused } of parsed) {
+    if (refused !== undefined) expect(refused).toBe("store.already-exists");
+  }
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 2 });
+    expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+  } finally {
+    store.close();
+  }
+  // The supported retry is the same public operation and imports nothing new.
+  const retry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry" });
+  expect(retry.imported).toBe(0);
+  // No filesystem mutex directory was created anywhere in the workspace.
+  expect(existsSync(join(context.harnessDir, ".status-write.lockdir"))).toBe(false);
+  expect(existsSync(join(context.harnessDir, ".execution-maintenance"))).toBe(false);
+}, 60_000);
