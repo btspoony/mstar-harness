@@ -523,6 +523,7 @@ import {
   lstatSync as lstatSync11,
   mkdirSync as mkdirSync8,
   openSync as openSync2,
+  renameSync as renameSync3,
   writeFileSync as writeFileSync6,
   writeSync
 } from "node:fs";
@@ -23119,6 +23120,11 @@ function importDshHostStateRows(tx, rows, nowIso) {
   for (const binding of rows.bindings) {
     const prior = tx.db.prepare("select excluded_before_seq from dsh_session_bindings where session_id = ? and cwd = ?").get(binding.sessionId, binding.cwd);
     if (!prior) {
+      const otherCwd = tx.db.prepare("select 1 from dsh_session_bindings where session_id = ? limit 1").get(binding.sessionId);
+      if (otherCwd) {
+        refused.push({ selector: "dsh-status", category: "status", facts: `binding ${binding.sessionId} at ${binding.cwd}`, discarded: `the imported session binding at ${binding.cwd}`, reason: "session binding exists at a different cwd", source: "dsh-status" });
+        continue;
+      }
       tx.db.prepare("insert into dsh_session_bindings(session_id,cwd,selected_workflow_id,execution_binding,excluded_before_seq,updated_at) values(?,?,?,?,?,?)").run(binding.sessionId, binding.cwd, binding.selectedWorkflowId, binding.executionBindingJson, binding.excludedBeforeSeq, binding.updatedAt);
       written.bindings++;
       changed = true;
@@ -23758,7 +23764,7 @@ function conflict2(message) {
 function rootOf(context) {
   return canonicalPath(dirname16(storeDbPath(context)));
 }
-function assertWorkflowTreeIsReal(root) {
+function assertWorkflowTreeIsReal(root, acknowledgedSkips) {
   const workflowsDir = join27(root, "workflows");
   let info;
   try {
@@ -23771,8 +23777,11 @@ function assertWorkflowTreeIsReal(root) {
   if (info.isSymbolicLink() || !info.isDirectory())
     conflict2(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
   for (const dirent of readdirSync15(workflowsDir, { withFileTypes: true })) {
-    if (dirent.isSymbolicLink())
-      conflict2(`workflow directory ${join27(workflowsDir, dirent.name)} is a symlink; replace it with an in-root directory or remove it, then rerun store upgrade.`);
+    if (!dirent.isSymbolicLink())
+      continue;
+    if (acknowledgedSkips.includes(`dsh-ledger:${dirent.name}`))
+      continue;
+    conflict2(`workflow directory ${join27(workflowsDir, dirent.name)} is a symlink; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-ledger:${dirent.name}\` to drop exactly that source, otherwise replace it with an in-root directory or remove it, then rerun store upgrade.`);
   }
 }
 function binding(value) {
@@ -23869,9 +23878,9 @@ function discoverV1(root, legacy, operator) {
   ].sort().map((rel) => [rel, createHash13("sha256").update(readSourceBytes(join27(root, rel), `legacy source ${rel}`)).digest("hex")]))).digest("hex");
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
 }
-function discover(context, operator) {
+function discover(context, operator, acknowledgedSkips) {
   const root = rootOf(context);
-  assertWorkflowTreeIsReal(root);
+  assertWorkflowTreeIsReal(root, acknowledgedSkips);
   const statusPath = join27(root, "status.json");
   const skipped = [];
   const sourceFiles = new Set;
@@ -24067,7 +24076,7 @@ async function importExecutionMinimal(input) {
   if (!isNonEmptyString(operator) || operator.trim() === "")
     throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
-  const source = discover(context, operator);
+  const source = discover(context, operator, input.acknowledgedSkips ?? []);
   const requestHash3 = createHash13("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,
@@ -28424,14 +28433,24 @@ function openWithoutFollowing(path2, flags, mode) {
     throw error;
   }
 }
-function interleavingSeam(path2) {
+function replaceLedgerForTest(path2, stage) {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
     return;
-  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path2) {
-    writeFileSync6(path2, `replaced between the open and the write
-`);
+  if (process.env[`MSTAR_LEDGER_REPLACE_${stage.replace("-", "_").toUpperCase()}`] !== path2)
     return;
-  }
+  const displaced = `${path2}.displaced-${stage}`;
+  const replacement = `${path2}.replacement-${stage}`;
+  renameSync3(path2, displaced);
+  writeFileSync6(replacement, `replacement inode canonical bytes (${stage})
+`);
+  renameSync3(replacement, path2);
+}
+function interleavingSeam(path2) {
+  replaceLedgerForTest(path2, "before-commit");
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
+    return;
+  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path2)
+    return;
   const peer = process.env.MSTAR_LEDGER_PEER_PARTIAL_SCRIPT;
   if (peer !== undefined && peer !== "")
     execFileSync6("bun", [peer, path2], { stdio: "ignore" });
@@ -28450,8 +28469,20 @@ function fsyncDirectory(dir) {
     closeSync2(fd);
   }
 }
+function assertLedgerPathIdentity(path2, opened, phase) {
+  let current;
+  try {
+    current = lstatSync11(path2);
+  } catch {
+    throw new ExecutionLedgerError("execution-ledgers.target-replaced", `${path2} changed ${phase}; no success receipt was issued.`);
+  }
+  if (current.dev !== opened.dev || current.ino !== opened.ino) {
+    throw new ExecutionLedgerError("execution-ledgers.target-replaced", `${path2} now names a different file than the opened ledger ${phase}; no success receipt was issued.`);
+  }
+}
 function commitLedgerFrame(path2, frame) {
   let fd;
+  let opened;
   let created = false;
   try {
     fd = openWithoutFollowing(path2, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
@@ -28462,11 +28493,12 @@ function commitLedgerFrame(path2, frame) {
     fd = openWithoutFollowing(path2, fsConstants.O_WRONLY | fsConstants.O_APPEND);
   }
   try {
-    const info = fstatSync2(fd);
-    if (!info.isFile()) {
+    opened = fstatSync2(fd);
+    if (!opened.isFile()) {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is not a regular file; nothing was written.`);
     }
     interleavingSeam(path2);
+    assertLedgerPathIdentity(path2, opened, "before append");
     const line = Buffer.concat([Buffer.from(`
 `, "utf8"), frame]);
     const written = writeSync(fd, line, 0, writeRequestLength(line), null);
@@ -28474,11 +28506,13 @@ function commitLedgerFrame(path2, frame) {
       throw new ExecutionLedgerError("execution-ledgers.append-short", `only ${written} of ${line.length} bytes of the framed note reached ${path2}; the partial bytes stay in place and are never repaired or truncated in a peer's name. Retry the append with a new record id.`);
     }
     fsyncSync(fd);
+    replaceLedgerForTest(path2, "after-fsync");
   } finally {
     closeSync2(fd);
   }
   if (created)
     fsyncDirectory(dirname19(path2));
+  assertLedgerPathIdentity(path2, opened, "before success receipt");
 }
 function assertRealDirectory(path2, what) {
   let info = null;
@@ -28665,6 +28699,25 @@ async function recoveryParkHook(attemptId, imagePath) {
   if (ready === undefined || release === undefined)
     return;
   writeJson(ready, { attemptId, imagePath, stage: "staged" });
+  for (let waited = 0;waited < 30000; waited += 5) {
+    if (existsSync24(release))
+      return;
+    const { promise, resolve: resolve22 } = Promise.withResolvers();
+    setTimeout(resolve22, 5);
+    await promise;
+  }
+}
+async function recoveryCleanupParkHook(attemptId) {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
+    return;
+  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
+  if (wanted !== attemptId && wanted !== "*")
+    return;
+  const ready = process.env.MSTAR_STORE_PARK_READY;
+  const release = process.env.MSTAR_STORE_PARK_RELEASE;
+  if (ready === undefined || release === undefined)
+    return;
+  writeJson(ready, { attemptId, stage: "cleanup" });
   for (let waited = 0;waited < 30000; waited += 5) {
     if (existsSync24(release))
       return;
@@ -29361,7 +29414,11 @@ async function restoreInOneTransaction(context, root, input, image, safetyReceip
   } finally {
     handle.close();
   }
-  writeJson(receiptPath, record);
+  let placedReceiptPath = null;
+  try {
+    writeJson(receiptPath, record);
+    placedReceiptPath = receiptPath;
+  } catch {}
   recoveryFailureHook("after-replacement");
   reclaimAbandonedRestoreScratch(root, attemptId, committedBefore);
   return {
@@ -29371,7 +29428,7 @@ async function restoreInOneTransaction(context, root, input, image, safetyReceip
     backupCoverageDigest: input.preview.backupCoverageDigest,
     liveCoverageDigest: input.preview.liveCoverageDigest,
     preRestoreBackup: record.preRestoreBackup,
-    recoveryReceiptPath: receiptPath
+    recoveryReceiptPath: placedReceiptPath
   };
 }
 function restoreReceiptOperationId(attemptId) {
@@ -29408,8 +29465,23 @@ async function runRestore(context, root, input) {
     const safety = await backupStore(context, {
       out: join32(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID7()}.db`)
     });
-    const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
-    return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
+    try {
+      recoveryFailureHook("before-live-hash");
+      const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
+      return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
+    } catch (error) {
+      if (process.env.MSTAR_STORE_TEST_RUNNER === "1")
+        await recoveryCleanupParkHook(attemptId);
+      const live = await currentAuthorityHandle(context).catch(() => null);
+      if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
+        try {
+          for (const suffix of RESTORE_SCRATCH_SIDECARS)
+            rmSync2(`${safety.backupPath}${suffix}`, { force: true });
+          rmSync2(safety.backupPath, { force: true });
+        } catch {}
+      }
+      throw error;
+    }
   } finally {
     for (const suffix of RESTORE_SCRATCH_SIDECARS)
       rmSync2(`${imagePath}${suffix}`, { force: true });
@@ -35613,6 +35685,7 @@ var init_engine = __esm(() => {
     "execution-ledgers.record-invalid",
     "execution-ledgers.scope-mismatch",
     "execution-ledgers.target-untrusted",
+    "execution-ledgers.target-replaced",
     "execution-ledgers.append-short"
   ];
   ExecutionLedgerError = class ExecutionLedgerError extends Error {

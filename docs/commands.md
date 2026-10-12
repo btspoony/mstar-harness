@@ -25,6 +25,8 @@ The remaining `store` verbs are `init`, `migrate`, `backup`, `activate`, and `re
 
 Backup captures a consistent native database image, including committed WAL state; it does not freeze ordinary documents, logs or `notes.jsonl`. Restore replaces the issue/catalog/execution/host authority domains in one native transaction on the same live database file, commits a new epoch and retains authorization, loss acknowledgement, stale-preview checks and a verified safety image. It neither rolls back ordinary file bodies nor renames the live database or removes its WAL/SHM files. Exact restore inputs and recovery belong to the current command help.
 
+The native restore receipt is authoritative. Failure to write its optional filesystem copy does not turn an already-committed restore into a refusal: the successful result returns `recoveryReceiptPath: null`. A proven pre-commit failure reclaims only that attempt's newly owned safety image; a changed or unreadable store generation preserves the image rather than treating a missing operation row as proof that no commit occurred. Dsh skip acknowledgements can recover unregistered Dsh-only symlink sources without following them, but do not authorize reading registered execution sources through symlinks.
+
 | Command | Purpose | Owning skill |
 |---------|---------|--------------|
 | [`/iteration-start`](#iteration-start) | Start an iteration: interactive direction lock, then the full lifecycle | `mstar-iteration` |
