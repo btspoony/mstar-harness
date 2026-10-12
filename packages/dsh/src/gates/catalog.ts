@@ -14,10 +14,9 @@
  * `workflow-selection.ts`): the session's scope/cwd/durable pick, else the
  * only active entry, else the latest terminal snapshot by mtime for an EMPTY
  * active registry; N>1 with no binding is the picker error, never first entry.
- * `state.plans[]` / row scopes come from the selected snapshot's `plans[]` rows
- * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, open issues
- * from the issue authority, and roadmap milestones from the store roadmap
- * authority — never a root v1 `plans[]` / root `agent-flow.jsonl` read.
+ * verbatim, `agentFlow` from the selected workflow's native event rows, open
+ * issues from the issue authority, and roadmap milestones from the store
+ * roadmap authority — never from retired root or workflow files.
  * The direction one-liner and the iteration gate come
  * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
  * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
@@ -566,12 +565,11 @@ function hhmm(ts: number): string {
  * ONCE by the caller (D4: the same selection the iteration gate consumes).
  * `state.plans[]` / `rowScopes` come from the selected snapshot's `plans[]` rows
  * verbatim (root action JSON stays the execution authority), `agentFlow` from
- * the workflow dir's `agent-flow.jsonl`, and the open-item facts from
- * `{HARNESS_DIR}/store.db` (the issue/catalog authority). Never a root v1
- * `plans[]` / root `agent-flow.jsonl` read, and never a project register: the
- * retired registers are not consulted anywhere on this path. The direction
- * one-liner and the branch fallbacks come from the SELECTED snapshot's own
- * `compass_ref` — never a directory-wide first-active compass scan.
+ * the selected workflow's native SQLite ledger window, and open-item facts
+ * from `{HARNESS_DIR}/store.db` (the issue/catalog authority). Never a root v1
+ * `plans[]` read, and never a project register: retired registers are not
+ * consulted here. Direction and branch fallbacks come from the selected
+ * snapshot's `compass_ref`.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  * @param selection - the ONE read-path selection for this build.
  * @param facts - the store-backed open-item facts (see {@link StoreFacts}).
@@ -666,17 +664,10 @@ function harnessStateSource(
       knowledge: facts.knowledge,
       storeFacts: facts.source,
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
-      // Actual subagent flow evidence — read on the same per-workspace cache
-      // cycle as the sibling state rows (one bounded ledger read per TTL
-      // refresh; spec §2.2). v3: the ledger lives in the SELECTED workflow
-      // dir (`workflows/<id>/agent-flow.jsonl`), never the root file.
-      // Fix-wave : a MISSING ledger reads as the EMPTY view
-      // (recording hasn't started — the panel shows the no-dispatches-yet
-      // empty state per the plan promise); only an UNREADABLE ledger → null
-      // (advisory — the agent-flow line is absent). The state section as a
-      // whole is still gated on status.json (missing status → state null →
-      // agentFlow absent too — documented).
-      agentFlow: readAgentFlow(join(harnessDir, selection.dir), 50),
+      // Read the selected workflow's native event window through the store.
+      // `null` means no authoritative window is available; it is not an empty
+      // success and no retired JSONL path is consulted.
+      agentFlow: readAgentFlow(join(harnessDir, 'workflows', selection.workflowId), 50),
     }
   } catch {
     return null // advisory degrade — the state section is absent, never hardening

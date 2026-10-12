@@ -305,7 +305,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
             hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
             pairing: this.pairing,
             resolvedWorkflowDir: join(harnessDir, source.dir),
-            ...(hint !== undefined ? { hint } : {}),
+            selectedGeneration: { storeId: source.storeId, epoch: source.epoch },
           })
         } catch (error) {
           this.ctx.logger(AGENT_FLOW_LOGGER).error(
