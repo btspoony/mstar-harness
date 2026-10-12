@@ -54,6 +54,16 @@
  * tail is preserved and separated from the next record by LF. A complete note
  * missing only its final LF participates in deduplication before that LF is
  * appended. Partial or unrecognized historical content never blocks a new note.
+ *
+ * ## Ledger expectations (append-only)
+ *
+ * The ledger is append-only and grows linearly with the notes a workflow
+ * records; nothing truncates, compacts or rewrites retained history, so both
+ * read paths are whole-file by design rather than by accident. The append path
+ * scans every retained byte to deduplicate on record id (`scanLedger` /
+ * `decideAppend`), and the coverage projection hashes the whole retained file
+ * for its identity (`normalizeWorkflowNotesCoverage`); both are contract
+ * behavior, so read cost is O(file) and is expected to grow with the ledger.
  */
 import {
   closeSync,
