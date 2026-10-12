@@ -572,6 +572,7 @@ export type {
   DshSessionBinding,
   DshSessionBindingUpdate,
   DshStatusEmission,
+  DshStatusEmissionRead,
   DshWorkflowEventInput,
   DshWriteResult,
   DshSelectedGeneration,

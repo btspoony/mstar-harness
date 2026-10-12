@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, readDshLedgerWindow, readDshScanBound, readDshSessionBinding, readDshStatusEmission, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
@@ -32,6 +32,11 @@ describe("host-state store domain", () => {
       kind: "unavailable",
       reason: expect.stringContaining("mstar store init"),
     });
+    // An absent authority is never a true no-row answer.
+    expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
+      kind: "unavailable",
+      reason: expect.stringContaining("mstar store init"),
+    });
     expect(existsSync(join(context.harnessDir, "store.db"))).toBe(false);
   });
   test("reports staged authority separately from true absence", async () => {
@@ -42,9 +47,42 @@ describe("host-state store domain", () => {
         kind: "unavailable",
         reason: expect.stringContaining("reviewed activation"),
       });
+      expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
+        kind: "unavailable",
+        reason: expect.stringContaining("reviewed activation"),
+      });
     } finally {
       handle.close();
     }
+  });
+
+  test("a schema- or content-refused store answers unavailable with its own cause and unchanged bytes", async () => {
+    const { context, handle } = await fresh("refused-read");
+    recordDshStatusEmission(context, "s", "/cwd", 4, "kept");
+    // A hole in the recorded migrations (version 4 dropped, later ones kept) is
+    // an observable schema verdict with its own recovery — never the no-row answer.
+    handle.db.exec("delete from schema_version where version = 4");
+    handle.close();
+    const dbPath = join(context.harnessDir, "store.db");
+    const before = readFileSync(dbPath);
+    expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
+      kind: "unavailable",
+      reason: expect.stringContaining("store.schema-drift"),
+    });
+    expect(readFileSync(dbPath).equals(before)).toBe(true);
+
+    // An existing store that cannot be read refuses by its own cause, never as
+    // an absent authority.
+    const broken = await fresh("broken-read");
+    broken.handle.close();
+    const brokenPath = join(broken.context.harnessDir, "store.db");
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${brokenPath}${suffix}`, { force: true });
+    writeFileSync(brokenPath, "this is not a sqlite database\n");
+    expect(readDshStatusEmission(broken.context, "s", "/cwd")).toMatchObject({
+      kind: "unavailable",
+      reason: expect.stringContaining("store.corrupt"),
+    });
+    expect(existsSync(brokenPath)).toBe(true);
   });
 
   test("refuses nested private DSH transactions without changing revision", async () => {
@@ -236,7 +274,11 @@ describe("host-state store domain", () => {
       expect(recordDshStatusEmission(context, "s", "/cwd", 1, "first")).toEqual({ kind: "written" });
       expect(recordDshStatusEmission(context, "s", "/cwd", 2, "second")).toEqual({ kind: "written" });
       expect(recordDshStatusEmission(context, "other", "/cwd", 1, "other-session")).toEqual({ kind: "written" });
-      expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({ turn: 2, payloadJson: "second" });
+      expect(readDshStatusEmission(context, "s", "/cwd")).toEqual({
+        kind: "ok", emission: { sessionId: "s", cwd: "/cwd", turn: 2, payloadJson: "second", emittedAt: expect.any(String) },
+      });
+      // A true no-row answer for an addressed pair is `ok` with no emission.
+      expect(readDshStatusEmission(context, "s", "/other-cwd")).toEqual({ kind: "ok" });
       expect(handle.db.prepare("select turn, payload_json from dsh_status_emissions where session_id='s' and cwd='/cwd'").get()).toEqual({ turn: 2, payload_json: "second" });
       expect(count(handle.db, "select count(*) as n from dsh_status_emissions")).toBe(2);
     } finally {

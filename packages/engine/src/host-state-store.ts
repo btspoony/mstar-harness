@@ -264,13 +264,21 @@ export type DshStatusEmission = {
   payloadJson: string;
 };
 
+/** `ok` with no `emission` is a true no-row answer for this exact
+ *  `(sessionId, cwd)` pair; every native refusal — absent, staged, corrupt,
+ *  schema or unreadable authority — is `unavailable` with its own cause and
+ *  recovery, never a fabricated absence. */
+export type DshStatusEmissionRead =
+  | { kind: "ok"; emission?: DshStatusEmission }
+  | { kind: "unavailable"; reason: string };
+
 export function readDshStatusEmission(
   context: StoreContext,
   sessionId: string,
   cwd: string,
-): DshStatusEmission | undefined {
+): DshStatusEmissionRead {
   try {
-    return withExecutionReadGuard(context, (db) => {
+    return withExecutionReadGuard(context, (db): DshStatusEmissionRead => {
       const row = db.prepare(
         "select session_id, cwd, turn, emitted_at, payload_json from dsh_status_emissions where session_id = ? and cwd = ?",
       ).get(sessionId, cwd) as {
@@ -280,12 +288,14 @@ export function readDshStatusEmission(
         emitted_at?: string;
         payload_json?: string;
       } | undefined;
-      return row
-        ? { sessionId: row.session_id!, cwd: row.cwd!, turn: row.turn!, emittedAt: row.emitted_at!, payloadJson: row.payload_json! }
-        : undefined;
+      if (!row) return { kind: "ok" };
+      return {
+        kind: "ok",
+        emission: { sessionId: row.session_id!, cwd: row.cwd!, turn: row.turn!, emittedAt: row.emitted_at!, payloadJson: row.payload_json! },
+      };
     });
-  } catch {
-    return undefined;
+  } catch (error) {
+    return { kind: "unavailable", reason: error instanceof Error ? error.message : String(error) };
   }
 }
 export type DshFactCategory = "registry" | "tail" | "identity" | "bounds" | "status";
