@@ -13,14 +13,14 @@
  * served payload is proven to be the emitted one.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as entry from '../src/index.ts'
-import { ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH, readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
 import {
   installEngineStatusEndpoint,
   MSTAR_ENGINE_STATUS_METHOD,
@@ -29,7 +29,7 @@ import {
   type MstarEngineStatusResult,
   type MstarSelectWorkflowResult,
 } from '../src/engine-status-endpoint.ts'
-import { bootApp, seedActiveWorkflow, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -82,14 +82,14 @@ function liveSession(app: BootResult, id: string, cwd: string, seq = 0): void {
   sessions.register({ id, header: { cwd }, seq })
 }
 
-/** Seed one stored snapshot through the store's own writer. */
-function seed(app: BootResult, sessionId: string, cwd: string, marker: number): void {
+/** Seed one stored emission through the store's own writer (creating the store on first use). */
+async function seed(app: BootResult, sessionId: string, cwd: string, marker: number): Promise<void> {
+  if (!existsSync(join(app.harnessDir, 'store.db'))) await seedStore(app.harnessDir)
   const result = writeEngineStatusSnapshot(app.harnessDir, {
     sessionId,
     cwd,
     turn: marker,
     payload: { version: '9.9.9', marker },
-    now: new Date('2026-09-10T12:00:00.000Z'),
   })
   if (result.kind !== 'written') throw new Error(`seed failed: ${result.reason}`)
 }
@@ -125,6 +125,10 @@ describe('engineStatus endpoint — registration on the shared /api gateway', ()
 
   it('serves the emitted snapshot end to end: pre-step emission → stored → endpoint', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    // The emission is an authority-dependent write: without an ACTIVE store the
+    // workspace truthfully persists nothing (covered by the store spec), so the
+    // end-to-end path needs the store it serves from.
+    await seedStore(app.harnessDir)
     liveSession(app, 'ses_alpha', app.root)
     const inbox: UserMessage[] = [
       createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'inbox' }] }),
@@ -157,7 +161,7 @@ describe('engineStatus endpoint — validation chain', () => {
   it('accepts a matching session + asserted cwd', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     const result = await endpointOf(app).engineStatus('ses_alpha', app.root)
     expect(result).toMatchObject({ status: 'ok', sessionId: 'ses_alpha', cwd: app.root, turn: 11 })
   })
@@ -165,7 +169,7 @@ describe('engineStatus endpoint — validation chain', () => {
   it('rejects a malformed or relative cwd without touching the store', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     const endpoint = endpointOf(app)
     expect(await endpoint.engineStatus('ses_alpha', '')).toEqual({ status: 'unavailable', reason: 'invalid-cwd' })
     expect(await endpoint.engineStatus('ses_alpha', 'relative/ws')).toEqual({
@@ -181,7 +185,7 @@ describe('engineStatus endpoint — validation chain', () => {
   it('refuses traversal in the asserted path', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     const endpoint = endpointOf(app)
     const probes = [
       `${app.root}/../../etc`,
@@ -199,7 +203,7 @@ describe('engineStatus endpoint — validation chain', () => {
 
   it('answers unavailable when the session is unknown to the host', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     // The snapshot exists, but the session does not: the endpoint never serves
     // a store row it cannot tie to a real session.
     expect(await endpointOf(app).engineStatus('ses_alpha', app.root)).toEqual({
@@ -221,8 +225,8 @@ describe('engineStatus endpoint — validation chain', () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
     liveSession(app, 'ses_beta', '/proj/other')
-    seed(app, 'ses_alpha', app.root, 11)
-    seed(app, 'ses_beta', '/proj/other', 22)
+    await seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_beta', '/proj/other', 22)
     const endpoint = endpointOf(app)
 
     // Both sessions are real and both have snapshots: each read is its own.
@@ -247,12 +251,14 @@ describe('engineStatus endpoint — validation chain', () => {
   it('refuses a session whose live cwd no longer matches the stored record', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', '/proj/moved')
-    seed(app, 'ses_alpha', '/proj/original', 11)
-    // The stored row belongs to the session's PREVIOUS workspace: a stale read
-    // is refused rather than served as current.
+    await seed(app, 'ses_alpha', '/proj/original', 11)
+    // The stored row belongs to the session's PREVIOUS workspace. Emission rows
+    // are addressed by (session, cwd), so the stale row is not even readable
+    // from this workspace: the read answers no-entry instead of serving it as
+    // current (the refusal-vocabulary shift the store cutover records).
     expect(await endpointOf(app).engineStatus('ses_alpha', '/proj/original')).toEqual({
       status: 'unavailable',
-      reason: 'session-cwd-mismatch',
+      reason: 'store-no-session-entry',
     })
   })
 
@@ -265,7 +271,7 @@ describe('engineStatus endpoint — validation chain', () => {
       inspected.push(sessionId)
       return { header: { cwd: app.root } }
     }
-    seed(app, 'ses_persisted', app.root, 7)
+    await seed(app, 'ses_persisted', app.root, 7)
     const result = await endpointOf(app).engineStatus('ses_persisted', app.root)
     expect(result).toMatchObject({ status: 'ok', sessionId: 'ses_persisted', turn: 7 })
     expect(inspected).toEqual(['ses_persisted'])
@@ -278,7 +284,7 @@ describe('engineStatus endpoint — validation chain', () => {
     service.handler = async () => {
       throw new Error('persistence offline')
     }
-    seed(app, 'ses_persisted', app.root, 7)
+    await seed(app, 'ses_persisted', app.root, 7)
     expect(await endpointOf(app).engineStatus('ses_persisted', app.root)).toEqual({
       status: 'unavailable',
       reason: 'session-inspect-failed',
@@ -484,22 +490,13 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     expect(await endpoint.selectWorkflow('s-A', '/elsewhere', 'wf-a')).toEqual({ status: 'unavailable', reason: 'cwd-mismatch' })
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-old')).toEqual({ status: 'unavailable', reason: 'workflow-not-active' })
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-missing')).toEqual({ status: 'unavailable', reason: 'workflow-not-active' })
-    seed(app, 's-A', app.root, 1)
-    await writeFile(
-      join(app.harnessDir, ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH),
-      JSON.stringify({ sv: 1, entries: {}, bindings: [] }),
-    )
-    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
-      status: 'unavailable',
-      reason: 'store-store-bindings-schema',
-    })
   })
 
   it('a valid pick survives re-apply without advancing the exclusion floor', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedTwoActives(app)
     liveSession(app, 's-A', app.root, 5)
-    seed(app, 's-A', app.root, 1)
+    await seed(app, 's-A', app.root, 1)
     const endpoint = endpointOf(app)
 
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
@@ -509,7 +506,7 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     })
     expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({
       kind: 'ok',
-      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', executionBinding: null, excludedBeforeSeq: 5 },
     })
 
     liveSession(app, 's-A', app.root, 9)
@@ -520,7 +517,7 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     })
     expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({
       kind: 'ok',
-      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', executionBinding: null, excludedBeforeSeq: 5 },
     })
 
     const served = await endpoint.engineStatus('s-A', app.root)

@@ -285,7 +285,7 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
 
     // (4) An entry for THAT session must exist — an absent/torn/unknown store
     // answers unavailable, never a best-effort parse.
-    const read = readEngineStatusSnapshot(harnessDir, sid)
+    const read = readEngineStatusSnapshot(harnessDir, sid, session.cwd)
     if (read.kind !== 'ok') return unavailable(`store-${read.reason}`)
     const entry: EngineStatusSnapshotEntry = read.entry
 
