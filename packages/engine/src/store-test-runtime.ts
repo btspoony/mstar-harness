@@ -281,6 +281,10 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     if (meta.revision !== 2) throw new Error(`expected both accepted writes committed (revision 2), got ${meta.revision}`);
     return "second writer received a bounded busy refusal with no lost accepted write";
   },
+  async "upgrade-pending"(rootDir) {
+    const result = await upgradeStore({ harnessDir: rootDir });
+    return `public upgrade returned schemaVersion=${result.schemaVersion}`;
+  },
 };
 
 /** Run one scenario against a temporary root directory. */

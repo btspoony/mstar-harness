@@ -1580,11 +1580,13 @@ function applyPendingMigrations(
   options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"] } = {},
 ): number {
   const own = !options.alreadyInTransaction;
-  const prior = readAppliedMigrations(db, true);
-  const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
-  const pending = MIGRATIONS.filter((m) => m.version > priorMax);
   if (own) db.exec("begin immediate");
   try {
+    // The applied set belongs to the transaction snapshot: another upgrader
+    // may have completed while this connection waited for the writer slot.
+    const prior = readAppliedMigrations(db, true);
+    const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
+    const pending = MIGRATIONS.filter((m) => m.version > priorMax);
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);

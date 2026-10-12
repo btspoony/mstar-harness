@@ -499,6 +499,46 @@ describe("migration 7 - project_milestones", () => {
     });
     upgraded.close();
   });
+  test("concurrent public upgrades serialize pending migration selection", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-concurrent-upgrade-"));
+    const db = new DatabaseSync(join(dir, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin");
+    db.exec("create table schema_version(version integer primary key, name text not null unique, checksum text not null, applied_at text not null)");
+    for (const migration of MIGRATIONS.slice(0, 6)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version values(?, ?, ?, ?)").run(migration.version, migration.name, migrationChecksum(migration), "now");
+    }
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-concurrent', 'Concurrent', 'projects', 'p-concurrent/roadmap.md', 'now', 'now')",
+    ).run();
+    db.exec("commit");
+    db.close();
+
+    let armed = true;
+    const originalExec = DatabaseSync.prototype.exec;
+    DatabaseSync.prototype.exec = function (sql: string): void {
+      if (armed && sql.trim().toLowerCase() === "begin immediate") {
+        armed = false;
+        // At the real writer-admission call-through, let a separate native
+        // process commit the pending batch before this connection proceeds.
+        const competitor = spawnSync(NODE_BIN, [BUNDLE, "upgrade-pending", dir], {
+          encoding: "utf8",
+          timeout: 60_000,
+          env: { ...process.env, MSTAR_STORE_TEST_RUNNER: "1" },
+        });
+        expect(competitor.status).toBe(0);
+        expect(competitor.stdout).toContain(`OK upgrade-pending: public upgrade returned schemaVersion=${MIGRATIONS.length}`);
+      }
+      return originalExec.call(this, sql);
+    };
+    try {
+      expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    } finally {
+      DatabaseSync.prototype.exec = originalExec;
+    }
+    expect(armed).toBe(false);
+  });
   test("milestone migration refusal covers version gaps and newer versions", async () => {
     for (const [label, mutate, code] of [
       ["gap", "delete from schema_version where version=2", "store.schema-drift"],
