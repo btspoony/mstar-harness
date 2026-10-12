@@ -831,8 +831,10 @@ export function recordDispatch(input: {
  * retained so clients can match the settle to its dispatch.
  */
 export function recordSettle(input: {
+  harnessDir: string
   workflowId: string
   workflowDir: string
+  agent?: string
   outcome: SettleOutcome
   durationMs?: number
   role?: string
@@ -1372,6 +1374,7 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
     harnessDir: ref.harnessDir,
     workflowId: ref.workflowId,
     workflowDir: ref.workflowDir,
+    ...(ref.callId !== undefined ? { callId: ref.callId } : {}),
     ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
     outcome,
     ...(durationMs !== undefined && Number.isFinite(durationMs) ? { durationMs } : {}),

@@ -535,6 +535,7 @@ describe('workflow event native acceptance and scan bound', () => {
       harnessDir,
       workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
+      selectedGeneration: selectedGenerationFor(harnessDir),
       prompt: `## Assignment
 
 **Execute as**: @fullstack-dev

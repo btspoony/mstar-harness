@@ -55,6 +55,7 @@ describe('agent-flow native event rows', () => {
       harnessDir,
       workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
+      selectedGeneration,
       exec,
       pairing,
       prompt: `## Assignment
@@ -327,6 +328,7 @@ Catalog correlation regression.
         harnessDir,
         workflowId: 'wf-1',
         resolvedWorkflowDir: workflowDir,
+        selectedGeneration,
         exec: { callId: 'stale-call', name: 'subagent', agent: { id: 'session-1' } },
         pairing,
         prompt: '**Execute as**: fullstack-dev',
