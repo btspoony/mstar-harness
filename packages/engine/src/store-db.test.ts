@@ -499,6 +499,39 @@ describe("migration 7 - project_milestones", () => {
     });
     upgraded.close();
   });
+  test("concurrent public upgrades serialize pending migration selection", async () => {
+    const dir = mkdtempSync(join(ROOT, "milestone-concurrent-upgrade-"));
+    const db = new DatabaseSync(join(dir, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin");
+    db.exec("create table schema_version(version integer primary key, name text not null unique, checksum text not null, applied_at text not null)");
+    for (const migration of MIGRATIONS.slice(0, 6)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version values(?, ?, ?, ?)").run(migration.version, migration.name, migrationChecksum(migration), "now");
+    }
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-concurrent', 'Concurrent', 'projects', 'p-concurrent/roadmap.md', 'now', 'now')",
+    ).run();
+    db.exec("commit");
+    db.close();
+
+    const results = await Promise.all([upgradeStore({ harnessDir: dir }), upgradeStore({ harnessDir: dir })]);
+    expect(results).toEqual([{ schemaVersion: MIGRATIONS.length }, { schemaVersion: MIGRATIONS.length }]);
+    const check = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
+    expect(check.prepare("select version, name, checksum from schema_version order by version").all()).toEqual(
+      MIGRATIONS.map((migration) => ({
+        version: migration.version,
+        name: migration.name,
+        checksum: migrationChecksum(migration),
+      })),
+    );
+    expect(check.prepare("select id, title from catalog_entities where id='p-concurrent'").get()).toEqual({
+      id: "p-concurrent",
+      title: "Concurrent",
+    });
+    expect(check.prepare("pragma integrity_check").get()).toEqual({ integrity_check: "ok" });
+    check.close();
+  });
   test("milestone migration refusal covers version gaps and newer versions", async () => {
     for (const [label, mutate, code] of [
       ["gap", "delete from schema_version where version=2", "store.schema-drift"],
