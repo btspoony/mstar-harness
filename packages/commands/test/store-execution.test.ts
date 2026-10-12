@@ -285,5 +285,53 @@ describe("store and execution command surface", () => {
     });
     expect(readFileSync(identityPath, "utf8")).toBe(source);
   });
+  test("a refused DSH phase leaves the earlier execution import committed and reports it truthfully", async () => {
+    const root = fixture("store-upgrade-dsh-partial");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initialized = await initializeStore({ harnessDir: harness });
+    initialized.close();
+    // A legacy execution workflow file the execution importer recognizes, so its
+    // earlier transaction commits real rows before the DSH phase refuses.
+    const workflowDir = join(harness, "workflows", "wf-partial");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(workflowDir, "agent-flow-ids.jsonl"), '{"id":"accepted","d":"digest"}\nmalformed\n');
+    const command = definition("store.upgrade");
+    const refused = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused", exitCode: 1 });
+    expect(refused.message).toContain("Execution-state import committed");
+    expect(refused.message).toContain("dsh-ledger:wf-partial");
+    const store = await openStore({ harnessDir: harness }, "read");
+    try {
+      // The DSH phase wrote nothing, but its receipt is absent and the earlier
+      // execution operation receipt stands as the truthful phase record.
+      expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+      expect(store.db.prepare("select count(*) as n from store_operations where operation_id like '%#dsh-host-state'").get()).toEqual({ n: 0 });
+      expect(store.db.prepare("select count(*) as n from store_operations").get()).toEqual({ n: 1 });
+    } finally { store.close(); }
+  });
+  test("an acknowledged DSH import replays its receipt without a second write", async () => {
+    const root = fixture("store-upgrade-dsh-replay");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initialized = await initializeStore({ harnessDir: harness });
+    initialized.close();
+    const workflowDir = join(harness, "workflows", "wf-replay");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(workflowDir, "agent-flow.jsonl"), '{"eventId":"wfc1:s:c:tool"}\n');
+    const command = definition("store.upgrade");
+    const first = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(first.status).toBe("ok");
+    const replay = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(replay.status).toBe("ok");
+    expect(dataOf(replay).dsh).toMatchObject({ verdict: "nothing-to-import", imported: { ledgerRows: 0 } });
+    const store = await openStore({ harnessDir: harness }, "read");
+    try {
+      // A repeat upgrade reuses provenance (zero new tail rows) and, because the
+      // fresh invocation mints a new operation id, adds one new receipt.
+      expect(store.db.prepare("select count(*) as n from dsh_ledger_events where workflow_id = ?").get("wf-replay")).toEqual({ n: 1 });
+      expect(store.db.prepare("select revision from store_meta where id=1").get()).toEqual({ revision: 1 });
+    } finally { store.close(); }
+  });
 
 });

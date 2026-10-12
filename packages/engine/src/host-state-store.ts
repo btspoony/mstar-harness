@@ -288,6 +288,10 @@ export function readDshStatusEmission(
     return undefined;
   }
 }
+export type DshFactCategory = "registry" | "tail" | "identity" | "bounds" | "status";
+/** One refused legacy fact group: the selector, the actual fact category, the
+ *  displayed facts, the exact discarded scope, and the reason. */
+export type DshHostStateRefusal = { selector: string; category: DshFactCategory; facts: string; discarded: string; reason: string; source: string };
 export type DshHostStateRows = {
   workflows: ReadonlyArray<{
     workflowId: string;
@@ -310,7 +314,7 @@ export function importDshHostStateRows(
 ): {
   written: { workflows: number; identities: number; ledgerRows: number; scanBounds: number; bindings: number; emissions: number };
   merged: { scanBoundsAdvanced: number; bindingFloorsRaised: number };
-  refused: Array<{ selector: string; facts: string; reason: string; source: string }>;
+  refused: DshHostStateRefusal[];
   reusedOrPresent: string[];
   revisionAdvanced: boolean;
 } {
@@ -324,7 +328,7 @@ export function importDshHostStateRows(
   }
   const written = { workflows: 0, identities: 0, ledgerRows: 0, scanBounds: 0, bindings: 0, emissions: 0 };
   const merged = { scanBoundsAdvanced: 0, bindingFloorsRaised: 0 };
-  const refused: Array<{ selector: string; facts: string; reason: string; source: string }> = [];
+  const refused: DshHostStateRefusal[] = [];
   const reusedOrPresent: string[] = [];
   if (!Number.isFinite(Date.parse(nowIso))) throw new StoreError("store.corrupt", "The legacy import timestamp is invalid.");
   let changed = false;
@@ -338,7 +342,7 @@ export function importDshHostStateRows(
     let workflowWritten = false;
     for (const fact of workflow.identities) {
       const prior = identity.get(workflow.workflowId, fact.eventId) as { digest: string } | undefined;
-      if (prior && prior.digest !== fact.digest) { refused.push({ selector: `dsh-ledger:${workflow.workflowId}`, facts: fact.eventId, reason: "accepted identity has a different digest", source: `workflows/${workflow.workflowId}` }); continue; }
+      if (prior && prior.digest !== fact.digest) { refused.push({ selector: `dsh-ledger:${workflow.workflowId}`, category: "identity", facts: fact.eventId, discarded: `the accepted identity ${fact.eventId} (native digest preserved)`, reason: "accepted identity has a different digest", source: `workflows/${workflow.workflowId}` }); continue; }
       if (!prior) { insertIdentity.run(workflow.workflowId, fact.eventId, fact.digest, fact.acceptedAt); written.identities++; changed = true; workflowWritten = true; }
       else reusedOrPresent.push(`identity:${workflow.workflowId}:${fact.eventId}`);
     }
@@ -348,7 +352,7 @@ export function importDshHostStateRows(
       const alreadyPresent = origins.length === expected.length && origins.every((origin, index) => origin.legacy_line === expected[index]);
       const hasRows = Number((workflowRows.get(workflow.workflowId) as { n: number }).n) > 0;
       if (alreadyPresent) reusedOrPresent.push(`tail:${workflow.workflowId}:${workflow.tailSourceDigest}`);
-      else if (hasRows) refused.push({ selector: `dsh-ledger:${workflow.workflowId}`, facts: `tail rows (${workflow.ledgerRows.length})`, reason: "ordering-unsafe: native or incomplete legacy-provenance rows already exist", source: `workflows/${workflow.workflowId}` });
+      else if (hasRows) refused.push({ selector: `dsh-ledger:${workflow.workflowId}`, category: "tail", facts: `tail rows (${workflow.ledgerRows.length})`, discarded: `the ${workflow.ledgerRows.length} held-back display row(s) for ${workflow.workflowId}`, reason: "ordering-unsafe: native or incomplete legacy-provenance rows already exist", source: `workflows/${workflow.workflowId}` });
       else for (const row of workflow.ledgerRows) {
         insertLedger.run(workflow.workflowId, row.eventId, row.lineJson, row.recordedAt, workflow.tailSourceDigest, row.lineIndex);
         written.ledgerRows++; changed = true; workflowWritten = true;

@@ -2,17 +2,22 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ExecutionError, withExecutionTransaction } from "./execution-store.js";
-import { storeDbPath, StoreError, type StoreContext } from "./store-db.js";
-import { importDshHostStateRows, type DshHostStateRows } from "./host-state-store.js";
+import { storeDbPath, StoreError, withExecutionReadGuard, type StoreContext } from "./store-db.js";
+import { importDshHostStateRows, type DshHostStateRefusal, type DshHostStateRows } from "./host-state-store.js";
 const FLOW = "agent-flow.jsonl";
 const IDS = "agent-flow-ids.jsonl";
 const CURSORS = "workflow-ledger-cursors.json";
 const JOURNAL = "agent-flow-compaction.json";
 const HISTORY = "agent-flow-history";
-const STATUS = "snapshots/engine-status.json";
+const SNAPSHOTS = "snapshots";
+const STATUS = "engine-status.json";
+const DIGEST = /^[0-9a-f]{64}$/;
+const CHUNK = /^chunk-[0-9]{6}\.jsonl$/;
 const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
+const nonBlankLines = (bytes: Buffer) => bytes.toString("utf8").split("\n").filter((line) => line.trim() !== "").length;
+
 type Finding = Record<string, unknown> & { source: string };
-type Refusal = { selector: string; facts: string; reason: string; source: string };
+type Refusal = DshHostStateRefusal;
 export type DshHostStateImportReport = {
   verdict: "imported" | "partially-imported" | "nothing-to-import";
   imported: { workflows: number; identities: number; ledgerRows: number; scanBounds: number; bindings: number; emissions: number };
@@ -21,21 +26,40 @@ export type DshHostStateImportReport = {
   sourceDigest: string;
 };
 type Evaluation = { rows: DshHostStateRows; findings: Finding[]; refusals: Refusal[]; sourceDigest: string };
+
 function refused(refusals: readonly Refusal[]): never {
-  throw new StoreError("store.upgrade-dsh-source-refused", `store upgrade refused: ${refusals.length} legacy DSH host-state fact group(s) could not be imported.\n${refusals.map((r) => `- ${r.selector}: ${r.facts}: ${r.reason}`).join("\n")}\nRecovery (supported path): rerun \`mstar store upgrade\` with \`--ack-skip-dsh <selector>\` for each listed selector. The invocation imports every other decidable fact and drops only the refused facts for acknowledged selectors. Original bytes remain unchanged; ordinary upgrade remains retryable.`);
+  throw new StoreError("store.upgrade-dsh-source-refused", `store upgrade refused: ${refusals.length} legacy DSH host-state fact group(s) could not be imported.\n${refusals.map((r) => `- ${r.selector}: ${r.facts} — ${r.discarded}: ${r.reason}`).join("\n")}\nRecovery (supported path): rerun \`mstar store upgrade\` with \`--ack-skip-dsh <selector>\` for each listed selector. The invocation imports every other decidable fact and drops exactly the refused facts for acknowledged selectors. Original bytes remain unchanged; ordinary upgrade remains retryable.`);
 }
+
+/** Loss disclosure keyed by the actual fact category, never by a filename substring. */
 function lossStatement(refusal: Refusal): string {
-  if (refusal.selector === "dsh-status") return "Loss: legacy session bindings (workflow picks, execution witnesses, and exclusion floors) and newest emissions were not imported; consumers may require a workflow re-pick or may backfill rows below the old exclusion floor.";
-  if (refusal.selector.startsWith("dsh-bounds:")) return "Loss: the named workflow's legacy scan bounds were not imported; affected sessions re-scan native session logs, verified identities replay as no-ops, and duplicate live evidence rows remain possible.";
-  return refusal.facts.includes("tail")
-    ? `Loss: ${refusal.facts} were not imported; the held-back display rows remain absent. Verified identities and scan bounds are independent facts.`
-    : `Loss: ${refusal.facts} were not imported; omitted verified identities will not deduplicate later native replay.`;
+  switch (refusal.category) {
+    case "status":
+      return "Loss: legacy session bindings (workflow picks, execution witnesses, and exclusion floors) and newest emissions were not imported; consumers may require a workflow re-pick or may backfill rows below the old exclusion floor.";
+    case "bounds":
+      return "Loss: the named workflow's legacy scan bounds were not imported; affected sessions re-scan native session logs, verified identities replay as no-ops, and duplicate live evidence rows remain possible.";
+    case "registry":
+      return `Loss: ${refusal.discarded}. The whole parsed registry is discarded, so no accepted identity from this source registers and a later native replay of the same event id would be accepted again (dedup limitation); the coupled display tail is withheld because its identities cannot be verified. Scan bounds are an independent fact.`;
+    case "tail":
+      return `Loss: ${refusal.discarded}. These held-back display rows never appear. Verified identities and scan bounds are independent facts and import per their own rules.`;
+    case "identity":
+      return `Loss: ${refusal.discarded}. A later native replay of that event id would be accepted again (dedup limitation). Every other identity, the tail and the scan bounds are unaffected.`;
+  }
 }
+
+/** Read one regular file whose parent directory must itself be a real directory. */
 function readBytes(path: string): Buffer {
   const st = lstatSync(path);
   if (st.isSymbolicLink() || !st.isFile()) throw new Error(`not a regular file: ${path}`);
   return readFileSync(path);
 }
+/** Read a child only through a verified, non-symlinked ancestor directory. */
+function readInside(parent: string, child: string): Buffer {
+  const st = lstatSync(parent);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`unsafe ancestor directory: ${parent}`);
+  return readBytes(join(parent, child));
+}
+
 function evaluate(context: StoreContext, now: string): Evaluation {
   const root = dirname(storeDbPath(context));
   const allFiles: Array<[string, string]> = [];
@@ -51,25 +75,24 @@ function evaluate(context: StoreContext, now: string): Evaluation {
       if (entry.isSymbolicLink() || !entry.isDirectory()) { findings.push({ source, kind: "ignored" }); continue; }
       const names = [FLOW, IDS, CURSORS, JOURNAL];
       const present: Record<string, Buffer> = {};
-      let identityReadRefused = false;
-      let tailReadRefused = false;
+      const unreadable = new Set<string>();
       for (const name of names) {
         try { const b = readBytes(join(dir, name)); present[name] = b; allFiles.push([`${source}/${name}`, hash(b)]); }
-        catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-            if (name === IDS) identityReadRefused = true;
-            if (name === FLOW) tailReadRefused = true;
-            refusals.push({ selector: name === CURSORS ? `dsh-bounds:${entry.name}` : `dsh-ledger:${entry.name}`, facts: name === CURSORS ? "scan bounds" : name, reason: String(e), source });
-          }
-        }
+        catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") unreadable.add(name); }
       }
+      const knownIndexLines = present[IDS] ? present[IDS]!.toString("utf8").split("\n").filter((line) => line.trim() !== "").length : 0;
+      const knownTailLines = present[FLOW] ? nonBlankLines(present[FLOW]!) : 0;
+      const registryLoss = `the entire accepted-identity registry for ${entry.name} (${knownIndexLines} index line(s) present) and the coupled display tail (${knownTailLines} non-blank line(s) present) were discarded`;
+
+      // Retained-history completeness: an unsafe or unreadable history ancestor is
+      // never followed for any purpose (identity completeness or archive proof).
       const historyIdentities = new Map<string, string>();
-      let historyUnreadable = false;
+      let historySafe = true;
       const historyDir = join(dir, HISTORY);
       try {
         const hs = lstatSync(historyDir);
-        if (hs.isSymbolicLink() || !hs.isDirectory()) throw new Error("history path is not a real directory");
-        for (const h of readdirSync(historyDir).filter(n => n.startsWith("chunk-") && n.endsWith(".jsonl")).sort()) {
+        if (hs.isSymbolicLink() || !hs.isDirectory()) { historySafe = false; throw new Error("history path is not a real directory"); }
+        for (const h of readdirSync(historyDir).filter((n) => n.startsWith("chunk-") && n.endsWith(".jsonl")).sort()) {
           const b = readBytes(join(historyDir, h)); allFiles.push([`${source}/${HISTORY}/${h}`, hash(b)]);
           for (const line of b.toString("utf8").split("\n")) if (line) {
             try {
@@ -81,153 +104,201 @@ function evaluate(context: StoreContext, now: string): Evaluation {
                 if (prior !== undefined && prior !== digest) throw new Error(`conflicting archived identity ${eventId}`);
                 historyIdentities.set(eventId, digest);
               }
-            } catch { historyUnreadable = true; }
+            } catch { historySafe = false; throw new Error("retained history holds an unparseable line"); }
           }
         }
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") historyUnreadable = true;
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          historySafe = false;
+          refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identity history completeness", discarded: registryLoss, reason: "retained history could not be completely validated", source });
+        }
       }
-      const identityRows: Array<{eventId:string;digest:string;acceptedAt:string}> = [];
-      let identityRefused = identityReadRefused;
-      if (historyUnreadable) {
-        identityRefused = true;
-        refusals.push({ selector: `dsh-ledger:${entry.name}`, facts: "identity history completeness", reason: "retained history could not be completely validated", source });
-      }
+
+      const identityRows: Array<{ eventId: string; digest: string; acceptedAt: string }> = [];
+      let identityRefused = !historySafe || unreadable.has(IDS);
+      if (unreadable.has(IDS)) refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identity index", discarded: registryLoss, reason: `the identity index could not be safely read`, source });
       if (present[IDS] === undefined) {
-        if (historyIdentities.size > 0) { identityRefused = true; refusals.push({ selector: `dsh-ledger:${entry.name}`, facts: "identities", reason: "identity index absent while retained history holds identified rows", source }); }
-      } else {
-        const seen = new Map<string,string>();
-        for (const [i,line] of present[IDS].toString("utf8").split("\n").entries()) {
+        if (historyIdentities.size > 0) {
+          identityRefused = true;
+          refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identities", discarded: registryLoss, reason: "the identity index is absent while retained history holds identified rows", source });
+        }
+      } else if (!identityRefused) {
+        const seen = new Map<string, string>();
+        let malformed: string | null = null;
+        for (const [i, line] of present[IDS]!.toString("utf8").split("\n").entries()) {
           if (!line) continue;
           try {
-            const rec = JSON.parse(line) as {id?:unknown;d?:unknown};
+            const rec = JSON.parse(line) as { id?: unknown; d?: unknown };
             if (typeof rec.id !== "string" || !rec.id || typeof rec.d !== "string" || !rec.d) throw new Error("malformed identity line");
-            const prior=seen.get(rec.id); if (prior !== undefined && prior !== rec.d) throw new Error(`conflicting duplicate identity ${rec.id}`);
-            if (prior === undefined) { seen.set(rec.id,rec.d); identityRows.push({eventId:rec.id,digest:rec.d,acceptedAt:now}); }
-          } catch (e) { identityRefused = true; refusals.push({ selector:`dsh-ledger:${entry.name}`, facts:`identities (line ${i+1})`, reason:String(e), source }); break; }
+            const prior = seen.get(rec.id); if (prior !== undefined && prior !== rec.d) throw new Error(`conflicting duplicate identity ${rec.id}`);
+            if (prior === undefined) { seen.set(rec.id, rec.d); identityRows.push({ eventId: rec.id, digest: rec.d, acceptedAt: now }); }
+          } catch (e) { malformed = `index line ${i + 1}: ${String(e)}`; break; }
         }
-        for (const [eventId, digest] of historyIdentities) {
-          if (seen.get(eventId) !== digest) {
-            identityRefused = true;
-            refusals.push({ selector: `dsh-ledger:${entry.name}`, facts: `identity ${eventId}`, reason: "accepted identity index does not cover retained history bytes", source });
-          }
+        let uncovered: string | null = null;
+        if (malformed === null) for (const [eventId, digest] of historyIdentities) {
+          if (seen.get(eventId) !== digest) { uncovered = eventId; break; }
+        }
+        if (malformed !== null || uncovered !== null) {
+          identityRefused = true;
+          refusals.push({
+            selector: `dsh-ledger:${entry.name}`, category: "registry", facts: malformed ?? `identity ${uncovered}`,
+            discarded: registryLoss,
+            reason: malformed === null ? "the accepted identity index does not cover the retained history bytes" : "the identity index is not fully parseable",
+            source,
+          });
         }
       }
       if (identityRefused) identityRows.length = 0;
-      const ledgerRows: Array<{eventId:string|null;lineJson:string;lineIndex:number;recordedAt:string}> = [];
-      let tailDigest: string|null = null;
-      if (tailReadRefused) refusals.push({ selector: `dsh-ledger:${entry.name}`, facts: "tail rows", reason: "display tail could not be safely read", source });
-      if (present[JOURNAL] !== undefined && present[FLOW] === undefined && !tailReadRefused) {
-        refusals.push({ selector: `dsh-ledger:${entry.name}`, facts: "tail rows", reason: "compaction journal exists without a readable display tail", source });
-      }
-      if (present[FLOW] !== undefined) {
-        tailDigest=hash(present[FLOW]);
-        let journalDecision: "clean"|"before"|"landed"|"invalid"="clean";
-        if (present[JOURNAL] !== undefined) {
-          try {
-            const parsed: unknown = JSON.parse(present[JOURNAL].toString("utf8"));
-            if (!parsed || typeof parsed !== "object" || !("version" in parsed) || parsed.version !== 1 ||
-              !("tailBefore" in parsed) || !parsed.tailBefore || typeof parsed.tailBefore !== "object" ||
-              !("tailAfter" in parsed) || !parsed.tailAfter || typeof parsed.tailAfter !== "object" ||
-              !("archive" in parsed) || !parsed.archive || typeof parsed.archive !== "object") throw new Error("invalid journal shape");
-            const journal = parsed as Record<string, unknown>;
-            const before = journal.tailBefore as Record<string, unknown>;
-            const after = journal.tailAfter as Record<string, unknown>;
-            const archive = journal.archive as Record<string, unknown>;
-            const tail = present[FLOW];
-            const fingerprint = { bytes: tail.length, sha256: hash(tail) };
-            if (before.bytes === fingerprint.bytes && before.sha256 === fingerprint.sha256) journalDecision = "before";
-            else if (after.bytes === fingerprint.bytes && after.sha256 === fingerprint.sha256 &&
-              typeof archive.chunk === "string" && /^chunk-[0-9]{6}\.jsonl$/.test(archive.chunk) &&
-              typeof archive.offset === "number" && Number.isSafeInteger(archive.offset) && archive.offset >= 0 &&
-              typeof archive.bytes === "number" && Number.isSafeInteger(archive.bytes) && archive.bytes >= 0 &&
-              typeof archive.sha256 === "string" && /^[a-f0-9]{64}$/.test(archive.sha256)) {
-              const archived = readBytes(join(historyDir, archive.chunk));
-              allFiles.push([`${source}/${HISTORY}/${archive.chunk}`, hash(archived)]);
-              const chunk = archived.subarray(archive.offset, archive.offset + archive.bytes);
-              if (archived.length === archive.offset + archive.bytes && hash(chunk) === archive.sha256) journalDecision = "landed";
-              else journalDecision = "invalid";
-            } else journalDecision = "invalid";
-          } catch { journalDecision = "invalid"; }
-          if (journalDecision === "invalid") refusals.push({ selector: `dsh-ledger:${entry.name}`, facts: "tail rows", reason: "compaction journal is not decidable from the observed tail and archive", source });
-          else findings.push({ source, kind: "journal", decision: journalDecision });
-        }
-        if (!identityRefused && journalDecision!=="invalid") {
-          for (const [i,line] of present[FLOW].toString("utf8").split("\n").entries()) if (line.trim()!=="") {
-            let eventId:string|null=null; try { const id=(JSON.parse(line) as {eventId?:unknown}).eventId; if(typeof id==="string") eventId=id; } catch {}
-            ledgerRows.push({eventId,lineJson:line,lineIndex:i+1,recordedAt:now});
-          }
-        } else if(identityRefused) refusals.push({selector:`dsh-ledger:${entry.name}`,facts:"tail rows",reason:"blocked by refused identity index",source});
-      }
-      const scanBounds: Array<{sessionId:string;next:number;stream:string|null}> = [];
-      if(present[CURSORS]!==undefined) {
+
+      // Display tail: the journal decision must be established without following
+      // any unsafe ancestor, and an unreadable journal withholds the tail.
+      const ledgerRows: Array<{ eventId: string | null; lineJson: string; lineIndex: number; recordedAt: string }> = [];
+      let tailSourceDigest: string | null = null;
+      let journalDecision: "clean" | "before" | "landed" | "invalid" = present[JOURNAL] === undefined ? "clean" : "invalid";
+      let tailRefusal: string | null = null;
+      if (unreadable.has(FLOW)) tailRefusal = "the display tail could not be safely read";
+      else if (unreadable.has(JOURNAL)) tailRefusal = "the compaction journal could not be safely read, so the tail disposition cannot be resolved";
+      else if (present[FLOW] === undefined && present[JOURNAL] !== undefined) tailRefusal = "a compaction journal exists without a readable display tail";
+      else if (present[JOURNAL] !== undefined) {
         try {
-          const value: unknown = JSON.parse(present[CURSORS].toString("utf8"));
-          if (!value || typeof value !== "object" || !("v" in value) || !("cursors" in value) || (value.v !== 1 && value.v !== 2) || !value.cursors || typeof value.cursors !== "object" || Array.isArray(value.cursors)) throw new Error("invalid cursor sidecar");
-          for (const [sessionId, raw] of Object.entries(value.cursors)) {
-            let next: unknown;
-            let stream: unknown = null;
-            if (value.v === 1) next = raw;
-            else if (raw && typeof raw === "object" && !Array.isArray(raw) && "next" in raw) {
-              next = raw.next;
-              stream = "stream" in raw ? raw.stream : null;
+          const parsed: unknown = JSON.parse(present[JOURNAL]!.toString("utf8"));
+          const rec = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : undefined;
+          const fingerprint = (value: unknown): { bytes: number; sha256: string } | undefined => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+            const bytes = (value as Record<string, unknown>).bytes, sha256 = (value as Record<string, unknown>).sha256;
+            if (!Number.isSafeInteger(bytes) || (bytes as number) < 0) return undefined;
+            if (typeof sha256 !== "string" || !DIGEST.test(sha256)) return undefined;
+            return { bytes: bytes as number, sha256 };
+          };
+          const before = fingerprint(rec?.tailBefore), after = fingerprint(rec?.tailAfter);
+          const archive = rec?.archive && typeof rec.archive === "object" && !Array.isArray(rec.archive) ? rec.archive as Record<string, unknown> : undefined;
+          const lines = rec?.lines;
+          if (rec?.version !== 1 || before === undefined || after === undefined || archive === undefined) throw new Error("unrecognized compaction journal shape");
+          if (typeof archive.chunk !== "string" || !CHUNK.test(archive.chunk)) throw new Error("invalid journal archive chunk");
+          if (!Number.isSafeInteger(archive.offset) || (archive.offset as number) < 0) throw new Error("invalid journal archive offset");
+          if (!Number.isSafeInteger(archive.bytes) || (archive.bytes as number) <= 0) throw new Error("invalid journal archive byte count");
+          if (typeof archive.sha256 !== "string" || !DIGEST.test(archive.sha256)) throw new Error("invalid journal archive digest");
+          if (!Number.isSafeInteger(lines) || (lines as number) < 1) throw new Error("invalid journal line count");
+          if (before.bytes <= after.bytes) throw new Error("the journal recorded no tail removal");
+          const observed = { bytes: present[FLOW]!.length, sha256: hash(present[FLOW]!) };
+          if (observed.bytes === before.bytes && observed.sha256 === before.sha256) journalDecision = "before";
+          else if (observed.bytes === after.bytes && observed.sha256 === after.sha256) {
+            if (!historySafe) tailRefusal = "the journal's archive proof is unavailable because the retained history directory is not a safe source";
+            else {
+              const archived = readBytes(join(historyDir, archive.chunk as string));
+              allFiles.push([`${source}/${HISTORY}/${archive.chunk}`, hash(archived)]);
+              const range = archived.subarray(archive.offset as number, (archive.offset as number) + (archive.bytes as number));
+              if (archived.length === (archive.offset as number) + (archive.bytes as number) && hash(range) === archive.sha256) journalDecision = "landed";
+              else tailRefusal = "the compaction journal archive range does not complete the recorded bytes";
             }
+          } else tailRefusal = "the compaction journal is decidable neither from the observed tail nor from its archive";
+        } catch (e) { tailRefusal = `the compaction journal is not a recognized transaction (${String(e)})`; }
+        if (tailRefusal === null && journalDecision !== "invalid") findings.push({ source, kind: "journal", decision: journalDecision });
+      }
+      const tailLoss = `the ${knownTailLines} held-back display row(s) for ${entry.name} were not imported`;
+      if (present[FLOW] === undefined) {
+        // No display tail fact at all: nothing to withhold, no crash on a missing file.
+      } else if (tailRefusal !== null) {
+        refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: `tail rows (${knownTailLines})`, discarded: tailLoss, reason: tailRefusal, source });
+      } else if (identityRefused) {
+        refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: `tail rows (${knownTailLines})`, discarded: tailLoss, reason: "the tail identities cannot be verified because the identity registry was refused", source });
+      } else {
+        const tailDigest = hash(present[FLOW]!);
+        for (const [i, line] of present[FLOW]!.toString("utf8").split("\n").entries()) if (line.trim() !== "") {
+          let eventId: string | null = null; try { const id = (JSON.parse(line) as { eventId?: unknown }).eventId; if (typeof id === "string") eventId = id; } catch {}
+          ledgerRows.push({ eventId, lineJson: line, lineIndex: i + 1, recordedAt: now });
+        }
+        tailSourceDigest = ledgerRows.length ? tailDigest : null;
+      }
+
+      // Scan-bound sidecar: an indivisible unit — validated in full before its rows
+      // are published, so a partially invalid sidecar publishes none of its bounds.
+      const pendingBounds: Array<{ sessionId: string; next: number; stream: string | null }> = [];
+      if (unreadable.has(CURSORS)) refusals.push({ selector: `dsh-bounds:${entry.name}`, category: "bounds", facts: "scan bounds", discarded: `every scan bound of ${entry.name}`, reason: "the cursor sidecar could not be safely read", source });
+      else if (present[CURSORS] !== undefined) {
+        try {
+          const value: unknown = JSON.parse(present[CURSORS]!.toString("utf8"));
+          if (!value || typeof value !== "object" || !("v" in value) || !("cursors" in value) || (value.v !== 1 && value.v !== 2) || !value.cursors || typeof value.cursors !== "object" || Array.isArray(value.cursors)) throw new Error("unrecognized cursor sidecar shape");
+          for (const [sessionId, raw] of Object.entries(value.cursors as Record<string, unknown>)) {
+            let next: unknown; let stream: unknown = null;
+            if (value.v === 1) next = raw;
+            else if (raw && typeof raw === "object" && !Array.isArray(raw) && "next" in raw) { next = (raw as Record<string, unknown>).next; stream = "stream" in raw ? (raw as Record<string, unknown>).stream : null; }
             if (!sessionId || typeof next !== "number" || !Number.isSafeInteger(next) || next < 1 || (stream !== null && (typeof stream !== "string" || stream.length === 0))) throw new Error(`invalid cursor for ${sessionId}`);
-            scanBounds.push({ sessionId, next, stream: typeof stream === "string" ? stream : null });
+            pendingBounds.push({ sessionId, next, stream: typeof stream === "string" ? stream : null });
           }
         } catch (error) {
-          refusals.push({ selector: `dsh-bounds:${entry.name}`, facts: "scan bounds", reason: String(error), source });
+          pendingBounds.length = 0;
+          refusals.push({ selector: `dsh-bounds:${entry.name}`, category: "bounds", facts: "scan bounds", discarded: `every scan bound of ${entry.name}`, reason: `the cursor sidecar is not structurally valid (${String(error)})`, source });
         }
       }
-      if(identityRows.length||ledgerRows.length||scanBounds.length||present[IDS]||present[FLOW]||present[CURSORS]) workflows.push({workflowId:entry.name,identities:identityRefused?[]:identityRows,tailSourceDigest:ledgerRows.length?tailDigest:null,ledgerRows,scanBounds});
-      if(identityRows.length) findings.push({source,kind:"identities",count:identityRows.length});
-      if(ledgerRows.length) findings.push({source,kind:"ledgerRows",count:ledgerRows.length});
-      if(scanBounds.length) findings.push({source,kind:"scanBounds",count:scanBounds.length});
+
+      // Publish the workflow exactly once, only when some fact actually survived.
+      if (identityRows.length || ledgerRows.length || pendingBounds.length) {
+        workflows.push({ workflowId: entry.name, identities: identityRows, tailSourceDigest, ledgerRows, scanBounds: pendingBounds });
+        if (identityRows.length) findings.push({ source, kind: "identities", count: identityRows.length });
+        if (ledgerRows.length) findings.push({ source, kind: "ledgerRows", count: ledgerRows.length });
+        if (pendingBounds.length) findings.push({ source, kind: "scanBounds", count: pendingBounds.length });
+      }
     }
   } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
-  const bindings: DshHostStateRows["bindings"][number][]=[];
-  const emissions: DshHostStateRows["emissions"][number][]=[];
-  const statusPath=join(root,STATUS);
+
+  // Engine-status envelope: one indivisible unit — bindings and emissions publish
+  // together, and only after every binding and bucket validates.
+  const bindings: DshHostStateRows["bindings"][number][] = [];
+  const emissions: DshHostStateRows["emissions"][number][] = [];
+  const snapshotsDir = join(root, SNAPSHOTS);
   try {
-    const b=readBytes(statusPath); allFiles.push([STATUS,hash(b)]);
+    const b = readInside(snapshotsDir, STATUS); allFiles.push([`${SNAPSHOTS}/${STATUS}`, hash(b)]);
+    const pendingBindings: DshHostStateRows["bindings"][number][] = [];
+    const pendingEmissions: DshHostStateRows["emissions"][number][] = [];
     try {
-      const value: unknown=JSON.parse(b.toString("utf8"));
-      if(!value||typeof value!=="object"||!("sv" in value)||value.sv!==1||!("entries" in value)||!value.entries||typeof value.entries!=="object"||Array.isArray(value.entries)) throw new Error("unrecognized engine-status envelope schema");
-      const buckets=value.entries as Record<string, unknown>;
-      const bindingRows="bindings" in value?value.bindings:{};
-      if(!bindingRows||typeof bindingRows!=="object"||Array.isArray(bindingRows)) throw new Error("invalid engine-status bindings map");
-      for(const [sessionId,b] of Object.entries(bindingRows)) {
-        if(!sessionId||!b||typeof b!=="object"||Array.isArray(b)) throw new Error("invalid engine-status binding");
-        const binding=b as Record<string, unknown>;
-        if(typeof binding.cwd!=="string"||!binding.cwd||!Number.isSafeInteger(binding.excludedBeforeSeq)||Number(binding.excludedBeforeSeq)<0) throw new Error("invalid engine-status binding");
-        const witness=binding.executionBinding;
-        if(witness!==undefined&&witness!==null) {
-          if(typeof witness!=="object"||Array.isArray(witness)||!("version" in witness)||witness.version!==1||!("session" in witness)||!witness.session||typeof witness.session!=="object"||Array.isArray(witness.session)) throw new Error("invalid engine-status execution binding");
-          const session=witness.session as Record<string,unknown>;
-          if(!("harnessRoot" in witness)||typeof witness.harnessRoot!=="string"||!witness.harnessRoot||typeof session.storeId!=="string"||!session.storeId||typeof session.workflowId!=="string"||!session.workflowId||typeof session.sessionId!=="string"||!session.sessionId||session.role!=="coordinator"||typeof session.epoch!=="number"||!Number.isSafeInteger(session.epoch)||session.epoch<=0) throw new Error("invalid engine-status execution binding");
+      const value: unknown = JSON.parse(b.toString("utf8"));
+      if (!value || typeof value !== "object" || !("sv" in value) || (value as { sv?: unknown }).sv !== 1 || !("entries" in value) || !(value as { entries?: unknown }).entries || typeof (value as { entries?: unknown }).entries !== "object" || Array.isArray((value as { entries?: unknown }).entries)) throw new Error("unrecognized engine-status envelope schema");
+      const buckets = (value as { entries: Record<string, unknown> }).entries;
+      const source = (value as { bindings?: unknown }).bindings ?? {};
+      if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("invalid engine-status bindings map");
+      for (const [sessionId, raw] of Object.entries(source as Record<string, unknown>)) {
+        if (!sessionId || !raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid engine-status binding");
+        const binding = raw as Record<string, unknown>;
+        if (typeof binding.cwd !== "string" || !binding.cwd || !Number.isSafeInteger(binding.excludedBeforeSeq) || Number(binding.excludedBeforeSeq) < 0) throw new Error("invalid engine-status binding");
+        const witness = binding.executionBinding;
+        if (witness !== undefined && witness !== null) {
+          if (typeof witness !== "object" || Array.isArray(witness) || !("version" in witness) || (witness as { version?: unknown }).version !== 1 || !("session" in witness) || !(witness as { session?: unknown }).session || typeof (witness as { session?: unknown }).session !== "object" || Array.isArray((witness as { session?: unknown }).session)) throw new Error("invalid engine-status execution binding");
+          const session = (witness as { session: Record<string, unknown> }).session; const root = (witness as { harnessRoot?: unknown }).harnessRoot;
+          if (typeof root !== "string" || !root || typeof session.storeId !== "string" || !session.storeId || typeof session.workflowId !== "string" || !session.workflowId || typeof session.sessionId !== "string" || !session.sessionId || session.role !== "coordinator" || typeof session.epoch !== "number" || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) throw new Error("invalid engine-status execution binding");
         }
-        if(binding.selectedWorkflowId!==undefined&&(typeof binding.selectedWorkflowId!=="string"||!binding.selectedWorkflowId)) throw new Error("invalid engine-status selected workflow");
-        bindings.push({sessionId,cwd:binding.cwd,selectedWorkflowId:typeof binding.selectedWorkflowId==="string"?binding.selectedWorkflowId:null,executionBindingJson:witness==null?null:JSON.stringify(witness),excludedBeforeSeq:Number(binding.excludedBeforeSeq),updatedAt:now});
+        if (binding.selectedWorkflowId !== undefined && (typeof binding.selectedWorkflowId !== "string" || !binding.selectedWorkflowId)) throw new Error("invalid engine-status selected workflow");
+        pendingBindings.push({ sessionId, cwd: binding.cwd, selectedWorkflowId: typeof binding.selectedWorkflowId === "string" ? binding.selectedWorkflowId : null, executionBindingJson: witness == null ? null : JSON.stringify(witness), excludedBeforeSeq: Number(binding.excludedBeforeSeq), updatedAt: now });
       }
-      for(const [sessionId,bucket] of Object.entries(buckets)) {
-        if(!Array.isArray(bucket)) throw new Error("invalid engine-status emission bucket");
-        for(const candidate of bucket) {
-          if(!candidate||typeof candidate!=="object"||Array.isArray(candidate)) throw new Error("invalid engine-status emission");
-          const entry=candidate as Record<string,unknown>;
-          if(entry.rv!==1||typeof entry.cwd!=="string"||!entry.cwd||typeof entry.at!=="string"||!entry.at||typeof entry.turn!=="number"||!Number.isFinite(entry.turn)||!entry.payload||typeof entry.payload!=="object"||Array.isArray(entry.payload)) throw new Error("invalid engine-status emission");
+      for (const [sessionId, bucket] of Object.entries(buckets)) {
+        if (!Array.isArray(bucket)) throw new Error("invalid engine-status emission bucket");
+        for (const candidate of bucket) {
+          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("invalid engine-status emission");
+          const entry = candidate as Record<string, unknown>;
+          if (entry.rv !== 1 || typeof entry.cwd !== "string" || !entry.cwd || typeof entry.at !== "string" || !entry.at || typeof entry.turn !== "number" || !Number.isFinite(entry.turn) || !entry.payload || typeof entry.payload !== "object" || Array.isArray(entry.payload)) throw new Error("invalid engine-status emission");
         }
-        const newest=bucket.at(-1);
-        if(newest===undefined) continue;
-        const emission=newest as Record<string,unknown>;
-        emissions.push({sessionId,cwd:emission.cwd as string,turn:emission.turn as number,emittedAt:emission.at as string,payloadJson:JSON.stringify(emission.payload)});
+        const newest = bucket.at(-1);
+        if (newest === undefined) continue;
+        const emission = newest as Record<string, unknown>;
+        pendingEmissions.push({ sessionId, cwd: emission.cwd as string, turn: emission.turn as number, emittedAt: emission.at as string, payloadJson: JSON.stringify(emission.payload) });
       }
-    } catch(e) { refusals.push({selector:"dsh-status",facts:"bindings and emissions",reason:String(e),source:STATUS}); }
-  } catch(e) { if((e as NodeJS.ErrnoException).code!=="ENOENT") refusals.push({selector:"dsh-status",facts:"bindings and emissions",reason:String(e),source:STATUS}); }
-  const sourceDigest=hash(JSON.stringify(allFiles.sort(([a],[b])=>a.localeCompare(b))));
-  return {rows:{workflows,bindings,emissions},findings,refusals,sourceDigest};
+    } catch (e) {
+      pendingBindings.length = 0; pendingEmissions.length = 0;
+      refusals.push({ selector: "dsh-status", category: "status", facts: "bindings and emissions", discarded: "every legacy session binding and status emission in the envelope", reason: String(e), source: `${SNAPSHOTS}/${STATUS}` });
+    }
+    bindings.push(...pendingBindings); emissions.push(...pendingEmissions);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") refusals.push({ selector: "dsh-status", category: "status", facts: "bindings and emissions", discarded: "every legacy session binding and status emission in the envelope", reason: String(e), source: `${SNAPSHOTS}/${STATUS}` });
+  }
+  const sourceDigest = hash(JSON.stringify(allFiles.sort(([a], [b]) => a.localeCompare(b))));
+  return { rows: { workflows, bindings, emissions }, findings, refusals, sourceDigest };
 }
 
 export async function importDshHostStateFiles(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[] }): Promise<DshHostStateImportReport> {
+  // The selected generation is captured BEFORE any filesystem evaluation and is
+  // required again on the owned transaction handle, so a store replacement or
+  // epoch change across the evaluation/await boundary is rejected instead of adopted.
+  const selected = withExecutionReadGuard(input.context, (_db, authority) => ({ storeId: authority.storeId, epoch: authority.epoch }));
   const evaluated = evaluate(input.context, new Date().toISOString());
   const acknowledgements = input.acknowledgedSkips ?? [];
   const invalid = acknowledgements.filter((selector) => {
@@ -238,6 +309,9 @@ export async function importDshHostStateFiles(input: { context: StoreContext; op
   if (invalid.length) throw new StoreError("store.upgrade-dsh-ack-unmatched", `Invalid --ack-skip-dsh selector ${invalid.join(", ")}; use dsh-status, dsh-ledger:<workflowId>, or dsh-bounds:<workflowId>.`);
   const runAt = new Date().toISOString();
   return withExecutionTransaction(input.context, (tx) => {
+    if (tx.storeId !== selected.storeId || tx.epoch !== selected.epoch) {
+      throw new StoreError("store.stale-epoch", "The selected store identity or epoch changed after legacy host-state evaluation began; nothing was imported. Rerun `mstar store upgrade` against the current store.");
+    }
     const requestHash = hash(JSON.stringify({
       operation: "store.upgrade.dsh-host-state",
       root: input.context.harnessDir,
@@ -251,27 +325,32 @@ export async function importDshHostStateFiles(input: { context: StoreContext; op
       if (prior.request_hash !== requestHash) throw new ExecutionError("execution.operation-conflict", `operationId ${input.operationId} was already used for a different DSH import request.`);
       return JSON.parse(String(prior.result_json)) as DshHostStateImportReport;
     }
+    const ackLedgerFact = (refusal: Refusal) => acknowledgements.includes(refusal.selector);
+    const allRefusals: Refusal[] = [];
+    for (const refusal of evaluated.refusals) if (!ackLedgerFact(refusal)) allRefusals.push(refusal);
     const outcome = importDshHostStateRows({ db: tx.db, storeId: tx.storeId, epoch: tx.epoch }, evaluated.rows, runAt);
-    const allRefusals = [...evaluated.refusals, ...outcome.refused];
-    const refusedSelectors = new Set(allRefusals.map((refusal) => refusal.selector));
+    for (const refusal of outcome.refused) if (!ackLedgerFact(refusal)) allRefusals.push(refusal);
+    const refusedSelectors = new Set([...evaluated.refusals, ...outcome.refused].map((refusal) => refusal.selector));
     const unmatched = acknowledgements.filter((selector) => !refusedSelectors.has(selector));
     if (unmatched.length) throw new StoreError("store.upgrade-dsh-ack-unmatched", `--ack-skip-dsh selector(s) matched no refused facts in this run: ${unmatched.join(", ")}. Refused selectors: ${[...refusedSelectors].join(", ") || "none"}.`);
-    const notAcknowledged = allRefusals.filter((refusal) => !acknowledgements.includes(refusal.selector));
-    if (notAcknowledged.length) refused(notAcknowledged);
-    for (const refusal of allRefusals) {
+    if (allRefusals.length) refused(allRefusals);
+    const dropped = [...evaluated.refusals, ...outcome.refused];
+    for (const refusal of dropped) {
       evaluated.findings.push({
         source: refusal.source,
         kind: "dropped-by-ack",
         selector: refusal.selector,
+        category: refusal.category,
         droppedFacts: refusal.facts,
-        loss: `${refusal.reason}. ${lossStatement(refusal)}`,
+        droppedScope: refusal.discarded,
+        loss: lossStatement(refusal),
       });
     }
     for (const fact of outcome.reusedOrPresent) evaluated.findings.push({ source: "native-store", kind: "reused-or-shadowed", fact });
     const hasWrites = Object.values(outcome.written).some((count) => count > 0) ||
       outcome.merged.scanBoundsAdvanced > 0 || outcome.merged.bindingFloorsRaised > 0;
     const report: DshHostStateImportReport = {
-      verdict: allRefusals.length ? "partially-imported" : hasWrites ? "imported" : "nothing-to-import",
+      verdict: dropped.length ? "partially-imported" : hasWrites ? "imported" : "nothing-to-import",
       imported: outcome.written,
       merged: outcome.merged,
       findings: evaluated.findings,

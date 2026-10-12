@@ -1,11 +1,12 @@
 import { afterAll, expect, test } from "bun:test";
+import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import {
-  advanceDshScanBound, appendDshLedgerRow, appendDshWorkflowEvent, importDshHostStateRows,
+  advanceDshScanBound, appendDshLedgerRow, appendDshWorkflowEvent,
   readDshScanBound, recordDshStatusEmission, writeDshSessionBinding,
 } from "./host-state-store.js";
 import { importDshHostStateFiles } from "./host-state-import.js";
@@ -91,12 +92,13 @@ test("retained identified history requires complete registry coverage and journa
   writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
   writeFileSync(join(workflow, "agent-flow-compaction.json"), JSON.stringify({
     version: 1,
+    lines: 1,
     tailBefore: { bytes: Buffer.byteLength(tail), sha256: sha(tail) },
     tailAfter: { bytes: 0, sha256: sha("") },
     archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: Buffer.byteLength(`${archived}\n`), sha256: sha(`${archived}\n`) },
   }));
   await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "missing-history-index" }))
-    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("identity index absent") });
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("identity index is absent") });
   writeFileSync(join(workflow, "agent-flow-ids.jsonl"), `${JSON.stringify({ id: "wfe1:session:event", d: sha(archived).slice(0, 32) })}\n`);
   const result = await importDshHostStateFiles({ context, operator: "fixture", operationId: "covered-history-index" });
   expect(result.imported.identities).toBe(1);
@@ -143,7 +145,7 @@ test("status import preserves session bounds and only the newest emission; scan 
   } finally { store.close(); }
 });
 
-test("a landed journal imports the tail and keeps the journal; an undecidable one refuses only the tail", async () => {
+test("a landed journal imports the tail and keeps the journal bytes; an undecidable one refuses only the tail", async () => {
   const { context, workflow } = await fixture("journal");
   const historyDir = join(workflow, "agent-flow-history");
   mkdirSync(historyDir, { recursive: true });
@@ -153,26 +155,32 @@ test("a landed journal imports the tail and keeps the journal; an undecidable on
   const journalPath = join(workflow, "agent-flow-compaction.json");
   writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
   writeFileSync(join(workflow, "agent-flow-ids.jsonl"), `${JSON.stringify({ id: "wfe1:session:old", d: sha(archived).slice(0, 32) })}\n`);
-  writeFileSync(journalPath, JSON.stringify({
+  // A real journal: both fingerprints, a positive archive range, a line count, and a
+  // strict removal (before.bytes > after.bytes); the observed tail equals tailAfter.
+  const landedJournal = JSON.stringify({
     version: 1,
-    tailBefore: { bytes: 99, sha256: sha("other") },
+    lines: 1,
+    tailBefore: { bytes: 64, sha256: sha("pre-compaction-tail") },
     tailAfter: { bytes: Buffer.byteLength(tail), sha256: sha(tail) },
     archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: Buffer.byteLength(`${archived}\n`), sha256: sha(`${archived}\n`) },
-  }));
+  });
+  writeFileSync(journalPath, landedJournal);
   const landed = await importDshHostStateFiles({ context, operator: "fixture", operationId: "landed" });
   expect(landed.imported.ledgerRows).toBe(1);
   expect(landed.findings).toContainEqual(expect.objectContaining({ kind: "journal", decision: "landed" }));
-  expect(readFileSync(journalPath, "utf8")).toContain("tailAfter");
+  expect(readFileSync(journalPath, "utf8")).toBe(landedJournal);
 
+  // Undecidable: valid journal shape whose tail matches neither fingerprint.
   writeFileSync(journalPath, JSON.stringify({
     version: 1,
-    tailBefore: { bytes: 1, sha256: sha("x") },
-    tailAfter: { bytes: 2, sha256: sha("y") },
-    archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: 1, sha256: sha("z") },
+    lines: 1,
+    tailBefore: { bytes: 64, sha256: sha("x") },
+    tailAfter: { bytes: 32, sha256: sha("y") },
+    archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: 4, sha256: sha("z") },
   }));
   const undecidable = await importDshHostStateFiles({ context, operator: "fixture", operationId: "undecidable", acknowledgedSkips: ["dsh-ledger:wf-journal"] });
   expect(undecidable.findings).toContainEqual(
-    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-journal", droppedFacts: "tail rows" }),
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-journal", category: "tail" }),
   );
   const store = await openStore(context, "read");
   try {
@@ -268,6 +276,72 @@ test("a mid-import failure rolls the whole DSH phase back and leaves the revisio
   } finally { store.close(); }
 });
 
+test("the actual importer rejects a store epoch change that lands before the owned transaction", async () => {
+  const { context, workflow } = await fixture("race");
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  const dbPath = storeDbPath(context);
+  // A competing connection advancing the epoch while the importer holds its own
+  // write transaction would sit behind the write lock, so the epoch is advanced
+  // immediately BEFORE the importer's owned transaction begins: the open handle
+  // then reads a generation that no longer matches the captured selection.
+  const bump = new DatabaseSync(dbPath);
+  const original = DatabaseSync.prototype.exec;
+  let bumped = false;
+  DatabaseSync.prototype.exec = function (this: DatabaseSync, sql: unknown) {
+    if (!bumped && typeof sql === "string" && sql.trim().toLowerCase() === "begin immediate") {
+      bumped = true;
+      bump.exec("update store_meta set authority_epoch = authority_epoch + 1 where id = 1");
+    }
+    return original.call(this, sql as never);
+  };
+  try {
+    await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "race" }))
+      .rejects.toMatchObject({ code: "store.stale-epoch" });
+  } finally {
+    DatabaseSync.prototype.exec = original;
+    bump.close();
+  }
+  expect(bumped).toBe(true);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from store_operations where operation_id like 'race%'").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select revision from store_meta where id=1").get()).toEqual({ revision: 0 });
+  } finally { store.close(); }
+});
+
+test("a repeated invocation with the same operation id returns the stored report with no new writes", async () => {
+  const { context, workflow } = await fixture("receipt");
+  writeFileSync(join(workflow, "agent-flow.jsonl"), '{"eventId":"wfc1:s:c:tool"}\n');
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  const first = await importDshHostStateFiles({ context, operator: "fixture", operationId: "same-id" });
+  expect(first.imported.ledgerRows).toBe(1);
+  const replay = await importDshHostStateFiles({ context, operator: "fixture", operationId: "same-id" });
+  expect(replay).toEqual(first);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from dsh_ledger_events").get()).toEqual({ n: 1 });
+    expect(store.db.prepare("select count(*) as n from store_operations where operation_id = 'same-id#dsh-host-state'").get()).toEqual({ n: 1 });
+    expect(store.db.prepare("select revision from store_meta where id=1").get()).toEqual({ revision: 1 });
+  } finally { store.close(); }
+});
+
+test("a partial legacy provenance set for the same digest is not treated as complete", async () => {
+  const { context, workflow } = await fixture("partial-provenance");
+  const tail = '{"n":1}\n{"n":2}\n';
+  writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
+  const digest = sha(tail);
+  const handle = await openStore(context, "write");
+  try {
+    // A prior interrupted import left only line 1 for this digest: the origin set
+    // is incomplete, so a retry must not report the tail already-present.
+    handle.db.prepare("insert into dsh_ledger_events(workflow_id,event_id,event_json,recorded_at,legacy_source_digest,legacy_line) values(?,?,?,?,?,?)")
+      .run("wf-partial-provenance", null, '{"n":1}', "2026-01-01T00:00:00.000Z", digest, 1);
+  } finally { handle.close(); }
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "partial" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("ordering-unsafe") });
+});
+
 test("an acknowledgement matching no refused fact is a usage failure on a clean workspace", async () => {
   const { context, workflow } = await fixture("clean-ack");
   writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
@@ -279,19 +353,92 @@ test("an acknowledgement matching no refused fact is a usage failure on a clean 
   } finally { store.close(); }
 });
 
-test("the typed writer refuses a stale store epoch before writing anything", async () => {
-  const { context } = await fixture("stale-epoch");
-  const handle = await openStore(context, "write");
+test("a partially malformed unit publishes nothing: an acknowledged bounds or status drop leaves zero rows", async () => {
+  const { context, workflow } = await fixture("unit");
+  // First cursor entry valid, second invalid: the whole sidecar is one unit.
+  writeFileSync(join(workflow, "workflow-ledger-cursors.json"), JSON.stringify({ v: 2, cursors: {
+    "session-a": { next: 5, stream: "stream-a" },
+    "session-b": { next: 0 },
+  } }));
+  // First binding valid, then an emission bucket with an invalid entry: the
+  // envelope is one unit, so neither bindings nor emissions publish.
+  const snapshotPath = join(context.harnessDir, "snapshots", "engine-status.json");
+  mkdirSync(join(context.harnessDir, "snapshots"), { recursive: true });
+  writeFileSync(snapshotPath, JSON.stringify({
+    sv: 1,
+    entries: { "session-a": [{ rv: 1, cwd: "/repo", at: "2026-01-01T00:00:00.000Z", turn: 1, payload: { value: 1 } }], "bad": [{ rv: 2 }] },
+    bindings: { "session-a": { cwd: "/repo", selectedWorkflowId: "wf-unit", executionBinding: null, excludedBeforeSeq: 3 } },
+  }));
+  const result = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "unit",
+    acknowledgedSkips: ["dsh-bounds:wf-unit", "dsh-status"],
+  });
+  expect(result.imported.scanBounds).toBe(0);
+  expect(result.imported.bindings).toBe(0);
+  expect(result.imported.emissions).toBe(0);
+  expect(result.findings.filter((finding) => finding.kind === "dropped-by-ack")).toHaveLength(2);
+  for (const finding of result.findings.filter((entry) => entry.kind === "dropped-by-ack")) {
+    expect(finding.category).toMatch(/^(bounds|status)$/);
+    expect(String(finding.loss)).toContain("Loss:");
+  }
+  const store = await openStore(context, "read");
   try {
-    handle.db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id=1").run();
-    expect(() => importDshHostStateRows(
-      { db: handle.db, storeId: handle.storeId, epoch: handle.epoch },
-      {
-        workflows: [{ workflowId: "wf-stale", identities: [{ eventId: "ev", digest: "d", acceptedAt: "2026-01-01T00:00:00.000Z" }], tailSourceDigest: null, ledgerRows: [], scanBounds: [] }],
-        bindings: [], emissions: [],
-      },
-      "2026-01-01T00:00:00.000Z",
-    )).toThrow(/store\.stale-epoch/);
-    expect(handle.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
-  } finally { handle.close(); }
+    expect(store.db.prepare("select count(*) as n from dsh_scan_bounds").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_session_bindings").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_status_emissions").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+});
+
+test("an unreadable journal withholds the tail instead of importing it", async () => {
+  const { context, workflow } = await fixture("unreadable-journal");
+  writeFileSync(join(workflow, "agent-flow.jsonl"), '{"eventId":"wfc1:s:c:tool"}\n');
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  // A symlinked journal is not a readable regular file: the tail disposition is unresolved.
+  writeFileSync(join(context.harnessDir, "elsewhere.json"), "{}");
+  symlinkSync(join(context.harnessDir, "elsewhere.json"), join(workflow, "agent-flow-compaction.json"));
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "unreadable-journal" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("compaction journal") });
+  const acked = await importDshHostStateFiles({ context, operator: "fixture", operationId: "unreadable-journal-ack", acknowledgedSkips: ["dsh-ledger:wf-unreadable-journal"] });
+  expect(acked.imported.ledgerRows).toBe(0);
+  expect(acked.imported.identities).toBe(1);
+});
+
+test("a symlinked history ancestor never contributes a landed-journal proof", async () => {
+  const { context, workflow } = await fixture("unsafe-history");
+  const realHistory = join(context.harnessDir, "real-history");
+  mkdirSync(realHistory, { recursive: true });
+  const archived = '{"eventId":"wfe1:session:old"}';
+  writeFileSync(join(realHistory, "chunk-000001.jsonl"), `${archived}\n`);
+  symlinkSync(realHistory, join(workflow, "agent-flow-history"));
+  const tail = '{"eventId":"wfc1:session:new"}\n';
+  writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
+  writeFileSync(join(workflow, "agent-flow-compaction.json"), JSON.stringify({
+    version: 1,
+    lines: 1,
+    tailBefore: { bytes: 64, sha256: sha("pre-compaction-tail") },
+    tailAfter: { bytes: Buffer.byteLength(tail), sha256: sha(tail) },
+    archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: Buffer.byteLength(`${archived}\n`), sha256: sha(`${archived}\n`) },
+  }));
+  const acked = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "unsafe-history",
+    acknowledgedSkips: ["dsh-ledger:wf-unsafe-history"],
+  });
+  // The tail is withheld: the unsafe ancestry means the archive range is not proof.
+  expect(acked.imported.ledgerRows).toBe(0);
+  expect(acked.findings).toContainEqual(expect.objectContaining({ kind: "dropped-by-ack", category: "tail" }));
+});
+
+test("a symlinked snapshots ancestor refuses the status source and a plain document directory stays a non-source", async () => {
+  const { context } = await fixture("unsafe-status");
+  mkdirSync(join(context.harnessDir, "workflows", "plain-docs"), { recursive: true });
+  writeFileSync(join(context.harnessDir, "workflows", "plain-docs", "README.md"), "# unrelated\n");
+  const realSnapshots = join(context.harnessDir, "real-snapshots");
+  mkdirSync(realSnapshots, { recursive: true });
+  writeFileSync(join(realSnapshots, "engine-status.json"), JSON.stringify({ sv: 1, entries: {}, bindings: {} }));
+  symlinkSync(realSnapshots, join(context.harnessDir, "snapshots"));
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "unsafe-status" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-status") });
+  // The document-only workflow directory is not an authority and produced no refusal.
+  const acked = await importDshHostStateFiles({ context, operator: "fixture", operationId: "unsafe-status-ack", acknowledgedSkips: ["dsh-status"] });
+  expect(acked.verdict).toBe("partially-imported");
 });
