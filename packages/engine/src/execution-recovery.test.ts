@@ -1074,8 +1074,8 @@ describe("execution-restore", () => {
     expect(live.authorityDifferences).toEqual([]);
     expect(live.lostOperationIds).toEqual([]);
 
-    // The terminal close prunes every receipt of this workflow, its own
-    // included — the durable record is the header, not the receipt.
+    // The terminal close prunes the earlier receipts but retains its own durable
+    // replay anchor.
     await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
       operationId: "op-close-pruned",
       session: world.sessionRef,
@@ -1083,7 +1083,10 @@ describe("execution-restore", () => {
       workflowId: WF,
       operation: { kind: "lifecycle", status: "stopped", reason: "retention fixture close" },
     });
-    expect(rawAll<{ operation_id: string }>(world.dbPath, `select operation_id from execution_operations where workflow_id = '${WF}'`)).toEqual([]);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}'`,
+    )).toEqual([{ epoch: retained[0]!.epoch, operation_id: "op-close-pruned" }]);
 
     // The pruned rows are DECLARED, not silent: each one is now a backup-only
     // execution-domain row, listed with `liveRevision: null`.
@@ -1098,7 +1101,9 @@ describe("execution-restore", () => {
       // Resurrected, never lost: retention removes replay/recovery state, not work.
       expect(preview.lostOperationIds).not.toContain(`execution:${row.epoch}:${row.operation_id}`);
     }
-    expect(preview.lostOperationIds).toEqual([]);
+    // The terminal receipt was committed after this backup, so it is live-only
+    // and will not survive restoring the earlier point.
+    expect(preview.lostOperationIds).toEqual([`execution:${retained[0]!.epoch}:op-close-pruned`]);
     // `previewExecutionRestore` carries the resurrected-receipt fact only
     // through `lossDigest` (the preview shape and its protocol version are
     // frozen), so the same fact is read from the two store files: the point's

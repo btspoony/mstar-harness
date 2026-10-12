@@ -2144,7 +2144,7 @@ export async function adoptTerminalWorkflow(
       ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
-    pruneWorkflowOperationReceipts(tx, input.workflowId);
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
       ...publicReceipt,
@@ -2987,11 +2987,16 @@ export function writeOperationReceipt(
     );
 }
 /**
- * Terminal workflows retain their header as history; their operation receipts
- * no longer have a live replay or recovery consumer.
+ * Terminal workflows retain their header as history; all their operation
+ * receipts EXCEPT the terminal mutation's own are pruned — the retained
+ * terminal receipt is the durable replay anchor that lets a caller that lost
+ * the success response replay the exact close/adoption instead of hitting a
+ * refusal (contract: an exact same request replays its recorded receipt).
  */
-export function pruneWorkflowOperationReceipts(tx: ExecutionTransaction, workflowId: string): void {
-  tx.db.prepare("delete from execution_operations where workflow_id = ?").run(workflowId);
+export function pruneWorkflowOperationReceipts(tx: ExecutionTransaction, workflowId: string, keepOperationId: string): void {
+  tx.db
+    .prepare("delete from execution_operations where workflow_id = ? and operation_id != ?")
+    .run(workflowId, keepOperationId);
 }
 
 /** §2.3 the authorization one session-authorized plan address resolves to. */

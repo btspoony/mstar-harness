@@ -1095,7 +1095,8 @@ export async function mutateExecutionWorkflow(
       receipt: applied.receipt,
       now: at,
     });
-    if (applied.membershipLost) pruneWorkflowOperationReceipts(tx, witness.workflowId);
+    if (applied.membershipLost)
+      pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
       ...applied.receipt,
       operationId: resolved.call.operationId,

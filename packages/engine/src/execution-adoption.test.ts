@@ -82,10 +82,10 @@ async function footprint(context: StoreContext) {
 }
 
 describe("terminal workflow adoption", () => {
-  test("records adoption, prunes its receipt and refuses same-id retries through the terminal header", async () => {
+  test("records adoption, prunes prior receipts, and replays the retained terminal receipt", async () => {
     const { context, caller } = await strandedTerminal();
     const execution = { harnessDir: context.harnessDir, caller };
-    const request = { workflowId: "wf-stranded", reason: "close the imported terminal record", operationId: "adopt-op-1" };
+    const request = { workflowId: "wf-stranded", expectedRevision: 1, reason: "close the imported terminal record", operationId: "adopt-op-1" };
     const prior = await openStore(context, "read");
     try {
       expect(prior.db.prepare("select workflow_id, operation_id from execution_operations order by operation_id").all()).toEqual([
@@ -108,18 +108,20 @@ describe("terminal workflow adoption", () => {
         revision: 2, status: "stopped", stop_reason: "fixture terminal stop",
       });
       expect(db.db.prepare("select workflow_id, operation_id from execution_operations order by operation_id").all()).toEqual([
+        { workflow_id: "wf-stranded", operation_id: request.operationId },
         { workflow_id: "wf-sibling", operation_id: "prior-sibling-receipt" },
       ]);
     } finally { db.close(); }
-    // Without an explicit CAS, the absent receipt reaches terminal-header read-back.
-    const retry = await refusalOf(() => adoptTerminalWorkflow(execution, request));
-    expect(retry.code).toBe("execution.adoption-refused");
-    expect(retry.message).toContain("read status validate and use the recorded result");
-    // An explicitly supplied pre-adoption revision remains a strict CAS, checked
-    // before terminal-header read-back even though the receipt was pruned.
-    const staleRetry = await refusalOf(() => adoptTerminalWorkflow(execution, { ...request, expectedRevision: 1 }));
-    expect(staleRetry.code).toBe("execution.header-revision-conflict");
-    expect(staleRetry.message).toContain("re-read status validate and retry with its listed revision");
+    // The explicit revision is stale after commit, but the retained receipt is
+    // consulted first and returns the exact committed result.
+    const retry = await adoptTerminalWorkflow(execution, request);
+    expect(retry.replayed).toBe(true);
+    expect(retry.data).toEqual(applied.data);
+    const changedOperation = await refusalOf(() => adoptTerminalWorkflow(execution, {
+      workflowId: request.workflowId, reason: request.reason, operationId: "adopt-op-different",
+    }));
+    expect(changedOperation.code).toBe("execution.adoption-refused");
+    expect(changedOperation.message).toContain("already has a terminal-adoption record");
     expect((await readExecutionState(context)).data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
     const dashboard = await withStoreRead(context, queryDashboard("workflows"));
     expect(dashboard.data.terminalUnregistered).toBeUndefined();
@@ -273,18 +275,19 @@ describe("terminal adoption session settlement", () => {
       expect(db.db.prepare("select state, revision from execution_sessions where workflow_id = ? and session_id = ?").get("wf-stranded", "active-holder"))
         .toEqual({ state: "revoked", revision: 2 });
       expect((db.db.prepare("select count(*) as n from execution_registry where workflow_id = ?").get("wf-stranded") as { n: number }).n).toBe(0);
-      expect((db.db.prepare("select count(*) as n from execution_operations where operation_id = ?").get("adopt-settle-1") as { n: number }).n).toBe(0);
+      expect((db.db.prepare("select count(*) as n from execution_operations where operation_id = ?").get("adopt-settle-1") as { n: number }).n).toBe(1);
     } finally { db.close(); }
   });
 
-  test("post-prune retries refuse through the terminal header rather than replaying receipts", async () => {
+  test("post-prune same-id adoption retries replay the retained terminal receipt", async () => {
     const stranded = await strandedWithHolder("active-holder");
     const proof = attestation(["active-holder"]);
     const applied = await adopt(stranded, { attestation: proof });
     expect(applied.replayed).toBe(false);
-    const retry = await refusalOf(() => adopt(stranded, { attestation: proof }));
-    expect(retry.code).toBe("execution.adoption-refused");
-    expect(retry.message).toContain("read status validate and use the recorded result");
+    const retry = await adopt(stranded, { attestation: proof });
+    expect(retry.replayed).toBe(true);
+    expect(retry.data).toEqual(applied.data);
+    expect(retry.recovery).toEqual(applied.recovery);
     expect((await readExecutionState(stranded.context)).data.terminalAdoptions).toHaveLength(1);
   });
 
@@ -351,9 +354,9 @@ describe("terminal adoption session settlement", () => {
 
     const unneeded = await strandedTerminal();
     const supplied = await adopt(unneeded, { attestation: attestation([]) });
-    const retry = await refusalOf(() => adopt(unneeded, { attestation: attestation([]) }));
-    expect(retry.code).toBe("execution.adoption-refused");
-    expect(retry.message).toContain("read status validate and use the recorded result");
+    const retry = await adopt(unneeded, { attestation: attestation([]) });
+    expect(retry.replayed).toBe(true);
+    expect(retry.data).toEqual(supplied.data);
     expect(supplied.replayed).toBe(false);
     // A valid document naming nothing ACTIVE is never silently dropped: the
     // receipt records that no settlement was required.
