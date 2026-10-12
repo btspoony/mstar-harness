@@ -54,6 +54,47 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readAgentFlow(workflowDir)?.events).toMatchObject([{ kind: 'workflow-run', runId: 'run-1', name: 'audit' }])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
+  it('serializes cold source rows ahead of a concurrent live event on the verified stream', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_010 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? {
+        type: 'tool-workflow/run-start',
+        seq: 0,
+        time: 1_700_000_000_011,
+        data: { runId: 'cold-run', name: 'cold' },
+      } : undefined,
+    }
+    let markStarted!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    let isFirstResolution = true
+    const resolveTarget = async (sessionId: string, cwd: string) => {
+      if (isFirstResolution) {
+        isFirstResolution = false
+        markStarted()
+        await blocked
+      }
+      return resolveExecutionLedgerTarget(sessionId, cwd)
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [session], get: () => session } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveTarget)
+    await started
+    ctx.events.emit({}, 'session/event', session, {
+      type: 'tool-workflow/run-start',
+      seq: 1,
+      time: 1_700_000_000_012,
+      data: { runId: 'live-run', name: 'live' },
+    })
+    release()
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['live-run', 'cold-run'])
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
+  })
   it('accepts, replays, and refuses conflicting source identity atomically', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const source = { sessionId: 'session-1', streamId: 'stream-a', seq: 4 }
