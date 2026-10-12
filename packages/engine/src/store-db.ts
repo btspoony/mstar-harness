@@ -80,6 +80,8 @@ export type StoreErrorCode =
   | "execution.workflow-identity-mismatch"
   | "store.stale-epoch"
   | "store.not-active"
+  | "store.publication-failed"
+  | "store.created-handle-failed"
   | "store.upgrade-dsh-source-refused"
   | "store.upgrade-dsh-ack-unmatched"
   | "store.upgrade-dsh-failed";
@@ -2198,6 +2200,35 @@ function removeStagingFiles(stagingPath: string): void {
   }
 }
 
+/** The operating system's own classification of a failed step, preserved
+ * verbatim so the operator diagnoses the filesystem, not a store. */
+function publicationCause(error: unknown): string {
+  const causeCode =
+    error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return causeCode === "" || message.includes(causeCode) ? message : `${causeCode}: ${message}`;
+}
+
+/**
+ * The refusal for a creation step that failed BEFORE any store existed at the
+ * canonical path: the real cause is preserved, the absence of a published
+ * store is stated (a canonical path is never called corrupt here — none was
+ * ever created), and the recovery is the same public entry once the filesystem
+ * condition is resolved, or a harness on a hard-link-capable filesystem
+ * selected through the existing `--harness` argument.
+ */
+function publicationRefusal(step: string, error: unknown, dbPath: string): StoreError {
+  const cause = publicationCause(error);
+  return new StoreError(
+    "store.publication-failed",
+    `The fresh store could not be ${step}: ${cause}. NO store was published at ${dbPath} — the canonical path ` +
+      `holds no store and nothing was written to it. Resolve the filesystem condition named above (permissions, ` +
+      `space, hard-link support) and rerun the same command, or select a harness on a filesystem that supports ` +
+      `atomic hard links with --harness.`,
+    { path: dbPath, cause },
+  );
+}
+
 /**
  * Create-only initialization for a genuinely empty workspace (contract §2).
  *
@@ -2214,6 +2245,14 @@ function removeStagingFiles(stagingPath: string): void {
  * `store.already-exists` there (EEXIST) and are not read or rewritten. Only
  * this attempt's own staging name is ever removed, so a failed create cannot
  * delete the store another process already published.
+ *
+ * Failure outcomes are named at their actual phase. Before publication,
+ * `store.publication-failed` preserves the operating system's own cause and
+ * states that NO store exists at the canonical path — which is never called
+ * corrupt, because none was created. After publication, a failed handle
+ * acquisition reports `store.created-handle-failed`: the PARTIAL outcome that
+ * it is — the store is created, activated and retained — with the real cause
+ * and the supported same-entry continuation.
  */
 export async function initializeStore(
   context: StoreContext,
@@ -2247,7 +2286,7 @@ export async function initializeStore(
   try {
     claim = openSync(stagingPath, "wx");
   } catch (error) {
-    refuseOpenFailure(error, dbPath);
+    throw publicationRefusal("created in the control root's own directory", error, dbPath);
   }
   closeSync(claim);
   let db: StoreDb | undefined;
@@ -2284,9 +2323,12 @@ export async function initializeStore(
     const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
     if (folded?.journal_mode !== "delete") {
       throw new StoreError(
-        "store.corrupt",
-        `The staged store could not be published as one self-contained database file (journal mode is ` +
-          `${String(folded?.journal_mode ?? "unknown")}, not "delete"). Nothing was published at ${dbPath}.`,
+        "store.publication-failed",
+        `The staged store could not be folded into one self-contained database file before publication ` +
+          `(journal mode is ${String(folded?.journal_mode ?? "unknown")}, not "delete"). NO store was published at ` +
+          `${dbPath} — the canonical path holds no store and nothing was written to it. Rerun the same command; if ` +
+          `it recurs, select a harness on a filesystem that supports atomic hard links with --harness.`,
+        { path: dbPath, cause: `journal mode ${String(folded?.journal_mode ?? "unknown")} after fold` },
       );
     }
     db.close();
@@ -2303,18 +2345,39 @@ export async function initializeStore(
     throw error;
   }
   // Publish: the atomic create-only step. EEXIST is a competing initializer's
-  // committed store (or a pre-existing file) — refuse it untouched.
+  // committed store (or a pre-existing file) — refuse it untouched. Any other
+  // failure is a filesystem/publication condition, never store corruption: no
+  // canonical store exists to be corrupted.
   try {
     linkSync(stagingPath, dbPath);
   } catch (error) {
     removeStagingFiles(stagingPath);
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw alreadyExists();
-    refuseOpenFailure(error, dbPath);
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      throw alreadyExists();
+    }
+    throw publicationRefusal("linked into place at its canonical path", error, dbPath);
   }
   removeStagingFiles(stagingPath);
-  // The handle is taken through the ordinary open path, on the published bytes:
-  // the same pragmas, verification and identity every other caller receives.
-  return await openStore(context, "write");
+  // The store is now committed, complete and ACTIVE at the canonical path. If
+  // this attempt cannot acquire its returned handle, that is a PARTIAL outcome
+  // and must be disclosed as one: the published image is kept — never unlinked,
+  // never reported as if nothing was created — and the caller is pointed at the
+  // supported continuation for its entry.
+  try {
+    return await openStore(context, "write");
+  } catch (error) {
+    const cause = publicationCause(error);
+    const causeCode = error instanceof StoreError ? error.code : "";
+    throw new StoreError(
+      "store.created-handle-failed",
+      `The store was created, activated and published at ${dbPath}, but this attempt could not open its handle ` +
+        `afterwards (${cause}). The published store is complete and was NOT modified, rolled back or removed. ` +
+        `Rerunning "mstar store init" here refuses create-only. Retry this command once the condition clears, and ` +
+        `for an interrupted upgrade continue the import into the published store with ` +
+        `"mstar store upgrade --harness <control root> --operator <name>".`,
+      { path: dbPath, published: true, cause, causeCode },
+    );
+  }
 }
 
 /**
