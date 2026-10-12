@@ -938,15 +938,15 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// §5 F1 the retained workflow-notes ledger: the append-only accepted-record
-// writer plus its pure coverage normalizer. ADDITIVE export — the accepted
-// record shape, its receipt and the coverage facts are the whole published
-// surface, and the write path stays behind the engine's own authorization.
+// §5 F1 the retained workflow-notes ledger: the append-only record writer plus
+// its pure coverage normalizer. The record shape, the receipt and the coverage
+// facts are the whole published surface, and the write path stays behind the
+// engine's own authorization.
 export type {
   WorkflowNote,
-  WorkflowNoteAcceptedRecord,
   WorkflowNoteAppendReceipt,
   WorkflowNoteHistoricalRecord,
+  WorkflowNoteRecord,
   WorkflowNotesCoverageFacts,
 } from "./execution-ledgers.js";
 export {
