@@ -39,12 +39,6 @@ export function legacyStatusDocPath(harnessRoot: string): string {
   return join(harnessRoot, "status.json");
 }
 
-/** Legacy workflow snapshot path (`{WORKFLOW_DIR}/<id>/snapshot.json`). Only
- * reachable through the protected-target classification of a `json` alias. */
-export function legacySnapshotDocPath(harnessRoot: string, workflowId: string): string {
-  return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, "snapshot.json");
-}
-
 /** Stable key inside the kind. Review id or absolute `json` path. */
 export type ArtifactRef = {
   kind: ArtifactKind;
@@ -176,7 +170,7 @@ function assertNotRetiredRegisterTarget(root: string, ref: ArtifactRef, filePath
 
 /**
  * Protected document class of a resolved target (spec §C4): the legacy
- * coordination documents the migration writers own. Only a `json` alias
+ * coordination documents. Only a `json` alias
  * (`--json <abs path>`, symlink) can reach them, and it is classified by its
  * CANONICAL target against the resolved protected roots, so no alias can dodge
  * the boundary. `review` and unrelated `json` keep current behavior.
@@ -214,12 +208,11 @@ const fsStoreInstances = new WeakSet<ArtifactStore>();
 
 /** Default local adapter: maps kinds to the existing `.mstar/` paths.
  * `put` uses the sync `writeJson` (atomic temp+rename unchanged) and
- * returns a resolved Promise; locks stay with callers (architect-locked
+ * returns a resolved Promise; no lock is taken anywhere (architect-locked
  * 2026-08-27). `get` mirrors `readJson`: missing file → `undefined`,
  * malformed JSON → throw with the path in the message. The returned store
- * also exposes its resolved `root` so the routed writers can fail loud
- * when a caller's explicit target path diverges from the store-resolved
- * path ; `root` is not part of the `ArtifactStore` contract.
+ * also exposes its resolved `root`; `root` is not part of the
+ * `ArtifactStore` contract.
  * `list` enumerates per the D4 table: report what exists — missing
  * backing dir/file → `[]`, `json` throws, keys sorted ascending. */
 export function createFsStore(harnessRoot: string): ArtifactStore & { root: string } {
@@ -239,8 +232,8 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       }
       const filePath = resolveArtifactPath(root, doc);
       assertNotRetiredRegisterTarget(root, doc, filePath);
-      // Protected coordination documents may be written only inside the
-      // authorization context opened by their locked migration writers.
+      // Legacy protected documents may be written only inside their own
+      // private authorization context (never through a raw store port).
       const protectedKind = protectedKindOf(root, doc, filePath);
       if (protectedKind !== null) {
         assertProtectedWriteAuthorized(filePath, "put", protectedKind);
@@ -316,8 +309,8 @@ function processControlRoot(): string {
 
 /**
  * Prevent custom stores from recreating or aliasing the retired project
- * register. Protected status/snapshot files are migration staging and their
- * writer callsites own authorization.
+ * register. The legacy status/snapshot documents stay unreachable except
+ * through their own authorization boundary.
  */
 function assertInjectedAccessAllowed(ref: ArtifactRef): void {
   const retirableKind = (ref.kind as string) === "residuals";
@@ -333,8 +326,8 @@ function assertInjectedAccessAllowed(ref: ArtifactRef): void {
  * injected store declines them, and it deliberately exposes **no** `root`: a
  * custom adapter's `root` is a claim about a directory it may not write to at
  * all, while consumers read a string `root` as the FsStore capability that
- * authorizes path agreement (`assertFsStorePath`) and the direct byte/CAS and
- * `--versioned` routes. Dropping the claim makes an injected adapter a body
+ * authorizes the direct byte/CAS and `--versioned` routes. Dropping the claim
+ * makes an injected adapter a body
  * store by construction; the engine-created FsStore is served unwrapped and
  * keeps its own root.
  */
@@ -384,26 +377,6 @@ export function getArtifactStore(): ArtifactStore {
     );
   }
   return createFsStore(root);
-}
-
-/**
- * Fail-loud root-agreement guard for the legacy migration writers : when
- * `store` is an FsStore, its resolved root must equal the caller's explicit
- * target directory. A divergence means the caller's path lives outside the
- * active store's root (silent decoupling between the caller's target and
- * where the store write lands). Custom (non-FS) stores own their mapping by
- * design and are skipped. Cheap: pure path resolution, no I/O.
- */
-export function assertFsStorePath(store: ArtifactStore, expectedRoot: string): void {
-  const root = (store as ArtifactStore & { root?: unknown }).root;
-  if (typeof root !== "string") return; // custom store — the caller's contract
-  const declared = resolve(root);
-  const expected = resolve(expectedRoot);
-  if (declared !== expected) {
-    throw new Error(
-      `routed writer path mismatch: the active FsStore root is ${JSON.stringify(declared)} but the caller's target is ${JSON.stringify(expected)} \u2014 call setArtifactStore(createFsStore(<root>)) first when the write target differs from the active store's root`,
-    );
-  }
 }
 
 /** Trust boundary (architect-locked 2026-08-27): `loadStoreModule` accepts

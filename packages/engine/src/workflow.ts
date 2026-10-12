@@ -37,7 +37,7 @@ import { canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 import { validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 
-/** Snapshot file name inside `workflows/<id>/` ( - writer contract). */
+/** Snapshot file name inside the legacy `workflows/<id>/` document. */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 
 /** Lifecycle status enum ( - terminal set = completed|failed|stopped). */

@@ -45,10 +45,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  assertFsStorePath,
   createFsStore,
   getArtifactStore,
-  legacySnapshotDocPath,
   legacyStatusDocPath,
   loadStoreModule,
   resolveArtifactPath,
@@ -290,11 +288,18 @@ describe("createFsStore path mapping", () => {
     }
   });
 
-  test("the legacy snapshot path honors .mstarc workflow_dir overrides", () => {
+  test("a json alias of a legacy snapshot under a .mstarc workflow_dir override is still classified protected", async () => {
     const root = tmpRoot("store-mstarc-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=wf-custom\nproject_dir=proj-custom\n");
-      expect(legacySnapshotDocPath(root, "wf-1")).toBe(join(root, "wf-custom", "wf-1", "snapshot.json"));
+      const store = createFsStore(root);
+      // The override applies to the protected-target classification too: the
+      // alias is judged against the RESOLVED workflow dir, not the default.
+      const snapshotPath = join(root, "wf-custom", "wf-1", "snapshot.json");
+      await expect(store.put({ kind: "json", key: snapshotPath, payload: { probe: true } })).rejects.toMatchObject({
+        code: "coordination.direct-write-refused",
+      });
+      expect(existsSync(snapshotPath)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -772,13 +777,15 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
       // path-agreement check skips it (the adapter owns its own mapping) and the
       // direct byte/CAS and `--versioned` consumers find no FsStore capability.
       expect("root" in injected).toBe(false);
-      expect(() => assertFsStorePath(injected, root)).not.toThrow();
 
-      // The engine's own FsStore keeps the capability it is verified by: the
-      // same diverging target is refused for it.
+      // The engine's own FsStore keeps the capability it is verified by.
       setArtifactStore(createFsStore(elsewhere));
-      expect("root" in getArtifactStore()).toBe(true);
-      expect(() => assertFsStorePath(getArtifactStore(), root)).toThrow(/routed writer path mismatch/);
+      const active = getArtifactStore() as ArtifactStore & { root: string };
+      expect("root" in active).toBe(true);
+      // Equivalence of the retired root-agreement check, asserted locally: a
+      // differing declared root is a divergence, an equal one is not.
+      expect(active.root).not.toBe(root);
+      expect(active.root).toBe(elsewhere);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(elsewhere, { recursive: true, force: true });
@@ -787,42 +794,21 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// assertFsStorePath — fail-loud root agreement
+// FsStore root capability (the retired root-agreement guard's fact)
 // ---------------------------------------------------------------------------
 
-describe("assertFsStorePath - fail-loud root agreement ", () => {
-  test("FsStore whose resolved root equals the expected root passes", () => {
-    const root = tmpRoot("store-assert-ok-");
+describe("FsStore root capability", () => {
+  test("the engine FsStore declares its resolved root", () => {
+    const root = tmpRoot("store-root-ok-");
     try {
-      const store = authorizedStore(createFsStore(root));
-      expect(() => assertFsStorePath(store, root)).not.toThrow();
+      expect(createFsStore(root).root).toBe(root);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("FsStore with a diverging expected root throws naming both roots", () => {
-    const root = tmpRoot("store-assert-mismatch-");
-    const other = tmpRoot("store-assert-other-");
-    try {
-      const store = authorizedStore(createFsStore(root));
-      let caught: Error | undefined;
-      try {
-        assertFsStorePath(store, other);
-      } catch (error) {
-        caught = error as Error;
-      }
-      expect(caught?.message).toMatch(/routed writer path mismatch: the active FsStore root is/);
-      expect(caught?.message).toContain(other);
-      expect(caught?.message).toContain(root);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-      rmSync(other, { recursive: true, force: true });
-    }
-  });
-
-  test("custom (non-FS) stores are skipped - the caller owns the mapping", () => {
-    expect(() => assertFsStorePath(recordingStore(), "/anywhere")).not.toThrow();
+  test("custom (non-FS) stores claim no root - the caller owns the mapping", () => {
+    expect("root" in recordingStore()).toBe(false);
   });
 });
 // loadStoreModule (trust boundary)

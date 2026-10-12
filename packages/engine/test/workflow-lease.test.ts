@@ -41,22 +41,6 @@ function violationCodes(gate: { violations: { code: string }[] }): string[] {
   return gate.violations.map((v) => v.code);
 }
 
-/**
- * A pid no live process owns (`process.kill(pid, 0)` → `ESRCH`) — the
- * stand-in for a crashed lock holder (#447). Scanned rather than
- * spawn-then-exit so the value cannot be a recycled live pid.
- */
-function deadPid(): number {
-  for (let pid = 50_000; pid < 50_100; pid += 1) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return pid;
-    }
-  }
-  throw new Error("no unowned pid found in the 50000-50099 scan range");
-}
-
 describe("validateIntegrationMergeLease", () => {
   test("valid serial merge lease passes", () => {
 // Spec: status-and-residuals.md § Snapshot top-level

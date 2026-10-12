@@ -1,6 +1,7 @@
 /**
  * Engine workflow module — v3 workflow snapshot schema (`workflows/<id>/snapshot.json`),
- * lifecycle status enum, validator invariants, and the whole-rewrite writer.
+ * lifecycle status enum and validator invariants. The legacy documents are
+ * read-only migration sources: no whole-rewrite file writer exists.
  *
  * Spec sources (each test cites the plan/brief section it enforces):
  * - Snapshot schema (final): plan .md` Task 2 —
@@ -23,9 +24,7 @@
  *   `ended_at` is present and `integration_merge_lease` is absent.
  * - Integration-mutex shape delegation: `validateIntegrationMergeLease`
  *   (`packages/engine/src/workflow.ts`).
- * - Writer: migration-only whole-rewrite of `dir/snapshot.json` through the
- *   active `ArtifactStore` (atomic temp+rename), no file lock;
- *   `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
+ * - `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"` names the legacy document.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";

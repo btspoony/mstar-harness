@@ -148,7 +148,6 @@ __export(exports_engine, {
   assertDefaultBranchProtected: () => assertDefaultBranchProtected,
   assertDeliveryRegistrationCoherence: () => assertDeliveryRegistrationCoherence,
   assertExecutionSessionCurrent: () => assertExecutionSessionCurrent,
-  assertFsStorePath: () => assertFsStorePath,
   assertIndexRows: () => assertIndexRows,
   assertIssueLinkVocabulary: () => assertIssueLinkVocabulary,
   assertIssueTriageVocabulary: () => assertIssueTriageVocabulary,
@@ -235,7 +234,6 @@ __export(exports_engine, {
   l1PreDispatchCheck: () => l1PreDispatchCheck,
   l2PreDispatchCheck: () => l2PreDispatchCheck,
   landedPathOf: () => landedPathOf,
-  legacySnapshotDocPath: () => legacySnapshotDocPath,
   legacyStatusDocPath: () => legacyStatusDocPath,
   linkCatalogEntities: () => linkCatalogEntities,
   linkIssue: () => linkIssue,
@@ -22522,9 +22520,6 @@ function validateQcReport(text4) {
 function legacyStatusDocPath(harnessRoot) {
   return join24(harnessRoot, "status.json");
 }
-function legacySnapshotDocPath(harnessRoot, workflowId) {
-  return join24(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, "snapshot.json");
-}
 function resolveArtifactPath(harnessRoot, ref) {
   const { kind, key } = ref;
   if (kind === "residuals") {
@@ -22700,16 +22695,6 @@ function getArtifactStore() {
     throw new Error(`harness dir not found from ${resolve18(process.cwd())} — cannot create the default FsStore (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   return createFsStore(root);
-}
-function assertFsStorePath(store, expectedRoot) {
-  const root = store.root;
-  if (typeof root !== "string")
-    return;
-  const declared = resolve18(root);
-  const expected = resolve18(expectedRoot);
-  if (declared !== expected) {
-    throw new Error(`routed writer path mismatch: the active FsStore root is ${JSON.stringify(declared)} but the caller's target is ${JSON.stringify(expected)} — call setArtifactStore(createFsStore(<root>)) first when the write target differs from the active store's root`);
-  }
 }
 function isArtifactStore(value) {
   return typeof value === "object" && value !== null && typeof value.put === "function" && typeof value.get === "function";
