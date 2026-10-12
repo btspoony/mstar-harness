@@ -2240,8 +2240,9 @@ async function runRestore(
       // The owned-safety cleanup witness. The test-runner-gated park reproduces the
       // one interleaving this proof is written for: a peer replacement that rewrites
       // the store's ledger, dropping THIS attempt's committed receipt, before this
-      // attempt reads the generation.
-      await recoveryCleanupParkHook(attemptId);
+      // attempt reads the generation. The test-mode check is at the CALLSITE, so the
+      // production path performs no extra suspension or allocation here.
+      if (process.env.MSTAR_STORE_TEST_RUNNER === "1") await recoveryCleanupParkHook(attemptId);
       const live = await currentAuthorityHandle(context).catch(() => null);
       if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
         try {

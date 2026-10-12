@@ -1032,22 +1032,36 @@ describe("execution-restore", () => {
     const backups = join(world.harness, "archived", "store-migration", "backups");
     mkdirSync(backups, { recursive: true });
     const plantedName = `pre-restore-e1-${randomUUID()}.db`;
-    writeFileSync(join(backups, plantedName), Buffer.from("an unrelated earlier point"));
+    const plantedBytes = Buffer.from("an unrelated earlier point");
+    writeFileSync(join(backups, plantedName), plantedBytes);
 
     const ready = join(world.root, "cleanup-ready.json");
     const release = join(world.root, "cleanup-release");
+    const previous = {
+      runner: process.env.MSTAR_STORE_TEST_RUNNER,
+      fault: process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE,
+      cleanupPark: process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP,
+      ready: process.env.MSTAR_STORE_PARK_READY,
+      release: process.env.MSTAR_STORE_PARK_RELEASE,
+    };
     process.env.MSTAR_STORE_TEST_RUNNER = "1";
     process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
     process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP = "*";
     process.env.MSTAR_STORE_PARK_READY = ready;
     process.env.MSTAR_STORE_PARK_RELEASE = release;
+
+    // A is started ONCE handling its own rejection, outside the try, so EVERY exit
+    // path can release it and await its settlement before the fixture root is torn
+    // down — a parked A would otherwise resume on its 30s timeout against a deleted
+    // root. Nothing that finally needs lives only on the success path.
+    const aOutcome = restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }).then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error: error as Error }),
+    );
     try {
-      // Attempt A commits the replacement and the after-replacement seam then
-      // throws, so A enters its owned-safety cleanup and parks there — its receipt
-      // already committed, its cleanup witness not yet run.
-      const parked = errorOf(() =>
-        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
-      );
+      // A commits the replacement and the after-replacement seam then throws, so A
+      // enters its owned-safety cleanup and parks there — its receipt already
+      // committed, its cleanup witness not yet run.
       for (let spin = 0; spin < 4000 && !existsSync(ready); spin++) await nextTurn();
       expect(existsSync(ready)).toBe(true);
       const readyPayload: unknown = JSON.parse(readFileSync(ready, "utf8"));
@@ -1058,44 +1072,70 @@ describe("execution-restore", () => {
       if (typeof attemptId !== "string") throw new Error("the cleanup park reported a non-string attempt id");
 
       // A's own point is the safety file A just took; the planted point is the only
-      // other. Capture its exact name before the peer runs.
+      // other. Capture its exact name, its bytes, and A's native committed record and
+      // safety generation BEFORE the peer runs.
       const ownPoint = readdirSync(backups).filter((name) => name.startsWith("pre-restore-")).find((name) => name !== plantedName);
       expect(ownPoint).toBeTruthy();
-      expect(existsSync(join(backups, plantedName))).toBe(true);
+      const ownBytes = readFileSync(join(backups, ownPoint!));
+      const ownMeta = rawGet<{ e: number }>(join(backups, ownPoint!), "select authority_epoch as e from store_meta where id = 1");
+      expect(ownMeta).toBeTruthy();
+      const safetyEpoch = ownMeta!.e;
+      const aRecord = rawGet<{ result_json: string }>(
+        world.dbPath,
+        `select result_json from store_operations where operation_id = 'restore-attempt:${attemptId}'`,
+      );
+      expect(aRecord).toBeTruthy();
+      const aCommittedRecord = JSON.parse(aRecord!.result_json) as { newEpoch: number };
+      const aNewEpoch = aCommittedRecord.newEpoch;
 
-      // A real peer restore now runs. A has already passed its after-replacement
-      // seam, so the seam is cleared and the peer commits cleanly; the cleanup park
-      // is cleared too so the peer can never itself block in that hook. It selects
-      // the SAME older point, so its commit rewrites store_operations WHOLESALE and
-      // drops A's exact committed receipt, and advances the epoch again. A's own
-      // generation therefore moves on without naming A.
+      // A real peer restore now runs. The fault and cleanup-park selectors are cleared
+      // so B can neither inherit the after-replacement failure nor block in the
+      // cleanup park. It selects the SAME older point, so its commit rewrites
+      // store_operations WHOLESALE and drops A's exact committed receipt, and advances
+      // the epoch again.
       delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
       delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
       const peerPreview = await previewExecutionRestore(world.context, point.backupPath);
       await restoreExecutionBackup(world.context, { preview: peerPreview, operator: OPERATOR, authorization: AUTHORIZATION });
 
-      // The interleaving is real: A's exact receipt is gone and the generation has moved.
+      // Observed, not source-derived: the generation advanced above A's safety point
+      // and above A's own committed epoch, AND A's exact receipt is gone from the
+      // rewritten ledger.
+      const liveEpoch = footprint(world.dbPath).epoch;
+      expect(liveEpoch).toBeGreaterThan(safetyEpoch);
+      expect(liveEpoch).toBeGreaterThan(aNewEpoch);
       const ledger = rawAll<{ operation_id: string }>(
         world.dbPath,
         "select operation_id from store_operations where operation_id like 'restore-attempt:%'",
       );
       expect(ledger.some((row) => row.operation_id === `restore-attempt:${attemptId}`)).toBe(false);
 
-      // Release A. Its cleanup witness must PRESERVE its committed point because the
-      // live generation no longer proves it never committed — not reclaim it on the
-      // absent receipt, which is exactly what the unsafe negative-membership witness
-      // would have done.
-      writeFileSync(release, "");
-      const error = await parked;
-      expect(error.message).toContain("after-replacement");
-      expect(existsSync(join(backups, ownPoint!))).toBe(true);
-      expect(readFileSync(join(backups, plantedName), "utf8")).toBe("an unrelated earlier point");
+      // Release A and join it. Its cleanup witness must PRESERVE its committed point
+      // because the live generation no longer proves it never committed — not reclaim
+      // it on the absent receipt, which is exactly what the unsafe negative-membership
+      // witness would have done.
+      writeFileSync(release, "go");
+      const settled = await aOutcome;
+      expect(settled.ok).toBe(false);
+      if (!settled.ok) expect(settled.error.message).toContain("after-replacement");
+
+      // A's own point and the unrelated planted point survive BYTE FOR BYTE.
+      expect(readFileSync(join(backups, ownPoint!))).toEqual(ownBytes);
+      expect(readFileSync(join(backups, plantedName))).toEqual(plantedBytes);
     } finally {
-      delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
-      delete process.env.MSTAR_STORE_PARK_READY;
-      delete process.env.MSTAR_STORE_PARK_RELEASE;
-      delete process.env.MSTAR_STORE_TEST_RUNNER;
-      delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+      // Every exit releases A first, then joins it, then restores the environment.
+      writeFileSync(release, "go");
+      await aOutcome;
+      if (previous.runner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previous.runner;
+      if (previous.fault === undefined) delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+      else process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = previous.fault;
+      if (previous.cleanupPark === undefined) delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
+      else process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP = previous.cleanupPark;
+      if (previous.ready === undefined) delete process.env.MSTAR_STORE_PARK_READY;
+      else process.env.MSTAR_STORE_PARK_READY = previous.ready;
+      if (previous.release === undefined) delete process.env.MSTAR_STORE_PARK_RELEASE;
+      else process.env.MSTAR_STORE_PARK_RELEASE = previous.release;
     }
   });
 
