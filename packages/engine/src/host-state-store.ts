@@ -385,6 +385,11 @@ export function importDshHostStateRows(
   for (const binding of rows.bindings) {
     const prior = tx.db.prepare("select excluded_before_seq from dsh_session_bindings where session_id = ? and cwd = ?").get(binding.sessionId,binding.cwd) as { excluded_before_seq: number } | undefined;
     if (!prior) {
+      const otherCwd = tx.db.prepare("select 1 from dsh_session_bindings where session_id = ? limit 1").get(binding.sessionId);
+      if (otherCwd) {
+        refused.push({ selector: "dsh-status", category: "status", facts: `binding ${binding.sessionId} at ${binding.cwd}`, discarded: `the imported session binding at ${binding.cwd}`, reason: "session binding exists at a different cwd", source: "dsh-status" });
+        continue;
+      }
       tx.db.prepare("insert into dsh_session_bindings(session_id,cwd,selected_workflow_id,execution_binding,excluded_before_seq,updated_at) values(?,?,?,?,?,?)")
         .run(binding.sessionId,binding.cwd,binding.selectedWorkflowId,binding.executionBindingJson,binding.excludedBeforeSeq,binding.updatedAt);
       written.bindings++; changed=true;

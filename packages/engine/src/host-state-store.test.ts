@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, readDshLedgerWindow, readDshScanBound, readDshSessionBinding, readDshStatusEmission, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
+import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, importDshHostStateRows, readDshLedgerWindow, readDshScanBound, readDshSessionBinding, readDshStatusEmission, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
 import { initializeStore, openStore, withDshWriteTransaction } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dsh-state-test-"));
@@ -281,6 +281,45 @@ describe("host-state store domain", () => {
       expect(readDshStatusEmission(context, "s", "/other-cwd")).toEqual({ kind: "ok" });
       expect(handle.db.prepare("select turn, payload_json from dsh_status_emissions where session_id='s' and cwd='/cwd'").get()).toEqual({ turn: 2, payload_json: "second" });
       expect(count(handle.db, "select count(*) as n from dsh_status_emissions")).toBe(2);
+    } finally {
+      handle.close();
+    }
+  });
+  test("refuses imported session bindings at a different cwd and preserves exact-pair replay", async () => {
+    const { context, handle } = await fresh("binding-import-cwd");
+    try {
+      expect(writeDshSessionBinding(context, "s", "/cwd", {
+        selectedWorkflowId: "wf-native", executionBinding: "native-bind", excludedBeforeSeq: 9,
+      })).toEqual({ kind: "written" });
+      const rows = {
+        workflows: [],
+        bindings: [{
+          sessionId: "s", cwd: "/other", selectedWorkflowId: "wf-legacy", executionBindingJson: "legacy-bind",
+          excludedBeforeSeq: 3, updatedAt: "2026-10-12T00:00:00.000Z",
+        }],
+        emissions: [],
+      };
+      const refused = withDshWriteTransaction(context, (tx) =>
+        importDshHostStateRows({ db: tx.db, storeId: tx.storeId, epoch: tx.epoch }, rows, "2026-10-12T00:00:00.000Z"));
+      expect(refused.refused).toEqual([{
+        selector: "dsh-status", category: "status", facts: "binding s at /other",
+        discarded: "the imported session binding at /other", reason: "session binding exists at a different cwd", source: "dsh-status",
+      }]);
+      expect(readDshSessionBinding(context, "s", "/cwd")).toMatchObject({
+        kind: "ok", binding: { selectedWorkflowId: "wf-native", executionBinding: "native-bind", excludedBeforeSeq: 9 },
+      });
+      expect(readDshSessionBinding(context, "s", "/other")).toMatchObject({ kind: "unavailable", reason: "cwd-mismatch" });
+      expect(count(handle.db, "select count(*) as n from dsh_session_bindings where session_id='s'")).toBe(1);
+      const replay = withDshWriteTransaction(context, (tx) =>
+        importDshHostStateRows({ db: tx.db, storeId: tx.storeId, epoch: tx.epoch }, {
+          ...rows, bindings: [{ ...rows.bindings[0]!, cwd: "/cwd" }],
+        }, "2026-10-12T00:00:00.000Z"));
+      expect(replay.refused).toEqual([]);
+      expect(replay.reusedOrPresent).toContain("binding:s:/cwd:already-present");
+      expect(readDshSessionBinding(context, "s", "/cwd")).toMatchObject({
+        kind: "ok", binding: { selectedWorkflowId: "wf-native", executionBinding: "native-bind", excludedBeforeSeq: 9 },
+      });
+      expect(count(handle.db, "select count(*) as n from dsh_session_bindings where session_id='s'")).toBe(1);
     } finally {
       handle.close();
     }
