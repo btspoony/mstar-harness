@@ -686,12 +686,15 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
       return realWrite(harnessDir, sessionId, cwd, update)
     })
 
-    const refused = await endpoint.selectWorkflow('s-B', app.root, 'wf-a')
-    expect(refused).toEqual({
-      status: 'unavailable',
-      reason:
-        'store-[store.stale-epoch] The selected store identity or epoch changed; resolve the current authority and retry.',
-    })
+    const refused: MstarSelectWorkflowResult = await endpoint.selectWorkflow('s-B', app.root, 'wf-a')
+    expect(refused.status).toBe('unavailable')
+    if (refused.status !== 'unavailable') throw new Error('unreachable')
+    // The DISTINCT NATIVE cause, not W1's source-comparison token: refusal here
+    // must be the native stale-generation guard the automatic-source window
+    // never reaches. Only the machine cause token is pinned — the refusal
+    // sentence's prose is not a product contract this test owns.
+    expect(refused.reason.startsWith('store-[store.stale-epoch]')).toBe(true)
+    expect(refused.reason).not.toBe('selection-generation-changed')
     // Exactly one native commit attempt, refused before its body ran.
     expect(commits).toBe(1)
     // No preference and no floor: the session has no binding row at all.
