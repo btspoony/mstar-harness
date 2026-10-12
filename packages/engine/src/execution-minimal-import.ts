@@ -43,8 +43,14 @@ function rootOf(context: StoreContext): string {
  * never enumerates `workflows/`, so without this precondition its route would
  * silently skip a source the v2 route refuses. `lstatSync` (not `existsSync`)
  * so a dangling symlink is refused rather than read as absent.
+ *
+ * A symlinked child is the DSH importer's own source, so an operator who has
+ * already acknowledged dropping it (`--ack-skip-dsh dsh-ledger:<id>`) leaves it
+ * to that phase instead of failing here before its documented recovery runs.
+ * Nothing is followed either way: linked bytes are reached only under the real
+ * path, which the DSH evaluation lstat-refuses.
  */
-function assertWorkflowTreeIsReal(root: string): void {
+function assertWorkflowTreeIsReal(root: string, acknowledgedSkips: readonly string[]): void {
   const workflowsDir = join(root, "workflows");
   let info;
   try { info = lstatSync(workflowsDir); } catch (error) {
@@ -53,7 +59,12 @@ function assertWorkflowTreeIsReal(root: string): void {
   }
   if (info.isSymbolicLink() || !info.isDirectory()) conflict(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
   for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
-    if (dirent.isSymbolicLink()) conflict(`workflow directory ${join(workflowsDir, dirent.name)} is a symlink; replace it with an in-root directory or remove it, then rerun store upgrade.`);
+    if (!dirent.isSymbolicLink()) continue;
+    // An acknowledged DSH-only child is re-refused and dropped by
+    // `importDshHostStateFiles`; a registered workflow is an execution source
+    // and still conflicts, so no acknowledged selector can discard one.
+    if (acknowledgedSkips.includes(`dsh-ledger:${dirent.name}`)) continue;
+    conflict(`workflow directory ${join(workflowsDir, dirent.name)} is a symlink; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-ledger:${dirent.name}\` to drop exactly that source, otherwise replace it with an in-root directory or remove it, then rerun store upgrade.`);
   }
 }
 
@@ -155,9 +166,9 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string):
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
 }
 
-function discover(context: StoreContext, operator: string): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string; dispositions: string[] } {
+function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[]): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string; dispositions: string[] } {
   const root = rootOf(context);
-  assertWorkflowTreeIsReal(root);
+  assertWorkflowTreeIsReal(root, acknowledgedSkips);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
   const sourceFiles = new Set<string>();
@@ -333,11 +344,11 @@ function discover(context: StoreContext, operator: string): { root: string; root
 }
 
 
-export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string }): Promise<MinimalImportResult> {
+export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[] }): Promise<MinimalImportResult> {
   const { context, operator, operationId } = input;
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
-  const source = discover(context, operator);
+  const source = discover(context, operator, input.acknowledgedSkips ?? []);
   const requestHash = createHash("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,

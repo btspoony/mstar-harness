@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -1587,6 +1587,53 @@ test("a v1 public upgrade refuses a symlinked workflows tree instead of silently
   } finally {
     store.close();
   }
+});
+
+test("an acknowledged DSH-only symlinked child recovers through --ack-skip-dsh without following the link", async () => {
+  const { context, unknownBytes } = legacyWorkspace("symlinked-dsh-child");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  // An UNREGISTERED symlinked child holding only legacy DSH ledger data: the
+  // execution preflight must leave it to the DSH importer's own documented
+  // acknowledgement instead of failing before that recovery can run.
+  const outside = join(context.harnessDir, "outside-dsh");
+  mkdirSync(outside, { recursive: true });
+  const linkedIds = '{"id":"wfe1:linked","d":"linked-digest"}\n';
+  writeFileSync(join(outside, "agent-flow-ids.jsonl"), linkedIds);
+  const linkPath = join(workflowsDir, "wf-link");
+  symlinkSync(outside, linkPath);
+
+  // Refusal without the explicit acknowledgement, and nothing committed.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-symlinked-dsh-child" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining("--ack-skip-dsh dsh-ledger:wf-link"),
+    });
+  const refused = await openStore(context, "read");
+  try {
+    expect(refused.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(refused.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { refused.close(); }
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-symlinked-dsh-child-ack",
+    acknowledgedSkips: ["dsh-ledger:wf-link"],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.dsh).toMatchObject({ verdict: "partially-imported" });
+  expect(recovered.dsh.findings).toContainEqual(
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-link", category: "workflows" }),
+  );
+  // The registered in-root workflow still imported; the linked source did not.
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: "wf-symlinked-dsh-child" }]);
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // Nothing was followed through the link: it is still a symlink and its target
+  // bytes are untouched, as is the unrelated in-root file.
+  expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(outside, "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+  expect([...readFileSync(join(workflowsDir, "wf-symlinked-dsh-child", "unknown.bin"))]).toEqual([...unknownBytes]);
 });
 
 test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
