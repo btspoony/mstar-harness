@@ -1,6 +1,6 @@
 # Coordination documents and registers
 
-Harness process state belongs to locked engine writers and their current actor, scope and state contracts. Recorded document versions are provenance, not replacement credentials. This file records the lifecycle verbs and the two surfaces that took over the retired project register: the issue store (open items) and its staged migration/activation lifecycle.
+Harness process authority belongs to native engine domain writers and their current actor, scope and state contracts. Recorded document versions are provenance, not replacement credentials. This file records lifecycle verbs and the two surfaces that took over the retired project register: the issue store (open items) and its separate reviewed migration/activation lifecycle.
 
 Field schemas, section meanings and per-document semantics are owned by `mstar-artifacts`; the capture duty and the register's migration mapping by `mstar-project-governance`; phase and close semantics by `mstar-iteration`. What follows is the CLI face.
 
@@ -30,11 +30,11 @@ Complete synthetic `CaptureInput` example (adapt evidence, timestamp and semanti
 }
 ```
 
-## The execution authority and its migration staging
+## The execution authority and its historical import sources
 
-ACTIVE root/workflow/plan/lease/session authority is `{HARNESS_DIR}/store.db` (`execution_*`), read through `mstar status validate` / `mstar plan show` and written only through public workflow/plan verbs. The files below are **migration staging**: the v1/v2 file forms the retired file route used, still read and written engine-internally by the kept migration tooling (`mstar migrate`, `mstar store upgrade`) and never reachable through the persist family, whose surface is `review` and `json`.
+ACTIVE root/workflow/plan/merge-exclusion/session authority is `{HARNESS_DIR}/store.db` (`execution_*`), read through `mstar status validate` / `mstar plan show` and written only through public workflow/plan verbs. The files below are **read-only import/history**. `mstar store upgrade` directly reads recognized v1/v2 execution sources and preserves their original bytes; standalone `mstar migrate` staging is retired. Public persist and engine `ArtifactKind` accept `review` and `json` only.
 
-| Migration staging file | Path shape | Holds |
+| Historical import file | Path shape | Holds |
 |---|---|---|
 | root register | `{HARNESS_DIR}/status.json` | schema version, update timestamp, and the registry of active workflows (id, type, start, directory) |
 | workflow snapshot | `{WORKFLOW_DIR}/<workflow-id>/snapshot.json` | one lifecycle: plan rows, coordination blocks, leases, branch anchors, delivery block |
@@ -55,7 +55,7 @@ Enumeration reflects what exists: listing a kind prints its stored keys, one per
 
 ## Protected document writes
 
-Use the supported lifecycle action for the current authority, not a raw protected-document replacement recipe. Protected status/snapshot targets and retired residual registers keep their writer/actor boundary: the migration tooling is their only writer. A versioned read may expose a digest or `absent` as historical information; neither is a mandatory mutation flag or a consumed byte-CAS token. Current semantic validation, lock/transaction behavior, numeric revisions and active execution tokens remain separate requirements.
+Use the supported lifecycle action for the current authority, not a raw protected-document replacement recipe. Root/snapshot/session files and retired residual registers have no live replacement writer. A digest or `absent` is historical information, not a mandatory mutation flag or consumed byte-CAS token. Current semantic validation, native transactions/CAS, numeric revisions, active execution tokens and genuine business integration exclusion remain separate requirements; there is no application file/directory mutex.
 
 ## Lifecycle close
 
@@ -98,17 +98,21 @@ Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above
 ```sh
 mstar store migrate --out <path>              # default: read-only preview manifest (writes no DB)
 mstar store migrate --apply --manifest <path> # the explicit reviewed apply → staged store
-mstar store backup --out <path>               # quiesced VACUUM INTO point, verified read-only
+mstar store backup --out <path>               # consistent native database image, verified read-only
 mstar store activate --manifest <path> --attestation <path>   # the barrier
 mstar store retire --manifest <path>          # moves the reviewed legacy sources under a ledger
 ```
 
 - **`migrate`** previews a reviewable manifest and no DB; reviewed apply commits issue/catalog/receipt import into a staged store. Ordinary mutations remain refused until activation. Source identity/path/state requirements remain; legacy project registers stay migration history and are never a live capture path.
-- **`backup`** writes a quiesced, SQLite-consistent `VACUUM INTO` recovery point (committed WAL frames included) and verifies it by reopening the copy read-only; the receipt records the store identity and the verified row counts. Copying `store.db` alone, without its WAL, is not a backup.
+- **`backup`** writes a SQLite-consistent `VACUUM INTO` database image (committed WAL state included) and verifies it by reopening the copy read-only. The image supplies its own identity and row facts; independently sampled live counts do not freeze time. Ordinary docs/logs/notes are neither frozen nor copied as transactional authority. Copying the live `store.db` alone without its WAL is not a backup.
 - **`activate`** is the barrier. It requires the reviewed apply receipt to be the **final** one, a compatible-consumer attestation (installed entrypoints and versions, quiesced sessions, the approving operator — never session credentials) and a verified backup; the state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards, and every command checks epoch and state.
 - **`retire`** moves the reviewed legacy registers and index sections into `{HARNESS_DIR}/archived/store-migration/<receipt-id>/` under a resumable per-item ledger, checking active identity, epoch, current paths and item state and preserving copy-before-remove ordering. Content-digest changes alone do not refuse retirement or replay. An unreviewed register path still refuses `store.legacy-write-detected`; resume uses current item/path/state facts and archive presence, not recorded-byte equality.
 
 Execution migration apply/activate/retire requests no longer take `manifestHash`, activation no longer takes `coverageDigest`, and restore no longer takes `acceptLossDigest`. Generated manifest/coverage/loss digests remain historical diagnostics only. Use current verb help for the remaining actor, authorization, identity, path, state and numeric revision inputs; no digest-confirmation flag or replacement seal is required.
+
+**Execution restore.** `mstar store execution restore-preview` assesses whole-domain loss from a verified backup; `restore` uses the same live database pathname/inode and one native owning transaction to replace issue/catalog/execution/host authority with a new epoch. Trust, schema/integrity/FK safety, operator authorization, loss acknowledgement, stale-preview refusal and operation replay remain required. A verified pre-restore safety image is captured outside the mutation transaction. No live database rename, WAL/SHM removal, retained-body freeze or ordinary-file rollback is part of restore. Current verb help owns exact inputs and post-commit retry/recovery; a committed outcome is never described as mutation-free failure.
+
+**Fresh-store failure phases.** `store.publication-failed` preserves the OS cause and means no store was published at the canonical path: fix the named filesystem condition (permissions, space or hard-link support) and retry the same entry, or select a supported filesystem with `--harness`. `store.created-handle-failed` means the store was already created, activated and published but opening its handle failed; the diagnostic preserves that actual cause and the complete store remains. `store init` stays create-only, so continue an interrupted upgrade with `mstar store upgrade --harness <same control root> --operator <name>` after the named condition clears; do not delete the published store or retained sources.
 
 **Readiness guidance (not an action).** These are the readiness checks an operator performs *before* a live activation; running a documentation or source task performs none of them, and no stored flag stands in for them. Activation is an authorized ops act under a recorded, bounded authorization covering the affected installed CLI/plugin upgrades or reloads; credentials and unrelated global configuration stay out of scope. Ready means every compatible consumer is quiesced and then reloaded, upgraded or explicitly excluded, and old software is kept out by that operational barrier — a marker, a chmod or a missing register cannot stop an old binary. If a host cannot reload safely, **stop at that host's exact manual-restart step**, have the user restart, then re-check entrypoint, runtime, version and session identity read-only before activating. Execution stays **unavailable** until an ACTIVE authority exists: a staged store serves no ordinary mutation, a workspace without a store bootstraps (`mstar harness scaffold` + `mstar store init`, or `mstar store upgrade`) or uses conversation tracking (no-plan mode), and the historical input files are migration sources, never live execution authority. A below-floor runtime or missing capability refuses actionably rather than falling back to JSON.
 
@@ -116,7 +120,7 @@ Execution migration apply/activate/retire requests no longer take `manifestHash`
 
 The protected writes are authorized, not merely gated:
 
-- every coordinated document is written only through the transport that owns it — the scope's execution token plus an independently acquired caller identity — re-checked inside the lock;
+- every coordinated authority mutation uses the transport that owns it — the scope's execution token plus an independently acquired caller identity — rechecked inside its native transaction;
 - **a reference and a token are not credentials a caller declares or forwards.** The active reference is a lookup into stored session rows; it grants nothing without the independently acquired caller the engine compares in its own transaction. Both the reference and every token stay with the coordinator or PM session: handing one to a leaf executor, or restating a token in a leaf's assignment, is a scope violation regardless of intent;
 - **no resume stands in for recovery**, and no recovery stands in for a fresh bind: a stopped owner is replaced by the recovery verb that owns its authority, never by a copied id, a restarted launcher or a hand-edited record;
 - the store face's own escape hatches are narrowed: an injected store cannot serve the coordinated surface, and the protected kinds refuse the direct faces entirely.

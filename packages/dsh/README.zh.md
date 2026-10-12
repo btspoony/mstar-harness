@@ -101,7 +101,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。`mstar_iteration_gate` 镜像改用 v3 输入 `snapshot_path`（`{HARNESS_DIR}/workflows/<id>/snapshot.json`——镜像 `mstar iteration gate --workflow <id>`；旧的根 `status_path` 输入随 v1 读取路径移除）。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；每条声明 frontmatter `input` hint，使 web 客户端 claim `/name ` 并等待用户后续输入而非立即执行；handler 把命令正文 + 用户输入 steer 进接收 agent）。
 - **插件自有命令**——`/mstar-execution` 在镜像之外注册自己的 `ctx.commands` 条目（hint `{operation JSON}`）：一个封闭 JSON 联合 `adopt`（规范 `exec-session-v1:` 引用，仅在只读 C1 session resume 成功后采纳）、`clear`、或 `run`（在覆写的执行身份下以 shell-free 方式启动原生 argv，并移除全部伪造/legacy 环境键）。身份只来自承载的原生会话自身 header，已知 leaf/subagent seat 在任何解析与 harness 探测之前即对每个操作拒绝，payload 绝不 steer 进模型——这是协作式操作者入口，不是生命周期否决，也不是 OS 进程围栏（`adopt`/`clear` 只写本会话自己的持久 binding 槽位）。
-- **pre-step catalog 行**——每个组合后的 agent 步骤都会追加**一条**统一的 `mstar-engine` catalog 消息：水印（统一 mstar 版本、harness 目录、enforcement）、迭代相位闸门段（解析到 steering compass 时）与工作区状态摘要段（工作区有 `status.json` 时：plan 注册表、open residual、分支/政策锚点、活跃 lease、知识摘要、compass 方向）。该行是 digest 门控的（每 turn 注入一次、变化时才重发），并共享一次按工作区 TTL 缓存的构建（`catalogTtlMs`，默认 60 秒）。
+- **pre-step catalog 行**——每个组合后的 agent 步骤追加**一条**统一的 `mstar-engine` catalog 消息：水印（统一 mstar 版本、harness 目录、enforcement）、迭代相位闸门段（解析到 steering compass 时）与来自可读 ACTIVE store 权威的工作区状态摘要（plan 注册表、open issues、分支/政策锚点、integration exclusion、知识摘要、compass 方向）。该行以 digest 门控（每 turn 注入一次、变化时才重发），共享按工作区的内存 TTL 缓存构建（`catalogTtlMs`，默认 60 秒）；每会话最新发射持久化到原生 host 域，而非文件缓存。
 
 ### Enforcement semantics
 
@@ -249,17 +249,17 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Agent-flow ledger
 
-agent-flow 账本位于**当前活动 workflow 目录**——`{HARNESS_DIR}/workflows/<id>/agent-flow.jsonl`（JSON Lines，保留最近 500 条）——即 catalog 的 `state.agentFlow` 证据所读的同一 JSONL。无活动生命周期时记录被**跳过**并只告警一次——绝不写 harness 根，绝不写终态快照目录。它记录**真实的** subagent 派发与结算证据（咨询式、try/catch 含容——账本写入失败绝不阻断派发或结算）：
+agent-flow 账本位于现有 control-root `store.db` 的 host 域，不再使用 workflow JSONL 文件。catalog 和面板窗口只是有界读取投影，不裁剪存储的事件。ACTIVE 权威建立之前，dsh 原生会话日志继续记录，authority 持久化如实报告 unavailable/degraded，并提供 `store init` / `store upgrade` 恢复路径；绝不伪造成功或回退到旧文件。真实派发与结算证据仍为咨询式、try/catch 包裹：账本不可用不阻断派发或结算。
 
-- **记录身份（record identity）**——每条**新**行携带稳定 `eventId`。持久化工作流事件携带已核实的来源位置 `{sessionId, streamId, seq}` 与 id `wfe1:<kind>:<sessionId>:<streamId>:<seq>`，其中 `streamId` 是日志的**已核实原生化身**——由持久会话头部的创建时间戳推导，**绝不是** store epoch，也绝不是文件 mtime——故会话交叉与日志重建都不会碰撞。实时工具调用行（`dispatch` / `settle` / `subagent-link` / `workflow-verdict`）仅在同一次观测**同时**给出承载会话 id 与 call id 时才带 `wfc1:<sessionId>:<callId>:<kind>`；两者不全的行**不带 id** 记录，绝不写成 `wfc1::`。此前的行保留其精确字节与行偏移身份——只是不带 `eventId`。
+- **记录身份**——已核实的原生 workflow 事件保留 `{sessionId, streamId, seq}` 与 `wfe1:<kind>:<sessionId>:<streamId>:<seq>`。流化身来自持久原生会话头部，绝不是 store epoch 或文件 mtime。实时工具调用行在两个 ID 均已知时可带 `wfc1:<sessionId>:<callId>:<kind>` 作关联；不伪造缺失 ID，实时行允许重复。
 - **派发（dispatch）**——每个 Assignment 形态的派发一行，记录派发身份：`role`（在写入边界归一化——去首尾空白并剥掉**一个**前导 `@`，故 `@explore` 与 `explore` 是同一 actor 而非两个角色）、`planId`、Assignment 的 `Task N` 标签记为 `taskId`、`taskCategory` 与判定。
 - **结算（settle）**——仅为**真实配对**的完成记录。前台调用在 `tools/post-execute` 监听器结算；`{ kind: 'background', jobId }` 结果按注册表 **`jobId`** 配对（jobs 注册表键，绝非子会话 id），待 `ctx.inject(['jobs'])` → `jobs.onJobDone` 报告终态快照时结算（`completed → ok` / `killed → denied` / `failed → error`，可用时附 `durationMs`）。每条配对结算都携带派发身份（`Task N` 标签仍是 `taskId`；`taskRef` 专用于注册表 job id，仅后台结算携带）外加**可选** `childId`——前台 `runId`，或 catalog 关联已提供的后台子会话 id。可选 id 缺失或超长时**只省略该字段**：真实完成照常记录，id 绝不截断、绝不重键。未配对载荷**不记录任何东西**——绝不伪造结算。
-- **`subagent-link`（非终态）**——某次派发实际启动的子会话 id，由上游以**父会话自有**的 `subagent/catalog` 会话事件发布（`label` = 委派 `description`；continuable 路径在工具返回**之前**追加）。逐派发的**调用窗口**关联——pre-execute 预留槽位、有效 `background` / `continuable` 结果使其可选中、`eventAt(seq)` 补扫加**一个**活的根上下文 `session/event` 观察者——把该 catalog 子会话关联回派发身份（`role` / `planId` / `taskId`，后台 one-shot 另带 `taskRef`），写入**该派发自己的** workflow 目录。它是**身份记录**，**不是**完成：无 `outcome`、无 `verdict`、无 `paired` 标记。该关联为 apply 作用域——无全历史冷扫描、无 `session/created` 回填，故 apply 之前写入的 catalog 绝不可能给更晚的派发贴标签——而 provider 不发出 catalog 的派发就是没有 link 行。
-- **有界展示尾部 + 归档历史**——500 事件展示上限不变，但被淘汰的行会在尾部重写**之前**逐字节、`fsync` 地写入 `{HARNESS_DIR}/workflows/<id>/agent-flow-history/chunk-NNNNNN.jsonl` 密封分块。两步是**一个**记录在 workflow 相对的瞬态 `agent-flow-compaction.json` journal 中的事务（`tailBefore` / `tailAfter` 整文件 sha256、精确归档区间与被移除行数）：记录先于触碰归档持久化、归档先于替换尾部持久化、且只有区间可证完整后才 durable 删除记录。每条写路径先解析未完成事务，故后续压缩不可能越过未完成者；既不匹配 before 也不匹配 after 的尾部（或匹配 after 但归档区间不完整）一律拒绝而非猜测。展示保留与去重保留是**两件事**：行的记录 id 一旦进入持久身份索引（见下），无论属于哪个化身都可以离开实时尾部——因为证明该记录不可能再被追加的是索引，而不是尾部、也不是扫描下界。无来源的行保留其字节并按行位置归档。
+- **`subagent-link`（非终态）**——从父会话自有的 `subagent/catalog` 事件观测子会话 ID，并在派发的 apply 作用域调用窗口内关联。它记录身份而非完成，不伪造 `outcome`、`verdict` 或 `paired`；catalog 证据缺失时不产生 link 行。
+- **原生存储**——事件、已接受来源身份、单调扫描下界、会话绑定与最新状态发射分别使用 `dsh_ledger_events`、`dsh_accepted_identities`、`dsh_scan_bounds`、`dsh_session_bindings`、`dsh_status_emissions`。不再有共享 JSONL tail/index/cursor/cache 权威、文件压缩、冻结或锁。旧文件字节保留为只读一次性 upgrade 输入/历史。
 
 ### Workflow 行
 
-同一账本还记录 **workflow / ralph 扇出运行**：一个会话事件消费者（日志器 `mstar/workflow-ledger`，apply 时注册）把四个持久化的 `tool-workflow/*` 会话事件映射为三种新账本类型。事实来源是**持久化会话事件**——追加进**调用方父会话**的日志（仅顶层运行；嵌套 transport 调用上游不记录任何东西），而**不是**内存中的 `workflow/*` emits（roadmap §10.4 N4）：会话日志才是可回放的事实，因此消费者以 **apply 时冷扫描**（构造期种子事件从不进 firehose——`firstLiveSeq`）加实时 **`session/event` firehose** 监听覆盖它。追加、身份提交与扫描下界推进在**同一个**临界区内完成，按序且每一步都在下一步之前 `fsync`：账本行 → 已接受身份索引条目 → 游标。
+同一账本从调用方父会话的原生日志中持久化的 `tool-workflow/*` 事件记录 **workflow / ralph 扇出运行**，而非内存中的 `workflow/*` emits。冷扫描与实时 `session/event` 监听器消费已核实的来源位置。事件追加、已接受身份/摘要检查与扫描下界推进在同一个原生事务内共同提交。
 
 | `tool-workflow/*` 事件 | 账本行 | 字段 |
 | --- | --- | --- |
@@ -267,11 +267,11 @@ agent-flow 账本位于**当前活动 workflow 目录**——`{HARNESS_DIR}/work
 | `agent-start` | `workflow-agent` | `runId`、`seq`（1 起始的成员序号）、`label`、`phase?`、`childId` |
 | `run-end` | `workflow-run-end` | `runId`、`stopReason`（`completed` / `cancelled` / `error`） |
 
-`tool-workflow/agent-end` 是上游成员簿记，**没有账本类型**（成员 `outcome` 有意不持久化），被过滤掉。可选字段（`agent` / `phase`）缺席时从序列化行省略（lossless-JSON 纪律）；三种类型共用账本的 `AGENT_FLOW_MAX_EVENTS` 截断 + 大小门禁，畸形行读取时收敛为 `undefined`（绝不重序列化）。展示字段（`name` / `label` / `phase`）在边界确定性限长（`WORKFLOW_LEDGER_MAX_NAME_LENGTH` 1024、`WORKFLOW_LEDGER_MAX_LABEL_LENGTH` 512——超长值以 `…` 标记截断）；id 尺寸字段（`runId` / `childId`，上限 512）超长时**整行跳过**——绝不截断成碰撞。
+`tool-workflow/agent-end` 是上游成员簿记，**没有账本类型**（成员 `outcome` 有意不持久化）。缺席的可选字段仍省略。既有展示字段限长与身份尺寸校验保留：超长展示值带标记截断，超长 `runId` / `childId` 整行跳过，绝不制造身份碰撞。读取窗口限制只是投影，不是存储截断。
 
 **第四种类型 `workflow-verdict`** 由 workflow/ralph 闸门（而非本消费者）写入——每个被把关的调用一行（`tool`、`workflow`/`objective`、`mode`、判定 `ok`/`advisory`/`denied`/`ask`、违规 `code`）——见 Gates → Workflow / ralph gate。展示身份字段（`workflow` / `objective`）同样带 1024 字符上限；判定的违规码绝不猜测（P-a `workflow.name.unknown` vs P-b `workflow.lease.uncovered`）。
 
-**去重与回放范围。** 去重权威是持久化的**已接受身份索引**——`{HARNESS_DIR}/workflows/<id>/agent-flow-ids.jsonl`，每条已接受行一行且 `fsync`——它经受住尾部压缩与游标淘汰。**冷热重叠**以及**插件重应用/重启**（重注册读取持久化索引而非从空状态开始）下每个记录 id 只产一行；同一 id 出现**不同**字节是 advisory 拒绝（不追加、不推进 durable 下界），而不是静默覆写。游标旁车（`workflow-ledger-cursors.json`，version 2 `{next, stream}`，兼容读取 version 1）只是按化身的**扫描下界**；日志头部不可读的会话**不记录任何行**而不是臆造化身，且已退役的 harness 根游标文件绝不作为 fallback 读取。索引缺失只有在保留历史中不存在**索引范围（`wfe1:`）**的已接受行时才算合法首跑——仅含工具调用行或 legacy 行的历史仍可继续——而索引/历史不可读或受损、游标存在但不可读、身份提交失败、同一 id 字节冲突复用，全部**拒绝**而不是被当作「尚未记录」。**apply 之后创建**、带构造期种子日志（恢复/分叉会话——其种子从不进 firehose）的会话会在上游 `session/created` 事件上**冷扫描一次**，持久身份同样保证该回填幂等。**分叉**会话的扫描从其 `inheritedEventCount` 开始：继承来的前缀属于父会话的历史，因此子会话只记录**自己**的事件——绝不会把父会话的行以子会话身份再记一份。游标旁车有界（每 harness 会话数上限，驱逐优先已不在线的会话）；丢失它只多走一次重扫，绝不会产生重复行。
+**已接受来源回放。** 已核实的原生 workflow 事件 ID 经数据库身份/摘要域只接受一次，覆盖冷热重叠与插件重启；同一已接受 ID 携不同字节会被拒绝而非覆写。扫描下界在已核实的流化身内单调推进。会话头部不可读时不接受事件，也不臆造化身。构造期带种子日志的会话在 `session/created` 上扫描；分叉从 `inheritedEventCount` 之后开始，保留父会话归属。实时 dispatch/settle/link/verdict 行允许重复，关联 ID 不使它们成为 accepted-operation 权威。缺失、staged、损坏或 schema 拒绝的 authority 如实保持 unavailable；真实的定址无记录仍与这些状态区分，并保留原生拒绝原因和恢复路径。
 
 **childId 关联 + 成员计数。** `workflow-agent` 行保留已发布成员的 `childId`（子会话 id）；运行的展示 `name` 只存在于 `workflow-run` 行，面板为 agent/end 行经窗口查找解析（同一 `runId`——成员行本身不带名称）。面板把成员 COUNT 挂到 `workflow-run` 行（窗口内该 `runId` 的 `workflow-agent` 行数；窗口有界——被 ≤50 事件窗口截掉的成员如实缺席，绝不猜 0）。
 
