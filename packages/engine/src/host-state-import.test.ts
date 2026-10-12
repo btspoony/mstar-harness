@@ -268,6 +268,17 @@ test("a mid-import failure rolls the whole DSH phase back and leaves the revisio
   } finally { store.close(); }
 });
 
+test("an acknowledgement matching no refused fact is a usage failure on a clean workspace", async () => {
+  const { context, workflow } = await fixture("clean-ack");
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "clean", acknowledgedSkips: ["dsh-ledger:wf-clean-ack"] }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-ack-unmatched", message: expect.stringContaining("matched no refused facts") });
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+});
+
 test("the typed writer refuses a stale store epoch before writing anything", async () => {
   const { context } = await fixture("stale-epoch");
   const handle = await openStore(context, "write");
