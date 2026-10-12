@@ -2,7 +2,7 @@
 
 > Loaded by `mstar-compound` SKILL.md at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-conventions`.
 >
-> **接口边界（HARD）**：本文件是 compound **执行步骤**的唯一 SSOT。触发时机、cwd、写入面与结果记录面属于**调用方流程**，由调用方自身声明并引用本文件 —— 本文件**不复述、也不定义**它们（迭代收口 → `mstar-iteration/references/phase-3-iteration-close.md` §3.2；单 plan 交付尾段 → `mstar-roles/references/project-manager/plan-management.md`）。
+> **接口边界（HARD）**：本文件是 compound **执行步骤**的唯一 SSOT。触发时机、cwd、写入面与结果记录面属于**调用方流程**，由调用方自身声明并引用本文件 —— 本文件**不复述、也不维护调用方清单**。
 
 ## Compound 执行流程（唯一流程）
 
@@ -174,7 +174,7 @@ If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the
 1. Register each new knowledge document in the store.db catalog (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`). README is prose, not a register; no index-row obligation.
 2. The knowledge-association carrier is catalog relations (`mstar catalog link`). Snapshot `plans[].metadata.knowledge_refs` is legacy read-only, not a write target.
 
-**iteration-close gate**: `mstar-iteration` §3.2 #5 — **each** new doc in the compound round must complete this phase; do not skip for lightweight captures.
+Every new doc must complete this phase; do not skip for lightweight captures.
 
 ## Phase 7: Refresh trigger
 
