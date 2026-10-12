@@ -352,11 +352,15 @@ plans:
   });
 describe("coordination checks command family", () => {
 
-  test("migration refusal leaves the source tree untouched", async () => {
+  test("the retired migrate verb refuses without touching the source tree", async () => {
     const cwd = tempRoot();
     const before = readdirSync(cwd);
-    const result = await definition("migrate").execute({ path: cwd } as never, context(cwd));
-    expect(result).toMatchObject({ status: "refused", exitCode: 1 });
+    const result = await definition("migrate").execute({} as never, context(cwd));
+    expect(result).toMatchObject({ status: "refused", exitCode: 1, code: "migrate.verb-retired" });
+    if (result.status === "refused") {
+      expect(result.message).toContain("mstar store upgrade --operator <name>");
+      expect(String(result.details?.recovery)).toContain("mstar store upgrade --operator <name>");
+    }
     expect(readdirSync(cwd)).toEqual(before);
   });
 

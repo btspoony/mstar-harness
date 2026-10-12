@@ -53,7 +53,6 @@ import {
 import { storedCoordinationViolations } from "./coordination-transitions.js";
 import {
   validateIntegrationMergeLease,
-  withStatusWriteLock,
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
@@ -1445,32 +1444,30 @@ function assertExecutionDomainEmpty(db: StoreDb, meta: ExecutionMeta): void {
  * schema upgrade alone never activates execution. This is a real domain
  * initializer for a genuinely empty execution workspace, not a test flag, and it
  * is wired to no CLI.
+ *
+ * Serialization is the store's own: `withExecutionTransaction` opens
+ * `BEGIN IMMEDIATE`, so two concurrent initializers serialize on SQLite and the
+ * loser sees the winner's ACTIVE authority and refuses `execution.not-empty`.
+ * The filesystem witness is re-checked immediately before commit, so a rogue
+ * writer that lands a legacy source while this transaction is open still cannot
+ * produce an ACTIVE authority beside it.
  */
 export async function initializeExecutionAuthority(context: StoreContext): Promise<ExecutionRead<ExecutionState>> {
-  const harnessDir = dirname(storeDbPath(context));
-  const statusPath = join(harnessDir, "status.json");
-  // Same-host exclusive write lock used by status.json / snapshot writers
-  // (`withStatusWriteLock` in lease.ts). File lock first, then the SQLite
-  // transaction — never the other way around. Recheck the filesystem witness
-  // immediately before commit so a rogue writer that skipped the lock still
-  // cannot land an active authority beside a live legacy source.
-  return withStatusWriteLock(statusPath, async () => {
+  assertNoLegacyExecutionSources(context);
+  await withExecutionTransaction(context, (tx) => {
+    assertActiveStoreAuthority(tx.db);
+    assertExecutionDomainEmpty(tx.db, tx.execution);
+    const now = new Date().toISOString();
+    tx.db
+      .prepare(
+        "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
+          "activated_at = ? where id = 1",
+      )
+      .run(now, now);
+    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
     assertNoLegacyExecutionSources(context);
-    await withExecutionTransaction(context, (tx) => {
-      assertActiveStoreAuthority(tx.db);
-      assertExecutionDomainEmpty(tx.db, tx.execution);
-      const now = new Date().toISOString();
-      tx.db
-        .prepare(
-          "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
-            "activated_at = ? where id = 1",
-        )
-        .run(now, now);
-      tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
-      assertNoLegacyExecutionSources(context);
-    });
-    return readExecutionState(context);
   });
+  return readExecutionState(context);
 }
 
 // ---------------------------------------------------------------------------

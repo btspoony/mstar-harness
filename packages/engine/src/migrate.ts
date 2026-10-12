@@ -1,11 +1,22 @@
 /**
- * Engine migrate module — the ONLY code that reads the v1 root status.json
- * shape: a pure planner
- * `migrateHarnessTree(root, opts): MigratePlan` plus the executor
- * `applyMigratePlan(plan)`.
+ * Engine migrate module — the PURE legacy v1 conversion the direct
+ * store-upgrade importer consumes.
  *
- * Frozen semantics (architect, writing-specialist-corrected, observed live
- * tree 2026-08-19):
+ * `convertLegacyV1Tree(root)` reads a v1 root `status.json` tree and returns
+ * the in-memory v2 workflow snapshots plus the registration identities they
+ * imply. It writes nothing, and it is the only code that still reads the v1
+ * root shape (`version: 1`, root `plans[]`, root `metadata`).
+ *
+ * The former executable v1-to-v2 file-staging writer is retired: the archive
+ * copy, the snapshot/notes/register/root-v2 write phases and the root
+ * `withStatusWriteLock` they ran under are gone with the pre-activation file
+ * route. The supported route for a workspace that still holds legacy files is
+ * `mstar store upgrade --operator <name>`, which imports recognizable v1/v2
+ * sources straight into the native execution authority and leaves every legacy
+ * source byte untouched (retry is the same public operation).
+ *
+ * Frozen conversion semantics (architect, writing-specialist-corrected,
+ * observed live tree 2026-08-19):
  * - **Grouping:** every plan row lifts into exactly one snapshot — the
  * iteration whose `{ITERATION_DIR}` compass frontmatter registers its id
  * (`iterations/<id>/delivery-compass.md` files only; the
@@ -20,10 +31,9 @@
  * - **Snapshot status mapping:** iteration snapshot status = compass
  * frontmatter (`active|locked` -> `running`; `completed` -> `completed`);
  * standalone rows `Done` -> `completed`, `InProgress|InReview` ->
- * `running`, `Blocked` -> `paused`, `Todo` -> `paused` + not-started
- * note; nothing maps to `failed|stopped` from v1 data (those states are
- * born in the v3 runtime). Row-level plan statuses stay VERBATIM inside
- * `plans[]`.
+ * `running`, `Blocked` -> `paused`, `Todo` -> `paused`; nothing maps to
+ * `failed|stopped` from v1 data (those states are born in the v3 runtime).
+ * Row-level plan statuses stay VERBATIM inside `plans[]`.
  * - **Field lift:** root `metadata` execution-policy keys
  * (`plan_parallelism`/`worktree_mode`/`push_policy`) -> snapshot
  * `execution_policy` (first-class); `iteration_base_branch`/
@@ -33,240 +43,77 @@
  * snapshot field is the integration checkout);
  * `integration_merge_lease` -> top-level `integration_merge_lease`; all of
  * these land on the ACTIVE iteration snapshot (status `running`; v3.0.0
- * today). `program_roadmap` becomes a preserved transport candidate; it is
- * never written as a Markdown file or used as authority. `harness_root` is dropped as
- * redundant with a `legacy_metadata` note;
- * `metadata.updated_at` folds into the v2 root `updated_at`; ALL other/
+ * today). `harness_root` is dropped as redundant with a `legacy_metadata`
+ * note; `metadata.updated_at` becomes the root `updated_at`; ALL other/
  * unknown root-metadata keys land in the active snapshot
  * `legacy_metadata` — nothing dropped silently.
- * - **Residuals:** open `residual_findings` entries ->
- * `projects/<id>/residuals.json` (entries keyed by plan id, each value an
- * ARRAY — v1 `residual_findings[plan-id]` multi-finding semantics
- * preserved verbatim; `source_plan`/`registered_at` provenance added per
- * entry; `lifecycle_id` added when the plan groups into an iteration).
- * No entry is ever collapsed or skipped.
- * `archived/residuals/*.json` are legacy history — NOT lifted.
- * - **Notes:** per-plan `notes` ARRAYS -> `workflows/<id>/notes.jsonl`
- * initial entries (one JSON line per note; string-typed `notes` stay on
- * the row verbatim and are not lifted). Standalone Todo rows add a
- * generated not-started note line. SSOT: the ledger is the runtime log;
- * row `notes` is the legacy verbatim copy (see workflow.ts snapshot docs).
- * - **Ordering & idempotence:** apply steps are additive-first (archive
- * copy, workflow dirs, project register); the root v2 replacement (`version:
- * 2`, `updated_at`, empty `workflows[]` until re-registered) is the LAST
- * step — the commit point; before it a failed run leaves v1 intact
- * (recoverable by re-run). A legacy `program_roadmap` remains a named
- * transport candidate on the returned plan only; it is never a file fallback
- * or a migration destination. Re-run on a v2 root (`version === 2`) -> no-op
- * with message. `dryRun` plans carry the full write-step list (source ->
- * destination) and apply zero writes.
+ * - **Nothing else lifts.** Residual registers, roadmap seeds and note
+ * ledgers have their own supported routes (`mstar store migrate` /
+ * `mstar roadmap import` / the append log); this conversion only produces
+ * execution authority, and the source bytes for every one of them stay on
+ * disk untouched.
  *
- * No fs writes happen outside the harness dir: every destination is
- * harness-relative — enforced at the planner boundary:
- * every lifecycle id that becomes a path segment (v1 row `id`/`plan_id`,
- * compass `iteration_id`, `opts.projectId`) must pass
- * `assertSafePathComponent` or the plan is refused BEFORE any step list is
- * produced. Duplicate v1 plan ids are likewise refused fail-loud: every row must land
- * in exactly one snapshot. All timestamps
- * derive from legacy data (deterministic, no clock reads).
- *
- * Phase-5 review fixes:
- * - F1 (custom layout): the planner resolves `{WORKFLOW_DIR}` /
- * `{PROJECT_DIR}` from the harness root (`.mstarc` `workflow_dir` /
- * `project_dir` win, defaults compose under the harness dir) and records
- * them on the plan; `file` fields keep the canonical default-layout rel
- * names, the executor writes through the resolved dirs — a custom layout
- * migrates to the same location the v3 runtime reads.
- * - F2 (cross-class id collision): iteration snapshot ids, standalone plan
- * ids and the project id must all be unique — an iteration id equal to a
- * standalone plan id would plan the same `workflows/<id>/snapshot.json`
- * twice (silent overwrite at apply); the plan is refused fail-loud with
- * the conflict list.
+ * No fs writes happen anywhere in this module: every returned path is
+ * harness-relative and derived, and each lifecycle id that becomes a path
+ * segment (v1 row `id`/`plan_id`, compass `iteration_id`) must pass
+ * `assertSafePathComponent` or the conversion is refused BEFORE any result is
+ * produced. Duplicate v1 plan ids are likewise refused fail-loud: every row
+ * must land in exactly one snapshot. All timestamps derive from legacy data
+ * (deterministic, no clock reads).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
-import { readJson, writeJson } from "./core.js";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { readArtifactBytes } from "./coordination-write.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { withStatusWriteLock } from "./lease.js";
-import { assertSafePathComponent, resolveProjectDir, resolveWorkflowDir } from "./path.js";
-import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
-import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
-import { openStore, storeDbPath } from "./store-db.js";
-import { CoordinationError, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
+import { assertSafePathComponent } from "./path.js";
 import {
-  isOpenResidual,
-  validateStatusV2,
-  type StatusDoc,
-  type StatusV2Doc,
-} from "./status.js";
-import {
-  WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
-  assertDeliveryRegistrationCoherence,
-  validateWorkflowSnapshot,
-  writeWorkflowSnapshot,
-  type WorkflowDeliveryKind,
   type WorkflowLifecycleStatus,
   type WorkflowLifecycleType,
   type WorkflowSnapshot,
 } from "./workflow.js";
 
-/** Root status file name inside `{HARNESS_DIR}` (v1 input / v2 output). */
+/** Root status file name inside `{HARNESS_DIR}` (the retained v1 input). */
 export const MIGRATE_STATUS_FILE = "status.json";
 
-/** Legacy v1 root copy written by migration (never deleted without it). */
-export const ARCHIVED_STATUS_V1_FILE = "archived/status.v1.json";
-
-/** Notes ledger file name inside `workflows/<id>/` (schema v1 event kinds). */
+/** Notes ledger file name inside `workflows/<id>/`. */
 export const NOTES_LEDGER_FILE = "notes.jsonl";
 
-/** One planned apply step (kind + source -> destination labels for dry-run). */
-export type MigrateStep = {
-  kind: "archive-status-v1" | "write-snapshot" | "write-notes" | "write-register" | "replace-root-v2";
-  source: string;
-  destination: string;
-};
+/**
+ * Date substituted for a legacy root that carries none. A fixed epoch keeps
+ * the conversion reproducible (no clock read) and matches the importer's own
+ * synthesized root date.
+ */
+const SYNTHESIZED_DATE = "1970-01-01";
 
-/** One planned workflow snapshot (id = plan id or iteration id). */
+/** One converted workflow identity (id = plan id or iteration id). */
 export type MigrateSnapshot = {
   id: string;
   type: WorkflowLifecycleType;
   status: WorkflowLifecycleStatus;
   /**
- * Canonical (default-layout) harness-relative snapshot path, e.g.
- * `workflows/<id>/snapshot.json`. The actual write target derives from
- * `MigratePlan.workflowDir` (Phase-5 F1 — a `.mstarc` custom
- * `workflow_dir` is honored by the executor); this field keeps the
- * default-layout rel name for display/provenance.
- */
+   * Canonical harness-relative snapshot path, e.g. `workflows/<id>/snapshot.json`.
+   * Provenance/registration display only — nothing is written there; the v3
+   * runtime resolves its own layout dirs.
+   */
   file: string;
- /** Provenance label (compass file / status.json row). */
+  /** Provenance label (compass file / status.json row). */
   source: string;
   data: WorkflowSnapshot;
 };
 
-/** One planned notes ledger (`workflows/<id>/notes.jsonl`). */
-export type MigrateNotesFile = {
- /** Canonical (default-layout) rel path; actual target = `plan.workflowDir` + the suffix. */
-  file: string;
-  source: string;
- /** Serialized JSON lines (each ends with `\n` when joined). */
-  lines: string[];
-};
-
-/** One planned project register document (`projects/<id>/residuals.json`). */
-export type MigrateRegister = {
- /** Canonical (default-layout) rel path; actual target = `plan.projectDir` + the suffix. */
-  file: string;
-  source: string;
-  data: ProjectRegisterDoc;
-};
-
-/** One legacy roadmap seed retained as an explicit transport candidate, never a file-write fallback. */
-export type MigrateRoadmap = {
- /** Canonical candidate path; not an apply destination. */
-  file: string;
-  source: string;
-  content: string;
-};
-
-/** The root v2 replacement (commit point; empty `workflows[]` until re-registered). */
-export type MigrateRootV2 = {
-  file: string;
-  data: StatusV2Doc;
-};
-
-/** Planner options ( — `--dry-run` returns steps, zero writes). */
-export type MigrateOptions = {
-  dryRun?: boolean;
- /** Project id for the register/roadmap home (default `_default`). */
-  projectId?: string;
-  /**
-   * Delivery kind declared for the ACTIVE standalone plan snapshots this lift
-   * produces (contract §1/§4a). A v1 `plans[]` row becomes a `type: plan`
-   * lifecycle, so its delivery kind is declared at registration and never
-   * inferred: the CLI/API caller passes it explicitly, and a lift that would
-   * create an active kind-less plan snapshot without it is refused (see
-   * `MigratePlan.deliveryKindRequired`).
-   */
-  deliveryKind?: WorkflowDeliveryKind;
-  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
-  branchSource?: string;
-  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
-  branchTarget?: string;
-  /** Completion policy for `verification/report-only` lifts. Required for that kind. */
-  completionPolicy?: string;
-};
-
-/** Full migration plan: every write is described; roadmap is transport-only. */
-export type MigratePlan = {
- /** Resolved harness dir. */
-  root: string;
-  /** Caller declarations reused when apply derives the locked current source. */
-  options?: MigrateOptions;
-  /**
- * Resolved `{WORKFLOW_DIR}` (Phase-5 F1): the `.mstarc` `[config]
- * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows`. The
- * snapshot/notes `file` fields below keep the canonical default-layout
- * rel names for display/provenance; the executor derives the actual
- * write targets from this dir so a custom layout lands where the v3
- * runtime reads.
- */
-  workflowDir: string;
-  /**
- * Resolved `{PROJECT_DIR}` (Phase-5 F1): the `.mstarc` `[config]
- * project_dir` declaration wins, else `{HARNESS_DIR}/projects`. Same
- * canonical-`file`-vs-actual-target split as `workflowDir` for register
- * writes. A legacy roadmap candidate is never an apply destination.
- */
-  projectDir: string;
-  dryRun: boolean;
-  /** Root status.json already at `version: 2` -> nothing to plan/apply. */
-  alreadyMigrated: boolean;
-  /** Human message (no-op reason when `alreadyMigrated`). */
-  message: string;
+/** What one legacy v1 tree converts into, in memory. */
+export type LegacyV1Conversion = {
+  /** Root `updated_at` the native root revision records (`metadata.updated_at` wins). */
+  updatedAt: string;
   snapshots: MigrateSnapshot[];
+  /** Harness-relative files the conversion read (source-digest input). */
+  sources: string[];
   /**
-   * Ids of the ACTIVE (running/paused) standalone plan snapshots this lift
-   * would create WITHOUT a declared delivery kind — i.e. the v1 rows lifted
-   * before the operator passed `opts.deliveryKind`. Non-empty means the plan is
-   * NOT applicable: `applyMigratePlan` refuses it (a close path could never
-   * complete such a lifecycle), and the CLI reports the missing flag as usage
-   * (exit 2) before any write. Terminal (completed) lifted snapshots are exempt
-   * — a finished lifecycle declares nothing (§1; the legacy terminal dead end
-   * is documented, not amended here).
+   * Facts the conversion could not carry verbatim, stated for the caller's
+   * receipt — never a silent drop.
    */
-  deliveryKindRequired: string[];
-  /**
-   * Ids of the ACTIVE (running/paused) standalone plan snapshots the single
-   * `opts.deliveryKind` declaration would be stamped onto when MORE THAN ONE
-   * lift qualifies. The declaration is one (kind, anchors, policy) tuple — one
-   * delivery identity, and the kind is per-workflow registration evidence (§1)
-   * — so it cannot describe several lifecycles at once. Non-empty means the
-   * plan is NOT applicable: `applyMigratePlan` refuses it and the CLI reports
-   * the ambiguity as usage (exit 2) before any write, so the operator migrates
-   * the tree in batches of one declared plan instead of pinning one identity
-   * onto several. Empty when no declaration was given or exactly one lift
-   * qualifies; terminal lifts are exempt like `deliveryKindRequired`.
-   */
-  deliveryKindAmbiguous: string[];
-  notesFiles: MigrateNotesFile[];
-  register: MigrateRegister | null;
-  /** Legacy v1 seed candidate; retained for explicit transport, never written by migration. */
-  roadmap: MigrateRoadmap | null;
-  /** The root v2 replacement (commit point; empty `workflows[]` until re-registered). */
-  rootV2: MigrateRootV2;
-  archive: { file: string; source: string };
-  /** Informational notes surfaced in dry-run output (never silent drops). */
-  migrationNotes: string[];
-  /** Ordered write-step list (additive-first; root v2 replacement last). */
-  steps: MigrateStep[];
-};
-
-/** Executor result. */
-export type MigrateResult = {
-  applied: boolean;
-  message: string;
+  dispositions: string[];
 };
 
 type CompassInfo = {
@@ -317,20 +164,12 @@ function compareIds(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Local calendar date `YYYY-MM-DD` (fallback only; fixtures always carry dates). */
-function todayString(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
-}
-
 /**
  * Scan the canonical compasses under `iterations/` (files named exactly
  * `delivery-compass.md` inside iteration dirs — the
  * `delivery-compass.<role>.md` review-chain variants are NOT grouping
  * sources). A malformed compass (unreadable/unsupported frontmatter or
- * unknown status) fails loud — migration must never misgroup silently.
+ * unknown status) fails loud — a conversion must never misgroup silently.
  */
 function scanCompasses(harnessDir: string): CompassInfo[] {
   const iterationsDir = join(harnessDir, "iterations");
@@ -354,7 +193,7 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     const status = doc.status;
     if (status !== "active" && status !== "locked" && status !== "completed") {
       throw new Error(
-        `refusing to migrate: compass ${JSON.stringify(compassPath)} has unsupported status ${JSON.stringify(status)} (expected active | locked | completed)`,
+        `refusing to convert: compass ${JSON.stringify(compassPath)} has unsupported status ${JSON.stringify(status)} (expected active | locked | completed)`,
       );
     }
     const plans = Array.isArray(doc.plans) ? doc.plans.filter((p): p is string => typeof p === "string" && p !== "") : [];
@@ -446,19 +285,14 @@ function buildIterationSnapshot(
 }
 
 /**
- * Build one standalone plan snapshot (row status mapping; Todo -> paused + note).
- *
- * `declaration` carries the caller-declared delivery kind (with its per-kind
- * evidence) and is applied to the ACTIVE statuses only (`running`/`paused`):
- * those become live `type: plan` lifecycles, so they must declare their kind at
- * registration (contract §1/§4a). A `completed` v1 row lifts without one — a
- * finished lifecycle declares nothing, and amending it is not this lift's job.
+ * Build one standalone plan snapshot (row status mapping; an unrecognized v1
+ * status defaults the SNAPSHOT to `paused` and is stated as a disposition —
+ * the row keeps its verbatim value).
  */
 function buildStandaloneSnapshot(
   row: Record<string, unknown>,
   rootUpdatedAt: string,
-  migrationNotes: string[],
-  declaration: { deliveryKind?: WorkflowDeliveryKind; branchSource?: string; branchTarget?: string; completionPolicy?: string } = {},
+  dispositions: string[],
 ): MigrateSnapshot {
   const id = rowIdOf(row) ?? "<unnamed>";
   const statusValue = row.status;
@@ -468,8 +302,8 @@ function buildStandaloneSnapshot(
   else if (statusValue === "Todo" || statusValue === "Blocked") status = "paused";
   else {
     status = "paused";
-    migrationNotes.push(
-      `row ${JSON.stringify(id)} has unrecognized v1 status ${JSON.stringify(statusValue)} \u2014 snapshot status defaults to paused (row status stays verbatim)`,
+    dispositions.push(
+      `row ${JSON.stringify(id)} has unrecognized v1 status ${JSON.stringify(statusValue)} \u2014 the converted snapshot status defaults to paused (the row status stays verbatim)`,
     );
   }
   const startedAt = pickDate([dateString(row.created_at), dateString(row.updated_at)], rootUpdatedAt);
@@ -486,16 +320,6 @@ function buildStandaloneSnapshot(
     updated_at: status === "completed" ? endedAt : updatedAt,
     plans: [row],
   };
-  if (status !== "completed" && declaration.deliveryKind !== undefined) {
-    snapshot.delivery_kind = declaration.deliveryKind;
-    if (declaration.branchSource !== undefined || declaration.branchTarget !== undefined) {
-      snapshot.branch = {
-        ...(declaration.branchSource !== undefined ? { source: declaration.branchSource } : {}),
-        ...(declaration.branchTarget !== undefined ? { target: declaration.branchTarget } : {}),
-      };
-    }
-    if (declaration.completionPolicy !== undefined) snapshot.completion_policy = declaration.completionPolicy;
-  }
 
   return {
     id,
@@ -511,7 +335,7 @@ function buildStandaloneSnapshot(
 function applyRootMetadataLift(
   snapshot: MigrateSnapshot,
   metadata: Record<string, unknown>,
-  migrationNotes: string[],
+  dispositions: string[],
   activeIterations: number,
 ): void {
   const data = snapshot.data;
@@ -551,227 +375,50 @@ function applyRootMetadataLift(
     legacyMetadata[key] = value;
   }
   if (metadata.harness_root !== undefined) {
-    legacyMetadata.harness_root_note = `dropped as redundant (v2 harness dir derives from status.json location): ${String(metadata.harness_root)}`;
+    legacyMetadata.harness_root_note = `dropped as redundant (the harness dir derives from the root file location): ${String(metadata.harness_root)}`;
   }
   if (Object.keys(legacyMetadata).length > 0) data.legacy_metadata = legacyMetadata;
 
   if (activeIterations > 1) {
-    migrationNotes.push(
-      `${activeIterations} active iterations present \u2014 root-metadata lifts applied to ${JSON.stringify(snapshot.id)} only`,
+    dispositions.push(
+      `${activeIterations} active iterations present \u2014 the root metadata lifts are carried by ${JSON.stringify(snapshot.id)} only`,
     );
   }
 }
 
 /**
- * Build a transport candidate from `metadata.program_roadmap`. The candidate
- * preserves legacy fields for an explicit later import; migration never
- * materializes it as a Markdown file.
- */
-function buildRoadmap(programRoadmap: Record<string, unknown>, projectId: string, migratedAt: string): string {
-  const title = typeof programRoadmap.title === "string" && programRoadmap.title !== "" ? programRoadmap.title : "Program roadmap";
-  const doc = typeof programRoadmap.doc === "string" ? programRoadmap.doc : "";
-  const completionVersion = typeof programRoadmap.completion_version === "string" ? programRoadmap.completion_version : "";
-  const branch = typeof programRoadmap.branch === "string" ? programRoadmap.branch : "";
-  const milestones = Array.isArray(programRoadmap.slices)
-    ? programRoadmap.slices.map((slice) => String(slice)).filter((slice) => slice !== "")
-    : [];
-  const deferred = Array.isArray(programRoadmap.deferred_beyond)
-    ? programRoadmap.deferred_beyond.map((item) => String(item)).filter((item) => item !== "")
-    : [];
-
-  const lines: string[] = [
-    "---",
-    `project_id: ${projectId}`,
-    `title: ${title}`,
-    "status: active",
-    `created_at: ${migratedAt}`,
-  ];
-  if (milestones.length > 0) {
-    lines.push("milestones:");
-    for (const milestone of milestones) lines.push(`  - ${milestone}`);
-  }
-  lines.push("residuals_ref: residuals.json", "---", "", "# Roadmap", "", "## Direction");
-  const provenance = [doc !== "" ? `doc: ${doc}` : "", completionVersion !== "" ? `completion_version: ${completionVersion}` : "", branch !== "" ? `branch: ${branch}` : ""]
-    .filter((part) => part !== "")
-    .join(", ");
-  lines.push(`Migrated from legacy status.json \`metadata.program_roadmap\`${provenance !== "" ? ` (${provenance})` : ""}.`);
-  if (programRoadmap.no_intermediate_releases !== undefined) {
-    lines.push(`no_intermediate_releases: ${String(programRoadmap.no_intermediate_releases)}`);
-  }
-  if (deferred.length > 0) {
-    lines.push("", "### Deferred beyond", ...deferred.map((item) => `- ${item}`));
-  }
-  lines.push("");
-  return lines.join("\n");
-}
-
-/**
- * Build the project register from v1 `residual_findings` (open entries
- * only). Entries are keyed by plan id, each value an ARRAY
- * of ALL open residuals of that plan (v1 `residual_findings[plan-id]`
- * multi-finding semantics preserved verbatim — no collapse, no skip, no
- * `migration_notes`).
- */
-function buildRegister(
-  residualFindings: Record<string, unknown>,
-  byPlan: Map<string, CompassInfo>,
-  projectId: string,
-  migratedAt: string,
-): MigrateRegister | null {
-  const entries: Record<string, ProjectRegisterEntry[]> = {};
-  const planKeys = Object.keys(residualFindings).sort();
-  for (const planId of planKeys) {
-    const raw = residualFindings[planId];
-    if (!Array.isArray(raw)) continue;
-    const open = raw
-      .filter((entry): entry is Record<string, unknown> => isPlainObject(entry) && isOpenResidual(entry))
-      .sort((a, b) => {
-        const aId = typeof a.id === "string" ? a.id : "";
-        const bId = typeof b.id === "string" ? b.id : "";
-        return compareIds(aId, bId);
-      });
-    if (open.length === 0) continue;
-    const owner = byPlan.get(planId);
-    entries[planId] = open.map((entry) => ({
-      ...entry,
-      source_plan: planId,
-      registered_at: migratedAt,
-      ...(owner !== undefined ? { lifecycle_id: owner.id } : {}),
-    }));
-  }
-  if (Object.keys(entries).length === 0) return null;
-  const doc: ProjectRegisterDoc = { entries };
-  return {
-    file: join("projects", projectId, PROJECT_REGISTER_FILE),
-    source: "status.json residual_findings",
-    data: doc,
-  };
-}
-
-function collectNotesFiles(snapshots: MigrateSnapshot[]): MigrateNotesFile[] {
-  const out: MigrateNotesFile[] = [];
-  for (const snapshot of snapshots) {
-    const lines: string[] = [];
-    let source = "";
-    for (const row of snapshot.data.plans) {
-      if (Array.isArray(row.notes)) {
-        source = "status.json plans[].notes arrays";
-        for (const note of row.notes) {
-          if (typeof note !== "string") continue;
-          lines.push(JSON.stringify({ kind: "note", ts: snapshot.data.updated_at, text: note }));
-        }
-      }
-    }
-    if (snapshot.type === "plan" && snapshot.status === "paused") {
-      const row = snapshot.data.plans[0];
-      if (row !== undefined && row.status === "Todo") {
-        source = source === "" ? "status.json plans[] Todo rows (not-started note)" : source;
-        const noteText =
-          typeof row.id === "string"
-            ? `${row.id} not started (v1 row status Todo mapped to snapshot status paused)`
-            : "not started (v1 row status Todo mapped to snapshot status paused)";
-        lines.push(JSON.stringify({ kind: "note", ts: snapshot.data.updated_at, text: noteText }));
-      }
-    }
-    if (lines.length === 0) continue;
-    out.push({
-      file: join(dirname(snapshot.file), NOTES_LEDGER_FILE),
-      source,
-      lines,
-    });
-  }
-  return out;
-}
-
-/**
- * Pure migration planner (): reads the v1 tree under `root` and
- * returns the full v2 migration plan — snapshots, notes ledgers, project
- * register, an optional transport-only legacy roadmap candidate, the archived
- * v1 copy and the root v2 replacement — with an ordered write-step list.
- * ZERO writes; the caller applies via `applyMigratePlan`.
+ * Pure conversion of one v1 root tree: reads `{HARNESS_DIR}/status.json`
+ * (`version: 1`) plus the iteration compasses and returns the in-memory v2
+ * workflow snapshots, the harness-relative files it read and the dispositions
+ * for facts it could not carry verbatim. ZERO writes; every refusal names the
+ * source fact that blocked the conversion.
  *
- * A v2 root (`status.json` `version === 2`) yields an `alreadyMigrated`
- * plan with no steps (idempotence); `opts.dryRun` marks the plan so apply
- * is a no-op too.
+ * A v2 root is not this function's input: the store-upgrade importer reads a
+ * `version: 2` tree natively (`isLegacyV1Root` gates the two routes).
  */
-export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): MigratePlan {
-  const harnessDir = resolve(root);
- // Phase-5 F1: resolve the v3 layout dirs from the harness root once — a
- // `.mstarc` `[config] workflow_dir` / `project_dir` declaration wins
- // (relative values resolve against the config file's directory, absolute
- // allowed; discovery never passes the harness dir's parent), otherwise
- // the defaults compose under the harness dir. Every planned write target
- // derives from these, so a custom layout migrates to the SAME location
- // the v3 runtime readers/writers resolve (cli `resolveSnapshotPath`,
- // hooks, tools).
-  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
-  const projectDir = resolveProjectDir(harnessDir, { harnessDir });
-  const projectId = opts.projectId ?? _DEFAULT_PROJECT;
-  // The delivery declaration for lifted ACTIVE plan snapshots (contract
-  // §1/§4a): the caller passes the kind explicitly — a code-side default would
-  // be retroactive inference — and the shared coherence rule rejects an
-  // incomplete one (a `development` without anchors, a
-  // `verification/report-only` without its completion policy) before any write.
-  if (
-    opts.deliveryKind !== undefined &&
-    !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(opts.deliveryKind)
-  ) {
-    throw new Error(
-      `refusing to migrate: options.deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(opts.deliveryKind)}`,
-    );
-  }
-  if (opts.deliveryKind !== undefined) {
-    assertDeliveryRegistrationCoherence(opts.deliveryKind, opts, "migrate");
-  }
-  const declaration = {
-    deliveryKind: opts.deliveryKind,
-    branchSource: opts.branchSource,
-    branchTarget: opts.branchTarget,
-    completionPolicy: opts.completionPolicy,
-  };
-  const statusPath = join(harnessDir, MIGRATE_STATUS_FILE);
+export function convertLegacyV1Tree(root: string): LegacyV1Conversion {
+  const statusPath = join(root, MIGRATE_STATUS_FILE);
   const source = readArtifactBytes(statusPath);
-  const legacy = (source?.payload ?? {}) as StatusDoc;
-
-  if (legacy.version === 2) {
-    const updatedAt = typeof legacy.updated_at === "string" && legacy.updated_at !== "" ? legacy.updated_at : "1970-01-01";
-    return {
-      root: harnessDir,
-      options: { ...opts },
-      workflowDir,
-      projectDir,
-      dryRun: opts.dryRun === true,
-      
-      alreadyMigrated: true,
-      message: `no-op: ${statusPath} is already at schema version 2 (migrated) \u2014 nothing to do`,
-      snapshots: [],
-      deliveryKindRequired: [],
-      deliveryKindAmbiguous: [],
-      notesFiles: [],
-      register: null,
-      roadmap: null,
-      rootV2: { file: MIGRATE_STATUS_FILE, data: { version: 2, updated_at: updatedAt, workflows: [] } },
-      archive: { file: ARCHIVED_STATUS_V1_FILE, source: MIGRATE_STATUS_FILE },
-      migrationNotes: [],
-      steps: [],
-    };
-  }
-  if (legacy.version !== undefined && legacy.version !== 1) {
+  if (source === undefined) {
     throw new Error(
-      `refusing to migrate: ${statusPath} has unrecognized schema version ${JSON.stringify(legacy.version)} (expected 1)`,
+      `refusing to convert: no legacy ${MIGRATE_STATUS_FILE} at ${statusPath}; a workspace without a legacy root has nothing to import`,
     );
   }
-  if (legacy.version === undefined) {
-    throw new Error(`refusing to migrate: no v1 status.json found at ${statusPath} (nothing to migrate)`);
+  const legacy: Record<string, unknown> = isPlainObject(source.payload) ? source.payload : {};
+  if (legacy.version !== 1) {
+    throw new Error(
+      `refusing to convert: ${statusPath} has unrecognized schema version ${JSON.stringify(legacy.version ?? null)} (expected 1); a v2 root is imported directly by \`mstar store upgrade --operator <name>\``,
+    );
   }
 
+  const dispositions: string[] = [];
   const rows = Array.isArray(legacy.plans) ? legacy.plans.filter(isPlainObject) : [];
   if (Array.isArray(legacy.plans)) {
- // Fail-loud lift guards: every row must
- // land in exactly one snapshot — a row without id/plan_id is
- // unliftable, an id that is not a single safe path component could
- // traverse out of the harness dir (it becomes `workflows/<id>/…`),
- // and duplicate ids would silently drop/overwrite a sibling row.
+    // Fail-loud lift guards: every row must land in exactly one snapshot — a
+    // row without id/plan_id is unliftable, an id that is not a single safe
+    // path component could traverse out of the harness dir (it becomes
+    // `workflows/<id>/...`), and duplicate ids would silently drop/overwrite a
+    // sibling row.
     const unLiftable: unknown[] = [];
     const idCounts = new Map<string, number>();
     for (const row of legacy.plans) {
@@ -785,407 +432,76 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     }
     if (unLiftable.length > 0) {
       throw new Error(
-        `refusing to migrate: ${unLiftable.length} plans[] row(s) cannot be lifted (missing id/plan_id or not an object) \u2014 every v1 row must land in exactly one snapshot`,
+        `refusing to convert: ${unLiftable.length} plans[] row(s) cannot be lifted (missing id/plan_id or not an object) \u2014 every v1 row must land in exactly one snapshot`,
       );
     }
     const duplicates = [...idCounts.entries()].filter(([, count]) => count > 1).map(([id]) => id);
     if (duplicates.length > 0) {
       throw new Error(
-        `refusing to migrate: ${duplicates.length} duplicate plan id(s) (${duplicates.join(", ")}) \u2014 every v1 row must land in exactly one snapshot`,
+        `refusing to convert: ${duplicates.length} duplicate plan id(s) (${duplicates.join(", ")}) \u2014 every v1 row must land in exactly one snapshot`,
       );
     }
   }
   const metadata = isPlainObject(legacy.metadata) ? legacy.metadata : {};
-  const rootUpdatedAt =
-    dateString(legacy.updated_at) ?? dateString(metadata.updated_at) ?? todayString();
-  const migratedAt = dateString(metadata.updated_at) ?? rootUpdatedAt;
+  const rootUpdatedAt = dateString(legacy.updated_at) ?? dateString(metadata.updated_at) ?? SYNTHESIZED_DATE;
+  const updatedAt = dateString(metadata.updated_at) ?? rootUpdatedAt;
 
-  const migrationNotes: string[] = [];
-  const compasses = scanCompasses(harnessDir);
- // Compass iteration ids become `workflows/<id>/…` path
- // segments (and `compass_ref` values) — refuse unsafe ids fail-loud.
+  const compasses = scanCompasses(root);
+  // Compass iteration ids become `workflows/<id>/...` path segments (and
+  // `compass_ref` values) — refuse unsafe ids fail-loud.
   for (const compass of compasses) {
     assertSafePathComponent(compass.id, "iteration id");
   }
- // The project id becomes `projects/<id>/…` segments.
-  assertSafePathComponent(projectId, "projectId");
   const { byPlan, rowById } = groupRows(rows, compasses);
 
- // 1. Iteration snapshots (every canonical compass; zero-plan compasses
- // still produce an empty terminal snapshot).
+  // 1. Iteration snapshots (every canonical compass; zero-plan compasses
+  // still produce an empty terminal snapshot).
   const snapshots: MigrateSnapshot[] = compasses.map((compass) => buildIterationSnapshot(compass, rowById, rootUpdatedAt));
 
- // 2. Standalone snapshots for unregistered rows.
+  // 2. Standalone snapshots for unregistered rows.
   for (const row of rows) {
     const id = rowIdOf(row);
-    if (id !== null && !byPlan.has(id)) snapshots.push(buildStandaloneSnapshot(row, rootUpdatedAt, migrationNotes, declaration));
+    if (id !== null && !byPlan.has(id)) snapshots.push(buildStandaloneSnapshot(row, rootUpdatedAt, dispositions));
   }
 
-  // Active standalone plan snapshots must carry the caller-declared kind: a v1
-  // row lifts into a live `type: plan` lifecycle whose close consultation
-  // requires one (contract §1/§4a), and no later seam can declare it for a
-  // snapshot the lift already wrote without a kind. Non-empty ⇒ the plan is not
-  // applicable: `applyMigratePlan` refuses it and the CLI reports the missing
-  // `--delivery-kind` as usage before any write. Terminal lifts are exempt.
-  const deliveryKindRequired = snapshots
-    .filter((snapshot) => snapshot.type === "plan" && snapshot.status !== "completed" && snapshot.data.delivery_kind === undefined)
-    .map((snapshot) => snapshot.id);
-
-  // The declaration is ONE (kind, anchors, policy) tuple — a single delivery
-  // identity, and the kind is per-workflow registration evidence (§1) — so it
-  // describes exactly one lifted lifecycle. A v1 tree whose lift creates 2+
-  // ACTIVE standalone plan snapshots cannot be declared in one run: stamping
-  // the tuple onto all of them would pin one branch/policy identity onto
-  // lifecycles it may not describe. The count guard reports those candidates
-  // instead of choosing for the operator — the plan is not applicable (apply
-  // refuses, the CLI reports usage, exit 2) and the tree migrates in batches of
-  // one declared plan. Terminal lifts are exempt, like `deliveryKindRequired`.
-  const declaredKindTargets =
-    declaration.deliveryKind === undefined
-      ? []
-      : snapshots
-          .filter((snapshot) => snapshot.type === "plan" && snapshot.status !== "completed" && snapshot.data.delivery_kind !== undefined)
-          .map((snapshot) => snapshot.id)
-          .sort(compareIds);
-  const deliveryKindAmbiguous = declaredKindTargets.length > 1 ? declaredKindTargets : [];
-
- // 2b. Cross-class lifecycle-id uniqueness (Phase-5 F2, Greptile P1):
- // plan rows are unique within plans[] (guard above) and compass ids are
- // unique by directory, but an iteration id may still equal a STANDALONE
- // plan id (a row registered in no compass) — both would plan the same
- // `workflows/<id>/snapshot.json` and the apply loop would silently
- // overwrite the earlier snapshot. The project id joins the same set
- // (register and optional transport candidate share the project's logical
- // namespace; under a custom `.mstarc` layout workflow and project dirs may coincide).
- // Refuse fail-loud with the conflict list — never a silent double-write.
+  // 2b. Cross-class lifecycle-id uniqueness: plan rows are unique within
+  // plans[] (guard above) and compass ids are unique by directory, but an
+  // iteration id may still equal a STANDALONE plan id (a row registered in no
+  // compass) — both would convert to the same `workflows/<id>` identity and a
+  // later snapshot would silently overwrite the earlier one. Refuse fail-loud
+  // with the conflict list — never a silent double-identity import.
   const lifecycleSources = new Map<string, string[]>();
   for (const snapshot of snapshots) {
     const sources = lifecycleSources.get(snapshot.id) ?? [];
     sources.push(snapshot.type === "iteration" ? "iteration" : "standalone plan");
     lifecycleSources.set(snapshot.id, sources);
   }
-  const projectSources = lifecycleSources.get(projectId) ?? [];
-  projectSources.push("project");
-  lifecycleSources.set(projectId, projectSources);
   const collisions = [...lifecycleSources.entries()].filter(([, sources]) => sources.length > 1);
   if (collisions.length > 0) {
     throw new Error(
-      `refusing to migrate: ${collisions.length} lifecycle id collision(s) (${collisions
+      `refusing to convert: ${collisions.length} lifecycle id collision(s) (${collisions
         .map(([id, sources]) => `${JSON.stringify(id)} shared by ${sources.join(" + ")}`)
-        .join("; ")}) \u2014 every id must be unique across iterations, standalone plans and the project id (each id becomes a workflow/project dir segment)`,
+        .join("; ")}) \u2014 every id must be unique across iterations and standalone plans (each id becomes a workflow identity)`,
     );
   }
   snapshots.sort((a, b) => compareIds(a.id, b.id));
 
- // 3. Root-metadata lift -> the active iteration snapshot (v3.0.0 today).
- // Lift-target rule (documented): sorted-first by snapshot
- // id — deterministic, but arbitrary when 2+ iterations run concurrently;
- // revisit with a locked-compass preference when the multi-active case
- // becomes real.
+  // 3. Root-metadata lift -> the active iteration snapshot (v3.0.0 today).
+  // Lift-target rule (documented): sorted-first by snapshot id — deterministic,
+  // but arbitrary when 2+ iterations run concurrently; the disposition names it.
   const activeIterations = snapshots.filter((snapshot) => snapshot.status === "running" && snapshot.type === "iteration");
   if (activeIterations.length > 0) {
-    applyRootMetadataLift(activeIterations[0]!, metadata, migrationNotes, activeIterations.length);
+    applyRootMetadataLift(activeIterations[0]!, metadata, dispositions, activeIterations.length);
   } else if (Object.keys(metadata).length > 0) {
-    migrationNotes.push(
-      "no active iteration snapshot found \u2014 root metadata execution-policy/branch keys have no lift home and stay unmapped (visible here, not silently dropped)",
+    dispositions.push(
+      "no active iteration snapshot found \u2014 root metadata execution-policy/branch keys have no lift home and stay unconverted (the legacy root file keeps them)",
     );
   }
 
- // 4. Notes ledgers (row notes arrays + not-started notes).
-  const notesFiles = collectNotesFiles(snapshots);
-
- // 5. Project register (open residual_findings only; all open entries per
- // plan — v1 multi-finding semantics, no collapse).
-  const residualFindings = isPlainObject(legacy.residual_findings) ? legacy.residual_findings : {};
-  const register = buildRegister(residualFindings, byPlan, projectId, migratedAt);
-
- // 6. Legacy roadmap seed (transport only; never writes Markdown or becomes
- // a fallback for the catalog/store authority).
-  const programRoadmap = isPlainObject(metadata.program_roadmap) ? metadata.program_roadmap : null;
-  let roadmap: MigrateRoadmap | null = null;
-  if (programRoadmap) {
-    const rawTitle = typeof programRoadmap.title === "string" && programRoadmap.title !== "" ? programRoadmap.title : "Program roadmap";
-    const sanitizedTitle = rawTitle.replace(/[\r\n]+/g, " ").trim();
-    if (sanitizedTitle !== rawTitle) {
-      migrationNotes.push(
-        `roadmap title sanitized for transport candidate frontmatter (line breaks replaced with spaces): ${JSON.stringify(rawTitle)}`,
-      );
-    }
-    roadmap = {
-      file: join("projects", projectId, PROJECT_ROADMAP_FILE),
-      source: "status.json metadata.program_roadmap",
-      content: buildRoadmap({ ...programRoadmap, title: sanitizedTitle }, projectId, migratedAt),
-    };
-  }
-
- // 7. Root v2 replacement (commit point; workflows[] empty until re-registered).
-  const rootV2: MigrateRootV2 = {
-    file: MIGRATE_STATUS_FILE,
-    data: { version: 2, updated_at: migratedAt, workflows: [] },
-  };
-  const archive = { file: ARCHIVED_STATUS_V1_FILE, source: MIGRATE_STATUS_FILE };
-
- // 8. Ordered step list (additive-first; root v2 replacement LAST).
-  const steps: MigrateStep[] = [
-    { kind: "archive-status-v1", source: archive.source, destination: archive.file },
-    ...snapshots.map((snapshot) => ({
-      kind: "write-snapshot" as const,
-      source: snapshot.source,
-      destination: snapshot.file,
-    })),
-    ...notesFiles.map((notes) => ({
-      kind: "write-notes" as const,
-      source: notes.source,
-      destination: notes.file,
-    })),
-  ];
-  if (register !== null) steps.push({ kind: "write-register", source: register.source, destination: register.file });
-  steps.push({ kind: "replace-root-v2", source: `${MIGRATE_STATUS_FILE} (v1)`, destination: `${MIGRATE_STATUS_FILE} (v2)` });
-
   return {
-    root: harnessDir,
-    options: { ...opts },
-    workflowDir,
-    projectDir,
-    dryRun: opts.dryRun === true,
-    alreadyMigrated: false,
-    message: `planned migration of ${snapshots.length} lifecycles (${steps.length} steps)`,
+    updatedAt,
     snapshots,
-    deliveryKindRequired,
-    deliveryKindAmbiguous,
-    notesFiles,
-    register,
-    roadmap,
-    rootV2,
-    archive,
-    migrationNotes,
-    steps,
-  };
-}
-
-/**
- * Apply current v1 authority using the preview's caller declarations. Archive
- * and destination writes precede the root v2 commit point; retry re-derives
- * current content rather than requiring the old preview's bytes. A v2 root
- * or dry-run plan is a no-op. Destination paths come from the same validated
- * planner used by preview, never from caller-edited preview write steps.
- */
-export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
-  if (plan.dryRun) {
-    return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes` };
-  }
-  const statusPath = join(plan.root, MIGRATE_STATUS_FILE);
-  const current = readJson(statusPath);
-  if (current.version === 2) {
-    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
-  }
-
-
-  const store = getArtifactStore();
-
-  // Active-store barrier (issue-governance cutover G2a): the v1→v2 layout
-  // migration recreates the legacy register/index layout. Old data may be
-  // parsed and migrated only BEFORE store activation — an ACTIVE issue store
-  // is the sole findings authority, and legacy recreation is refused. A
-  // missing store is the pre-store workspace (legacy layout is the only
-  // authority; migrate proceeds); a staged store is the pre-activation
-  // exclusion window (§7) and also proceeds. A corrupt/unverifiable store
-  // fails closed.
-  await assertNoActiveStoreForLegacyLayout(plan.root);
-
- // The apply is a multi-document write (archive → snapshots → notes →
- // register → root v2 replacement), so it runs under the ROOT lock. The lock
- // prevents root writers and concurrent migrations from interleaving with
- // commit. Schema version is a field-value no-op, not a content fingerprint.
-  return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store));
-}
-
-/**
- * Wrap a raw fs failure on a migration target in the coordination vocabulary.
- */
-function rawTargetStoreError(filePath: string, error: unknown): CoordinationError {
-  // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
-  return new CoordinationError(
-    "coordination.store",
-    "Cannot write the migration target. Inspect the reported path and filesystem cause, then correct the target filesystem state before retrying.",
-    { path: filePath, cause: error instanceof Error ? error.message : String(error) },
-  );
-}
-
-function writeRawMigrateTarget(filePath: string, content: Buffer): void {
-  try {
-    mkdirSync(dirname(filePath), { recursive: true });
-  } catch (error) {
-    // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
-    throw rawTargetStoreError(filePath, error);
-  }
-  try {
-    writeFileSync(filePath, content, { flag: "wx" });
-    return;
-  } catch (error) {
-    // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw rawTargetStoreError(filePath, error);
-    try {
-      // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
-      if (!statSync(filePath).isFile()) throw rawTargetStoreError(filePath, new Error("existing target is not a regular file"));
-    } catch (statError) {
-      if (statError instanceof CoordinationError) throw statError;
-      // reachability: manual — legacy v1→v2 layout migration has no CLI retry verb; command-free recovery is the honest form
-      throw rawTargetStoreError(filePath, statError);
-    }
-}
-}
-
-/**
- * Active-store barrier for the legacy layout migration (G2a): an ACTIVE
- * issue store refuses legacy recreation; a missing store (pre-store
- * workspace) and a staged store (pre-activation exclusion window) proceed.
- * Any other store failure (corrupt, schema drift, below-floor runtime)
- * propagates — the layout migration never runs against an authority it
- * cannot verify.
- */
-async function assertNoActiveStoreForLegacyLayout(harnessDir: string): Promise<void> {
-  const dbPath = storeDbPath({ harnessDir });
-  if (!existsSync(dbPath)) return;
-  const handle = await openStore({ harnessDir }, "read");
-  try {
-    const meta = handle.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
-      | { authorityState?: unknown }
-      | undefined;
-    if (meta?.authorityState === "active") {
-      throw new CoordinationError(
-        "coordination.store",
-        `refusing legacy layout migration: the issue store at ${dbPath} is ACTIVE and is the only findings authority ` +
-          `\u2014 legacy registers/indexes are migration history and must never be recreated (use the issue store verbs)`,
-        { path: dbPath },
-      );
-    }
-  } finally {
-    handle.close();
-  }
-}
-
-/**
- * Locked half of `applyMigratePlan`: the additive phase and root v2
- * replacement. Assumes the root lock on `statusPath` is held.
- */
-async function applyMigratePlanLocked(
-  reviewed: MigratePlan,
-  statusPath: string,
-  store: ArtifactStore,
-): Promise<MigrateResult> {
-
-  const source = readArtifactBytes(statusPath);
-  const sourcePayload = source?.payload;
-  if (isPlainObject(sourcePayload) && sourcePayload.version === 2) {
-    return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
-  }
-
-  // Preview data is diagnostic; derive the destinations from current authority.
-  const plan = migrateHarnessTree(reviewed.root, reviewed.options);
-  if (plan.deliveryKindAmbiguous.length > 0) {
-    throw new Error(
-      `refusing to apply migration: one delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts ` +
-        `(${plan.deliveryKindAmbiguous.join(", ")}); migrate them in batches of one declared lifecycle (CLI: --delivery-kind)`,
-    );
-  }
-  if (plan.deliveryKindRequired.length > 0) {
-    throw new Error(
-      `refusing to apply migration: ${plan.deliveryKindRequired.length} active standalone plan snapshot(s) ` +
-        `(${plan.deliveryKindRequired.join(", ")}) would be lifted without a declared delivery kind; ` +
-        `re-plan with an explicit deliveryKind (CLI: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>)`,
-    );
-  }
-  const workflowTargetOf = (file: string): string => join(plan.workflowDir, relative("workflows", file));
-  const projectTargetOf = (file: string): string => join(plan.projectDir, relative("projects", file));
-
- // 1. Archive the v1 root before the commit point; an existing archive is left
- // untouched and never compared with current bytes.
-  writeRawMigrateTarget(join(plan.root, plan.archive.file), readFileSync(statusPath));
-
- // 2. Refresh only destinations with this workflow identity. JSON is still the
- // authority before the root commit, including on retry after a partial apply.
-  for (const snapshot of plan.snapshots) {
-    const snapshotDir = dirname(workflowTargetOf(snapshot.file));
-    const snapshotPath = join(snapshotDir, WORKFLOW_SNAPSHOT_FILE);
-    if (!existsSync(snapshotPath)) {
-      await writeWorkflowSnapshot(snapshot.data, snapshotDir, { createOnly: true });
-      continue;
-    }
-    await withStatusWriteLock(snapshotPath, async () => {
-      const existing = readJson(snapshotPath);
-      if (existing.id !== snapshot.id || existing.type !== snapshot.type || existing.coordination !== undefined) {
-        throw new CoordinationError(
-          "coordination.store",
-          `migration target ${snapshotPath} belongs to another or coordinated workflow; configure a separate workflow_dir in .mstarc and retry migrate`,
-          { path: snapshotPath },
-        );
-      }
-      const payload = { ...existing, ...snapshot.data } as WorkflowSnapshot;
-      // A source-owned ended_at cannot survive a running current lift.
-      if (snapshot.data.ended_at === undefined) delete payload.ended_at;
-      const gate = validateWorkflowSnapshot(payload);
-      if (!gate.ok) throw new Error(`refusing to write invalid workflow snapshot: ${gate.violations.map((v) => v.message).join("; ")}`);
-      assertFsStorePath(store, { kind: "snapshot", key: snapshot.id }, snapshotPath);
-      // A v1 root still owns these uncoordinated migration destinations. This
-      // is not a runtime phase projection: all current source rows are lifted.
-      await withProtectedWrite(snapshotPath, "put", () =>
-        store.put({ kind: "snapshot", key: snapshot.id, payload }),
-      );
-    });
-  }
-
- // 3. Notes ledgers are create-only destinations and retain their planned
- // contents exactly; an existing regular file is left untouched.
-  for (const notes of plan.notesFiles) {
-    const content = notes.lines.length > 0 ? `${notes.lines.join("\n")}\n` : "";
-    writeRawMigrateTarget(workflowTargetOf(notes.file), Buffer.from(content, "utf8"));
-  }
-
- // 4. Project register (additive; validated before the write). Legacy-only:
- // this write happens exclusively in the pre-activation window guarded by
- // `assertNoActiveStoreForLegacyLayout` — the retired `residuals` kind never
- // goes through the runtime ArtifactStore, so the bytes land through the same
- // atomic `writeJson` the FsStore would use, inside the protected-write
- // context and the register lock.
-  if (plan.register !== null) {
-    const registerData = plan.register.data;
-    const gate = validateProjectRegister(registerData);
-    if (!gate.ok) {
-      throw new Error(
-        `refusing to apply migration: invalid project register: ${gate.violations.map((v) => v.message).join("; ")}`,
-      );
-    }
- // Zero entries -> no register file: the planner
- // already returns `register: null` when there are no open residuals,
- // but a hand-built plan may carry a gate-passing empty `{ entries: {} }`
- // — writing an empty register would orphan an empty file. Validate
- // FIRST so an invalid doc (e.g. missing `entries`) still throws.
-    if (Object.keys(registerData.entries ?? {}).length > 0) {
-      const filePath = projectTargetOf(plan.register.file);
-      mkdirSync(dirname(filePath), { recursive: true });
-      await withStatusWriteLock(filePath, async () => {
-        if (!existsSync(filePath)) {
-          await withProtectedWrite(filePath, "put", () => {
-            writeJson(filePath, registerData);
-          });
-          return;
-        }
-        
-      });
-    }
-  }
-
- // 6. Root v2 replacement — the commit point, serialized with root writers.
- // The schema-version check above preserves idempotence after migration.
-  const rootGate = validateStatusV2(plan.rootV2.data, { harnessDir: plan.root });
-  if (!rootGate.ok) {
-    throw new Error(`refusing to apply migration: invalid v2 root: ${rootGate.violations.map((v) => v.message).join("; ")}`);
-  }
-  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
-  await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: plan.rootV2.data }));
-  return {
-    applied: true,
-    message: `migrated ${plan.snapshots.length} lifecycles into workflows/, project layer seeded, root status.json replaced (v1 archived to ${plan.archive.file})`,
+    sources: compasses.map((compass) => relative(root, compass.file).split(/[\\/]+/).join("/")),
+    dispositions,
   };
 }

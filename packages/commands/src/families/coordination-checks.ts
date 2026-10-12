@@ -1,20 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
-  applyMigratePlan,
-  createFsStore,
   evaluatePhaseGate,
   evaluatePostMergeCloseFromExecutionAuthority,
-  migrateHarnessTree,
   parseCompassFrontmatter,
   pushCadenceProbe,
   readRegisteredWorkflowFromExecutionAuthority,
   resolveProcessHarnessDir,
-  setArtifactStore,
-  validateProjectRegister,
-  validateWorkflowSnapshot,
-  WORKFLOW_DELIVERY_KINDS,
-  type MigratePlan,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
@@ -47,55 +39,31 @@ function harnessDir(context: InvocationContext, override?: string): string {
 function assertWorkflowId(id: string): void {
   if (id === "" || id === "." || id === ".." || id.includes("/") || id.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(id)}`);
 }
-function validatePlanDocs(plan: MigratePlan): string[] {
-  const warnings: string[] = [];
-  for (const snapshot of plan.snapshots) {
-    const result = validateWorkflowSnapshot(snapshot.data);
-    if (!result.ok) for (const item of result.violations) warnings.push(`[${item.severity}] ${item.code}: ${item.message} (planned snapshot ${snapshot.file})`);
-  }
-  if (plan.register !== null) {
-    const result = validateProjectRegister(plan.register.data);
-    if (!result.ok) for (const item of result.violations) warnings.push(`[${item.severity}] ${item.code}: ${item.message} (planned register ${plan.register.file})`);
-  }
-  return warnings;
-}
 
 export function getCoordinationChecksCommandDefinitions(): readonly CommandDefinition[] {
   const output = commandEnvelopeSchema;
   return [
     command({
       id: "migrate",
+      // The retired file-route inputs stay RECOGNIZED (help text included) so
+      // their use is the named retirement refusal instead of commander's
+      // generic unknown-option usage.
       cli: { path: ["migrate"], aliases: [], arguments: [], options: [
-        { key: "dryRun", flags: "--dry-run", required: false }, { key: "path", flags: "--path <root>", required: false },
-        { key: "deliveryKind", flags: "--delivery-kind <kind>", required: false }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
-        { key: "branchTarget", flags: "--branch-target <branch>", required: false }, { key: "completionPolicy", flags: "--completion-policy <text>", required: false },
-        { key: "json", flags: "--json", required: false },
+        { key: "dryRun", flags: "--dry-run", required: false, help: "retired file-route input: the v1-to-v2 staging preview is gone; the refusal names the supported store upgrade" },
+        { key: "path", flags: "--path <root>", required: false, help: "retired file-route input: pass the control root to `mstar store upgrade --harness <path> --operator <name>` instead" },
+        { key: "json", flags: "--json", required: false, help: "retired file-route input: `mstar store upgrade` reports the imported/retained facts as JSON" },
       ] },
-      input: z.object({ dryRun: z.boolean().optional(), path: z.string().optional(), deliveryKind: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), json: z.boolean().optional() }),
-      output, effects: ["read", "write"], description: "Migrate a v1 status tree using the engine migration plan.",
-      async execute(input, context) {
-        const id = "migrate";
-        const root = input.path ? path.resolve(context.cwd, input.path) : resolveProcessHarnessDir(context.cwd) ?? context.cwd;
-        try {
-          setArtifactStore(createFsStore(root));
-          const plan = migrateHarnessTree(root, {
-            dryRun: input.dryRun === true,
-            ...(input.deliveryKind === undefined ? {} : { deliveryKind: input.deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number] }),
-            ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }),
-            ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }),
-            ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }),
-          });
-          if (plan.alreadyMigrated) return ok(id, { root, dryRun: plan.dryRun, alreadyMigrated: true, applied: false, message: plan.message, steps: plan.steps, migrationNotes: plan.migrationNotes });
-          if (plan.deliveryKindAmbiguous.length > 0) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `a single delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts (${plan.deliveryKindAmbiguous.join(", ")}) — migrate them in batches of one declared plan` });
-          if (plan.deliveryKindRequired.length > 0) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `${plan.deliveryKindRequired.length} active standalone plan snapshot(s) would be lifted without a declared delivery kind (${plan.deliveryKindRequired.join(", ")}) — pass deliveryKind with its evidence (development: branchSource/branchTarget; verification/report-only: completionPolicy)` });
-          if (plan.dryRun) return ok(id, { root, dryRun: true, alreadyMigrated: false, applied: false, message: `dry-run: ${plan.steps.length} steps planned, zero writes`, steps: plan.steps, migrationNotes: plan.migrationNotes, roadmapCandidate: plan.roadmap, validationWarnings: validatePlanDocs(plan) });
-          try {
-            const result = await applyMigratePlan(plan);
-            return ok(id, { root, dryRun: false, alreadyMigrated: false, applied: result.applied, message: result.message, steps: plan.steps, migrationNotes: plan.migrationNotes, roadmapCandidate: plan.roadmap });
-          } catch (error) {
-            return { version: 1, command: id, status: "error", code: "migrate.apply-failure", exitCode: 2, message: messageOf(error) };
-          }
-        } catch (error) { return engineFailure(id, error, "migrate.refused"); }
+      input: z.object({ dryRun: z.boolean().optional(), path: z.string().optional(), json: z.boolean().optional() }),
+      output, effects: [], description: "Retired command; refuses without mutation.",
+      async execute() {
+        return refusalEnvelope({
+          command: "migrate",
+          status: "refused",
+          code: "migrate.verb-retired",
+          exitCode: 1,
+          message: "migrate: removed — the v1-to-v2 file-staging route is retired. The supported route is `mstar store upgrade --operator <name>`, which imports recognizable v1/v2 execution sources directly into the control root's store.db and leaves every legacy file untouched. This verb writes nothing.",
+          recovery: "Run mstar store upgrade --operator <name> for the control root that holds the legacy files; it converts v1 sources in memory, preserves the originals, and is retryable.",
+        });
       },
     }),
     command({
