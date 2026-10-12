@@ -3,8 +3,8 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendDshLedgerRow, readDshLedgerWindow } from '@mstar-harness/engine'
-import { callIdentity, readAgentFlow, recordDispatch, recordJobSettle, recordSettle, registerSettleListener, registerSubagentCatalogListener, SETTLE_SEAM } from '../src/gates/agent-flow.ts'
+import { appendDshLedgerRow, openStore, readDshLedgerWindow } from '@mstar-harness/engine'
+import { callIdentity, readAgentFlow, recordDispatch, recordJobSettle, recordSettle, registerSettleListener, registerSubagentCatalogListener, SETTLE_SEAM, setAgentFlowInvalidator, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
@@ -86,7 +86,7 @@ describe('agent-flow native event rows', () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const prompt = `## Assignment
 
-**Execute as**: fullstack-dev
+**Execute as**: @fullstack-dev
 **Plan Path**: /private/plans/native-flow.md
 
 ## Task 7
@@ -108,12 +108,34 @@ SECRET_PROMPT_BODY_MUST_NOT_PERSIST
       undefined,
       selectedGeneration,
     ).kind).toBe('written')
+    expect(appendDshLedgerRow(
+      { harnessDir },
+      'wf-1',
+      JSON.stringify({
+        v: 1,
+        ts: 3,
+        kind: 'settle',
+        outcome: 'error',
+        role: 'fullstack-dev',
+        childId: 'c'.repeat(4_100),
+        taskRef: '',
+      }),
+      undefined,
+      selectedGeneration,
+    ).kind).toBe('written')
     const raw = readDshLedgerWindow({ harnessDir }, 'wf-1', 20) ?? []
     expect(raw.join('\\n')).not.toContain('SECRET_PROMPT_BODY_MUST_NOT_PERSIST')
     const view = readAgentFlow(workflowDir)
-    expect(view?.events).toMatchObject([{ kind: 'dispatch', role: 'fullstack-dev', planId: 'native-flow', taskId: 'T7' }])
-    expect(view?.events).toHaveLength(1)
-    expect(view?.summary).toEqual([{ role: 'fullstack-dev', outcome: 'ok', count: 1 }])
+    expect(view?.events).toContainEqual(expect.objectContaining({ kind: 'dispatch', role: 'fullstack-dev', planId: 'native-flow', taskId: 'T7' }))
+    const malformedOptionalSettle = view?.events.find((event) => event.kind === 'settle' && event.outcome === 'error')
+    expect(malformedOptionalSettle).toBeDefined()
+    expect(malformedOptionalSettle).not.toHaveProperty('childId')
+    expect(malformedOptionalSettle).not.toHaveProperty('taskRef')
+    expect(view?.events).toHaveLength(2)
+    expect(view?.summary).toEqual([
+      { role: '', outcome: 'error', count: 1 },
+      { role: 'fullstack-dev', outcome: 'ok', count: 1 },
+    ])
   })
   it('links only catalog entries inside the paired session window and keeps terminal/job identity separate', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
@@ -281,6 +303,44 @@ Catalog correlation regression.
       .map((event) => event.eventId)
     expect(settleIds).toContain(callIdentity('settle', 'session-1', 'shared-call')?.eventId)
     expect(secondSettleIds).toContain(callIdentity('settle', 'session-2', 'shared-call')?.eventId)
+  })
+  it('refuses a stale selected generation without pairing or invalidating', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const previousLogger = setAgentFlowLogger(() => { levels.push('warning') })
+    const previousInvalidator = setAgentFlowInvalidator(() => { invalidations += 1 })
+    const levels: string[] = []
+    let invalidations = 0
+    try {
+      const handle = await openStore({ harnessDir }, 'write')
+      try {
+        handle.db.prepare('update store_meta set authority_epoch = authority_epoch + 1 where id = 1').run()
+      } finally {
+        handle.close()
+      }
+      const pairing: AgentFlowPairing = {
+        dispatchByCallId: new Map(),
+        dispatchByJobId: new Map(),
+        catalogBySession: new WeakMap(),
+      }
+      recordDispatch({
+        harnessDir,
+        resolvedWorkflowDir: workflowDir,
+        selectedGeneration,
+        exec: { callId: 'stale-call', name: 'subagent', agent: { id: 'session-1' } },
+        pairing,
+        prompt: '**Execute as**: fullstack-dev',
+        violations: [],
+        hard: false,
+      })
+      expect(readDshLedgerWindow({ harnessDir }, 'wf-1', 10)).toEqual([])
+      expect(readAgentFlow(workflowDir)?.events).toEqual([])
+      expect(pairing.dispatchByCallId.size).toBe(0)
+      expect(invalidations).toBe(0)
+      expect(levels).toContain('warning')
+    } finally {
+      setAgentFlowLogger(previousLogger)
+      setAgentFlowInvalidator(previousInvalidator)
+    }
   })
   it('returns unavailable without native authority', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agent-flow-unavailable-'))

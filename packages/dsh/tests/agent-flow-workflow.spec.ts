@@ -4,12 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openStore, readDshScanBound } from '@mstar-harness/engine'
-import { readAgentFlow, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
+import { readAgentFlow, recordDispatch, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
-import { awaitWorkflowLedgerIdle, registerWorkflowLedger } from '../src/gates/workflow-ledger.ts'
+import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import { seedActiveWorkflow, selectedGenerationFor } from './harness.ts'
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 process.env.MSTAR_STORE_TEST_RUNNER ??= '1'
 const roots: string[] = []
 afterEach(async () => {
@@ -96,7 +97,7 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
   it('refuses a source event when the resolved original generation is superseded before commit', async () => {
-    const { root, harnessDir, workflowDir } = await activeFixture()
+    const { root, harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const session = {
       header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_020 },
       seq: 1,
@@ -128,7 +129,61 @@ describe('workflow event native acceptance and scan bound', () => {
     await awaitWorkflowLedgerIdle()
     expect(changed).toBe(true)
     expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    const restore = await openStore({ harnessDir }, 'write')
+    try {
+      restore.db.prepare('update store_meta set authority_epoch = ? where id = 1').run(selectedGeneration.epoch)
+    } finally {
+      restore.close()
+    }
+    ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'stale-run')).toHaveLength(1)
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
+    ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'stale-run')).toHaveLength(1)
+  })
+  it('keeps a bound row eligible across transient target refusal and retries the same log exactly once', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_029 },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? {
+        type: 'tool-workflow/run-start',
+        seq: 0,
+        time: 1_700_000_000_029,
+        data: { runId: 'transient-run', name: 'retry' },
+      } : undefined,
+    }
+    const initial = readWorkflowSessionBinding(harnessDir, 'session-1', root)
+    expect(initial.kind).toBe('ok')
+    const floorBefore = ('binding' in initial ? initial.binding?.excludedBeforeSeq : undefined) ?? 0
+    let firstResolution = true
+    const resolveTransiently = async (sessionId: string, cwd: string) => {
+      if (firstResolution) {
+        firstResolution = false
+        return null
+      }
+      return resolveExecutionLedgerTarget(sessionId, cwd)
+    }
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => [session], get: () => session } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveTransiently)
+    await awaitWorkflowLedgerIdle()
+    const afterRefusal = readWorkflowSessionBinding(harnessDir, 'session-1', root)
+    expect(('binding' in afterRefusal ? afterRefusal.binding?.excludedBeforeSeq : undefined) ?? 0).toBe(floorBefore)
+    expect(readAgentFlow(workflowDir)?.events).toEqual([])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
+
+    ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'transient-run')).toHaveLength(1)
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
+    const afterRecovery = readWorkflowSessionBinding(harnessDir, 'session-1', root)
+    expect(('binding' in afterRecovery ? afterRecovery.binding?.excludedBeforeSeq : undefined) ?? 0).toBe(floorBefore)
   })
   it('leaves a valid source row eligible when native target resolution returns no target', async () => {
     const { root, harnessDir, workflowDir } = await activeFixture()
@@ -150,6 +205,46 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readAgentFlow(workflowDir)?.events).toEqual([])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'unbound-session')).toBeUndefined()
   })
+  it('advances an isolated valid agent-end without a display row and refuses malformed agent-end positions', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const source = (createdAt: number, envelope: unknown) => ({
+      header: { id: 'session-1', cwd: root, createdAt },
+      seq: 1,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => seq === 0 ? envelope : undefined,
+    })
+    const invalid = [
+      source(1_700_000_000_090, {
+        type: 'tool-workflow/agent-end', seq: 0.5, time: 10,
+        data: { runId: 'bad-source', seq: 1, outcome: 'completed' },
+      }),
+      source(1_700_000_000_091, {
+        type: 'tool-workflow/agent-end', seq: 0, time: 11,
+        data: { runId: 'bad-member-seq', seq: 1.5, outcome: 'completed' },
+      }),
+      source(1_700_000_000_092, {
+        type: 'tool-workflow/agent-end', seq: 0, time: 12,
+        data: { runId: 'bad-outcome', seq: 1, outcome: 'unknown' },
+      }),
+    ]
+    const ctx = new Context()
+    ctx.provide('sessions', { list: () => invalid, get: () => invalid[0] } as never)
+    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    await awaitWorkflowLedgerIdle()
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
+    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+
+    const valid = source(1_700_000_000_093, {
+      type: 'tool-workflow/agent-end', seq: 0, time: 13,
+      data: { runId: 'isolated-end', seq: 1, outcome: 'completed' },
+    })
+    const validContext = new Context()
+    validContext.provide('sessions', { list: () => [valid], get: () => valid } as never)
+    registerWorkflowLedger(validContext, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
+  })
   it('re-registers created-session backfill idempotently and keeps live intake healthy after list/read failures', async () => {
     const { root, harnessDir, workflowDir } = await activeFixture()
     const session = {
@@ -167,16 +262,30 @@ describe('workflow event native acceptance and scan bound', () => {
         return undefined
       },
     }
-    const ctx = new Context()
-    ctx.provide('sessions', {
-      list: () => { throw new Error('fixture list failure') },
+    const provideSessions = (ctx: Context, list: () => unknown[]) => ctx.provide('sessions', {
+      list,
       get: (id: string) => id === 'session-1' ? session : undefined,
     } as never)
-    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
-    registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
-    ctx.events.emit({}, 'session/created', session)
+    const first = new Context()
+    provideSessions(first, () => [session])
+    registerWorkflowLedger(first, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
-    ctx.events.emit({}, 'session/event', session, {
+    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run')).toHaveLength(1)
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
+
+    const replay = new Context()
+    provideSessions(replay, () => [session])
+    registerWorkflowLedger(replay, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    await awaitWorkflowLedgerIdle()
+    replay.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+
+    const degraded = new Context()
+    provideSessions(degraded, () => { throw new Error('fixture service list failure') })
+    registerWorkflowLedger(degraded, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+    degraded.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    degraded.events.emit({}, 'session/event', session, {
       type: 'tool-workflow/run-end',
       seq: 2,
       time: 1_700_000_000_042,
@@ -206,8 +315,15 @@ describe('workflow event native acceptance and scan bound', () => {
       data: { runId: 'first-run', name: 'first' },
     })
     await awaitWorkflowLedgerIdle()
+    ctx.events.emit({}, 'session/event', empty, {
+      type: 'tool-workflow/run-end',
+      seq: 1,
+      time: 1_700_000_000_052,
+      data: { runId: 'first-run', stopReason: 'completed' },
+    })
+    await awaitWorkflowLedgerIdle()
     const oldBound = readDshScanBound({ harnessDir }, 'wf-1', 'session-1')
-    expect(oldBound).toMatchObject({ next: 1 })
+    expect(oldBound).toMatchObject({ next: 2 })
 
     const rebuilt = {
       header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_052 },
@@ -227,6 +343,7 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(rebuiltBound?.stream).not.toBe(oldBound?.stream)
     expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual([
       'rebuilt-run',
+      'workflow-run-end',
       'first-run',
     ])
 
@@ -239,7 +356,7 @@ describe('workflow event native acceptance and scan bound', () => {
     })
     await awaitWorkflowLedgerIdle()
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toEqual(rebuiltBound)
-    expect(readAgentFlow(workflowDir)?.events).toHaveLength(2)
+    expect(readAgentFlow(workflowDir)?.events).toHaveLength(3)
   })
 
   it('isolates two bound workflows while an unbound fork and foreign-session target remain ineligible', async () => {
@@ -312,9 +429,48 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'unbound-fork')).toBeUndefined()
     expect(readDshScanBound({ harnessDir }, 'wf-2', 'foreign-session')).toBeUndefined()
   })
+  it('deduplicates depth advisories per run without blocking rows when child metadata fails', async () => {
+    const { root, harnessDir, workflowDir } = await activeFixture()
+    const rows = [
+      { type: 'tool-workflow/run-start', seq: 0, time: 1, data: { runId: 'depth-a', name: 'depth-a' } },
+      { type: 'tool-workflow/agent-start', seq: 1, time: 2, data: { runId: 'depth-a', seq: 1, label: 'below', childId: 'below' } },
+      { type: 'tool-workflow/agent-start', seq: 2, time: 3, data: { runId: 'depth-a', seq: 2, label: 'first-high', childId: 'high-a' } },
+      { type: 'tool-workflow/agent-start', seq: 3, time: 4, data: { runId: 'depth-a', seq: 3, label: 'duplicate-high', childId: 'high-a2' } },
+      { type: 'tool-workflow/run-start', seq: 4, time: 5, data: { runId: 'depth-b', name: 'depth-b' } },
+      { type: 'tool-workflow/agent-start', seq: 5, time: 6, data: { runId: 'depth-b', seq: 1, label: 'throwing-read', childId: 'throw' } },
+      { type: 'tool-workflow/agent-start', seq: 6, time: 7, data: { runId: 'depth-b', seq: 2, label: 'healthy-high', childId: 'high-b' } },
+    ]
+    const session = {
+      header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_070 },
+      seq: rows.length,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) => rows[seq],
+    }
+    const warnings: string[] = []
+    const previousLogger = setWorkflowLedgerLogger((level, message) => {
+      if (level === 'warn') warnings.push(message)
+    })
+    try {
+      const ctx = new Context()
+      ctx.provide('sessions', {
+        list: () => [session],
+        get: (id: string) => {
+          if (id === 'throw') throw new Error('fixture child lookup failure')
+          return { header: { delegationDepth: id === 'below' ? 1 : 2 } }
+        },
+      } as never)
+      registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
+      await awaitWorkflowLedgerIdle()
+      expect(warnings).toHaveLength(3)
+      expect(readAgentFlow(workflowDir)?.events).toHaveLength(7)
+      expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 7 })
+    } finally {
+      setWorkflowLedgerLogger(previousLogger)
+    }
+  })
   it('classifies, validates, bounds, and sanitizes mixed native workflow events', async () => {
     const { root, harnessDir, workflowDir } = await activeFixture()
-    const long = 'x'.repeat(1_300)
+    const long = '🧭'.repeat(1_300)
     const rows = [
       { type: 'tool-workflow/run-start', seq: 0, time: 10, data: { runId: 'control-only', name: '\u0007' } },
       { type: 'tool-workflow/run-start', seq: 1, time: 11, data: { runId: 'run-a', name: 'pre\u0007sanitized' } },
@@ -351,12 +507,17 @@ describe('workflow event native acceptance and scan bound', () => {
     if (longMember?.kind === 'workflow-agent') {
       expect(longMember.label).toBeDefined()
       expect(longMember.phase).toBeDefined()
-      expect(longMember.label?.length ?? 0).toBeLessThanOrEqual(512)
-      expect(longMember.phase?.length ?? 0).toBeLessThanOrEqual(512)
+      expect(Array.from(longMember.label ?? '').length).toBeLessThanOrEqual(512)
+      expect(Array.from(longMember.phase ?? '').length).toBeLessThanOrEqual(512)
+      expect(longMember.label).toContain('🧭')
+      expect(longMember.phase).toContain('🧭')
     }
     const longRun = view?.events.find((event) => event.kind === 'workflow-run' && event.runId === 'run-b')
     expect(longRun?.kind).toBe('workflow-run')
-    if (longRun?.kind === 'workflow-run') expect(longRun.name?.length ?? 0).toBeLessThanOrEqual(1_024)
+    if (longRun?.kind === 'workflow-run') {
+      expect(Array.from(longRun.name ?? '').length).toBeLessThanOrEqual(1_024)
+      expect(longRun.name).toContain('🧭')
+    }
     expect(view?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(6)
     expect(view?.summary.map((bucket) => bucket.outcome)).toEqual(expect.arrayContaining([
       'workflow-run', 'workflow-agent', 'workflow-run-end',
@@ -373,6 +534,23 @@ describe('workflow event native acceptance and scan bound', () => {
     await awaitWorkflowLedgerIdle()
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 12 })
     expect(readAgentFlow(workflowDir)?.events).toHaveLength(6)
+    recordDispatch({
+      harnessDir,
+      resolvedWorkflowDir: workflowDir,
+      selectedGeneration: selectedGenerationFor(harnessDir),
+      prompt: `## Assignment
+
+**Execute as**: @fullstack-dev
+`,
+      violations: [],
+      hard: false,
+    })
+    const mixed = readAgentFlow(workflowDir, 7)
+    expect(mixed?.events).toHaveLength(7)
+    expect(mixed?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(7)
+    expect(mixed?.summary).toContainEqual({ role: 'fullstack-dev', outcome: 'ok', count: 1 })
+    expect(mixed?.summary).toContainEqual({ role: 'workflow', outcome: 'workflow-run', count: 2 })
+    expect(readAgentFlow(workflowDir, 1)?.summary).toEqual([{ role: 'fullstack-dev', outcome: 'ok', count: 1 }])
   })
 
   it('accepts, replays, and refuses conflicting source identity atomically', async () => {
