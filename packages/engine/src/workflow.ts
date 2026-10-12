@@ -1,7 +1,9 @@
 /**
  * Engine workflow module - v3 workflow snapshot schema
  * (`workflows/<id>/snapshot.json`), lifecycle status enum, validator, and the
- * whole-rewrite writer.
+ * integration merge mutex shape. The former whole-rewrite file writer is
+ * deleted with the file execution route: these documents are read-only
+ * migration sources / retained history.
  *
  * Spec sources (each export cites the plan/brief section it enforces):
  * - Snapshot schema (final): `schema_version: 1` (snapshot-own field;
@@ -19,36 +21,23 @@
  *   key survives only as a read alias in `readWorkflowSnapshot`),
  *   `legacy_metadata?` (catch-all for unmapped v1 root-metadata keys),
  *   `compass_ref?` (relative pointer to the iteration delivery compass).
- * - Mutex shape: `validateIntegrationMergeLease` unchanged (`lease.ts`).
- * - Writer: whole-rewrite under `withStatusWriteLock(snapshotPath)` - the
- *   `.status-write.lockdir` lands inside `workflows/<id>/` (dirname of the
- *   snapshot), no harness-root pollution.
+ * - Mutex shape: `validateIntegrationMergeLease` (this module).
  */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
-  CoordinationError,
-  canonicalTarget,
   isPlainObject,
-  readArtifactBytes,
   validateRowCoordination,
   validateSnapshotCoordination,
-  withProtectedWrite,
   type RowValidationRoute,
   type SnapshotCoordination,
 } from "./coordination-write.js";
-import { validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 import { validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
-// Call-time-only cycle with status.ts (status.ts imports the snapshot consts
-// from this module): neither module dereferences the other's bindings during
-// module evaluation, so the ESM live-binding cycle is safe (see status.ts).
-import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 
-/** Snapshot file name inside `workflows/<id>/` ( - writer contract). */
+/** Snapshot file name inside the legacy `workflows/<id>/` document. */
 export const WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 
 /** Lifecycle status enum ( - terminal set = completed|failed|stopped). */
@@ -233,6 +222,98 @@ export function deriveLifecyclePhase(snapshot: WorkflowSnapshot): LifecyclePhase
   }
   const allDone = rows.length > 0 && rows.every((row) => row.status === "Done");
   return { phase: allDone ? CLOSE_PHASE : EXECUTE_PHASE, facts: [...facts, ...ownership] };
+}
+
+/** Normative claimed_at form: RFC 3339 UTC with explicit `Z` (ADR field table). */
+const DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
+const RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
+/** Repo local-date convention: `YYYY-MM-DD` (used by the real control status.json lease). */
+const DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
+
+/**
+ * Snapshot top-level `integration_merge_lease` (v3 — relocated from the v1
+ * root `metadata.integration_merge_lease`). Absent = unclaimed; writers delete
+ * the key on release (never `null`/tombstone).
+ */
+export type IntegrationMergeLease = {
+  holder: string;
+  claimed_at: string;
+  plan_id: string;
+  source_branch: string;
+  target_branch: string;
+  session_label?: string;
+  [key: string]: unknown;
+};
+
+/**
+ * Validate one snapshot top-level `integration_merge_lease` object
+ * (status-and-residuals.md § Snapshot top-level `integration_merge_lease`
+ * (v3)): required `holder` / `claimed_at` / `plan_id` / `source_branch` /
+ * `target_branch`; optional `session_label`. Absent = unclaimed; `null` and
+ * tombstone objects are invalid (writers delete the key on release).
+ * Integration merges into `spec_integration_branch` are serial — one holder
+ * at a time (phase-2-worktree-lease.md § Integration merge lease).
+ */
+export function validateIntegrationMergeLease(lease: unknown): GateResult {
+  const violations: ValidationResult[] = [];
+  if (!isPlainObject(lease)) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "lease.merge-lease.invalid",
+          "integration_merge_lease must be an object \u2014 absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release",
+        ),
+      ],
+    };
+  }
+  validateNonEmptyString(
+    violations,
+    lease.holder,
+    "holder",
+    "lease.merge-lease.missing-holder",
+    "lease.merge-lease.invalid-holder",
+  );
+  if (lease.claimed_at === undefined) {
+    violations.push(violation("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
+  } else if (
+    typeof lease.claimed_at !== "string" ||
+    !(RFC3339_Z_RE.test(lease.claimed_at) || DATE_ONLY_RE.test(lease.claimed_at))
+  ) {
+    violations.push(
+      violation(
+        "medium",
+        "lease.merge-lease.invalid-claimed-at",
+        "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date",
+      ),
+    );
+  }
+  validateNonEmptyString(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
+  validateNonEmptyString(
+    violations,
+    lease.source_branch,
+    "source_branch",
+    "lease.merge-lease.missing-source-branch",
+    "lease.merge-lease.invalid-source-branch",
+  );
+  validateNonEmptyString(
+    violations,
+    lease.target_branch,
+    "target_branch",
+    "lease.merge-lease.missing-target-branch",
+    "lease.merge-lease.invalid-target-branch",
+  );
+  if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
+    violations.push(
+      violation(
+        "medium",
+        "lease.merge-lease.invalid-session-label",
+        "session_label must be a string (display only \u2014 never used for ownership comparison)",
+      ),
+    );
+  }
+  return { ok: violations.length === 0, violations };
 }
 
 export type WorkflowSnapshot = {
@@ -776,280 +857,6 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
     }
   }
   return { snapshot, diagnostics };
-}
-
-/**
- * Writer contract (spec §C4). `createOnly` is the locked create-only shorthand
- * used by the scaffold/migrate/audit writers: an existing document (even an
- * empty or malformed one) is never silently replaced. Omitting it means
- * replace-whatever-is-there under the snapshot lock — the lock discipline is
- * the serializer, and there is no version token to present.
- *
- * The delta allowed here is `phase` + `updated_at` and nothing else - a
- * coordinator persists its phase projection through this writer without ever
- * gaining a backdoor to row owners, leases, lifecycle scalars or branch
- * anchors. ACTIVE execution workflow operations own lifecycle terminal changes.
- */
-export type WriteWorkflowSnapshotOptions = {
-  createOnly?: boolean;
-  /**
-   * Canonical coordinator session envelope path (spec §C4). Required when the
-   * stored snapshot is coordinated: only the snapshot's own bound coordinator
-   * may pass, and the `coordination` block itself is never part of the delta.
-   */
-  sessionPath?: string;
-};
-
-/**
- * Write a workflow snapshot as a field-scoped update of `dir/snapshot.json`
- * under `withStatusWriteLock(snapshotPath)` ( - the `.status-write.lockdir`
- * lands inside `workflows/<id>/`, dirname of the snapshot; no harness-root
- * pollution). The snapshot is validated first - an invalid snapshot throws
- * and nothing is written. `dir` is created recursively. The durable write
- * routes through the active `ArtifactStore` (the store contract: snapshot →
- * `{ kind: "snapshot", key: <workflow id> }`) inside the existing lock - the
- * default FsStore resolves `{WORKFLOW_DIR}/<key>/snapshot.json`, identical
- * to `join(dir, WORKFLOW_SNAPSHOT_FILE)` for canonical callers. The write
- * fails loud when the active FsStore would resolve a different path than
- * the caller's `join(dir, WORKFLOW_SNAPSHOT_FILE)`  - callers
- * whose target root differs from the active store's root MUST
- * `setArtifactStore(createFsStore(root))` first.
- */
-// Migration importer only: status/snapshot are not runtime persistence routes.
-export async function writeWorkflowSnapshot(
-  snapshot: WorkflowSnapshot,
-  dir: string,
-  opts: WriteWorkflowSnapshotOptions = {},
-): Promise<void> {
-  const gate = validateWorkflowSnapshot(snapshot);
-  if (!gate.ok) {
-    const detail = gate.violations.map((v) => v.message).join("; ");
-    throw new Error(`refusing to write invalid workflow snapshot: ${detail}`);
-  }
-  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
-  // Fail-loud path agreement : the lockdir serializes
-  // `snapshotPath`; the store put must land on that same file. A divergence
-  // (caller target outside the active FsStore root) throws before the dir or
-  // lockdir is created - nothing is written anywhere.
-  const store = getArtifactStore();
-  assertFsStorePath(store, { kind: "snapshot", key: snapshot.id }, snapshotPath);
-  // simplify: whole-rewrite snapshot on every state change (temp+rename via
-  // writeJson under the workflow lockdir) - the ceiling is O(plans[] × row
-  // payload) per write; unbounded inputs already divert to notes.jsonl at
-  // migrate time. Upgrade path: append-only delta file or per-row files +
-  // compaction when a lifecycle exceeds ~N plans / large per-row payloads.
-  // The lockdir mkdir is non-recursive - the snapshot dir must exist before
-  // acquisition (the lockdir lands inside `dir`, dirname of the snapshot).
-  mkdirSync(dir, { recursive: true });
-  // The store put is the durable write inside the lock; the store is never a
-  // second lock (architect-locked 2026-08-27: locks stay with callers).
-  await withStatusWriteLock(snapshotPath, async () => {
-    const current = readArtifactBytes(snapshotPath);
-    // Create-only is the writer's own existence rule: an existing document
-    // (even an empty or malformed one) is never silently replaced, and the
-    // refusal names the create-only intent rather than any version token. An
-    // omitted `createOnly` is a replace-whatever-is-there under this lock —
-    // the lock discipline is the serializer.
-    if (opts.createOnly === true && current !== undefined) {
-      throw new CoordinationError(
-        "coordination.direct-write-refused",
-        `snapshot ${snapshotPath} already exists \u2014 a create-only write never replaces one; remove it explicitly or ` +
-          `write without createOnly`,
-        { path: snapshotPath },
-      );
-    }
-    const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
-    if (current === undefined) assertNoRecoveryHistoryOnCreate(payload, snapshotPath);
-    assertCoordinatedSnapshotWriter(current?.payload, snapshotPath, opts.sessionPath);
-    await withProtectedWrite(snapshotPath, "put", () =>
-      store.put({ kind: "snapshot", key: snapshot.id, payload }),
-    );
-  });
-}
-
-/**
- * Provenance boundary for the recovery audit (prerequisite contract §3.3).
- *
- * `coordination.identity_recoveries` is written ONLY by
- * `recoverPrepareCoordinator`, which appends one entry under the snapshot write
- * lock after authenticating the prior binding. The ordinary writer pins an
- * EXISTING audit to disk (a replacement cannot drop or rewrite it), but a
- * create-only write has no disk document to pin against: without this boundary
- * a caller could CREATE a snapshot carrying an arbitrary, schema-valid -
- * entirely forged - recovery history that never passed through the recovery
- * transition. Shape validation is not provenance, so the history is refused
- * outright, whatever its shape, and the only door that establishes it is the
- * authorized recovery.
- */
-function assertNoRecoveryHistoryOnCreate(payload: unknown, snapshotPath: string): void {
-  const coordination = isPlainObject(payload) ? payload.coordination : undefined;
-  const recoveries = isPlainObject(coordination) ? coordination.identity_recoveries : undefined;
-  if (!Array.isArray(recoveries) || recoveries.length === 0) return;
-  throw new CoordinationError(
-    "coordination.direct-write-refused",
-    `refusing to create snapshot ${snapshotPath} carrying ${recoveries.length} coordination.identity_recoveries ` +
-      `entr${recoveries.length === 1 ? "y" : "ies"} \u2014 recovery history is established only by the coordinator ` +
-      `recovery transition, and this create-only write proves no such provenance`,
-    { path: snapshotPath, recoveries: recoveries.length },
-  );
-}
-
-/**
- * Coordinated snapshots are replaced only by their own bound coordinator
- * (spec §C4) - the `mstar persist replace snapshot` door authenticates on the
- * session envelope, and a replacement can never add or drop the
- */
-function assertCoordinatedSnapshotWriter(
-  stored: unknown,
-  snapshotPath: string,
-  sessionPath: string | undefined,
-  action = "replacement",
-): void {
-  const coordination = isPlainObject(stored) ? stored.coordination : undefined;
-  if (coordination === undefined) return;
-  const bound = isPlainObject(coordination) && isPlainObject(coordination.coordinator) ? coordination.coordinator.session_file : undefined;
-  if (sessionPath === undefined || typeof bound !== "string" || canonicalTarget(sessionPath) !== canonicalTarget(bound)) {
-    throw new CoordinationError(
-      "coordination.identity-mismatch",
-      "The snapshot is coordinated; retry this operation with its currently bound coordinator session envelope. Inspect the workflow with mstar status validate.",
-      {
-        action,
-        path: snapshotPath,
-        expected: bound,
-        actual: sessionPath,
-      },
-    );
-  }
-}
-
-/**
- * `phase` + `updated_at` are taken from the incoming snapshot (spec §C4 line
- * 152). The stored document remains the source for every other field, while
- * semantic identity, scope, state and authority fields are checked against
- * their stored values before projection. Documentary content may vary, while
- * row execution scope metadata remains write-protected.
- */
-function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
-  if (!isPlainObject(stored)) {
-    throw new CoordinationError(
-      "coordination.store",
-      "The stored workflow snapshot is not an object; refusing a field-scoped rewrite. Inspect the snapshot with mstar status validate.",
-      {},
-    );
-  }
-  const protectedFields = [
-    "schema_version", "id", "type", "status", "started_at", "ended_at",
-    "branch", "integration_worktree_path", "compass_ref", "execution_policy",
-    "integration_merge_lease", "delivery_kind", "project",
-    "completion_policy",
-  ] as const;
-  const candidate = incoming as unknown as Record<string, unknown>;
-  for (const field of protectedFields) {
-    if (candidate[field] !== undefined && !isDeepStrictEqual(candidate[field], stored[field])) {
-      throw new CoordinationError(
-        "coordination.direct-write-refused",
-        "Snapshot replacement cannot change a protected workflow field; use the authorized lifecycle operation. Inspect the workflow with mstar status validate.",
-        { field },
-      );
-    }
-  }
-  const incomingCoordination = isPlainObject(candidate.coordination) ? candidate.coordination : {};
-  const storedCoordination = isPlainObject(stored.coordination) ? stored.coordination : {};
-  if (incomingCoordination.coordinator !== undefined &&
-      !isDeepStrictEqual(incomingCoordination.coordinator, storedCoordination.coordinator)) {
-    throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change the coordinator because the execution store is authoritative; run mstar status validate to read the workflow token, then use the documented session recover command with its required workflow, operation, reason, attestation and expect options to rebind a stopped coordinator.", { field: "coordination.coordinator" });
-  }
-  const rows = Array.isArray(stored.plans) ? stored.plans : [];
-  const incomingRows = Array.isArray(candidate.plans) ? candidate.plans : [];
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    if (isPlainObject(row) && typeof row.id === "string") byId.set(row.id, row);
-  }
-  if (incomingRows.length !== rows.length) {
-    throw new CoordinationError(
-      "coordination.direct-write-refused",
-      "Snapshot replacement cannot add or remove plan rows; use the authorized workflow amendment operation. Inspect the workflow with mstar status validate.",
-      { field: "plans" },
-    );
-  }
-  const rowFields = ["id", "plan_id", "file", "status", "progress", "revision"] as const;
-  const seenRows = new Set<string>();
-  for (const row of incomingRows) {
-    if (!isPlainObject(row) || typeof row.id !== "string" || seenRows.has(row.id)) {
-      throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement contains an unidentified or duplicate plan row; inspect the workflow with mstar status validate.", { field: "plans" });
-    }
-    seenRows.add(row.id);
-    const prior = byId.get(row.id);
-    if (prior === undefined) {
-      throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot add a plan row; use the authorized workflow amendment operation. Inspect the workflow with mstar status validate.", { field: "plans", plan_id: row.id });
-    }
-    for (const field of rowFields) {
-      if (row[field] !== undefined && !isDeepStrictEqual(row[field], prior[field])) {
-        throw new CoordinationError(
-          "coordination.direct-write-refused",
-          "Snapshot replacement cannot change a plan row field; use the authorized plan operation. Inspect the workflow with mstar status validate.",
-          { field: `plans.${field}`, plan_id: row.id },
-        );
-      }
-    }
-    const incomingAuthority = isPlainObject(row.coordination) ? row.coordination : {};
-    const storedAuthority = isPlainObject(prior.coordination) ? prior.coordination : {};
-    for (const field of ["revision"] as const) {
-      if (incomingAuthority[field] !== undefined && !isDeepStrictEqual(incomingAuthority[field], storedAuthority[field])) {
-        throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change plan row coordination state; use the authorized plan operation. Inspect the workflow with mstar status validate.", { field: `plans.coordination.${field}`, plan_id: row.id });
-      }
-    }
-    for (const [block, fields] of [
-      ["prepared", ["qa_gate", "findings_cleanup", "prepared_by", "prepared_at"]],
-      ["progress", ["status", "summary", "evidence_paths", "track_branches"]],
-      ["completion", ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"]],
-    ] as const) {
-      const proposed = isPlainObject(incomingAuthority[block]) ? incomingAuthority[block] : {};
-      const held = isPlainObject(storedAuthority[block]) ? storedAuthority[block] : {};
-      for (const field of fields) {
-        if (proposed[field] !== undefined && !isDeepStrictEqual(proposed[field], held[field])) {
-          throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change plan row coordination state; use the authorized plan operation. Inspect the workflow with mstar status validate.", { field: `plans.coordination.${block}.${field}`, plan_id: row.id });
-        }
-      }
-    }
-    const incomingMetadata = isPlainObject(row.metadata) ? row.metadata : {};
-    const storedMetadata = isPlainObject(prior.metadata) ? prior.metadata : {};
-    for (const field of ["iteration_refs", "spec_integration_branch", "merge_target", "worktree_path", "working_branch"] as const) {
-      if (incomingMetadata[field] !== undefined && !isDeepStrictEqual(incomingMetadata[field], storedMetadata[field])) {
-        throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change plan row metadata; use the authorized plan operation. Inspect the workflow with mstar status validate.", { field: `plans.metadata.${field}`, plan_id: row.id });
-      }
-    }
-  }
-  const allowed = ["phase", "updated_at"];
-  const next: Record<string, unknown> = { ...stored };
-  for (const key of allowed) {
-    const value = candidate[key];
-    if (value === undefined) delete next[key];
-    else next[key] = value;
-  }
-  return next as unknown as WorkflowSnapshot;
-}
-
-
-
-/**
- * Shared by writers that already hold the snapshot lock. `snapshotPath` is the
- * canonical target of the put: the store boundary refuses an unauthorized
- * write to a protected document, so the write is recorded inside
- * `withProtectedWrite` (spec §C4 - durable protected writes route through the
- * store inside the locked coordination context).
- */
-async function validateAndPutWorkflowSnapshot(
-  store: ArtifactStore,
-  snapshot: WorkflowSnapshot,
-  snapshotPath: string,
-): Promise<void> {
-  const gate = validateWorkflowSnapshot(snapshot);
-  if (!gate.ok) {
-    const detail = gate.violations.map((v) => `${v.code}: ${v.message}`).join("; ");
-    throw new WorkflowSnapshotValidationError(`refusing to write invalid workflow snapshot: ${detail}`, gate.violations);
-  }
-  await withProtectedWrite(snapshotPath, "put", () => store.put({ kind: "snapshot", key: snapshot.id, payload: snapshot }));
 }
 
 /** Terminal enum predicate only; callers validate document shape separately. */

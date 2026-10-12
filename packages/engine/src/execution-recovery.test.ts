@@ -197,7 +197,7 @@ async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; m
   throw new Error("expected a refusal, but the call resolved");
 }
 
-/** Any failure, typed or not — the crash seams and the lock holder raise plain errors. */
+/** Any failure, typed or not — the crash seams raise plain errors. */
 async function errorOf(run: () => Promise<unknown>): Promise<Error> {
   try {
     await run();
@@ -983,6 +983,35 @@ describe("execution-restore", () => {
       writeFileSync(join(marker, "holder.pid"), `${process.pid}\n`);
     }
 
+    // The REAL mutual exclusion, which the retired helper was never: a genuine
+    // competing writer holds SQLite's write lock (`BEGIN IMMEDIATE`) on the
+    // same live database. The retired marker directories are irrelevant to it —
+    // they are consulted by nothing — so the restore refuses on the bounded
+    // SQLite wait (`store.busy`) rather than on any file lock.
+    const competitor = new DatabaseSync(world.dbPath);
+    try {
+      competitor.exec("pragma busy_timeout=0");
+      competitor.exec("begin immediate");
+      process.env.MSTAR_STORE_TEST_RUNNER = "1";
+      process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
+      const blocked = await refusalOf(() =>
+        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
+      );
+      expect(blocked.code).toBe("store.busy");
+      expect(footprint(world.dbPath).epoch).toBe(preview.liveEpoch);
+    } finally {
+      delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+      delete process.env.MSTAR_STORE_TEST_RUNNER;
+      try {
+        competitor.exec("rollback");
+      } catch {
+        // the exclusive section may already be gone
+      }
+      competitor.close();
+    }
+
+    // With the competitor gone the SAME public retry succeeds: identical
+    // preview, committed transaction.
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
       operator: OPERATOR,
@@ -992,7 +1021,8 @@ describe("execution-restore", () => {
 
     // §8: the SAME live database, not a replaced one — same pathname, same
     // inode, and no WAL/SHM of an old generation removed. Nothing in the restore
-    // takes or clears a lock, so every marker and its holder file are intact.
+    // reads, requires or clears the retired marker directories, so every marker
+    // and its holder file is intact.
     const after = statSync(world.dbPath);
     expect(after.ino).toBe(before.ino);
     expect(world.dbPath).toBe(join(world.harness, "store.db"));
@@ -1000,9 +1030,6 @@ describe("execution-restore", () => {
       expect(existsSync(marker)).toBe(true);
       expect(readFileSync(join(marker, "holder.pid"), "utf8")).toBe(`${process.pid}\n`);
     }
-    // …and the restore is not blocked by them: it ran with a marker held by a
-    // live pid for this very process, which is exactly what the deleted lock
-    // would have refused.
     expect(existsSync(receipt.recoveryReceiptPath)).toBe(true);
     expect(receipt.recoveryReceiptPath.startsWith(canonicalPath(world.harness))).toBe(true);
   });

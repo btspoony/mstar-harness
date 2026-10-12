@@ -80,9 +80,6 @@ import {
   type ValidatedCompletionEvidence,
 } from "./coordination-transitions.js";
 import {
-  withStatusWriteLock,
-} from "./lease.js";
-import {
   assertSafePathComponent,
   canonicalizeNearestExisting,
   resolveHarnessDir,

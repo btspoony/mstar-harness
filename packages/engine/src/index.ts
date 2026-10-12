@@ -5,9 +5,9 @@
  * OpenCode plugin consume it in-process. `core` is the shared type/version
  * base, `path` implements harness path resolution + scaffold + gitignore
  * checks, `status` implements the status.json schema, residual lifecycle,
- * findings-cleanup gate and the tech-debt rollup port, `lease` implements the
- * workflow integration merge mutex + same-host status write lock, `dispatch`
- * implements the Assignment field contract, default-branch
+ * findings-cleanup gate and the tech-debt rollup port, `workflow` implements
+ * the workflow snapshot schema and the integration merge mutex shape,
+ * `dispatch` implements the Assignment field contract, default-branch
  * gate, QC seat mapping and tri-identity/anti-recursion prechecks, `lint`
  * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks and
  * ephemeral/provenance citation discovery,
@@ -118,10 +118,9 @@ export {
   validateStatusV2,
   validateWorkflowEntry,
 } from "./status.js";
-export type { IntegrationMergeLease } from "./lease.js";
-export { validateIntegrationMergeLease, withStatusWriteLock } from "./lease.js";
 export type {
   DeliveryRegistrationEvidence,
+  IntegrationMergeLease,
   RegisterIterationWorkflowOptions,
   RegisterPlanWorkflowOptions,
   WorkflowCompoundOutcome,
@@ -139,6 +138,7 @@ export {
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
   normalizeIterationCompassRef,
+  validateIntegrationMergeLease,
   WORKFLOW_COMPOUND_OUTCOMES,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
@@ -488,11 +488,20 @@ export type { QcVerdict } from "./qcreview.js";
 export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
 
-/** `status` and `snapshot` are migration-internal engine kinds, not persist CLI kinds. */
+/** Artifact kinds are `review` and `json` only (the `status` / `snapshot` /
+ * `residuals` kinds are retired). */
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordination.js";
 
-export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
+export {
+  createFsStore,
+  getArtifactStore,
+  guardInjectedStore,
+  legacyStatusDocPath,
+  loadStoreModule,
+  resolveArtifactPath,
+  setArtifactStore,
+} from "./store.js";
 
 export { activeLifecyclePlanId, collectActiveLifecycleBranches } from "./lifecycle-branches.js";
 export type { ActiveLifecycleBranch } from "./lifecycle-branches.js";

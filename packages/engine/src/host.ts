@@ -21,7 +21,7 @@
  */
 import type { GateResult, ValidationResult } from "./core.js";
 import type { AssignmentFields } from "./dispatch.js";
-import type { IntegrationMergeLease } from "./lease.js";
+import type { IntegrationMergeLease } from "./workflow.js";
 
 /** All hosts the engine knows about (roadmap §8.4 host union). `pi` has no
  * plugin API in v1 — it appears in the union (and in `HostAdapter.host`) but

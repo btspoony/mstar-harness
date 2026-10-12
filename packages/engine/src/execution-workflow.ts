@@ -153,12 +153,12 @@ import {
   isTerminalSnapshot,
   validateWorkflowSnapshot,
   type WorkflowDeliveryEvidence,
+  type IntegrationMergeLease,
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { assertBranchAlignment, isDistinctCheckout, readMainWorktree } from "./worktree.js";
 import type { PlanRow } from "./status.js";
-import type { IntegrationMergeLease } from "./lease.js";
 
 /* ------------------------------------------------------------------------ *
  * §3 the closed workflow-operation union
