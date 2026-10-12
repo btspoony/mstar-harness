@@ -1201,13 +1201,18 @@ function agentDigestKey(agent: unknown, cwd: string | undefined): string {
 }
 
 /**
- * Persist the JUST-EMITTED catalog payload to the durable snapshot store
- * (`{HARNESS_DIR}/snapshots/engine-status.json`), keyed by the session id —
- * the edge-safe source a later host endpoint serves.
+ * Persist the JUST-EMITTED catalog payload as this session's newest durable
+ * emission row in the control-root store (`dsh_status_emissions`), keyed by
+ * the session id + its workspace — the edge-safe source a later host endpoint
+ * serves. Only the NEWEST emission per session is kept: the shared envelope's
+ * 50-entry mirror, its age rule and its byte ceiling were write-path
+ * containment of one file and have no reader.
  *
- * Contained: no session id, an unresolved `{HARNESS_DIR}` or an unwritable
- * store degrades to a debug/warn log — the advisory emission path never aborts
- * the step it observes (same containment rule as the append path above).
+ * Contained: no session id, an unresolved `{HARNESS_DIR}` or a store that
+ * cannot be written (no ACTIVE authority, a schema drift, a busy store)
+ * degrades to a warn log — the advisory emission path never aborts the step it
+ * observes (same containment rule as the append path above), and never
+ * fabricates a successful write.
  * @param ctx - registrant context (logger only).
  * @param harnessDir - the workspace's resolved `{HARNESS_DIR}` (null when none).
  * @param cwd - the session workspace the payload was resolved for.
@@ -1240,12 +1245,6 @@ function persistEngineStatusSnapshot(
     ctx.logger(CATALOG_LOGGER).warn(
       `engine-status snapshot not persisted for ${sessionId} (readers answer unavailable): ${result.reason}`,
     )
-    return
   }
-  // The store reports an oversize store ONCE (`warn` is present only on the
-  // first write that crosses its byte ceiling in this process), so this is the
-  // containment contract's "one warning per oversized store" — not a warning
-  // per turn. The row and the panel are unaffected either way.
-  if (result.warn !== undefined) ctx.logger(CATALOG_LOGGER).warn(result.warn)
 }
 

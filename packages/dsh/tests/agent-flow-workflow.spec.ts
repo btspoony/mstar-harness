@@ -18,6 +18,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { storeDbPath } from '@mstar-harness/engine'
 import { AGENT_FLOW_FILE, AGENT_FLOW_MAX_EVENTS, readAgentFlow, recordDispatch as recordDispatchToWorkflow, recordSettle as recordSettleToWorkflow } from '../src/index.ts'
 import {
   AGENT_FLOW_COMPACTION_FILE,
@@ -1787,8 +1788,11 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
     sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-x' }) }], { id: 'sess-x', header: { cwd: root } }))
-    const storePath = join(harnessDir, 'snapshots', 'engine-status.json')
-    await seedHarness(harnessDir, { 'snapshots/engine-status.json': '{ "sv": 1, "entries": ' })
+    // A canonical store path that is not a readable regular store file: the
+    // binding read refuses, so attribution pauses instead of guessing a target.
+    const storePath = storeDbPath({ harnessDir })
+    for (const suffix of ['', '-wal', '-shm']) await rm(`${storePath}${suffix}`, { force: true })
+    await mkdir(storePath, { recursive: true })
     const captured: string[] = []
     const priorSink = setWorkflowLedgerLogger((_level, message) => { captured.push(message) })
     try {
@@ -1796,9 +1800,8 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
 
       expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
       expect(readAgentFlow(dirs['wf-b'])!.events).toEqual([])
-      // The corrupt store is REPORTED and left byte-identical (never reset).
-      expect(captured.some((m) => m.includes('store-invalid-json'))).toBe(true)
-      expect(readFileSync(storePath, 'utf8')).toBe('{ "sv": 1, "entries": ')
+      // The refusal is REPORTED with the store's own cause.
+      expect(captured.some((m) => m.includes('store.corrupt'))).toBe(true)
     } finally {
       setWorkflowLedgerLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

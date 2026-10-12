@@ -1974,8 +1974,8 @@ function catalogRowOf(decision: PreStepDecision): { row: UserMessage; source: Ms
 function textOf(row: UserMessage): string {
   return row.content[0]?.type === 'text' ? row.content[0].text : ''
 }
-function storedCatalogPayload(harnessDir: string): MstarEngineStatusPayload {
-  const read = readEngineStatusSnapshot(harnessDir, 'seed-wf-1')
+function storedCatalogPayload(harnessDir: string, cwd: string): MstarEngineStatusPayload {
+  const read = readEngineStatusSnapshot(harnessDir, 'seed-wf-1', cwd)
   if (read.kind !== 'ok') throw new Error(`catalog snapshot unavailable: ${read.reason}`)
   return read.entry.payload as unknown as MstarEngineStatusPayload
 }
@@ -2003,7 +2003,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, undefined, catalogAgent(root)), defaultEnter(inbox))
     const { row } = catalogRowOf(decision)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
 
     // Structured evidence: events (latest first) + summary over the window.
     expect(payload.state).not.toBeNull()
@@ -2037,7 +2037,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const app = booted = await bootApp({ root, harnessDir: null })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
 
     // The structured source KEEPS the link as its own role×outcome bucket
     // (the identity evidence stays available to machine consumers)…
@@ -2063,7 +2063,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, undefined, catalogAgent(root)), defaultEnter(inbox))
     const { row } = catalogRowOf(decision)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
     expect(payload.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
   })
@@ -2079,7 +2079,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const app = booted = await bootApp({ root, harnessDir: null })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
 
     expect(payload.state!.agentFlow!.events).toHaveLength(50)
     expect(textOf(row)).toContain('agent flow: 50 events (latest 50)')
@@ -2094,7 +2094,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const app = booted = await bootApp({ root, harnessDir: null })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     const { row } = catalogRowOf(decision)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
 
     expect(payload.state!.agentFlow).toEqual({ events: [], summary: [] })
     expect(textOf(row)).not.toContain('agent flow:')
@@ -2109,7 +2109,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     const app = booted = await bootApp({ root, harnessDir: null })
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root)), defaultEnter([]))
     catalogRowOf(decision)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
 
     const payloadRecord = payload as unknown as Record<string, unknown>
     expect(Object.values(payloadRecord).every((v) => v !== undefined)).toBe(true)
@@ -2132,7 +2132,7 @@ describe('agent-flow catalog — state.agentFlow evidence + render', () => {
     // Second pre-step: TTL 0 forces a rebuild → the event is visible.
     const second = await app.ctx.waterfall('agent/pre-step', stepPayload([], undefined, catalogAgent(root), 2), defaultEnter([]))
     const { row } = catalogRowOf(second)
-    const payload = storedCatalogPayload(harnessDir)
+    const payload = storedCatalogPayload(harnessDir, root)
 
     expect(payload.state!.agentFlow?.events).toHaveLength(1)
     expect(payload.state!.agentFlow?.events[0]).toMatchObject({ kind: 'dispatch', verdict: 'ok' })
