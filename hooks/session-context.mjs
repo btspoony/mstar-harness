@@ -22530,6 +22530,9 @@ function resolveArtifactPath(harnessRoot, ref) {
   if (kind === "residuals") {
     throw new Error("ArtifactStore no longer persists project registers — the issue store (store.db) is the only findings authority; a residuals.json is migration history");
   }
+  if (kind === "status" || kind === "snapshot") {
+    throw new CoordinationError("coordination.direct-write-refused", `ArtifactStore no longer admits the ${String(kind)} kind — the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`, { kind: String(kind) });
+  }
   if (kind === "json") {
     if (!isAbsolute12(key)) {
       throw new Error(`ArtifactStore json key must be an absolute path — got ${JSON.stringify(key)}`);
@@ -22630,9 +22633,7 @@ function createFsStore(harnessRoot) {
       if (kind === "json") {
         throw new Error("ArtifactStore json keys are absolute paths and cannot be listed");
       }
-      if (kind === "residuals") {
-        throw new Error("ArtifactStore no longer persists project registers — the issue store (store.db) is the only findings authority; a residuals.json is migration history");
-      }
+      resolveArtifactPath(root, { kind, key: "root" });
       const keys = [];
       const sddDir = join24(root, "sdd");
       for (const key of listJsonKeys(join24(sddDir, "_reviews"))) {

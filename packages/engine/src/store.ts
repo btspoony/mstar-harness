@@ -17,7 +17,7 @@ import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
-import { assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
+import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   assertSafePathComponent,
@@ -93,8 +93,10 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
     );
   }
   if ((kind as string) === "status" || (kind as string) === "snapshot") {
-    throw new Error(
+    throw new CoordinationError(
+      "coordination.direct-write-refused",
       `ArtifactStore no longer admits the ${String(kind)} kind \u2014 the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`,
+      { kind: String(kind) },
     );
   }
   if (kind === "json") {
