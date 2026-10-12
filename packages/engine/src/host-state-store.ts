@@ -170,7 +170,10 @@ export function appendDshWorkflowEvent(
       ).get(input.workflowId, input.eventId) as { digest?: string } | undefined;
       if (prior) {
         if (prior.digest !== input.digest) {
-          return { kind: "refused" as const, reason: "workflow event identity was already accepted with a different digest; the accepted fact is preserved, and this core exposes no supported conflict-recovery operation." };
+          return {
+            kind: "refused" as const,
+            reason: `workflow event identity ${input.eventId} was already accepted with digest ${prior.digest} at verified source session=${input.source.sessionId}, stream=${input.source.streamId}, seq=${input.source.seq}; the accepted fact is preserved. Re-read that native session's eventAt(${input.source.seq}) and resubmit the original event with the same identity and source.`,
+          };
         }
         if (advanceBound(tx.db, input.workflowId, input.source.sessionId, input.source.seq + 1, input.source.streamId)) tx.markChanged();
         return { kind: "replayed" as const };

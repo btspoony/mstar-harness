@@ -69,7 +69,15 @@ describe("host-state store domain", () => {
       handle.db.prepare("delete from dsh_scan_bounds where workflow_id = ? and session_id = ?").run("wf-a", "session-a");
       expect(appendDshWorkflowEvent(context, identity)).toEqual({ kind: "replayed" });
       expect(readDshScanBound(context, "wf-a", "session-a")).toEqual({ next: 2, stream: "stream-a" });
-      expect(appendDshWorkflowEvent(context, { ...identity, digest: "digest-b" })).toMatchObject({ kind: "refused" });
+      handle.db.prepare("delete from dsh_scan_bounds where workflow_id = ? and session_id = ?").run("wf-a", "session-a");
+      const conflict = appendDshWorkflowEvent(context, { ...identity, digest: "digest-b", lineJson: "{\"eventId\":\"wrong-payload\"}" });
+      expect(conflict).toMatchObject({
+        kind: "refused",
+        reason: expect.stringContaining("digest-a at verified source session=session-a, stream=stream-a, seq=1"),
+      });
+      expect(readDshScanBound(context, "wf-a", "session-a")).toBeUndefined();
+      expect(appendDshWorkflowEvent(context, identity)).toEqual({ kind: "replayed" });
+      expect(readDshScanBound(context, "wf-a", "session-a")).toEqual({ next: 2, stream: "stream-a" });
       expect(readDshLedgerWindow(context, "wf-a", 10)).toEqual([
         identity.lineJson, "{\"eventId\":\"same\"}", "{\"eventId\":\"same\"}",
       ]);
@@ -115,6 +123,56 @@ describe("host-state store domain", () => {
       expect(readDshScanBound(context, "wf", "s")).toBeUndefined();
     } finally {
       handle.close();
+    }
+  });
+  test("a second process changing generation invalidates a previously selected writer with zero DSH writes", async () => {
+    const { context, handle } = await fresh("generation-race");
+    const selected = { storeId: handle.storeId, epoch: handle.epoch };
+    const revision = (handle.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
+    handle.close();
+    const gate = join(context.harnessDir, "generation-switched");
+    const moduleUrl = new URL("./host-state-store.ts", import.meta.url).href;
+    const storeModuleUrl = new URL("./store-db.ts", import.meta.url).href;
+    const writerSource = `import { existsSync } from 'node:fs'; import { appendDshWorkflowEvent } from ${JSON.stringify(moduleUrl)}; console.log('selected'); while (!existsSync(process.env.DSH_GENERATION_GATE!)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5); const r=appendDshWorkflowEvent({harnessDir:process.env.DSH_HARNESS_DIR!},{workflowId:'wf',eventId:'e',digest:'d',lineJson:'{}',source:{sessionId:'s',streamId:'stream',seq:2},selectedGeneration:{storeId:process.env.DSH_STORE_ID!,epoch:Number(process.env.DSH_EPOCH)}}); console.log(JSON.stringify(r));`;
+    const switchSource = `import { writeFileSync } from 'node:fs'; import { openStore } from ${JSON.stringify(storeModuleUrl)}; const h=await openStore({harnessDir:process.env.DSH_HARNESS_DIR!},'write'); h.db.prepare('update store_meta set authority_epoch=authority_epoch+1 where id=1').run(); h.close(); writeFileSync(process.env.DSH_GENERATION_GATE!,'switched'); console.log('switched');`;
+    const writer = spawn(process.execPath, ["-e", writerSource], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, DSH_GENERATION_GATE: gate, DSH_HARNESS_DIR: context.harnessDir, DSH_STORE_ID: selected.storeId, DSH_EPOCH: String(selected.epoch) },
+    });
+    let output = "";
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => { markReady = resolve; });
+    const writerResult = new Promise<string>((resolve, reject) => {
+      writer.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+        output += chunk;
+        if (output.includes("selected")) markReady();
+      });
+      writer.stderr.setEncoding("utf8").on("data", (chunk: string) => output += chunk);
+      writer.on("error", reject);
+      writer.on("close", (code) => code === 0 ? resolve(output.trim().split("\n").at(-1)!) : reject(new Error(`writer exit ${code}: ${output}`)));
+    });
+    await ready;
+    const switcher = spawn(process.execPath, ["-e", switchSource], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, DSH_GENERATION_GATE: gate, DSH_HARNESS_DIR: context.harnessDir },
+    });
+    let switchOutput = "";
+    const switchResult = new Promise<void>((resolve, reject) => {
+      switcher.stdout.setEncoding("utf8").on("data", (chunk: string) => switchOutput += chunk);
+      switcher.stderr.setEncoding("utf8").on("data", (chunk: string) => switchOutput += chunk);
+      switcher.on("error", reject);
+      switcher.on("close", (code) => code === 0 ? resolve() : reject(new Error(`switcher exit ${code}: ${switchOutput}`)));
+    });
+    await Promise.all([switchResult, writerResult]);
+    expect(JSON.parse(await writerResult)).toMatchObject({ kind: "refused", reason: expect.stringContaining("store.stale-epoch") });
+    const check = await openStore(context, "read");
+    try {
+      expect(count(check.db, "select count(*) as n from dsh_accepted_identities")).toBe(0);
+      expect(count(check.db, "select count(*) as n from dsh_ledger_events")).toBe(0);
+      expect(count(check.db, "select count(*) as n from dsh_scan_bounds")).toBe(0);
+      expect((check.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision).toBe(revision);
+    } finally {
+      check.close();
     }
   });
 
