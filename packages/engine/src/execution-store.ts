@@ -35,7 +35,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, type Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   ExecutionPinConflictError,
@@ -87,6 +87,7 @@ import {
   isTerminalSnapshot,
   rowValidationRoute,
   validateWorkflowSnapshot,
+  WORKFLOW_SNAPSHOT_FILE,
   type WorkflowSnapshot,
 } from "./workflow.js";
 
@@ -1360,23 +1361,72 @@ function assertNoLegacyExecutionSources(context: StoreContext): void {
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources: string[] = [];
   const statusPath = join(harnessDir, "status.json");
-  if (existsSync(statusPath)) sources.push(statusPath);
-  if (existsSync(workflowDir)) {
-    // Fail closed: a path that exists but cannot be listed is a source too.
-    let entries: string[];
+  try {
+    lstatSync(statusPath);
+    sources.push(statusPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${statusPath} (unreadable)`);
+  }
+  let workflowRootIsDirectory = false;
+  try {
+    const info = lstatSync(workflowDir);
+    workflowRootIsDirectory = info.isDirectory() && !info.isSymbolicLink();
+    if (!workflowRootIsDirectory) sources.push(workflowDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${workflowDir} (unreadable)`);
+  }
+  if (workflowRootIsDirectory) {
+    let entries: Dirent[];
     try {
-      entries = readdirSync(workflowDir);
+      entries = readdirSync(workflowDir, { withFileTypes: true });
     } catch {
-      entries = ["<unreadable>"];
+      entries = [];
+      sources.push(`${workflowDir} (unreadable)`);
     }
-    if (entries.length > 0) sources.push(`${workflowDir} (${entries.length} entr${entries.length === 1 ? "y" : "ies"})`);
+    for (const entry of entries) {
+      const dir = join(workflowDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        sources.push(dir);
+        continue;
+      }
+      if (!entry.isDirectory()) continue;
+      for (const name of [WORKFLOW_SNAPSHOT_FILE, "notes.jsonl"]) {
+        const path = join(dir, name);
+        try {
+          lstatSync(path);
+          sources.push(path);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${path} (unreadable)`);
+        }
+      }
+      const sessionsDir = join(dir, "sessions");
+      try {
+        const info = lstatSync(sessionsDir);
+        if (info.isSymbolicLink() || !info.isDirectory()) {
+          sources.push(sessionsDir);
+        } else {
+          let sessions: Dirent[];
+          try {
+            sessions = readdirSync(sessionsDir, { withFileTypes: true });
+          } catch {
+            sessions = [];
+            sources.push(`${sessionsDir} (unreadable)`);
+          }
+          for (const session of sessions) {
+            if (session.name.endsWith(".json")) sources.push(join(sessionsDir, session.name));
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${sessionsDir} (unreadable)`);
+      }
+    }
   }
   if (sources.length > 0) {
     throw new ExecutionError(
       "execution.not-empty",
       `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. ` +
-        `Execution authority is initialized only for an empty execution workspace \u2014 this workspace belongs on the ` +
-        `staged migration route. Nothing was created or modified.`,
+        `Import these sources with the supported \`mstar store upgrade --operator <name>\` operation; the retired ` +
+        `staged migration writer is unavailable. Nothing was created or modified.`,
     );
   }
 }

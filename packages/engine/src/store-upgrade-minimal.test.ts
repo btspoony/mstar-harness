@@ -1526,7 +1526,18 @@ function legacyV1Workspace(name: string): { context: StoreContext; statusBytes: 
       { id: workflowId, title: "Legacy v1 plan", file: `${workflowId}.md`, status: "Done", done_at: "2026-10-02" },
       { id: "v1-standalone", title: "Standalone v1 plan", file: "v1-standalone.md", status: "Todo" },
     ],
-    metadata: { iteration_base_branch: "integration/v1", target_branch: "main", harness_root: harnessDir },
+    metadata: {
+      iteration_base_branch: "integration/v1",
+      target_branch: "main",
+      harness_root: harnessDir,
+      program_roadmap: { title: "Retained program roadmap", milestones: [{ id: "m1", title: "Keep this fact" }] },
+      integration_merge_lease: {
+        holder: "legacy-coordinator",
+        claimed_at: "2026-10-04T00:00:00Z",
+        source_branch: "feature/legacy",
+        target_branch: "main",
+      },
+    },
   }, null, 2)}\n`);
   writeFileSync(join(harnessDir, "status.json"), statusBytes);
   writeFileSync(join(harnessDir, "plain-doc.md"), "# unrelated document\n");
@@ -1547,7 +1558,16 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
     // Both lifecycles land in the native tables, with the v1 metadata lift.
     const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("iter-v1") as { state_json: string };
     const iteration = JSON.parse(header.state_json) as Record<string, unknown>;
-    expect(iteration).toMatchObject({ type: "iteration", status: "running", branch: { base: "integration/v1", target: "main" } });
+    expect(iteration).toMatchObject({
+      type: "iteration",
+      status: "running",
+      branch: { base: "integration/v1", target: "main" },
+      legacy_metadata: { program_roadmap: { title: "Retained program roadmap", milestones: [{ id: "m1", title: "Keep this fact" }] } },
+    });
+    expect(iteration.integration_merge_lease).toBeUndefined();
+    expect(result.dispositions).toContain(
+      "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not carried into the new authority; operator \"operator\" requested this store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+    );
     // The standalone Todo row imports paused and continuable.
     const standalone = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
     expect(JSON.parse(standalone.state_json)).toMatchObject({ type: "plan", status: "paused" });
@@ -1574,17 +1594,29 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   expect(replay.imported).toBe(0);
 });
 
-test("a v1 root whose lift is genuinely unacceptable refuses without touching the store", async () => {
+test("a v1 root whose lift is unacceptable reports the committed schema and authority state", async () => {
   const { context } = legacyV1Workspace("v1-refusal");
   const statusPath = join(context.harnessDir, "status.json");
   const doc = JSON.parse(readFileSync(statusPath, "utf8")) as { plans: Array<Record<string, unknown>> };
   doc.plans.push({ id: "../escape", title: "unsafe", file: "x.md", status: "Todo" });
   writeFileSync(statusPath, JSON.stringify(doc));
   const before = readFileSync(statusPath);
-  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-refusal" })).rejects.toThrow();
-  // The refusal names the unconvertible row and leaves the legacy source and
-  // the workspace untouched — no snapshot tree, no archive, no import rows.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-refusal" })
+    .then(() => { throw new Error("unsafe v1 plan unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.message).toContain("Schema version");
+  expect(refusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(refusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(refusal.message).toContain("retry `mstar store upgrade --operator <name>`");
+  expect(refusal.code).toBe("execution.migration-conflict");
   expect([...readFileSync(statusPath)]).toEqual([...before]);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
+  }
   expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
   expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
 });
@@ -1611,30 +1643,25 @@ try {
   const children = Array.from({ length: 3 }, (_, index) => {
     const child = spawn("bun", [worker, context.harnessDir, `op-concurrent-${index}`], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
-    let stderr = "";
     let announced: () => void = () => {};
     const ready = new Promise<void>((resolve) => { announced = resolve; });
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
       if (stdout.includes("ready\n")) announced();
     });
-    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
     const closed = new Promise<number | null>((resolve) => child.on("close", resolve));
-    return { index, ready, release: () => child.stdin.write("go\n"), done: closed.then(() => ({ stdout, stderr })) };
+    return { index, ready, release: () => child.stdin.write("go\n"), done: closed.then(() => ({ stdout })) };
   });
   await Promise.all(children.map((child) => child.ready));
   for (const child of children) child.release();
   const results = await Promise.all(children.map((child) => child.done));
 
-  const parsed = results.map(({ stdout, stderr }) => {
-    expect(stderr).not.toContain("lockdir");
-    expect(stderr).not.toContain(".status-write");
+  const parsed = results.map(({ stdout }) => {
     const payload = JSON.parse(stdout.slice("ready\n".length)) as { imported?: number; refused?: string };
     return { imported: payload.imported ?? 0, refused: payload.refused };
   });
-  // The create-only initializer has exactly one winner; a loser refuses
-  // `store.already-exists` (an ordinary public retry, not a lock wait), and
-  // that winner imports both legacy lifecycles. No child waits on a lockdir.
+  // The importer creates one coherent store and commits the v1 lifecycles once;
+  // competing public attempts receive only the create-only store refusal.
   expect(parsed.filter(({ imported }) => imported > 0)).toHaveLength(1);
   expect(parsed.map(({ imported }) => imported).reduce((sum, value) => sum + value, 0)).toBe(2);
   for (const { refused } of parsed) {

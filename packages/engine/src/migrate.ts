@@ -142,7 +142,6 @@ const ROOT_METADATA_LIFT_KEYS: Record<string, true> = {
   spec_integration_branch: true,
   control_worktree_path: true,
   integration_merge_lease: true,
-  program_roadmap: true,
   updated_at: true,
 };
 
