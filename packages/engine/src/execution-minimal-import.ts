@@ -36,6 +36,27 @@ function rootOf(context: StoreContext): string {
   return canonicalPath(dirname(storeDbPath(context)));
 }
 
+/**
+ * The legacy `workflows/` tree is never followed through a symlink. A
+ * symlinked root or workflow directory refuses before EITHER conversion route
+ * evaluates or commits an import — the v1 root converts purely in memory and
+ * never enumerates `workflows/`, so without this precondition its route would
+ * silently skip a source the v2 route refuses. `lstatSync` (not `existsSync`)
+ * so a dangling symlink is refused rather than read as absent.
+ */
+function assertWorkflowTreeIsReal(root: string): void {
+  const workflowsDir = join(root, "workflows");
+  let info;
+  try { info = lstatSync(workflowsDir); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) conflict(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
+  for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
+    if (dirent.isSymbolicLink()) conflict(`workflow directory ${join(workflowsDir, dirent.name)} is a symlink; replace it with an in-root directory or remove it, then rerun store upgrade.`);
+  }
+}
+
 function binding(value: unknown): Binding | null {
   if (!isPlainObject(value)) return null;
   if (!isNonEmptyString(value.session_id) || !isNonEmptyString(value.session_file) || !isAbsolute(value.session_file) || !isNonEmptyString(value.bound_at)) return null;
@@ -136,6 +157,7 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string):
 
 function discover(context: StoreContext, operator: string): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string; dispositions: string[] } {
   const root = rootOf(context);
+  assertWorkflowTreeIsReal(root);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
   const sourceFiles = new Set<string>();
@@ -170,12 +192,12 @@ function discover(context: StoreContext, operator: string): { root: string; root
   }
   const registeredIds = new Set(safeEntries.flatMap((entry) => isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
   const workflowsDir = join(root, "workflows");
+  // The workflows-root/directory symlink refusal already ran as a precondition
+  // for both routes (`assertWorkflowTreeIsReal`); this scan only discovers
+  // unregistered snapshots.
   if (existsSync(workflowsDir)) {
-    const workflowsInfo = lstatSync(workflowsDir);
-    if (workflowsInfo.isSymbolicLink() || !workflowsInfo.isDirectory()) conflict(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
     for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
       const dir = join(workflowsDir, dirent.name);
-      if (dirent.isSymbolicLink()) conflict(`workflow directory ${dir} is a symlink; replace it with an in-root directory or remove it, then rerun store upgrade.`);
       if (!dirent.isDirectory() || registeredIds.has(dirent.name)) continue;
       const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
       if (!existsSync(snapshotPath)) continue;

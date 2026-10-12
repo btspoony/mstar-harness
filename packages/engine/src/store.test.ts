@@ -104,19 +104,22 @@ function recordingStore(): ArtifactStore & { puts: ArtifactDoc[] } {
  * its own root — the guard must not read it as authority). */
 function probeStore(
   rootClaim?: string,
-): ArtifactStore & { root?: string; puts: ArtifactDoc[]; gets: ArtifactRef[]; deletes: ArtifactRef[] } {
+): ArtifactStore & { root?: string; puts: ArtifactDoc[]; gets: ArtifactRef[]; deletes: ArtifactRef[]; lists: ArtifactKind[] } {
   const puts: ArtifactDoc[] = [];
   const gets: ArtifactRef[] = [];
   const deletes: ArtifactRef[] = [];
+  const lists: ArtifactKind[] = [];
   const store: ArtifactStore & {
     root?: string;
     puts: ArtifactDoc[];
     gets: ArtifactRef[];
     deletes: ArtifactRef[];
+    lists: ArtifactKind[];
   } = {
     puts,
     gets,
     deletes,
+    lists,
     async put(doc: ArtifactDoc): Promise<void> {
       puts.push(doc);
     },
@@ -126,6 +129,10 @@ function probeStore(
     },
     async delete(ref: ArtifactRef): Promise<void> {
       deletes.push(ref);
+    },
+    async list(kind: ArtifactKind): Promise<ArtifactRef[]> {
+      lists.push(kind);
+      return [];
     },
   };
   if (rootClaim !== undefined) store.root = rootClaim;
@@ -719,6 +726,40 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("an injected store cannot serve the retired status/snapshot kinds on any data port", async () => {
+    const store = probeStore();
+    setArtifactStore(store);
+    const active = getArtifactStore();
+
+    // A JS consumer or a previously compiled adapter calls with a kind the type
+    // no longer admits. Every port must refuse with the same coordination code
+    // the FsStore path table raises, and no adapter port may be reached — the
+    // facade is the public installation boundary, so a union type cannot be the
+    // only enforcement.
+    for (const kind of ["status", "snapshot"]) {
+      for (const port of ["put", "get", "delete", "list"] as const) {
+        const call = port === "put"
+          ? () => active.put({ kind, key: "root", payload: {} } as never)
+          : port === "list"
+            ? () => active.list!(kind as never)
+            : port === "get"
+              ? () => active.get({ kind, key: "root" } as never)
+              : () => active.delete!({ kind, key: "root" } as never);
+        await expect(call()).rejects.toMatchObject({ code: "coordination.direct-write-refused" });
+      }
+    }
+    expect(store.puts).toEqual([]);
+    expect(store.gets).toEqual([]);
+    expect(store.deletes).toEqual([]);
+    expect(store.lists).toEqual([]);
+
+    // Supported kinds are unaffected: review and an unrelated json body still
+    // delegate to the injected adapter.
+    await active.put({ kind: "review", key: "20260922-injected-kind", payload: { verdict: "approve" } });
+    await active.put({ kind: "json", key: join(tmpdir(), "injected-kind-body.json"), payload: { note: "body" } });
+    expect(store.puts.map((doc) => doc.kind)).toEqual(["review", "json"]);
   });
 
   test("an injected store cannot recreate, read or delete the retired project register", async () => {

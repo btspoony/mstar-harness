@@ -73,26 +73,32 @@ export interface ArtifactStore {
  * evaluated after the key passes `assertSafePathComponent`. */
 const PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
 
+/** The single kind-admission rule (one home for the retirement refusal). The
+ * type no longer admits the retired kinds, but a runtime caller — a JavaScript
+ * consumer or an already-compiled adapter — must be refused by kind alone,
+ * before any path mapping or delegation, rather than silently resolving or
+ * forwarding a legacy target. */
+function assertKindAdmitted(kind: string): void {
+  if (kind === "residuals") {
+    throw new Error(
+      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
+    );
+  }
+  if (kind === "status" || kind === "snapshot") {
+    throw new CoordinationError(
+      "coordination.direct-write-refused",
+      `ArtifactStore no longer admits the ${kind} kind \u2014 the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`,
+      { kind },
+    );
+  }
+}
+
 /** Map an artifact ref to its file path under `harnessRoot` (the store contract — the single kind→path
  * mapping). Exported so host adapters import the contract instead of
  * re-deriving it textually. */
 export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
   const { kind, key } = ref;
-  // Retired kind guards: the type no longer admits these kinds, but a runtime
-  // caller (JS consumer, stale adapter) must also be refused rather than
-  // silently resolving a legacy path.
-  if ((kind as string) === "residuals") {
-    throw new Error(
-      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
-    );
-  }
-  if ((kind as string) === "status" || (kind as string) === "snapshot") {
-    throw new CoordinationError(
-      "coordination.direct-write-refused",
-      `ArtifactStore no longer admits the ${String(kind)} kind \u2014 the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`,
-      { kind: String(kind) },
-    );
-  }
+  assertKindAdmitted(kind as string);
   if (kind === "json") {
  // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
     if (!isAbsolute(key)) {
@@ -145,17 +151,12 @@ function readDirEntries(dir: string): Dirent[] {
   }
 }
 
-/** Refuse every retired register write target (G2a): the `residuals` kind is
- * gone, and a `json` alias (`--json <abs path>`, symlink) whose CANONICAL
- * target is a `residuals.json` under the resolved project dir must not
- * recreate the legacy authority either — it refuses, it never falls through
- * to an ordinary write. */
+/** Refuse a `json` alias (`--json <abs path>`, symlink) whose CANONICAL
+ * target is a `residuals.json` under the resolved project dir — it must not
+ * recreate the legacy authority; it refuses, it never falls through to an
+ * ordinary write. The retired `residuals` KIND itself is refused by
+ * `assertKindAdmitted`, which every caller applies first. */
 function assertNotRetiredRegisterTarget(root: string, ref: ArtifactRef, filePath: string): void {
-  if ((ref.kind as string) === "residuals") {
-    throw new Error(
-      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
-    );
-  }
   if (ref.kind === "json") {
     const canonical = canonicalTarget(filePath);
     if (basename(canonical) !== "residuals.json") return;
@@ -313,11 +314,14 @@ function processControlRoot(): string {
  * through their own authorization boundary.
  */
 function assertInjectedAccessAllowed(ref: ArtifactRef): void {
-  const retirableKind = (ref.kind as string) === "residuals";
-  const aliasKind = ref.kind === "json";
-  if (!retirableKind && !aliasKind) return;
-  const controlRoot = processControlRoot();
-  assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
+  // The retired-kind refusal is the same rule the FsStore path table applies
+  // (`resolveArtifactPath` → `assertKindAdmitted`): an injected store must not
+  // forward a kind the engine no longer admits, whatever a caller's TypeScript
+  // union claims. Applied before the canonical target classification, so a
+  // status/snapshot request never reaches a delegated port.
+  assertKindAdmitted(ref.kind as string);
+  if (ref.kind !== "json") return;
+  assertNotRetiredRegisterTarget(processControlRoot(), ref, ref.key);
 }
 
 /**
@@ -351,7 +355,12 @@ export function guardInjectedStore(store: ArtifactStore): ArtifactStore {
   }
   const list = store.list;
   if (list !== undefined) {
-    guarded.list = (kind: ArtifactKind) => list.call(store, kind);
+    // Async like every other port (and like FsStore.list), so a refused kind
+    // rejects rather than throwing through a caller's promise chain.
+    guarded.list = async (kind: ArtifactKind): Promise<ArtifactRef[]> => {
+      assertKindAdmitted(kind as string);
+      return list.call(store, kind);
+    };
   }
   return guarded;
 }

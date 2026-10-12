@@ -499,6 +499,59 @@ test("a symlinked history ancestor never contributes a landed-journal proof", as
   expect(acked.findings).toContainEqual(expect.objectContaining({ kind: "dropped-by-ack", category: "tail" }));
 });
 
+test("a symlinked workflow directory refuses by default and imports only after the source-scoped acknowledgement", async () => {
+  const { context } = await fixture("symlinked-dir");
+  const real = join(context.harnessDir, "elsewhere-dir");
+  mkdirSync(real, { recursive: true });
+  const ids = '{"id":"wfe1:session:event","d":"digest"}\n';
+  const tail = '{"eventId":"wfc1:session:tool"}\n';
+  writeFileSync(join(real, "agent-flow-ids.jsonl"), ids);
+  writeFileSync(join(real, "agent-flow.jsonl"), tail);
+  symlinkSync(real, join(context.harnessDir, "workflows", "wf-link-dir"));
+
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "symlinked-dir" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-ledger:wf-link-dir") });
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_ledger_events").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_scan_bounds").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+
+  const acked = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "symlinked-dir-ack", acknowledgedSkips: ["dsh-ledger:wf-link-dir"],
+  });
+  expect(acked.verdict).toBe("partially-imported");
+  expect(acked.imported.identities).toBe(0);
+  expect(acked.findings).toContainEqual(
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-link-dir", category: "workflows" }),
+  );
+  // The link target's bytes were never read, rewritten or followed.
+  expect(readFileSync(join(real, "agent-flow-ids.jsonl"), "utf8")).toBe(ids);
+  expect(readFileSync(join(real, "agent-flow.jsonl"), "utf8")).toBe(tail);
+});
+
+test("a symlinked workflows root refuses the whole legacy tree and recovers through its own acknowledgement", async () => {
+  const { context } = await fixture("symlinked-root");
+  const realRoot = join(context.harnessDir, "elsewhere-tree");
+  mkdirSync(join(realRoot, "wf-tree"), { recursive: true });
+  writeFileSync(join(realRoot, "wf-tree", "agent-flow-ids.jsonl"), '{"id":"wfe1:x","d":"d"}\n');
+  rmSync(join(context.harnessDir, "workflows"), { recursive: true, force: true });
+  symlinkSync(realRoot, join(context.harnessDir, "workflows"));
+
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "symlinked-root" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-workflows") });
+
+  const acked = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "symlinked-root-ack", acknowledgedSkips: ["dsh-workflows"],
+  });
+  expect(acked.verdict).toBe("partially-imported");
+  expect(acked.imported.identities).toBe(0);
+  expect(acked.findings).toContainEqual(
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-workflows", category: "workflows" }),
+  );
+});
+
 test("a symlinked snapshots ancestor refuses the status source and a plain document directory stays a non-source", async () => {
   const { context } = await fixture("unsafe-status");
   mkdirSync(join(context.harnessDir, "workflows", "plain-docs"), { recursive: true });

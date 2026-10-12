@@ -34,6 +34,8 @@ function refused(refusals: readonly Refusal[]): never {
 /** Loss disclosure keyed by the actual fact category, never by a filename substring. */
 function lossStatement(refusal: Refusal): string {
   switch (refusal.category) {
+    case "workflows":
+      return "Loss: the legacy workflow tree at the named source was not read (a symlinked source tree is never followed), so no legacy identity, display row or scan bound under it imports; consumers may require a workflow re-pick or may backfill rows below the old exclusion floor.";
     case "status":
       return "Loss: legacy session bindings (workflow picks, execution witnesses, and exclusion floors) and newest emissions were not imported; consumers may require a workflow re-pick or may backfill rows below the old exclusion floor.";
     case "bounds":
@@ -69,10 +71,30 @@ function evaluate(context: StoreContext, now: string): Evaluation {
   const dirs = join(root, "workflows");
   try {
     const rootInfo = lstatSync(dirs);
-    if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) findings.push({ source: "workflows", kind: "ignored" });
+    // A symlinked source tree is never followed: nothing under it is readable
+    // through that path, so the whole source refuses as one acknowledged unit
+    // instead of reporting nothing to import. A real non-directory is not a
+    // legacy body source and stays a non-source.
+    if (rootInfo.isSymbolicLink()) refusals.push({
+      selector: "dsh-workflows", category: "workflows",
+      facts: "the legacy host-state source tree", discarded: "every legacy DSH fact under workflows/",
+      reason: "the workflows root is a symlink and is never followed", source: "workflows",
+    });
+    else if (!rootInfo.isDirectory()) findings.push({ source: "workflows", kind: "ignored" });
     else for (const entry of readdirSync(dirs, { withFileTypes: true })) {
       const dir = join(dirs, entry.name), source = `workflows/${entry.name}`;
-      if (entry.isSymbolicLink() || !entry.isDirectory()) { findings.push({ source, kind: "ignored" }); continue; }
+      // Same no-follow rule per workflow: no fact of this workflow is
+      // decidable, so it refuses as one source-scoped unit.
+      if (entry.isSymbolicLink()) {
+        refusals.push({
+          selector: `dsh-ledger:${entry.name}`, category: "workflows",
+          facts: "this workflow's legacy host-state facts",
+          discarded: `the legacy identity registry, display tail and scan bounds of ${entry.name}`,
+          reason: "the workflow directory is a symlink and is never followed", source,
+        });
+        continue;
+      }
+      if (!entry.isDirectory()) { findings.push({ source, kind: "ignored" }); continue; }
       const names = [FLOW, IDS, CURSORS, JOURNAL];
       const present: Record<string, Buffer> = {};
       const unreadable = new Set<string>();
@@ -310,11 +332,11 @@ export async function importDshHostStateFiles(input: { context: StoreContext; op
   const evaluated = evaluate(input.context, new Date().toISOString());
   const acknowledgements = input.acknowledgedSkips ?? [];
   const invalid = acknowledgements.filter((selector) => {
-    if (selector === "dsh-status") return false;
+    if (selector === "dsh-status" || selector === "dsh-workflows") return false;
     const match = /^dsh-(?:ledger|bounds):(.+)$/.exec(selector);
     return !match || match[1] === "." || match[1] === ".." || match[1]!.includes("/");
   });
-  if (invalid.length) throw new StoreError("store.upgrade-dsh-ack-unmatched", `Invalid --ack-skip-dsh selector ${invalid.join(", ")}; use dsh-status, dsh-ledger:<workflowId>, or dsh-bounds:<workflowId>.`);
+  if (invalid.length) throw new StoreError("store.upgrade-dsh-ack-unmatched", `Invalid --ack-skip-dsh selector ${invalid.join(", ")}; use dsh-status, dsh-workflows, dsh-ledger:<workflowId>, or dsh-bounds:<workflowId>.`);
   const runAt = new Date().toISOString();
   return withExecutionTransaction(input.context, (tx) => {
     if (tx.storeId !== selected.storeId || tx.epoch !== selected.epoch) {

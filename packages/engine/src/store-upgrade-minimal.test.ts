@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -1563,6 +1563,31 @@ function legacyV1Workspace(name: string): { context: StoreContext; statusBytes: 
   writeFileSync(join(harnessDir, "plain-doc.md"), "# unrelated document\n");
   return { context: { harnessDir }, statusBytes };
 }
+
+test("a v1 public upgrade refuses a symlinked workflows tree instead of silently skipping it", async () => {
+  const { context } = legacyV1Workspace("v1-unsafe-workflows");
+  // A recognizable v1 root takes the in-memory conversion route, which never
+  // enumerates `workflows/`; the tree-safety precondition must still run before
+  // either route commits, exactly like the v2 route's own refusal.
+  const realTree = join(context.harnessDir, "elsewhere-v1-tree");
+  mkdirSync(join(realTree, "wf-linked"), { recursive: true });
+  writeFileSync(join(realTree, "wf-linked", "snapshot.json"), "{}\n");
+  symlinkSync(realTree, join(context.harnessDir, "workflows"));
+
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-unsafe-workflows" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining("is not a real directory"),
+    });
+
+  // Nothing committed: the store holds no execution rows from this run.
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
+  }
+});
 
 test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
   const { context, statusBytes } = legacyV1Workspace("v1-direct");
