@@ -31,15 +31,16 @@
  * `appendWorkflowNote` proves the control root exists, resolves (and, when
  * genuinely absent and already authorized, materializes) the retained workflow
  * body dir, then takes C1's synchronous current-session assertion immediately
- * before a **single `O_APPEND` write** of the complete framed record. There is
- * no file lock, no maintenance exclusion, no whole-file read, no dedup
- * decision, no tail repair, no truncation and no rewrite of a peer's bytes: one
- * write call lands the whole frame or reports the short append. **Every** frame
- * carries a leading LF, including the one that creates the leaf, so its line
- * survives when a peer wrote a partial record after the open and before this
- * write; the boundary never depends on the leaf having been empty. A stale
- * epoch, a revoked session or a foreign caller refuses before any byte is
- * written, and append success means the frame is fsynced.
+ * before a **single `O_APPEND` write** of the complete framed record. It checks
+ * that the opened descriptor still names the canonical leaf immediately before
+ * writing. There is no file lock, no maintenance exclusion, no whole-file read,
+ * no dedup decision, no tail repair, no truncation and no rewrite of peer bytes.
+ * A later external rotation can still move an already-written inode; this
+ * observer is not a rotation lock. **Every** frame carries a leading LF,
+ * including the one that creates the leaf, so its line survives when a peer
+ * writes a partial record after open and before this write. A stale epoch, a
+ * revoked session or a foreign caller refuses before any byte is written, and
+ * append success means the frame is fsynced.
  *
  * ## Leaf trust
  *
@@ -64,6 +65,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  renameSync,
   type Stats,
   writeFileSync,
   writeSync,
@@ -107,6 +109,7 @@ export const EXECUTION_LEDGER_ERROR_CODES = [
   "execution-ledgers.record-invalid",
   "execution-ledgers.scope-mismatch",
   "execution-ledgers.target-untrusted",
+  "execution-ledgers.target-replaced",
   "execution-ledgers.append-short",
 ] as const;
 
@@ -289,16 +292,16 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
 }
 
 /**
- * Test-runner-only fault seam between the leaf open and the frame write: a peer
- * that writes into the same leaf inside that window. Two shapes are exercised —
- * a replacement of the leaf (the bytes this append then appends to are the
- * replacement's), and a real second process leaving a partial record, which is
- * the interleaving that decides whether the frame needs its boundary byte.
+ * Test-runner-only replacement between the leaf open and frame write.
  */
 function interleavingSeam(path: string): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
   if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path) {
-    writeFileSync(path, "replaced between the open and the write\n");
+    const displaced = `${path}.displaced`;
+    const replacement = `${path}.replacement`;
+    renameSync(path, displaced);
+    writeFileSync(replacement, "replacement inode canonical bytes\n");
+    renameSync(replacement, path);
     return;
   }
   const peer = process.env.MSTAR_LEDGER_PEER_PARTIAL_SCRIPT;
@@ -362,6 +365,21 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
       );
     }
     interleavingSeam(path);
+    let current: Stats;
+    try {
+      current = lstatSync(path);
+    } catch {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-replaced",
+        `${path} changed after it was opened; nothing was written.`,
+      );
+    }
+    if (current.dev !== info.dev || current.ino !== info.ino) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-replaced",
+        `${path} now names a different file than the opened ledger; nothing was written.`,
+      );
+    }
     const line = Buffer.concat([Buffer.from("\n", "utf8"), frame]);
     const written = writeSync(fd, line, 0, writeRequestLength(line), null);
     if (written !== line.length) {

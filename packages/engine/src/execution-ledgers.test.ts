@@ -369,17 +369,15 @@ describe("execution-ledgers: plain-log append semantics", () => {
     expect(facts.tail).toBeNull();
   });
 
-  test("a leaf replaced between the open and the write keeps that replacement's bytes", async () => {
-    shared.seed({ ledger: `${LEGACY_LINE}${lineOf(note("note-1", "body"))}` });
-    await withEnv({ MSTAR_LEDGER_REPLACE_BEFORE_COMMIT: shared.ledgerPath }, () =>
-      appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body")),
+  test("an opened ledger replaced by a new inode refuses before writing", async () => {
+    const original = `${LEGACY_LINE}${lineOf(note("note-1", "body"))}`;
+    shared.seed({ ledger: original });
+    const refusal = await withEnv({ MSTAR_LEDGER_REPLACE_BEFORE_COMMIT: shared.ledgerPath }, () =>
+      refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body"))),
     );
-    // The replacement content is retained in full and this record is appended to
-    // it: the writer neither restores the old bytes nor truncates the new ones.
-    const text = ledgerBytes(shared).toString("utf8");
-    expect(text.startsWith("replaced between the open and the write\n")).toBe(true);
-    expect(text).toContain(`"id":"note-1"`);
-    expect(factsOf(shared).records.map((entry) => entry.record.id)).toEqual(["note-1"]);
+    expect(refusal.code).toBe("execution-ledgers.target-replaced");
+    expect(ledgerBytes(shared).toString("utf8")).toBe("replacement inode canonical bytes\n");
+    expect(readFileSync(`${shared.ledgerPath}.displaced`, "utf8")).toBe(original);
   });
 
   test("a peer's partial write between the creator's open and its write still leaves the note readable", async () => {
