@@ -270,13 +270,15 @@ describe("execution-ledgers: canonical location and framed bytes", () => {
     expect(snapshotDoc.plans[0]!.notes).toEqual(["inline legacy row note", "second inline note"]);
   });
 
-  test("creates a fresh leaf with no boundary byte and no lock directory", async () => {
+  test("creates a fresh leaf with its own boundary byte and no lock directory", async () => {
     const fresh = await notesFixture("fresh-workflow");
     expect(existsSync(fresh.workflowDir)).toBe(false);
 
     const receipt = await appendWorkflowNote(fresh.coordContext, fresh.session, note("note-first", "first note"));
     expect(receipt).toEqual({ id: "note-first" });
-    expect(ledgerBytes(fresh).toString("utf8")).toBe(lineOf(note("note-first", "first note")));
+    // The creator's frame carries the same boundary as every other append: the
+    // leaf is not private between the open and the write.
+    expect(ledgerBytes(fresh).toString("utf8")).toBe(`\n${lineOf(note("note-first", "first note"))}`);
     // The body dir holds the retained ledger and nothing else: no snapshot, no
     // session envelope, no authority file, and no lock directory.
     expect(readdirSync(fresh.workflowDir)).toEqual(["notes.jsonl"]);
@@ -379,6 +381,38 @@ describe("execution-ledgers: plain-log append semantics", () => {
     expect(text).toContain(`"id":"note-1"`);
     expect(factsOf(shared).records.map((entry) => entry.record.id)).toEqual(["note-1"]);
   });
+
+  test("a peer's partial write between the creator's open and its write still leaves the note readable", async () => {
+    // Deterministic interleaving of the two real writers: the creator opens the
+    // absent leaf, this process's seam lets a REAL child process write a partial
+    // record into it, and only then does the creator write its own frame.
+    const fixture = await notesFixture("creator-peer-interleave");
+    expect(existsSync(fixture.workflowDir)).toBe(false);
+    const partial = '{"version":1,"id":"peer-partial","workflowId":"' + WF + '","sessionId":"peer","kind":"note","ts":"' + TS + '","text":"neve';
+    const peerScript = join(ROOT, "peer-partial.mjs");
+    writeFileSync(
+      peerScript,
+      `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.argv[2], ${JSON.stringify(partial)}, "utf8");
+`,
+    );
+
+    const target = note("note-creator", "creator body");
+    await withEnv({ MSTAR_LEDGER_PEER_PARTIAL_SCRIPT: peerScript }, () =>
+      appendWorkflowNote(fixture.coordContext, fixture.session, target),
+    );
+
+    // Every peer byte survives, and the creator's acknowledged note is still its
+    // own readable record rather than fused to the peer's unterminated JSON.
+    const text = ledgerBytes(fixture).toString("utf8");
+    expect(text.startsWith(partial)).toBe(true);
+    const facts = factsOf(fixture);
+    expect(facts.records.map((entry) => entry.record.id)).toEqual(["note-creator"]);
+    expect(facts.records[0]!.record.text).toBe("creator body");
+    expect(facts.counts.unrecognized).toBe(1);
+    expect(facts.tail).toBeNull();
+  }, 30_000);
 
   test("an append takes no lock, so a leftover lock directory is irrelevant", async () => {
     const fixture = await notesFixture("leftover-lockdir");

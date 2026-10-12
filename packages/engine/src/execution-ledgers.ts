@@ -34,11 +34,12 @@
  * before a **single `O_APPEND` write** of the complete framed record. There is
  * no file lock, no maintenance exclusion, no whole-file read, no dedup
  * decision, no tail repair, no truncation and no rewrite of a peer's bytes: one
- * write call lands the whole frame or reports the short append. A leading LF
- * frames the record on an existing leaf, so its line survives even when a peer's
- * earlier append stopped mid-record; a leaf this call created is empty and needs
- * no boundary. A stale epoch, a revoked session or a foreign caller refuses
- * before any byte is written, and append success means the frame is fsynced.
+ * write call lands the whole frame or reports the short append. **Every** frame
+ * carries a leading LF, including the one that creates the leaf, so its line
+ * survives when a peer wrote a partial record after the open and before this
+ * write; the boundary never depends on the leaf having been empty. A stale
+ * epoch, a revoked session or a foreign caller refuses before any byte is
+ * written, and append success means the frame is fsynced.
  *
  * ## Leaf trust
  *
@@ -67,6 +68,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { canonicalTarget, isNonEmptyString, isPlainObject, sha256Bytes } from "./coordination-write.js";
 import { assertExecutionSessionCurrent } from "./execution-session.js";
@@ -287,14 +289,20 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
 }
 
 /**
- * Test-runner-only fault seam between the leaf open and the frame write: the
- * case where a peer removed or replaced the leaf inside that window. It never
- * changes retained content of a leaf this append then writes.
+ * Test-runner-only fault seam between the leaf open and the frame write: a peer
+ * that writes into the same leaf inside that window. Two shapes are exercised —
+ * a replacement of the leaf (the bytes this append then appends to are the
+ * replacement's), and a real second process leaving a partial record, which is
+ * the interleaving that decides whether the frame needs its boundary byte.
  */
-function replaceLeafSeam(path: string): void {
+function interleavingSeam(path: string): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT !== path) return;
-  writeFileSync(path, "replaced between the open and the write\n");
+  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path) {
+    writeFileSync(path, "replaced between the open and the write\n");
+    return;
+  }
+  const peer = process.env.MSTAR_LEDGER_PEER_PARTIAL_SCRIPT;
+  if (peer !== undefined && peer !== "") execFileSync("bun", [peer, path], { stdio: "ignore" });
 }
 
 /**
@@ -326,13 +334,14 @@ function fsyncDirectory(dir: string): void {
  * repair and no truncation. A short append is reported as a failure and leaves
  * exactly the bytes that landed, so a later record is still reachable.
  *
- * A record written into an already-existing leaf is prefixed with one LF. That
- * boundary is what keeps the frame readable when a peer's earlier append stopped
- * mid-record: it is decided from the open alone (this call created the leaf, or
- * it did not) and never from a read of the peer's bytes, so no race can leave
- * this record fused to an unterminated line. A leaf this call created is empty
- * and needs no boundary; a boundary written into a leaf that already ended with
- * LF is an empty line, which readers skip.
+ * Every frame — including one that creates the leaf — carries one leading LF.
+ * The leaf is not private between this call's open and its write: a peer can
+ * create it, or extend it with a partial record, in that window, so a boundary
+ * decided from the open alone would fuse this record to an unterminated line and
+ * hide an acknowledged note from every reader. The leading LF is unconditional
+ * for the same reason on a leaf this call created. A boundary written into a
+ * leaf that already ended with LF, or into a freshly created empty leaf, is an
+ * empty line, which readers skip.
  */
 function commitLedgerFrame(path: string, frame: Buffer): void {
   let fd: number;
@@ -352,8 +361,8 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
         `${path} is not a regular file; nothing was written.`,
       );
     }
-    replaceLeafSeam(path);
-    const line = created ? frame : Buffer.concat([Buffer.from("\n", "utf8"), frame]);
+    interleavingSeam(path);
+    const line = Buffer.concat([Buffer.from("\n", "utf8"), frame]);
     const written = writeSync(fd, line, 0, writeRequestLength(line), null);
     if (written !== line.length) {
       throw new ExecutionLedgerError(
