@@ -1377,6 +1377,19 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       expected: initialized.token,
       operationId: "retry-operation",
     });
+    const handle = await openStore(context, "read");
+    const persisted = JSON.parse(String(one(handle.db, "select result_json from execution_operations where operation_id = 'retry-operation'").result_json)) as Record<string, unknown>;
+    handle.close();
+    expect(Object.keys(persisted).sort()).toEqual(["epoch", "slim", "storeId", "token"]);
+    expect(persisted.slim).toBe(true);
+    await registerPlan(context, "p-2");
+    const current = await readExecutionState(context);
+    await createExecutionWorkflow(domainContext(context, domainCaller("wf-2")), {
+      ...creationInput("wf-2", [planRow("p-2")]),
+      expected: current.token,
+      operationId: "later-create",
+    });
+    const live = await readExecutionState(context);
     const footprint = executionFootprint(context);
 
     // The retry reuses the ORIGINAL (now superseded) root token: an idempotent
@@ -1388,11 +1401,52 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     });
     expect(replayed.replayed).toBe(true);
     expect(replayed.operationId).toBe("retry-operation");
-    expect(replayed.token).toBe(committed.token);
+    expect(replayed.token).toBe(live.token);
     expect(replayed.storeId).toBe(committed.storeId);
     expect(replayed.epoch).toBe(committed.epoch);
-    expect(replayed.data).toEqual(committed.data);
+    expect(replayed.data).toEqual(live.data);
     expect(executionFootprint(context)).toEqual(footprint);
+    const writer = await openStore(context, "write");
+    try {
+      writer.db.prepare("update execution_operations set result_json = ? where operation_id = ?").run(
+        JSON.stringify(committed),
+        "retry-operation",
+      );
+    } finally {
+      writer.close();
+    }
+    const fatReplay = await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
+      ...request,
+      expected: initialized.token,
+      operationId: "retry-operation",
+    });
+    expect(fatReplay.replayed).toBe(true);
+    expect(fatReplay.data).toEqual(committed.data);
+    expect(fatReplay.token).toBe(committed.token);
+  });
+  test("workflow graph receipts stay bounded as registered plan count grows", async () => {
+    const receiptSize = async (count: number) => {
+      const { context } = await freshStore(`bounded-receipt-${count}`);
+      const plans = Array.from({ length: count }, (_, index) => planRow(`p-${index}`));
+      for (const plan of plans) await registerPlan(context, String(plan.id));
+      const committed = await createExecutionWorkflow(domainContext(context, domainCaller("wf-size")), {
+        ...creationInput("wf-size", plans),
+        expected: (await readExecutionState(context)).token,
+        operationId: `bounded-${count}`,
+      });
+      const handle = await openStore(context, "read");
+      const payload = String(one(handle.db, `select result_json from execution_operations where operation_id = 'bounded-${count}'`).result_json);
+      handle.close();
+      const envelope = JSON.parse(payload) as Record<string, unknown>;
+      expect(Object.keys(envelope).sort()).toEqual(["epoch", "slim", "storeId", "token"]);
+      return { bytes: Buffer.byteLength(payload), fatBytes: Buffer.byteLength(JSON.stringify(committed)), envelope };
+    };
+    const small = await receiptSize(2);
+    const large = await receiptSize(25);
+    expect(small.bytes).toBeLessThanOrEqual(512);
+    expect(large.bytes).toBeLessThanOrEqual(512);
+    expect(Math.abs(large.bytes - small.bytes)).toBeLessThanOrEqual(32);
+    expect(large.fatBytes).toBeGreaterThan(large.bytes * 10);
   });
 
   test("refuses a snapshot that is bound, leased, terminal or carries accepted evidence", async () => {
