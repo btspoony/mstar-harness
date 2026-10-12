@@ -997,7 +997,8 @@ test("a logical missing-plan claim refuses unchanged and recovers from its genui
   expect(restored.epoch).toBe(Math.max(preview.liveEpoch, backup.epoch) + 1);
   expect(restored.restoredFromSha256).toBe(preview.backupSha256);
   expect(restored.preRestoreBackup.schemaVersion).toBe(8);
-  const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath, "utf8"));
+  expect(restored.recoveryReceiptPath).not.toBeNull();
+  const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath!, "utf8"));
   expect(recoveryRecord).toMatchObject({
     phase: "replaced", operator: "fixture-operator", authorization: "restore-pre-corruption-point",
     // The record names the SELECTED recovery point, which is a pathname a reader

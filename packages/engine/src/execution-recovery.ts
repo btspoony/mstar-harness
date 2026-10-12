@@ -36,7 +36,10 @@
  *   single row, so a competitor that commits in the admission window refuses
  *   instead of being silently discarded. It replaces every authority row of all
  *   four domains in FK-safe order, commits a new epoch above both generations,
- *   and records one durable receipt per attempt before and after that commit.
+ *   and commits the complete recovery record with them in the store's own
+ *   `store_operations` ledger — the durable receipt — placing a copy of that
+ *   committed record beside the store best-effort, so a copy this run cannot
+ *   write leaves the committed outcome reported rather than looking refused.
  *   The operator and authorization reference are the audit record of who
  *   accepted the loss; the recorded `lossDigest` is provenance, never an
  *   admission input.
@@ -223,7 +226,15 @@ export type ExecutionRestoreReceipt = {
   backupCoverageDigest: string | null;
   liveCoverageDigest: string | null;
   preRestoreBackup: BackupReceipt;
-  recoveryReceiptPath: string;
+  /**
+   * The operator-facing copy of the committed record, or `null` when that copy
+   * could not be written (an unwritable recovery directory, a full disk). The
+   * committed record is durable in the store's own `store_operations` ledger
+   * either way — the copy is a convenience beside it, never the evidence — so a
+   * copy this run could not place never turns a committed destructive operation
+   * into a reported failure.
+   */
+  recoveryReceiptPath: string | null;
 };
 
 /** §8 (verbatim): the diagnostic projection of the execution authority. */
@@ -2056,11 +2067,22 @@ async function restoreInOneTransaction(
   } finally {
     handle.close();
   }
-  // The operator-facing durable copy of the committed record. Both this file and
-  // the post-commit seam below run strictly AFTER the commit, so the file can
-  // only ever describe an outcome the store already holds — never an intent that
-  // might not have landed.
-  writeJson(receiptPath, record);
+  // The operator-facing durable copy of the committed record. It runs strictly
+  // AFTER the commit, so it can only ever describe an outcome the store already
+  // holds — never an intent that might not have landed. It is a convenience
+  // beside the store's own `store_operations` row, which IS the record and
+  // already committed with the authority it describes, so a filesystem failure
+  // here (an unwritable recovery directory, a full disk) is reported as a
+  // missing copy rather than as a refused restore: the destructive operation
+  // really did succeed and the operator must not be told otherwise.
+  let placedReceiptPath: string | null = null;
+  try {
+    writeJson(receiptPath, record);
+    placedReceiptPath = receiptPath;
+  } catch {
+    // best-effort: the committed record is durable in the store; only its copy
+    // beside the store is missing, and `recoveryReceiptPath: null` reports that.
+  }
   recoveryFailureHook("after-replacement");
   // Scratch of a crashed attempt is reclaimed only now, once this attempt has
   // committed: a REFUSED restore therefore leaves every prior attempt's bytes
@@ -2074,7 +2096,7 @@ async function restoreInOneTransaction(
     backupCoverageDigest: input.preview.backupCoverageDigest,
     liveCoverageDigest: input.preview.liveCoverageDigest,
     preRestoreBackup: record.preRestoreBackup,
-    recoveryReceiptPath: receiptPath,
+    recoveryReceiptPath: placedReceiptPath,
   };
 }
 
@@ -2158,7 +2180,33 @@ async function runRestore(
     // record's audit facts must not be derived from filesystem work inside the
     // owning transaction.
     const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
-    return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
+    try {
+      return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
+    } catch (error) {
+      // A PROVEN pre-commit refusal abandons nothing: the safety point this
+      // attempt just took is referenced by no `store_operations` row and by no
+      // returned receipt, so leaving it would accumulate one full-store image per
+      // retry under the backups directory. The store is the only witness, and the
+      // witness is positive — `restoreReceiptOperationId` writes this attempt's
+      // complete record into `store_operations` in the SAME commit as the
+      // authority it describes, so a ledger that names this attempt proves the
+      // commit landed (the point is kept) and a ledger that reads and does NOT
+      // name it proves the transaction rolled back as a unit (the point is
+      // reclaimed). An unreadable ledger is neither, and preserves. Ambiguity —
+      // a process that dies before reaching this line — leaks its own point the
+      // same way it already leaks its staging image; both are reclaimed later by
+      // the same kind of positive evidence.
+      const committedAttempts = await readCommittedRestoreAttempts(context);
+      if (committedAttempts !== null && !committedAttempts.has(attemptId)) {
+        try {
+          for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${safety.backupPath}${suffix}`, { force: true });
+          rmSync(safety.backupPath, { force: true });
+        } catch {
+          // best-effort: a point this run cannot reclaim is left for the operator
+        }
+      }
+      throw error;
+    }
   } finally {
     // This attempt's own scratch image, and only while it is still that file:
     // nothing here can touch the live store.

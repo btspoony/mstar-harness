@@ -659,7 +659,8 @@ describe("execution-restore", () => {
 
     // The durable record is the OPERATOR-facing copy of a record the store
     // itself committed in the same transaction as the authority it describes.
-    const record = JSON.parse(readFileSync(receipt.recoveryReceiptPath, "utf8")) as Record<string, unknown>;
+    expect(receipt.recoveryReceiptPath).not.toBeNull();
+    const record = JSON.parse(readFileSync(receipt.recoveryReceiptPath!, "utf8")) as Record<string, unknown>;
     expect(record.phase).toBe("replaced");
     expect(record.newEpoch).toBe(receipt.epoch);
     expect(record.verified).toMatchObject({ integrity: "ok", foreignKeys: "ok" });
@@ -947,6 +948,81 @@ describe("execution-restore", () => {
     expect(existsSync(`${unreceiptedImage}-journal`)).toBe(true);
   });
 
+  test("execution-restore-commits-when-the-operator-facing-receipt-copy-cannot-be-written", async () => {
+    const world = await recoveryWorld("restore-receipt-copy");
+    const point = await recoveryPoint(world, "receipt-copy-point");
+    await mutateEveryDomain(world, "receipt-copy");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+
+    // The recovery copy directory is a REGULAR FILE, so `writeJson`'s
+    // mkdir/write/rename cannot place the operator-facing copy — the real shape
+    // of an unwritable recovery directory or a full disk, with no chmod or root
+    // assumption. The store-side facts below are what decide the outcome.
+    mkdirSync(join(world.harness, "archived", "store-migration"), { recursive: true });
+    writeFileSync(join(world.harness, "archived", "store-migration", "recovery"), "blocked by a regular file\n");
+
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+
+    // The destructive operation really did succeed: the epoch advanced and the
+    // complete record is durable in the store's own ledger, in the same commit as
+    // the authority it describes.
+    expect(receipt.epoch).toBe(Math.max(preview.liveEpoch, point.epoch) + 1);
+    expect(footprint(world.dbPath).epoch).toBe(receipt.epoch);
+    const committedRecord = rawGet<{ result_json: string }>(
+      world.dbPath,
+      "select result_json from store_operations where operation_id like 'restore-attempt:%'",
+    );
+    expect(JSON.parse(committedRecord!.result_json)).toMatchObject({ newEpoch: receipt.epoch, phase: "replaced" });
+
+    // …and the missing copy is REPORTED as a missing copy, not as a refused
+    // restore: the operator is never told a committed destructive operation
+    // failed, and the store's own record is still reachable.
+    expect(receipt.recoveryReceiptPath).toBeNull();
+    expect(receipt.storeId).toBe(world.storeId);
+    expect(receipt.preRestoreBackup.storeId).toBe(world.storeId);
+  });
+
+  test("execution-restore-reclaims-its-own-safety-point-only-on-a-proven-pre-commit-refusal", async () => {
+    const world = await recoveryWorld("restore-safety-reclaim");
+    const point = await recoveryPoint(world, "safety-reclaim-point");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const backups = join(world.harness, "archived", "store-migration", "backups");
+    mkdirSync(backups, { recursive: true });
+    // An EARLIER refusal's safety point, planted to prove the reclaim owns only
+    // THIS attempt's file: nothing else is ever a candidate.
+    const leftoverName = `pre-restore-e1-${randomUUID()}.db`;
+    const leftover = join(backups, leftoverName);
+    writeFileSync(leftover, Buffer.from("an earlier refusal's safety image"));
+
+    // A stale preview refuses inside the transaction — a PROVEN pre-commit
+    // outcome, since this run observed the failure itself — so the safety point
+    // this attempt took a moment ago is abandoned by nothing and reclaimed.
+    await captureIssue(world.context, issueInput("Stale-preview refusal"), {
+      operationId: "op-stale-refusal", actor: "project-manager",
+    });
+    const refusal = await refusalOf(() =>
+      restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
+    );
+    expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
+
+    // Exactly one safety point exists — the planted leftover — so repeated
+    // retries no longer accumulate a full-store image each, and the earlier
+    // attempt's bytes are untouched.
+    expect(readdirSync(backups).filter((name) => name.startsWith("pre-restore-"))).toEqual([leftoverName]);
+    expect(readFileSync(leftover, "utf8")).toBe("an earlier refusal's safety image");
+
+    // The same public retry after a fresh preview still succeeds, and it is THEN
+    // that a safety point survives: a committed outcome names its point in the
+    // returned receipt, so the reclaim never touches it.
+    const current = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview: current, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(existsSync(receipt.preRestoreBackup.backupPath)).toBe(true);
+  });
+
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {
     const world = await recoveryWorld("restore-incomplete");
     const point = await recoveryPoint(world, "incomplete-point");
@@ -1034,8 +1110,9 @@ describe("execution-restore", () => {
       expect(existsSync(marker)).toBe(true);
       expect(readFileSync(join(marker, "holder.pid"), "utf8")).toBe(`${process.pid}\n`);
     }
-    expect(existsSync(receipt.recoveryReceiptPath)).toBe(true);
-    expect(receipt.recoveryReceiptPath.startsWith(canonicalPath(world.harness))).toBe(true);
+    expect(receipt.recoveryReceiptPath).not.toBeNull();
+    expect(existsSync(receipt.recoveryReceiptPath!)).toBe(true);
+    expect(receipt.recoveryReceiptPath!.startsWith(canonicalPath(world.harness))).toBe(true);
   });
 
   test("execution-restore-preview-leaves-the-live-store-file-state-untouched", async () => {
