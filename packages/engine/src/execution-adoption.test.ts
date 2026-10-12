@@ -283,6 +283,7 @@ describe("terminal adoption session settlement", () => {
     const stranded = await strandedWithHolder("active-holder");
     const proof = attestation(["active-holder"]);
     const applied = await adopt(stranded, { attestation: proof });
+    expect(applied.replayed).toBe(false);
     const persisted = await openStore(stranded.context, "read");
     try {
       const selected = persisted.db.prepare("select result_json from execution_operations where operation_id = ?").get("adopt-settle-1");
@@ -294,8 +295,14 @@ describe("terminal adoption session settlement", () => {
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
         throw new Error("the adoption receipt envelope is not an object");
       const envelope = parsed as Record<string, unknown>;
-      expect(envelope.slim).toBe(true);
-      expect(envelope.operationRecovery).toEqual(applied.recovery);
+      expect(Object.keys(envelope).sort()).toEqual(["epoch", "operationRecovery", "slim", "storeId", "token"]);
+      expect(envelope).toEqual({
+        slim: true,
+        token: applied.token,
+        storeId: applied.storeId,
+        epoch: applied.epoch,
+        operationRecovery: applied.recovery,
+      });
     } finally { persisted.close(); }
     const retry = await adopt(stranded, { attestation: proof });
     expect(retry.replayed).toBe(true);

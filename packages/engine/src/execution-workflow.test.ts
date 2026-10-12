@@ -1125,8 +1125,20 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       "select result_json from execution_operations where operation_id = 'op-recover-sibling'",
     )[0]!.result_json)) as Record<string, unknown>;
     expect(recoveryReceipt.slim).toBeUndefined();
-    expect(recoveryReceipt.data).toMatchObject({ sessionId: siblingRecovery.data.sessionId, role: siblingRecovery.data.role });
-    expect(recoveryReceipt.recovery).toBeDefined();
+    expect(recoveryReceipt.data).toEqual({
+      epoch: siblingRecovery.epoch,
+      storeId: siblingRecovery.storeId,
+      workflowId: siblingId,
+      role: "coordinator",
+      sessionId: siblingRecoveryCaller.sessionId,
+    });
+    expect(recoveryReceipt.recovery).toEqual({
+      prior_session_id: siblingRecoveryRequest.priorSessionId,
+      reason: siblingRecoveryRequest.reason,
+      attested_at: siblingRecoveryRequest.attestation.attestedAt,
+      operator: siblingRecoveryRequest.attestation.operator,
+      stopped_sessions: [siblingCaller.sessionId],
+    });
     // registry loss advances the root once.
     expect(revisions(fixture.context)).toEqual({
       root: before.root + 1,
