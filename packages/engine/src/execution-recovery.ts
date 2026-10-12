@@ -311,6 +311,37 @@ function recoveryFailureHook(stage: "before-replacement" | "after-replacement"):
   }
 }
 
+/**
+ * The test-runner-gated PARK seam, the same gate and the same shape as
+ * `recoveryFailureHook`: it stops the restore inside its own staging/admission
+ * window — after the private image is staged and verified, and before the owning
+ * write transaction opens — so an overlap between two real attempts is
+ * reproducible instead of described.
+ *
+ * `MSTAR_STORE_PARK_EXECUTION_RESTORE` names the attempt to park, or the
+ * wildcard `*` for "the attempt this process is running" (a caller cannot know a
+ * randomly minted attempt id in advance). The run then reports its attempt and
+ * staged image into `MSTAR_STORE_PARK_READY` and blocks on
+ * `MSTAR_STORE_PARK_RELEASE` with a bounded wait, exactly as a live peer
+ * suspended in staging would. Inert without `MSTAR_STORE_TEST_RUNNER=1`, so no
+ * shipped CLI or plugin process can reach it.
+ */
+async function recoveryParkHook(attemptId: string, imagePath: string): Promise<void> {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
+  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE;
+  if (wanted !== attemptId && wanted !== "*") return;
+  const ready = process.env.MSTAR_STORE_PARK_READY;
+  const release = process.env.MSTAR_STORE_PARK_RELEASE;
+  if (ready === undefined || release === undefined) return;
+  writeJson(ready, { attemptId, imagePath, stage: "staged" });
+  for (let waited = 0; waited < 30_000; waited += 5) {
+    if (existsSync(release)) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 5);
+    await promise;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Reading the three authority domains
 // ---------------------------------------------------------------------------
@@ -2098,6 +2129,10 @@ async function runRestore(
           `${input.preview.liveStoreId}; a point of another store is never restored over this one.`,
       );
     }
+    // The staging/admission window, reproduced on demand: the private image is
+    // staged and verified and the owning transaction has not opened. Inert
+    // without the test-runner gate.
+    await recoveryParkHook(attemptId, imagePath);
 
     // The pre-restore safety point, taken OUTSIDE the mutation transaction:
     // `VACUUM INTO` may not run inside one. It is the same lock-free verified
