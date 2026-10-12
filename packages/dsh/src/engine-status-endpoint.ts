@@ -283,10 +283,12 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
     if (harnessDir === null || harnessDir === '') return unavailable('no-harness-dir')
 
-    // (4) An entry for THAT session must exist — an absent/torn/unknown store
-    // answers unavailable, never a best-effort parse.
-    const read = readEngineStatusSnapshot(harnessDir, sid)
-    if (read.kind !== 'ok') return unavailable(`store-${read.reason}`)
+    // (4) An entry for THAT session must exist — native authority refusals
+    // retain their cause/recovery, never masquerading as a missing row.
+    const read = readEngineStatusSnapshot(harnessDir, sid, session.cwd)
+    if (read.kind !== 'ok') return unavailable(
+      read.reason.startsWith('[store.') ? read.reason : `store-${read.reason}`,
+    )
     const entry: EngineStatusSnapshotEntry = read.entry
 
     // (5) The asserted cwd must match the record, and the record must match the
@@ -336,6 +338,9 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     // about the registry itself rather than this session's evidence).
     const registry = await readExecutionWorkflowSource({ harnessDir })
     if (registry.kind === 'unavailable') return unavailable(`selection-unavailable:${registry.code}`)
+    const selectedGeneration = registry.storeId === undefined || registry.epoch === undefined
+      ? undefined
+      : { storeId: registry.storeId, epoch: registry.epoch }
     if (registry.kind === 'error') {
       const selection = registry.selection
       if (selection.kind !== 'error' || selection.code !== 'workflow.selection.unbound-multi-active' ||
@@ -351,6 +356,7 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     }
     const automatic = await readExecutionWorkflowSource({ harnessDir }, structural)
     if (automatic.kind === 'unavailable') return unavailable(`selection-unavailable:${automatic.code}`)
+    if (automatic.storeId !== registry.storeId || automatic.epoch !== registry.epoch) return unavailable('selection-generation-changed')
     if (automatic.kind === 'active' && automatic.workflowId !== wid) return unavailable('binding-conflict')
 
     // (4) Idempotent re-apply: the same stored active pick is acknowledged
@@ -365,6 +371,7 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     const written = updateWorkflowSessionBinding(harnessDir, sid, liveCwd, {
       selectedWorkflowId: wid,
       excludedBeforeSeq: seq,
+      ...(selectedGeneration === undefined ? {} : { selectedGeneration }),
     })
     if (written.kind === 'degraded') return unavailable(`store-${written.reason}`)
     try {

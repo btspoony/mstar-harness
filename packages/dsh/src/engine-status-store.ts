@@ -1,131 +1,51 @@
 /**
- * Durable engine-status snapshot store — the edge-safe catalog source that a
- * web-only reader (panel/endpoint) can serve WITHOUT re-running the in-process
- * resolution that produces the step catalog.
+ * Durable engine-status store — the edge-safe catalog source a later host
+ * endpoint serves, plus the per-session workflow-selection CONTROL record (D4).
  *
- * WHY a snapshot: the composed catalog payload is only available at the
- * digest-gated `agent/pre-step` emission; a later reader (a different fiber,
- * or the host endpoint answering a browser request) cannot rebuild it — it
- * would re-resolve `{HARNESS_DIR}`, re-scan status/compass/residual, and could
- * answer with state that never reached the model. Persisting the EXACT emitted
- * payload at the emission site makes the served value a record of what the
- * model actually saw, keyed by the session that saw it.
+ * Every piece of state lives in the control-root `store.db` through the
+ * engine's typed synchronous host-state domain operations
+ * (`packages/engine/src/host-state-store.ts`): one transaction per operation,
+ * SQLite's own `BEGIN IMMEDIATE` serializing concurrent writers. There is no
+ * plugin-owned file, no directory lock, and no shared read-modify-write
+ * envelope:
  *
- * File: `{HARNESS_DIR}/snapshots/engine-status.json`
+ * - an emission is UPSERTed as this session's single newest row
+ *   (`dsh_status_emissions`) — the depth every reader ever consumed;
+ * - a binding commit UPSERTs this session's row (`dsh_session_bindings`),
+ *   merging the exclusion floor by max and preserving an omitted preference.
  *
- * ```json
- * {
- *   "sv": 1,
- *   "entries": { "<session id>": [ { "rv": 1, "cwd": "/proj", "at": "…", "turn": 3, "payload": { … } } ] },
- *   "bindings": { "<session id>": { "cwd": "/proj", "selectedWorkflowId": "wf-2", "excludedBeforeSeq": 12 } }
- * }
- * ```
+ * ADDRESSING (HARD): both records are keyed by the durable
+ * `session.header.id` AND the authoritative cwd, so a read must be addressed
+ * by both. A session id alone cannot address a row — the endpoint therefore
+ * passes the cwd it resolved SERVER-side. A read that finds no row for that
+ * exact pair reports `no-session-entry` (never another workspace's row).
  *
- * `entries` is the emission history (what the model saw); `bindings` is the
- * session-scoped workflow-selection CONTROL state (D4: the picked active
- * workflow + the durable no-backfill floor). The control map is additive and
- * optional — a missing map means "no pick / floor 0" — and is never part of an
- * emitted payload: each writer preserves the other's field verbatim, and the
- * binding writer never touches `payload` / `at` / `turn`.
+ * READ RULE (HARD): an absent row, a store this build cannot answer from, or a
+ * malformed stored record is never guessed at. A read reports either the
+ * stored record or the explicit unavailable state carrying the store's own
+ * cause (which names `mstar store init` / `mstar store upgrade` before an
+ * ACTIVE authority exists).
  *
- * `sv` is the envelope schema version and `rv` the per-entry record version:
- * a reader that does not recognize EITHER must answer "unavailable" rather
- * than parse a shape it does not understand — and (write rule below) a writer
- * must refuse rather than replace one.
- *
- * Durability discipline (same as the agent-flow ledger):
- * - every write runs under the per-directory inter-process write lock
- *   ({@link withWorkflowDirLock} — atomic `mkdir` lockdir, the package's
- *   single lock primitive);
- * - the file itself is replaced by `writeFileSync(<writer-unique>.tmp)` +
- *   `renameSync` (atomic replace — concurrent readers never observe a torn
- *   file, and the failure cleanup can only ever remove its own temp file);
- * - retention is enforced on EVERY write: newest
- *   {@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION} entries per session,
- *   nothing older than {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}, and the whole
- *   envelope under {@link ENGINE_STATUS_SNAPSHOT_MAX_BYTES}.
- *
- * READ RULE (HARD): `sv !== 1`, an unknown shape, an unreadable file, or an
- * absent file all yield the explicit {@link EngineStatusUnavailable} result.
- * A best-effort parse is never returned — a reader must not present guessed
- * state as the model's state.
- *
- * WRITE RULE (HARD): the same rule governs the writer. An existing envelope
- * whose `sv` is unknown, whose JSON is torn, or that cannot be read is NOT
- * replaceable: the write refuses with the explicit `degraded` reason and
- * leaves the bytes untouched. Every session's snapshots live in that one file,
- * so "start from an empty envelope" would silently destroy the snapshots of
- * every other session sharing this `{HARNESS_DIR}` — a store the writer does
- * not understand is never the writer's to overwrite (a version flap between
- * two plugin builds, or a hand-truncated file, must not become data loss).
- *
- * BOUNDS: retention is per-session ({@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION}
- * + {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}) AND global
- * ({@link ENGINE_STATUS_SNAPSHOT_MAX_BYTES}): a store above the byte ceiling
- * sheds its least-recently-written session buckets — oldest first, never the
- * writing session — and the write path reports the oversize condition ONCE per
- * store so the host can log the one warning the containment contract promises
- * instead of a warning per turn.
- *
- * KEYING (HARD): both session maps are prototype-less (`Object.create(null)`),
- * and the read path gates on `Object.hasOwn`. The session id is caller-chosen
- * on the host's `session.create` (a branded string with no shape validation),
- * so an id equal to an `Object.prototype` member (`__proto__`, `constructor`,
- * `toString`, …) must be an ordinary key: on a plain object literal it would
- * instead read an inherited member (a non-array → `TypeError`) or hit the
- * `__proto__` setter (reported `written` while persisting nothing).
+ * KEYING (HARD): the stored maps are SQL rows keyed by
+ * `(session_id, cwd)`. The session id is caller-chosen on the host's
+ * `session.create` (a branded string with no shape validation), but SQLite
+ * binds it as an ordinary parameter — an id equal to an `Object.prototype`
+ * member is a value, never a lookup of an inherited member.
  *
  * @module @mstar-harness/dsh/engine-status-store
  */
 
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import type { Stats } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { EXECUTION_MAINTENANCE_LOCKDIR, withExecutionMaintenanceLock, withWorkflowDirLock } from './gates/agent-flow.ts'
+import {
+  readDshSessionBinding,
+  readDshStatusEmission,
+  recordDshStatusEmission,
+  writeDshSessionBinding,
+  type DshSelectedGeneration,
+  type ExecutionBinding,
+} from '@mstar-harness/engine'
 
-import type { ExecutionBinding } from '@mstar-harness/engine'
-/** Envelope schema version carried by the snapshot file (`sv`). */
-export const ENGINE_STATUS_SNAPSHOT_VERSION = 1
 /** Per-entry record version carried by every stored entry (`rv`). */
 export const ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION = 1
-/** Retention: newest entries kept per session (older ones are pruned on write). */
-export const ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION = 50
-/** Retention: maximum entry age (30 days) — older entries are pruned on write. */
-export const ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
-/**
- * Retention: global byte ceiling for one store — the bound the per-session
- * numbers above cannot express, since every session in a workspace shares this
- * one file. Calibrated on the measured emission payload (≈19 KB per entry,
- * ≈0.9 MB per session at the 50-entry cap) to ≈16 MB, i.e. ≈17 sessions before
- * the oldest buckets are evicted; the writing session is never the one evicted.
- */
-export const ENGINE_STATUS_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
-/**
- * Lock-acquisition budget (ms) for the advisory snapshot write. The write runs
- * synchronously on the per-turn `agent/pre-step` emission path, so it may never
- * inherit the ledger's 30 s deadline: contention (or a stale lockdir left by a
- * killed host) must degrade the advisory write quickly instead of stalling the
- * agent step — and, in the same process, the `/api` gateway that serves the
- * panel.
- */
-export const ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS = 250
-/**
- * §4.3 outer-exclusion budget (ms): both write paths take the SAME
- * `.execution-maintenance` key the engine's `withExecutionMaintenanceLock`
- * takes (activation / migration / restore) BEFORE their directory lock, so a
- * plugin write never slips into such a window with the ordering the engine
- * documents (maintenance → directory). The wait is bounded by the same
- * reasoning as {@link ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS}: an emission runs
- * on the per-turn `agent/pre-step` path, so a held key must refuse quickly
- * rather than stall the agent step (and the `/api` gateway in this process).
- */
-export const ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS = 250
-/** Poll interval (ms) for the maintenance exclusion; the wait is a bounded sync loop. */
-export const ENGINE_STATUS_MAINTENANCE_POLL_MS = 10
-/** Stable reason reported when the maintenance exclusion could not be taken. */
-export const ENGINE_STATUS_MAINTENANCE_REASON = 'execution-maintenance-active'
-/** Snapshot file location relative to `{HARNESS_DIR}`. */
-export const ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH = 'snapshots/engine-status.json'
 
 /**
  * One stored emission: the payload the model saw, plus the identity needed to
@@ -145,15 +65,8 @@ export interface EngineStatusSnapshotEntry {
   readonly payload: Record<string, unknown>
 }
 
-/** Why a snapshot read could not produce the stored entry (every path explicit). */
-export type EngineStatusSnapshotUnavailableReason =
-  | 'no-harness-dir'
-  | 'absent'
-  | 'unreadable'
-  | 'invalid-json'
-  | 'envelope-schema'
-  | 'no-session-entry'
-  | 'entry-schema'
+/** Store-read refusal text is retained verbatim from the native authority. */
+export type EngineStatusSnapshotUnavailableReason = string
 
 /** The explicit "no answer" result — never a best-effort parse. */
 export interface EngineStatusUnavailable {
@@ -166,23 +79,16 @@ export type EngineStatusSnapshotRead =
   | { readonly kind: 'ok'; readonly entry: EngineStatusSnapshotEntry }
   | EngineStatusUnavailable
 
-/** Write outcome: written, or the degraded reason (never throws for I/O faults). */
+/** Write outcome: written, or the degraded reason (never throws for store faults). */
 export type EngineStatusSnapshotWrite =
-  | {
-    readonly kind: 'written'
-    readonly path: string
-    readonly entries: number
-    /** Session buckets shed to stay under the global byte ceiling (0 when none). */
-    readonly evicted: number
-    /**
-     * Present ONLY on the first oversize write for this store in this process —
-     * the caller logs it. One warning per store, never one per turn.
-     */
-    readonly warn?: string
-  }
+  | { readonly kind: 'written' }
   | { readonly kind: 'degraded'; readonly reason: string }
 
-/** One write request — the emission site's payload plus its session identity. */
+/**
+ * One write request — the emission site's payload plus its session identity.
+ * The store stamps the emission time itself; no caller-supplied timestamp is
+ * accepted (the durable row's time is the store transaction's own).
+ */
 export interface EngineStatusSnapshotWriteInput {
   /** The session whose catalog row this payload is (`session.header.id`). */
   readonly sessionId: string
@@ -192,18 +98,14 @@ export interface EngineStatusSnapshotWriteInput {
   readonly turn: number
   /** The exact payload object handed to the step messages. */
   readonly payload: object
-  /** Emission timestamp (test seam; production uses `new Date()`). */
-  readonly now?: Date
-  /** Global byte ceiling override (test seam; production uses the constant). */
-  readonly maxBytes?: number
+  /** The selected authority generation of the emission's selection, when bound. */
+  readonly selectedGeneration?: DshSelectedGeneration
 }
-
 
 /**
  * One session's durable workflow-selection CONTROL record (D4): the active
- * workflow this session picked plus the durable no-backfill floor. It lives in
- * the envelope's optional top-level `bindings` map — never inside an emitted
- * payload — and is keyed by the durable `session.header.id`.
+ * workflow this session picked plus the durable no-backfill floor. It is never
+ * part of an emitted payload and is keyed by the durable `session.header.id`.
  */
 export interface WorkflowSessionBinding {
   /** The authoritative session cwd the record was written for (exact-match anchor). */
@@ -232,24 +134,16 @@ export interface WorkflowSessionBindingUpdate {
   readonly executionBinding?: ExecutionBinding | null
   /** The exclusion floor to merge (by max) into the stored record. */
   readonly excludedBeforeSeq: number
-  /** Global byte ceiling override (test seam; production uses the constant). */
-  readonly maxBytes?: number
+  /** The selected authority generation of the picker's selection, when bound. */
+  readonly selectedGeneration?: DshSelectedGeneration
 }
 
-/** Binding write outcome: written, or the degraded reason (never throws for I/O faults). */
+/** Binding write outcome: written, or the degraded reason (never throws for store faults). */
 export type WorkflowSessionBindingWrite =
   | { readonly kind: 'written' }
   | { readonly kind: 'degraded'; readonly reason: string }
 
-/** Absolute snapshot file path for one `{HARNESS_DIR}`. */
-export function engineStatusSnapshotPath(harnessDir: string): string {
-  return join(harnessDir, ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH)
-}
-
-/** The explicit unavailable result (single constructor — one shape everywhere). */
-export function engineStatusUnavailable(
-  reason: EngineStatusSnapshotUnavailableReason,
-): EngineStatusUnavailable {
+export function engineStatusUnavailable(reason: string): EngineStatusUnavailable {
   return { kind: 'unavailable', reason }
 }
 
@@ -258,303 +152,83 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** A non-empty string, or undefined. */
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-/** Interpret one unknown array element as a stored entry, or undefined. */
-function asEntry(value: unknown): EngineStatusSnapshotEntry | undefined {
-  if (!isPlainObject(value)) return undefined
-  if (value.rv !== ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION) return undefined
-  const cwd = nonEmptyString(value.cwd)
-  const at = nonEmptyString(value.at)
-  if (cwd === undefined || at === undefined) return undefined
-  if (typeof value.turn !== 'number' || !Number.isFinite(value.turn)) return undefined
-  if (!isPlainObject(value.payload)) return undefined
-  return { rv: value.rv as number, cwd, at, turn: value.turn, payload: value.payload }
-}
-
-/** Interpret one durable execution-authority witness. */
+/**
+ * Interpret one durable execution-authority witness. The accepted shape is the
+ * engine's own `ExecutionBinding`: version 1, the recording harness root, and a
+ * complete coordinator `ExecutionSessionRef` (store id, positive epoch,
+ * workflow id, role, session id). Anything else is not a witness this build may
+ * persist or serve — the caller refuses rather than carrying a partial record.
+ */
 function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined {
-  if (value === null || value === undefined) return value === null ? null : undefined
+  if (value === null) return null
   if (!isPlainObject(value) || value.version !== 1) return undefined
   if (typeof value.harnessRoot !== 'string' || value.harnessRoot === '' || !isPlainObject(value.session)) return undefined
-  const session = value.session as Record<string, unknown>
-  if (typeof session.storeId !== 'string' || session.storeId === '' ||
+  const session = value.session
+  if (
+    typeof session.storeId !== 'string' || session.storeId === '' ||
     typeof session.workflowId !== 'string' || session.workflowId === '' ||
     typeof session.sessionId !== 'string' || session.sessionId === '' ||
     session.role !== 'coordinator' ||
-    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return undefined
+    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0
+  ) {
+    return undefined
+  }
   return value as ExecutionBinding
 }
 
-/** Interpret one unknown value as a stored binding record, or undefined. */
-function asBinding(value: unknown): WorkflowSessionBinding | undefined {
-  if (!isPlainObject(value)) return undefined
-  const cwd = nonEmptyString(value.cwd)
-  if (cwd === undefined) return undefined
-  const seq = value.excludedBeforeSeq
-  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return undefined
-  const selectedRaw = value.selectedWorkflowId
-  const selected = nonEmptyString(selectedRaw)
-  if (selectedRaw !== undefined && selected === undefined) return undefined
-  const executionBinding = asExecutionBinding(value.executionBinding)
-  if (executionBinding === undefined && value.executionBinding !== undefined) return undefined
-  return {
-    cwd,
-    ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
-    ...(value.executionBinding === undefined ? {} : { executionBinding }),
-    excludedBeforeSeq: seq,
-  }
-}
-
-/** Age of one entry in ms, or undefined when its `at` is not a usable timestamp. */
-function entryAge(at: string, nowMs: number): number | undefined {
-  const parsed = Date.parse(at)
-  if (!Number.isFinite(parsed)) return undefined
-  return nowMs - parsed
-}
-
 /**
- * Read the newest stored snapshot entry for one session.
- *
- * Every failure path is explicit: `{HARNESS_DIR}` unresolved (`no-harness-dir`),
- * file absent (`absent`), unreadable (`unreadable`), not JSON (`invalid-json`),
- * wrong envelope shape/`sv` (`envelope-schema`), no entries for the session
- * (`no-session-entry`), or an unreadable entry record (`entry-schema`).
+ * Every failure path is explicit: unresolved `{HARNESS_DIR}` (`no-harness-dir`),
+ * no row for this exact `(sessionId, cwd)` pair (`no-session-entry`), a native
+ * authority refusal carrying the engine's complete cause/recovery text, or a
+ * stored payload that is not usable JSON (`invalid-json`) / not an object
+ * (`entry-schema`). A row belonging to another workspace is never served — it
+ * is not addressable by this pair.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none resolved).
  * @param sessionId - the session whose snapshot is requested.
- * @returns the newest stored entry, or the explicit unavailable state.
+ * @param cwd - the authoritative session workspace the row was written for.
+ * @returns the stored entry, or the explicit unavailable state.
  */
 export function readEngineStatusSnapshot(
   harnessDir: string | null,
   sessionId: string,
+  cwd: string,
 ): EngineStatusSnapshotRead {
   if (harnessDir === null || harnessDir === '') return engineStatusUnavailable('no-harness-dir')
-  if (sessionId === '') return engineStatusUnavailable('no-session-entry')
-  let raw: string
+  if (sessionId === '' || cwd === '') return engineStatusUnavailable('no-session-entry')
+  const read = readDshStatusEmission({ harnessDir }, sessionId, cwd)
+  if (read.kind === 'unavailable') return engineStatusUnavailable(read.reason)
+  const emission = read.emission
+  if (emission === undefined) return engineStatusUnavailable('no-session-entry')
+  let payload: unknown
   try {
-    raw = readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8')
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    return engineStatusUnavailable(code === 'ENOENT' ? 'absent' : 'unreadable')
-  }
-  let doc: unknown
-  try {
-    doc = JSON.parse(raw)
+    payload = JSON.parse(emission.payloadJson)
   } catch {
     return engineStatusUnavailable('invalid-json')
   }
-  if (!isPlainObject(doc) || doc.sv !== ENGINE_STATUS_SNAPSHOT_VERSION) {
-    return engineStatusUnavailable('envelope-schema')
+  if (!isPlainObject(payload)) return engineStatusUnavailable('entry-schema')
+  return {
+    kind: 'ok',
+    entry: {
+      rv: ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION,
+      cwd: emission.cwd,
+      at: emission.emittedAt,
+      turn: emission.turn,
+      payload,
+    },
   }
-  const entries = doc.entries
-  if (!isPlainObject(entries)) return engineStatusUnavailable('envelope-schema')
-  // OWN key only: the session id is caller-chosen on the host's `session.create`,
-  // so `entries['constructor']` must never resolve an inherited member.
-  if (!Object.hasOwn(entries, sessionId)) return engineStatusUnavailable('no-session-entry')
-  const bucket = entries[sessionId]
-  if (!Array.isArray(bucket) || bucket.length === 0) return engineStatusUnavailable('no-session-entry')
-  const entry = asEntry(bucket[bucket.length - 1])
-  if (entry === undefined) return engineStatusUnavailable('entry-schema')
-  return { kind: 'ok', entry }
-}
-
-/** The in-memory shape of one persisted envelope. */
-interface SnapshotDoc {
-  sv: number
-  entries: Record<string, EngineStatusSnapshotEntry[]>
-  bindings: Record<string, WorkflowSessionBinding>
 }
 
 /**
- * A prototype-less session map. Session ids are caller-chosen (`session.create`
- * brand-casts whatever the caller sent), so an id equal to an `Object.prototype`
- * member must behave exactly like any other key — on a plain object literal
- * `entries['__proto__']` would reach the setter (and `'constructor'` an
- * inherited function) instead of the bucket.
- */
-function sessionMap(): Record<string, EngineStatusSnapshotEntry[]> {
-  return Object.create(null) as Record<string, EngineStatusSnapshotEntry[]>
-}
-
-/** A prototype-less binding map — the same keying rule as {@link sessionMap}. */
-function bindingMap(): Record<string, WorkflowSessionBinding> {
-  return Object.create(null) as Record<string, WorkflowSessionBinding>
-}
-
-/**
- * The envelope's serialized form. The control map is omitted entirely while it
- * holds no record, so an envelope written before D4 stays byte-identical on the
- * next emission write.
- */
-function serializeEnvelope(
-  entries: Record<string, EngineStatusSnapshotEntry[]>,
-  bindings: Record<string, WorkflowSessionBinding>,
-): string {
-  const base = { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries }
-  return Object.keys(bindings).length === 0 ? JSON.stringify(base) : JSON.stringify({ ...base, bindings })
-}
-
-/**
- * The read-modify-write precondition: a usable envelope, or the explicit reason
- * the write refuses. An existing file the writer cannot understand is NEVER
- * treated as an empty envelope — this file holds every session's snapshots.
- */
-type WriteLoad =
-  | { readonly kind: 'ok'; readonly doc: SnapshotDoc }
-  | { readonly kind: 'refused'; readonly reason: string }
-
-/**
- * Load the existing envelope for a read-modify-write.
+ * Persist one emission as this session's single newest row.
  *
- * Absent → a fresh envelope (the normal first write). Present but unreadable,
- * torn, a non-object, or carrying an `sv` this build does not know → `refused`
- * (the caller degrades with that reason and touches nothing). The read rule and
- * the write rule are the same rule: what the reader must not parse is what the
- * writer must not overwrite.
- *
- * That rule applies at the ENTRY level too, and it is the reason this function
- * refuses rather than filters: the write replaces the whole file, so silently
- * dropping anything it cannot parse would let a build destroy data a DIFFERENT
- * build wrote — an upgrade/downgrade overlap where a newer plugin's records
- * (a bumped record version, or a bucket shape this build does not model) are
- * erased by an older plugin's next write, including other sessions' buckets. A
- * store this build does not fully understand is therefore refused whole, never
- * rewritten in part.
- */
-function loadForWrite(harnessDir: string): WriteLoad {
-  let raw: string
-  try {
-    raw = readFileSync(engineStatusSnapshotPath(harnessDir), 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return {
-        kind: 'ok',
-        doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries: sessionMap(), bindings: bindingMap() },
-      }
-    }
-    return { kind: 'refused', reason: 'store-unreadable' }
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return { kind: 'refused', reason: 'store-invalid-json' }
-  }
-  if (!isPlainObject(parsed) || parsed.sv !== ENGINE_STATUS_SNAPSHOT_VERSION || !isPlainObject(parsed.entries)) {
-    return { kind: 'refused', reason: 'store-envelope-schema' }
-  }
-  const entries = sessionMap()
-  for (const [key, value] of Object.entries(parsed.entries)) {
-    // A bucket that is not an array, or an entry this build cannot parse (an
-    // unknown record version, a foreign shape), is unrecognized content: refuse
-    // instead of dropping it on the floor of a full-file rewrite.
-    if (!Array.isArray(value)) return { kind: 'refused', reason: 'store-entry-schema' }
-    const kept: EngineStatusSnapshotEntry[] = []
-    for (const candidate of value) {
-      const entry = asEntry(candidate)
-      if (entry === undefined) return { kind: 'refused', reason: 'store-entry-schema' }
-      kept.push(entry)
-    }
-    if (kept.length > 0) entries[key] = kept
-  }
-  // The control map follows the same one-rule contract: absent means "no pick",
-  // but a map (or a record) this build cannot read is unrecognized content that
-  // a full-file rewrite would destroy — refused whole, never reset to empty.
-  const bindings = bindingMap()
-  if (parsed.bindings !== undefined) {
-    if (!isPlainObject(parsed.bindings)) return { kind: 'refused', reason: 'store-bindings-schema' }
-    for (const [key, value] of Object.entries(parsed.bindings)) {
-      const binding = asBinding(value)
-      if (binding === undefined) return { kind: 'refused', reason: 'store-bindings-schema' }
-      bindings[key] = binding
-    }
-  }
-  return { kind: 'ok', doc: { sv: ENGINE_STATUS_SNAPSHOT_VERSION, entries, bindings } }
-}
-
-/**
- * Retention filter: drop an entry whose `at` is not a usable timestamp (it can
- * never be aged or ordered) and one older than
- * {@link ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS}; then keep the newest
- * {@link ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION} of what remains.
- */
-function pruneBucket(
-  bucket: readonly EngineStatusSnapshotEntry[],
-  nowMs: number,
-): EngineStatusSnapshotEntry[] {
-  const fresh: EngineStatusSnapshotEntry[] = []
-  for (const entry of bucket) {
-    const age = entryAge(entry.at, nowMs)
-    if (age === undefined || age > ENGINE_STATUS_SNAPSHOT_MAX_AGE_MS) continue
-    fresh.push(entry)
-  }
-  if (fresh.length <= ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION) return fresh
-  return fresh.slice(fresh.length - ENGINE_STATUS_SNAPSHOT_MAX_PER_SESSION)
-}
-
-/** Emission time of a bucket's newest entry (0 when no entry carries one). */
-function bucketRecency(bucket: readonly EngineStatusSnapshotEntry[]): number {
-  let newest = 0
-  for (const entry of bucket) {
-    const parsed = Date.parse(entry.at)
-    if (Number.isFinite(parsed) && parsed > newest) newest = parsed
-  }
-  return newest
-}
-
-/**
- * Enforce the GLOBAL bound: shed whole session buckets, least-recently-written
- * first, until the serialized envelope fits `maxBytes`. The writing session is
- * never evicted (its bucket is the write's whole point) — when it alone exceeds
- * the ceiling the store is written as-is and only the oversize signal is raised.
- * @param pruned - the per-session-pruned map (mutated).
- * @param keep - the session the write belongs to (never evicted).
- * @param maxBytes - the byte ceiling for the serialized envelope.
- * @param sizeOf - serialized size of a candidate map.
- * @returns how many buckets were shed.
- */
-function enforceGlobalBound(
-  pruned: Record<string, EngineStatusSnapshotEntry[]>,
-  keep: string,
-  maxBytes: number,
-  sizeOf: (entries: Record<string, EngineStatusSnapshotEntry[]>) => number,
-): number {
-  if (sizeOf(pruned) <= maxBytes) return 0
-  const candidates = Object.keys(pruned)
-    .filter((key) => key !== keep)
-    .map((key) => ({ key, recency: bucketRecency(pruned[key] as EngineStatusSnapshotEntry[]) }))
-    .sort((left, right) => left.recency - right.recency)
-  let evicted = 0
-  for (const candidate of candidates) {
-    if (sizeOf(pruned) <= maxBytes) break
-    // `delete` on a prototype-less map: an ordinary key removal, never a
-    // prototype interaction (same reason the map is created without one).
-    delete pruned[candidate.key]
-    evicted += 1
-  }
-  return evicted
-}
-
-/** Stores that already raised their one oversize warning in this process. */
-const oversizeWarned = new Set<string>()
-
-/**
- * Persist one emission: append the entry for `sessionId`, prune (age + per
- * session cap + the global byte ceiling), and atomically replace the file — the
- * whole read-modify-write under the directory write lock.
- *
- * Contained by design: a lock timeout, a missing/unwritable directory, a failed
- * replace, or an existing store this build does not understand returns
- * `{kind:'degraded', reason}` (the advisory emission path must never abort the
- * step it observes, and must never destroy what it cannot read). The in-memory
- * payload is unaffected either way.
+ * Contained by design: a store that cannot be written (no ACTIVE authority, a
+ * schema drift, a busy store, a changed selected generation) returns the
+ * explicit `{kind:'degraded', reason}` the advisory emission path logs — it
+ * never aborts the step it observes, and it never fabricates a successful
+ * write.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none resolved).
  * @param input - the emission's session identity + payload.
- * @returns written (with the entry count, the evicted-bucket count and — once
- *   per store — the oversize warning) or the degraded reason.
+ * @returns written, or the degraded reason.
  */
 export function writeEngineStatusSnapshot(
   harnessDir: string | null,
@@ -565,219 +239,25 @@ export function writeEngineStatusSnapshot(
   if (input.cwd === '') return { kind: 'degraded', reason: 'no-session-cwd' }
   if (!Number.isFinite(input.turn)) return { kind: 'degraded', reason: 'invalid-turn' }
   if (!isPlainObject(input.payload)) return { kind: 'degraded', reason: 'payload-not-object' }
-  const at = (input.now ?? new Date()).toISOString()
-  if (!Number.isFinite(Date.parse(at))) return { kind: 'degraded', reason: 'invalid-timestamp' }
-  const dir = dirname(engineStatusSnapshotPath(harnessDir))
-  const file = engineStatusSnapshotPath(harnessDir)
-  // Writer-unique temp name: the failure cleanup below removes EXACTLY the file
-  // this call created. A shared `${file}.tmp` would let one writer's error path
-  // delete a concurrent writer's live temp file (its `renameSync` then fails
-  // with ENOENT and that snapshot is silently dropped).
-  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
-  try {
-    // The lockdir lives INSIDE the snapshot dir (same placement rule as the
-    // ledger's), so the directory must exist before the atomic `mkdir` lock
-    // acquisition — otherwise the missing parent surfaces as ENOENT, not as
-    // lock contention.
-    mkdirSync(dir, { recursive: true })
-    return withExecutionMaintenanceLock(harnessDir, () => withWorkflowDirLock(dir, () => {
-      const loaded = loadForWrite(harnessDir)
-      // A store this build does not understand is not the writer's to replace:
-      // refusing keeps every other session's snapshots (and the bytes the newer
-      // build wrote) intact, and the reader answers `unavailable` for it anyway.
-      if (loaded.kind === 'refused') return { kind: 'degraded' as const, reason: loaded.reason }
-      const doc = loaded.doc
-      const nowMs = Date.parse(at)
-      const bucket = pruneBucket(doc.entries[input.sessionId] ?? [], nowMs)
-      bucket.push({
-        rv: ENGINE_STATUS_SNAPSHOT_ENTRY_VERSION,
-        cwd: input.cwd,
-        at,
-        turn: input.turn,
-        payload: input.payload as Record<string, unknown>,
-      })
-      doc.entries[input.sessionId] = pruneBucket(bucket, nowMs)
-      const pruned = sessionMap()
-      for (const [key, value] of Object.entries(doc.entries)) {
-        const kept = pruneBucket(value, nowMs)
-        if (kept.length === 0) continue
-        pruned[key] = kept
-      }
-      const maxBytes = input.maxBytes ?? ENGINE_STATUS_SNAPSHOT_MAX_BYTES
-      // Retention prunes ENTRY buckets only: the control records are not
-      // history and must never be shed (or aged out) by an emission write —
-      // they are counted in the ceiling below instead.
-      const serialized = (entries: Record<string, EngineStatusSnapshotEntry[]>): string =>
-        serializeEnvelope(entries, doc.bindings)
-      const evicted = enforceGlobalBound(pruned, input.sessionId, maxBytes, (entries) =>
-        Buffer.byteLength(serialized(entries), 'utf8'))
-      const payload = serialized(pruned)
-      const oversized = Buffer.byteLength(payload, 'utf8') > maxBytes
-      let total = 0
-      for (const kept of Object.values(pruned)) total += kept.length
-      writeFileSync(tmp, payload)
-      renameSync(tmp, file)
-      // This process replaced the store: drop the binding memo so the very next
-      // read re-parses instead of answering from the pre-write bytes (the stat
-      // guard would normally miss on the new inode — this makes it deterministic).
-      bindingStoreMemos.delete(file)
-      // One warning per oversize store, never one per turn: the latch is
-      // per-store and monotonic for this process — an already-warned store
-      // never warns again, so an eviction loop cannot turn the containment
-      // warning into a per-turn log line.
-      let warn: string | undefined
-      if (oversized && !oversizeWarned.has(file)) {
-        oversizeWarned.add(file)
-        warn =
-          `engine-status snapshot store ${file} is above its ${maxBytes}-byte ceiling ` +
-          `(kept ${total} entries, shed ${evicted} oldest session bucket(s) this write); ` +
-          'recovery: delete the file — it is prunable plugin-owned state and readers answer unavailable for it'
-      }
-      return {
-        kind: 'written' as const,
-        path: file,
-        entries: total,
-        evicted,
-        ...(warn === undefined ? {} : { warn }),
-      }
-    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS }), {
-      timeoutMs: ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS,
-      pollMs: ENGINE_STATUS_MAINTENANCE_POLL_MS,
-    })
-  } catch (error) {
-    // Remove ONLY this call's temp file: the lock may have failed before the
-    // directory existed, and the name above is unique to this writer.
-    try {
-      rmSync(tmp, { force: true })
-    } catch {
-      // best-effort cleanup only
-    }
-    return { kind: 'degraded', reason: pluginWriteFailureReason(harnessDir, error) }
-  }
-}
-
-/**
- * The stable reason of one refused store write. A refusal that names the
- * maintenance lockdir is the §4.3 window (reported as
- * {@link ENGINE_STATUS_MAINTENANCE_REASON} — both writers take that key, so an
- * activation/restore window is the caller's expected state, not a mystery
- * timeout); anything else keeps its own message.
- */
-function pluginWriteFailureReason(harnessDir: string, error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  return message.includes(join(harnessDir, EXECUTION_MAINTENANCE_LOCKDIR))
-    ? ENGINE_STATUS_MAINTENANCE_REASON
-    : message === '' ? 'write-failed' : message
-}
-
-/**
- * One store file's CONTROL state, as far as the binding read needs it: the
- * `bindings` map (or its absence), or why the file is not a store this build
- * can answer from. Per-KEY record validation stays in the read path — this is
- * only the expensive part (`readFileSync` + `JSON.parse` of every session's
- * emission history).
- */
-type BindingStoreSnapshot =
-  | { readonly kind: 'ok'; readonly bindings: Record<string, unknown> | undefined }
-  | { readonly kind: 'unavailable'; readonly reason: string }
-
-/** One memoized parse, keyed by the store file's identity (`ino` + `size` + `mtimeMs`). */
-interface BindingStoreMemo {
-  readonly ino: number
-  readonly size: number
-  readonly mtimeMs: number
-  readonly snapshot: BindingStoreSnapshot
-}
-
-/** Memoized parses kept per process: the store lives under `{HARNESS_DIR}`, one per workspace (repo + worktrees). */
-const BINDING_STORE_MEMO_CAP = 16
-const bindingStoreMemos = new Map<string, BindingStoreMemo>()
-
-/**
- * The binding read's one full parse of a store file (the memoized body).
- *
- * The same shape checks as the write path's `loadForWrite`, narrowed to what
- * the control map needs: an absent file, a torn one, an unknown envelope
- * version or a non-object `bindings` map is an explicit answer, never a
- * guessed empty record. A missing map is `ok` WITHOUT bindings ("no pick").
- */
-function parseBindingStore(file: string): BindingStoreSnapshot {
-  let raw: string
-  try {
-    raw = readFileSync(file, 'utf8')
-  } catch {
-    return { kind: 'unavailable', reason: 'store-unreadable' }
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return { kind: 'unavailable', reason: 'store-invalid-json' }
-  }
-  if (!isPlainObject(parsed) || parsed.sv !== ENGINE_STATUS_SNAPSHOT_VERSION || !isPlainObject(parsed.entries)) {
-    return { kind: 'unavailable', reason: 'store-envelope-schema' }
-  }
-  const bindings = parsed.bindings
-  if (bindings === undefined) return { kind: 'ok', bindings: undefined }
-  if (!isPlainObject(bindings)) return { kind: 'unavailable', reason: 'store-bindings-schema' }
-  return { kind: 'ok', bindings }
-}
-
-/**
- * Parse one store file's control map, memoized by the file's identity.
- *
- * The binding read sits on the plugin's hottest paths (every
- * `tools/pre-execute`, every agent pre-step, every plan-mode sync) while the
- * file changes only when a catalog emission or a picker commit is written —
- * so an unchanged file answers from one `statSync` plus a Map lookup instead
- * of a whole-file `readFileSync` + `JSON.parse`. The identity triple is the
- * guard: this build's own writes replace the file (new inode + size + mtime)
- * AND forget the entry outright, a content change moves `mtimeMs`, and a
- * different file at the same path differs in `ino`/`size`.
- *
- * Cost of a miss: one stat + one parse. Cost of a hit: one stat. An absent
- * file is never memoized — the failing stat IS the freshness check.
- * @param file - the absolute store path (`engineStatusSnapshotPath`).
- */
-function readBindingStoreSnapshot(file: string): BindingStoreSnapshot {
-  let stat: Stats
-  try {
-    stat = statSync(file)
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { kind: 'ok', bindings: undefined }
-      : { kind: 'unavailable', reason: 'store-unreadable' }
-  }
-  const memo = bindingStoreMemos.get(file)
-  if (memo !== undefined && memo.ino === stat.ino && memo.size === stat.size && memo.mtimeMs === stat.mtimeMs) {
-    return memo.snapshot
-  }
-  const snapshot = parseBindingStore(file)
-  // Cap FIFO (the codebase's own convention — `watermarkCache`,
-  // `terminalStatusCache`): the oldest store is the least likely to be read
-  // next, and the cap bounds a long-lived process over many workspaces.
-  if (bindingStoreMemos.size >= BINDING_STORE_MEMO_CAP) {
-    const oldest = bindingStoreMemos.keys().next()
-    if (!oldest.done) bindingStoreMemos.delete(oldest.value)
-  }
-  bindingStoreMemos.set(file, { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, snapshot })
-  return snapshot
+  const written = recordDshStatusEmission(
+    { harnessDir },
+    input.sessionId,
+    input.cwd,
+    input.turn,
+    JSON.stringify(input.payload),
+    input.selectedGeneration,
+  )
+  return written.kind === 'written' ? { kind: 'written' } : { kind: 'degraded', reason: written.reason }
 }
 
 /**
  * Read one session's durable workflow-selection binding.
  *
  * The answers are deliberately distinct: `{kind:'ok'}` WITHOUT a `binding`
- * means there is nothing recorded for this session (no store yet, an sv=1
- * envelope without the control map, no key for the session) — the caller
- * proceeds unbound. `{kind:'unavailable', reason}` means the record cannot be
- * trusted (`store-unreadable`, `store-invalid-json`, `store-envelope-schema`,
- * `store-bindings-schema`, `cwd-mismatch`) — the caller must NOT treat that as
- * "no pick" and attribute the session anywhere.
- *
- * The file read + parse is memoized by the file's identity (see
- * {@link readBindingStoreSnapshot}); only this session's key is re-checked per
- * call, so the per-tool-call / per-step cost does not scale with the store.
+ * means there is nothing recorded for this session — the caller proceeds
+ * unbound. `{kind:'unavailable', reason}` means the record cannot be trusted
+ * (`cwd-mismatch`, a store refusal carrying its own recovery text) — the caller
+ * must NOT treat that as "no pick" and attribute the session anywhere.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param sessionId - the durable `session.header.id` (the picker key).
  * @param cwd - the authoritative session cwd (exact match against the record).
@@ -790,34 +270,45 @@ export function readWorkflowSessionBinding(
   if (harnessDir === '') return { kind: 'unavailable', reason: 'no-harness-dir' }
   if (sessionId === '') return { kind: 'unavailable', reason: 'no-session-id' }
   if (cwd === '') return { kind: 'unavailable', reason: 'no-session-cwd' }
-  const snapshot = readBindingStoreSnapshot(engineStatusSnapshotPath(harnessDir))
-  if (snapshot.kind === 'unavailable') return { kind: 'unavailable', reason: snapshot.reason }
-  const bindings = snapshot.bindings
-  // OWN key only (same rule as the entry buckets): the session id is
-  // caller-chosen, so an id naming an `Object.prototype` member must be an
-  // ordinary key rather than an inherited member.
-  if (bindings === undefined || !Object.hasOwn(bindings, sessionId)) return { kind: 'ok' }
-  const binding = asBinding(bindings[sessionId])
-  if (binding === undefined) return { kind: 'unavailable', reason: 'store-bindings-schema' }
-  if (binding.cwd !== cwd) return { kind: 'unavailable', reason: 'cwd-mismatch' }
-  return { kind: 'ok', binding }
+  const read = readDshSessionBinding({ harnessDir }, sessionId, cwd)
+  if (read.kind === 'unavailable') return { kind: 'unavailable', reason: read.reason }
+  const stored = read.binding
+  if (stored === undefined) return { kind: 'ok' }
+  let executionBinding: ExecutionBinding | null = null
+  if (stored.executionBinding !== null) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(stored.executionBinding)
+    } catch {
+      return { kind: 'unavailable', reason: 'store-bindings-schema' }
+    }
+    const witness = asExecutionBinding(parsed)
+    if (witness === undefined) return { kind: 'unavailable', reason: 'store-bindings-schema' }
+    executionBinding = witness
+  }
+  return {
+    kind: 'ok',
+    binding: {
+      cwd: stored.cwd,
+      ...(stored.selectedWorkflowId === null ? {} : { selectedWorkflowId: stored.selectedWorkflowId }),
+      executionBinding,
+      excludedBeforeSeq: stored.excludedBeforeSeq,
+    },
+  }
 }
 
 /**
  * Durably record one session's workflow-selection binding (the D4 picker
- * commit / exclusion-floor advance) — the same read-modify-write discipline as
- * {@link writeEngineStatusSnapshot}: the snapshot-dir lock, a writer-unique
- * temp file, an atomic rename, and the refusal rule for a store this build
- * cannot understand. The emission records (`payload` / `at` / `turn` /
- * `rv` / `cwd`) are preserved EXACTLY: this write only sets
- * `bindings[sessionId]`, merges the floor by max, and keeps the stored
- * preference when the update omits one. A binding that cannot fit the ceiling
- * is refused rather than paid for by dropping another session's record.
+ * commit / exclusion-floor advance) in ONE store transaction: the stored
+ * preference is preserved when the update omits one, the exclusion floor
+ * merges by max (an older observation never walks the window back over rows
+ * already excluded), and a record whose stored cwd is not this session's cwd
+ * refuses `cwd-mismatch`.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param sessionId - the durable `session.header.id`.
  * @param cwd - the authoritative session cwd (must match any stored record).
  * @param update - the preference (optional) and the exclusion floor.
- * @returns written, or the degraded reason (never throws for I/O faults).
+ * @returns written, or the degraded reason (never throws for store faults).
  */
 export function updateWorkflowSessionBinding(
   harnessDir: string,
@@ -834,67 +325,26 @@ export function updateWorkflowSessionBinding(
   if (update.selectedWorkflowId !== undefined && update.selectedWorkflowId === '') {
     return { kind: 'degraded', reason: 'invalid-selected-workflow-id' }
   }
-  const file = engineStatusSnapshotPath(harnessDir)
-  const dir = dirname(file)
-  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
-  try {
-    mkdirSync(dir, { recursive: true })
-    return withExecutionMaintenanceLock(harnessDir, () => withWorkflowDirLock(dir, () => {
-      const loaded = loadForWrite(harnessDir)
-      if (loaded.kind === 'refused') return { kind: 'degraded' as const, reason: loaded.reason }
-      const doc = loaded.doc
-      const existing: WorkflowSessionBinding | undefined = Object.hasOwn(doc.bindings, sessionId)
-        ? doc.bindings[sessionId]
-        : undefined
-      // The record is anchored to its workspace: a session id reused under a
-      // different cwd is not the record's owner (and the picker's read applies
-      // the same exact-match rule).
-      if (existing !== undefined && existing.cwd !== cwd) {
-        return { kind: 'degraded' as const, reason: 'cwd-mismatch' }
-      }
-      const selected = update.selectedWorkflowId ?? existing?.selectedWorkflowId
-      const executionBinding = update.executionBinding === undefined
-        ? existing?.executionBinding ?? null
-        : update.executionBinding
-      if (executionBinding !== null && asExecutionBinding(executionBinding) === undefined) {
-        return { kind: 'degraded' as const, reason: 'invalid-execution-binding' }
-      }
-      doc.bindings[sessionId] = {
-        cwd,
-        ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
-        ...(update.executionBinding !== undefined || existing?.executionBinding !== undefined
-          ? { executionBinding }
-          : {}),
-        // The floor only advances: an older observation never walks the
-        // exclusion window back over rows already excluded.
-        excludedBeforeSeq: Math.max(existing?.excludedBeforeSeq ?? 0, update.excludedBeforeSeq),
-      }
-      const payload = serializeEnvelope(doc.entries, doc.bindings)
-      const maxBytes = update.maxBytes ?? ENGINE_STATUS_SNAPSHOT_MAX_BYTES
-      // Refused as a UNIT: shedding another session's snapshot bucket (or its
-      // pick) to make room for this one would trade a durable record for a
-      // newer one.
-      if (Buffer.byteLength(payload, 'utf8') > maxBytes) {
-        return { kind: 'degraded' as const, reason: 'store-over-byte-ceiling' }
-      }
-      writeFileSync(tmp, payload)
-      renameSync(tmp, file)
-      // Same rule as the emission write above: a pick committed by THIS process
-      // is visible to the next read, never served from the pre-pick memo.
-      bindingStoreMemos.delete(file)
-      return { kind: 'written' as const }
-    }, { timeoutMs: ENGINE_STATUS_SNAPSHOT_LOCK_TIMEOUT_MS }), {
-      timeoutMs: ENGINE_STATUS_MAINTENANCE_LOCK_TIMEOUT_MS,
-      pollMs: ENGINE_STATUS_MAINTENANCE_POLL_MS,
-    })
-  } catch (error) {
-    // Remove ONLY this call's temp file (writer-unique name, same rule as the
-    // emission write).
-    try {
-      rmSync(tmp, { force: true })
-    } catch {
-      // best-effort cleanup only
+  let executionBinding: string | null | undefined
+  if (update.executionBinding !== undefined) {
+    if (update.executionBinding !== null && asExecutionBinding(update.executionBinding) === undefined) {
+      return { kind: 'degraded', reason: 'invalid-execution-binding' }
     }
-    return { kind: 'degraded', reason: pluginWriteFailureReason(harnessDir, error) }
+    executionBinding = update.executionBinding === null ? null : JSON.stringify(update.executionBinding)
   }
+  const written = writeDshSessionBinding(
+    { harnessDir },
+    sessionId,
+    cwd,
+    {
+      ...(update.selectedWorkflowId === undefined ? {} : { selectedWorkflowId: update.selectedWorkflowId }),
+      ...(executionBinding === undefined ? {} : { executionBinding }),
+      excludedBeforeSeq: update.excludedBeforeSeq,
+    },
+    update.selectedGeneration,
+  )
+  if (written.kind === 'written') return { kind: 'written' }
+  // The engine reports a cwd conflict as its own message; keep that one token
+  // stable for the picker/floor callers that branch on it.
+  return { kind: 'degraded', reason: /cwd-mismatch/.test(written.reason) ? 'cwd-mismatch' : written.reason }
 }

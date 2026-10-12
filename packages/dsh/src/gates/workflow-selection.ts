@@ -524,7 +524,7 @@ export type ExecutionWorkflowSourceRead =
       readonly storeId: string
       readonly epoch: number
     }
-  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection }
+  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection; readonly storeId?: string; readonly epoch?: number }
   | { readonly kind: 'unavailable'; readonly code: string; readonly message: string }
 
 /**
@@ -607,13 +607,13 @@ export async function readExecutionWorkflowSource(
     }
   }
   const validated = activeEntriesOf(state.root.workflows)
-  if ('error' in validated) return { kind: 'error', selection: validated.error }
+  if ('error' in validated) return { kind: 'error', selection: validated.error, storeId: read.storeId, epoch: read.epoch }
   const source: ActiveSetSource = {
     entries: validated.entries,
     snapshotOf: (entry: ActiveEntry) => executionSnapshotOf(state, entry.id),
   }
   const selection = selectActiveWorkflow(source, hint)
-  if (selection.kind !== 'active') return { kind: 'error', selection }
+  if (selection.kind !== 'active') return { kind: 'error', selection, storeId: read.storeId, epoch: read.epoch }
   const snapshot = source.snapshotOf({ id: selection.workflowId, dir: selection.dir })
   if (snapshot === undefined) {
     return {
@@ -623,6 +623,8 @@ export async function readExecutionWorkflowSource(
         code: 'workflow.selection.snapshot-unreadable',
         message: `the execution authority registers ${selection.workflowId} but holds no state for it`,
       },
+      storeId: read.storeId,
+      epoch: read.epoch,
     }
   }
   return { kind: 'active', workflowId: selection.workflowId, dir: selection.dir, snapshot, storeId: read.storeId, epoch: read.epoch }
@@ -636,6 +638,7 @@ export function adoptExecutionBinding(
   sessionId: string,
   cwd: string,
   executionBinding: ExecutionBinding,
+  selectedGeneration?: { storeId: string; epoch: number },
 ): boolean {
   if (executionBinding.harnessRoot !== harnessDir || executionBinding.session.sessionId !== sessionId) return false
   const existing = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
@@ -644,17 +647,24 @@ export function adoptExecutionBinding(
     selectedWorkflowId: executionBinding.session.workflowId,
     executionBinding,
     excludedBeforeSeq: existing.binding?.excludedBeforeSeq ?? 0,
+    ...(selectedGeneration === undefined ? {} : { selectedGeneration }),
   })
   return written.kind === 'written'
 }
 
 /** Clear a stale native binding while preserving the user selection/floor. */
-export function clearExecutionBinding(harnessDir: string, sessionId: string, cwd: string): boolean {
+export function clearExecutionBinding(
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+  selectedGeneration?: { storeId: string; epoch: number },
+): boolean {
   const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
   if (binding.kind !== 'ok') return false
   return updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
     executionBinding: null,
     excludedBeforeSeq: binding.binding?.excludedBeforeSeq ?? 0,
+    ...(selectedGeneration === undefined ? {} : { selectedGeneration }),
   }).kind === 'written'
 }
 

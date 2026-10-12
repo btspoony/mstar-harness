@@ -12,15 +12,23 @@
  * waterfall persists the snapshot) and only then calls the endpoint, so the
  * served payload is proven to be the emitted one.
  */
-import { afterEach, describe, expect, it } from 'bun:test'
-import { writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { initializeStore, openStore, storeDbPath } from '@mstar-harness/engine'
 import * as entry from '../src/index.ts'
-import { ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH, readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+// Namespace imports of the two REAL modules the endpoint calls into: the
+// picker-boundary cases interpose a call-through wrapper on ONE exported
+// function per case, so the production handler still reads the real native
+// authority while the test controls exactly when the authority moves.
+import * as endpointStore from '../src/engine-status-store.ts'
+import * as workflowSelection from '../src/gates/workflow-selection.ts'
 import {
   installEngineStatusEndpoint,
   MSTAR_ENGINE_STATUS_METHOD,
@@ -29,13 +37,22 @@ import {
   type MstarEngineStatusResult,
   type MstarSelectWorkflowResult,
 } from '../src/engine-status-endpoint.ts'
-import { bootApp, seedActiveWorkflow, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
+
+/**
+ * The picker-boundary interposer a window case arms. Restored after every test
+ * so a failing assertion can never leak the wrapper into the next case (the
+ * mocked reader/writer is a module-level binding shared by the whole file).
+ */
+let boundarySpy: { mockRestore(): void } | undefined
 
 afterEach(async () => {
   await booted?.dispose()
   booted = undefined
+  boundarySpy?.mockRestore()
+  boundarySpy = undefined
 })
 
 /**
@@ -82,14 +99,14 @@ function liveSession(app: BootResult, id: string, cwd: string, seq = 0): void {
   sessions.register({ id, header: { cwd }, seq })
 }
 
-/** Seed one stored snapshot through the store's own writer. */
-function seed(app: BootResult, sessionId: string, cwd: string, marker: number): void {
+/** Seed one stored emission through the store's own writer (creating the store on first use). */
+async function seed(app: BootResult, sessionId: string, cwd: string, marker: number): Promise<void> {
+  if (!existsSync(join(app.harnessDir, 'store.db'))) await seedStore(app.harnessDir)
   const result = writeEngineStatusSnapshot(app.harnessDir, {
     sessionId,
     cwd,
     turn: marker,
     payload: { version: '9.9.9', marker },
-    now: new Date('2026-09-10T12:00:00.000Z'),
   })
   if (result.kind !== 'written') throw new Error(`seed failed: ${result.reason}`)
 }
@@ -125,6 +142,10 @@ describe('engineStatus endpoint — registration on the shared /api gateway', ()
 
   it('serves the emitted snapshot end to end: pre-step emission → stored → endpoint', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    // The emission is an authority-dependent write: without an ACTIVE store the
+    // workspace truthfully persists nothing (covered by the store spec), so the
+    // end-to-end path needs the store it serves from.
+    await seedStore(app.harnessDir)
     liveSession(app, 'ses_alpha', app.root)
     const inbox: UserMessage[] = [
       createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'inbox' }] }),
@@ -157,7 +178,7 @@ describe('engineStatus endpoint — validation chain', () => {
   it('accepts a matching session + asserted cwd', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     const result = await endpointOf(app).engineStatus('ses_alpha', app.root)
     expect(result).toMatchObject({ status: 'ok', sessionId: 'ses_alpha', cwd: app.root, turn: 11 })
   })
@@ -165,7 +186,7 @@ describe('engineStatus endpoint — validation chain', () => {
   it('rejects a malformed or relative cwd without touching the store', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     const endpoint = endpointOf(app)
     expect(await endpoint.engineStatus('ses_alpha', '')).toEqual({ status: 'unavailable', reason: 'invalid-cwd' })
     expect(await endpoint.engineStatus('ses_alpha', 'relative/ws')).toEqual({
@@ -181,7 +202,7 @@ describe('engineStatus endpoint — validation chain', () => {
   it('refuses traversal in the asserted path', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     const endpoint = endpointOf(app)
     const probes = [
       `${app.root}/../../etc`,
@@ -199,7 +220,7 @@ describe('engineStatus endpoint — validation chain', () => {
 
   it('answers unavailable when the session is unknown to the host', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
-    seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_alpha', app.root, 11)
     // The snapshot exists, but the session does not: the endpoint never serves
     // a store row it cannot tie to a real session.
     expect(await endpointOf(app).engineStatus('ses_alpha', app.root)).toEqual({
@@ -208,21 +229,46 @@ describe('engineStatus endpoint — validation chain', () => {
     })
   })
 
-  it('answers unavailable when no snapshot was ever emitted for the session', async () => {
+  it('preserves absent, staged, corrupt and schema refusal causes at the endpoint', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    expect(await endpointOf(app).engineStatus('ses_alpha', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'store-absent',
-    })
+    const endpoint = endpointOf(app)
+
+    const absent = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(absent.status === 'unavailable' ? absent.reason : '').toContain('[store.not-initialized]')
+    expect(absent.status === 'unavailable' ? absent.reason : '').toContain('mstar store init')
+
+    let handle = await initializeStore({ harnessDir: app.harnessDir })
+    handle.db.prepare("update execution_meta set authority_state='staged' where id=1").run()
+    handle.close()
+    const staged = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(staged.status === 'unavailable' ? staged.reason : '').toContain('[store.not-active]')
+    expect(staged.status === 'unavailable' ? staged.reason : '').toContain('reviewed activation')
+
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
+    await seedStore(app.harnessDir)
+    handle = await openStore({ harnessDir: app.harnessDir }, 'write')
+    handle.db.exec('delete from schema_version where version = 4')
+    handle.close()
+    const schemaPath = join(app.harnessDir, 'store.db')
+    const beforeSchemaRead = readFileSync(schemaPath)
+    const schema = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(schema.status === 'unavailable' ? schema.reason : '').toContain('[store.schema-drift]')
+    expect(schema.status === 'unavailable' ? schema.reason : '').toContain('nothing was modified')
+    expect(readFileSync(schemaPath).equals(beforeSchemaRead)).toBe(true)
+
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
+    mkdirSync(join(app.harnessDir, 'store.db'))
+    const corrupt = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(corrupt.status === 'unavailable' ? corrupt.reason : '').toContain('[store.corrupt]')
   })
 
   it('never answers with another session data (cross-session probes)', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
     liveSession(app, 'ses_beta', '/proj/other')
-    seed(app, 'ses_alpha', app.root, 11)
-    seed(app, 'ses_beta', '/proj/other', 22)
+    await seed(app, 'ses_alpha', app.root, 11)
+    await seed(app, 'ses_beta', '/proj/other', 22)
     const endpoint = endpointOf(app)
 
     // Both sessions are real and both have snapshots: each read is its own.
@@ -247,12 +293,14 @@ describe('engineStatus endpoint — validation chain', () => {
   it('refuses a session whose live cwd no longer matches the stored record', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', '/proj/moved')
-    seed(app, 'ses_alpha', '/proj/original', 11)
-    // The stored row belongs to the session's PREVIOUS workspace: a stale read
-    // is refused rather than served as current.
+    await seed(app, 'ses_alpha', '/proj/original', 11)
+    // The stored row belongs to the session's PREVIOUS workspace. Emission rows
+    // are addressed by (session, cwd), so the stale row is not even readable
+    // from this workspace: the read answers no-entry instead of serving it as
+    // current (the refusal-vocabulary shift the store cutover records).
     expect(await endpointOf(app).engineStatus('ses_alpha', '/proj/original')).toEqual({
       status: 'unavailable',
-      reason: 'session-cwd-mismatch',
+      reason: 'store-no-session-entry',
     })
   })
 
@@ -265,7 +313,7 @@ describe('engineStatus endpoint — validation chain', () => {
       inspected.push(sessionId)
       return { header: { cwd: app.root } }
     }
-    seed(app, 'ses_persisted', app.root, 7)
+    await seed(app, 'ses_persisted', app.root, 7)
     const result = await endpointOf(app).engineStatus('ses_persisted', app.root)
     expect(result).toMatchObject({ status: 'ok', sessionId: 'ses_persisted', turn: 7 })
     expect(inspected).toEqual(['ses_persisted'])
@@ -278,7 +326,7 @@ describe('engineStatus endpoint — validation chain', () => {
     service.handler = async () => {
       throw new Error('persistence offline')
     }
-    seed(app, 'ses_persisted', app.root, 7)
+    await seed(app, 'ses_persisted', app.root, 7)
     expect(await endpointOf(app).engineStatus('ses_persisted', app.root)).toEqual({
       status: 'unavailable',
       reason: 'session-inspect-failed',
@@ -472,6 +520,37 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     })
   }
 
+  /**
+   * Advance the REAL authority generation of the fixture store, exactly as the
+   * engine's own fixtures do (`execution-store.test.ts`), so the picker compares
+   * two genuinely different authority reads rather than a token the test handed
+   * to a wrapper. Synchronous on purpose: the picker's commit is a synchronous
+   * native call, so the second window's barrier cannot yield between the
+   * automatic validation and the native transaction.
+   */
+  function advanceAuthorityEpoch(harnessDir: string): void {
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      db.prepare('update store_meta set authority_epoch = authority_epoch + 1 where id = 1').run()
+    } finally {
+      db.close()
+    }
+  }
+
+  /** The fixture store's own generation, read back from the native authority. */
+  function authorityEpochOf(harnessDir: string): number {
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      const row = db.prepare('select authority_epoch from store_meta where id = 1').get() as
+        | { authority_epoch?: unknown }
+        | undefined
+      if (typeof row?.authority_epoch !== 'number') throw new Error('fixture generation is unreadable')
+      return row.authority_epoch
+    } finally {
+      db.close()
+    }
+  }
+
   it('refuses invalid/terminal ids, cwd mismatch, non-live sessions and a failed store commit', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedTwoActives(app)
@@ -484,22 +563,13 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     expect(await endpoint.selectWorkflow('s-A', '/elsewhere', 'wf-a')).toEqual({ status: 'unavailable', reason: 'cwd-mismatch' })
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-old')).toEqual({ status: 'unavailable', reason: 'workflow-not-active' })
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-missing')).toEqual({ status: 'unavailable', reason: 'workflow-not-active' })
-    seed(app, 's-A', app.root, 1)
-    await writeFile(
-      join(app.harnessDir, ENGINE_STATUS_SNAPSHOT_RELATIVE_PATH),
-      JSON.stringify({ sv: 1, entries: {}, bindings: [] }),
-    )
-    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
-      status: 'unavailable',
-      reason: 'store-store-bindings-schema',
-    })
   })
 
   it('a valid pick survives re-apply without advancing the exclusion floor', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedTwoActives(app)
     liveSession(app, 's-A', app.root, 5)
-    seed(app, 's-A', app.root, 1)
+    await seed(app, 's-A', app.root, 1)
     const endpoint = endpointOf(app)
 
     expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
@@ -509,7 +579,7 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     })
     expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({
       kind: 'ok',
-      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', executionBinding: null, excludedBeforeSeq: 5 },
     })
 
     liveSession(app, 's-A', app.root, 9)
@@ -520,7 +590,7 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     })
     expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({
       kind: 'ok',
-      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', excludedBeforeSeq: 5 },
+      binding: { cwd: app.root, selectedWorkflowId: 'wf-a', executionBinding: null, excludedBeforeSeq: 5 },
     })
 
     const served = await endpoint.engineStatus('s-A', app.root)
@@ -529,5 +599,117 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
       binding: { selection: { kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' } },
     })
   })
-})
+  /**
+   * Window 1 — the authority is replaced AFTER the registry read and BEFORE
+   * the automatic source read (`engine-status-endpoint.ts` `pick()` step 2 →
+   * step 3). The interposer is a CALL-THROUGH wrapper on the real reader: the
+   * first (registry) read is delegated verbatim, and only once it has answered
+   * does the test advance the REAL authority generation. The picker's second
+   * read therefore compares two genuinely different authority reads, so the
+   * refusal can only be the source-comparison token — the native commit guard
+   * is never reached.
+   */
+  it('refuses with selection-generation-changed when the authority is replaced between the registry and automatic source reads', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedTwoActives(app)
+    liveSession(app, 's-A', app.root, 17)
+    const endpoint = endpointOf(app)
 
+    const originalEpoch = authorityEpochOf(app.harnessDir)
+
+    const realRead = workflowSelection.readExecutionWorkflowSource
+    let reads = 0
+    let advanced = false
+    boundarySpy = spyOn(workflowSelection, 'readExecutionWorkflowSource').mockImplementation(async (context, hint) => {
+      reads += 1
+      const answer = await realRead(context, hint)
+      if (!advanced) {
+        // The registry read has answered; the authority moves now, i.e. before
+        // the picker's automatic read is even issued.
+        advanced = true
+        advanceAuthorityEpoch(app.harnessDir)
+      }
+      return answer
+    })
+
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'unavailable',
+      reason: 'selection-generation-changed',
+    })
+    // Both source reads were the REAL reader against the REAL store.
+    expect(reads).toBe(2)
+    expect(authorityEpochOf(app.harnessDir)).toBe(originalEpoch + 1)
+    // No preference and no floor: the session has no binding row at all.
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({ kind: 'ok' })
+
+    // The barriered generation has settled: an unchanged healthy retry commits
+    // the preference and the correct exclusion floor.
+    boundarySpy.mockRestore()
+    boundarySpy = undefined
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'selected',
+      sessionId: 's-A',
+      workflowId: 'wf-a',
+    })
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toMatchObject({
+      kind: 'ok',
+      binding: { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 17 },
+    })
+  })
+
+  /**
+   * Window 2 — the authority is replaced AFTER the automatic-source validation
+   * and BEFORE the native commit (`pick()` step 3 → step 5). The interposer is
+   * a CALL-THROUGH wrapper on the real native writer: it advances the REAL
+   * generation from the SAME synchronous boundary the picker commits on (the
+   * commit is a synchronous native call, so the bump cannot be async), then
+   * delegates the untouched call through. The native transaction re-reads the
+   * metadata it opened with, so only the picker's forwarded
+   * `selectedGeneration` can refuse it — a caller that dropped that token
+   * would commit here.
+   */
+  it('refuses with the native stale-generation guard when the authority is replaced after automatic validation and before the native commit', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedTwoActives(app)
+    liveSession(app, 's-B', app.root, 17)
+    const endpoint = endpointOf(app)
+
+    const realWrite = endpointStore.updateWorkflowSessionBinding
+    let commits = 0
+    let advanced = false
+    boundarySpy = spyOn(endpointStore, 'updateWorkflowSessionBinding').mockImplementation((harnessDir, sessionId, cwd, update) => {
+      commits += 1
+      if (!advanced) {
+        advanced = true
+        advanceAuthorityEpoch(harnessDir)
+      }
+      return realWrite(harnessDir, sessionId, cwd, update)
+    })
+
+    const refused: MstarSelectWorkflowResult = await endpoint.selectWorkflow('s-B', app.root, 'wf-a')
+    expect(refused.status).toBe('unavailable')
+    if (refused.status !== 'unavailable') throw new Error('unreachable')
+    // The DISTINCT NATIVE cause, not W1's source-comparison token: refusal here
+    // must be the native stale-generation guard the automatic-source window
+    // never reaches. Only the machine cause token is pinned — the refusal
+    // sentence's prose is not a product contract this test owns.
+    expect(refused.reason.startsWith('store-[store.stale-epoch]')).toBe(true)
+    expect(refused.reason).not.toBe('selection-generation-changed')
+    // Exactly one native commit attempt, refused before its body ran.
+    expect(commits).toBe(1)
+    // No preference and no floor: the session has no binding row at all.
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-B', app.root)).toEqual({ kind: 'ok' })
+
+    boundarySpy.mockRestore()
+    boundarySpy = undefined
+    expect(await endpoint.selectWorkflow('s-B', app.root, 'wf-a')).toEqual({
+      status: 'selected',
+      sessionId: 's-B',
+      workflowId: 'wf-a',
+    })
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-B', app.root)).toMatchObject({
+      kind: 'ok',
+      binding: { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 17 },
+    })
+  })
+})
