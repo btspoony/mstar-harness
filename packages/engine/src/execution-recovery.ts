@@ -11,10 +11,10 @@
  *   store's journal mode. It verifies the recovery point through the
  *   same verdict `backupStore` applies (§8 "re-open it for `integrity_check` +
  *   `foreign_key_check`", migration checksums, identity, execution identity),
- *   then inventories the WHOLE store — issue, catalog and execution — against
- *   the live authority, and returns the canonical `lossDigest` of that
- *   inventory. It writes no authority row, no receipt and no artifact of its
- *   own, so it is safe to run at any time.
+ *   then inventories the WHOLE store — issue, catalog, execution and host
+ *   state — against the live authority, and returns the canonical `lossDigest`
+ *   of that inventory. It writes no authority row, no receipt and no artifact
+ *   of its own, so it is safe to run at any time.
  * - `restoreExecutionBackup` is the destructive step. It re-derives the loss
  *   inventory under the maintenance lock and records it as the honest account
  *   of what the replacement costs; the operator and authorization reference are
@@ -36,27 +36,15 @@
  * ## The loss inventory, and why it is complete
  *
  * §8 asks the preview to list "changed/deleted authoritative rows and committed
- * operation ids across all three domains, not just an execution revision
+ * operation ids across all domains, not just an execution revision
  * difference". The inventory below enumerates EVERY authority table of the
- * three domains (the durable `projection_*` tables are excluded: contract §5
- * makes them disposable and rebuildable, never authority), compares each row on
- * both sides by its canonical content — a purely informational comparison that
+ * store's domains (issue, catalog, execution and the native Dsh host state;
+ * the durable `projection_*` tables are excluded: contract §5 makes them
+ * disposable and rebuildable, never authority), compares each row on both
+ * sides by its canonical content — a purely informational comparison that
  * decides only whether the row is LISTED, never whether a replacement is
  * admitted — and additionally lists the committed operation receipts of the
- * three domains.
- *
- * §7 R4 completes that with the RETAINED ACCEPTED BODIES. A whole-store SQLite
- * copy does not carry the file-native ledgers, so the recovery point also
- * freezes an inventory of them (bytes, ordered accepted-record identities,
- * checkpoint) beside the copy, and the preview compares it with the live
- * bodies: a body whose accepted records still carry the point's, in order and
- * by exact hash, is an append-only extension and its extra records are
- * PRESERVED; a body that was replaced or deleted — or the body carrying the
- * durable selection/cache facts — is listed as a difference. The restore never
- * rewrites those bodies, so the difference is disclosed, approved and recorded
- * rather than silently "rolled back", and an unterminated trailing record the
- * point did not record refuses the whole inventory with both stores and every
- * body retained, asking for an explicit salvage scope.
+ * domains.
  *
  * `authorityDifferences` reports, per differing row, the row's OWN authority
  * revision when its table carries one, and `null` when the row is absent on
@@ -80,6 +68,12 @@
  * is lost). It is provenance the preview and the receipt carry; no comparison of
  * it admits or refuses a replacement. Any change on either side — including
  * a change to a row the readable list can only mark as `1`/`1` — changes it.
+ *
+ * A database image does NOT roll back the append-only logs and authored
+ * documents beside the store (notes, agent-flow history, launch journal,
+ * selection snapshot): those are ordinary retained files, never a second
+ * transactionally frozen authority, so the preview neither freezes nor
+ * inventories them and a restore leaves every one of their bytes in place.
  *
  * ## Crash identification
  *
@@ -128,32 +122,31 @@ import {
 } from "./store-db.js";
 import {
   StoreActivationError,
-  backupStoreUnderExclusion,
+  backupStore,
   canonicalPath,
-  freezeRetainedBodies,
   inspectBackupCopy,
   isPathWithin,
-  readRetainedBodyInventory,
   withExecutionMaintenanceLock,
   type BackupExecutionMeta,
   type BackupInspection,
   type BackupReceipt,
-  type RetainedBodyCheckpoint,
-  type RetainedBodyInventory,
 } from "./store-activation.js";
 
 /**
  * Transport version of the recovery receipt, of the diagnostic export and of
  * the loss payload.
  *
- * Version 2 is §7 R4's loss-aware whole-store restore: the preview and the
- * durable receipt additionally carry the retained accepted-body inventory
- * digest, the live bodies' digest and the disclosed body/selection
- * differences. A version-1 payload is refused by name rather than decoded as
- * `restoreExecutionBackup`'s input, because a version-1 preview cannot describe
- * a body loss at all.
+ * Version 3 is the schema-owned whole-store loss payload: the preview and the
+ * durable receipt carry the authority rows and committed operation ids of
+ * EVERY authority domain (issue, catalog, execution and the native Dsh host
+ * state), and nothing about file-native bodies — notes, agent-flow ledgers,
+ * cursors, the launch journal and the selection snapshot are ordinary retained
+ * files, never a second transactionally frozen authority, so no payload
+ * describes them and a database image does not roll their bytes back. A
+ * payload of an earlier generation is refused by name rather than decoded as
+ * `restoreExecutionBackup`'s input.
  */
-export const EXECUTION_RECOVERY_PROTOCOL_VERSION = 2;
+export const EXECUTION_RECOVERY_PROTOCOL_VERSION = 3;
 
 /**
  * Stable refusal codes. `execution.recovery-loss-unaccepted` is §5's verdict
@@ -180,47 +173,18 @@ export class ExecutionRecoveryError extends Error {
 
 /** §8: one authority row that differs between the live store and the point. */
 export type ExecutionRecoveryAuthorityDifference = {
-  domain: "issue" | "catalog" | "execution";
+  domain: "issue" | "catalog" | "execution" | "host";
   key: string;
   liveRevision: number | null;
   backupRevision: number | null;
 };
 
-/**
- * §7 R4: one retained accepted body (or selection fact) that differs between
- * the point's frozen inventory and the live bodies.
- *
- * `lostRecords` counts the point's accepted records the live body no longer
- * carries (a deleted or replaced body); `preservedRecords` counts the live
- * accepted records the point does not hold — §7 preserves append-only
- * post-point history where identities do not conflict, so those records are
- * never deleted by a restore. `kind: "selection"` marks the body that carries
- * the durable selection/cache facts.
- */
-export type ExecutionRecoveryRetainedDifference = {
-  /** The control-root-relative retained body this difference is about. */
-  path: string;
-  /**
-   * `deleted`: the point froze it and the live store no longer has it.
-   * `replaced`: the live body no longer carries the point's accepted records.
-   * `preserved`: the live body only EXTENDED the point's accepted records, and
-   * §7 keeps that history instead of deleting it.
-   * `selection`: the body carries the durable selection/cache facts.
-   */
-  kind: "deleted" | "replaced" | "preserved" | "selection";
-  lostRecords: number;
-  preservedRecords: number;
-  pointSha256: string;
-  /** `null` when the body the point froze is gone entirely. */
-  liveSha256: string | null;
-};
-
 /** §8 (verbatim): what restoring one recovery point would cost. */
 export type ExecutionRecoveryPreview = {
   /**
-   * §7 R4: the loss-payload generation. A preview of another generation is
-   * refused by `restoreExecutionBackup` rather than silently losing the
-   * retained-body loss it cannot describe.
+   * The loss-payload generation. A preview of another generation is refused by
+   * `restoreExecutionBackup` rather than decoded with a loss inventory it does
+   * not carry.
    */
   version: number;
   backupPath: string;
@@ -229,14 +193,8 @@ export type ExecutionRecoveryPreview = {
   liveEpoch: number;
   backupEpoch: number;
   lostOperationIds: string[];
-  /** §7 R4: the retained accepted bodies the restore would NOT roll back. */
-  retainedDifferences: ExecutionRecoveryRetainedDifference[];
-  /** §7 R4: the point's frozen retained inventory digest. */
-  retainedDigest: string;
-  /** §7 R4: the live retained inventory digest the preview compared against it. */
-  retainedLiveDigest: string;
   /**
-   * §7 R4/§4.2: the populated coverage generation each side records for its
+   * §4.2: the populated coverage generation each side records for its
    * ACTIVE migration — the point's own bytes and the live store's, read from
    * each store rather than asserted. `null` when a side records none (a staged
    * pre-activation store).
@@ -252,13 +210,7 @@ export type ExecutionRestoreReceipt = {
   storeId: string;
   epoch: number;
   restoredFromSha256: string;
-  /** §7 R4: the point's frozen retained accepted-body inventory digest. */
-  retainedDigest: string;
-  /** §7 R4: the live retained inventory digest this attempt re-froze and recorded. */
-  retainedLiveDigest: string;
-  /** §7 R4: the retained bodies/selection facts this restore did NOT roll back. */
-  retainedDifferences: ExecutionRecoveryRetainedDifference[];
-  /** §7 R4/§4.2: the coverage generation each side recorded for its active migration. */
+  /** §4.2: the coverage generation each side recorded for its active migration. */
   backupCoverageDigest: string | null;
   liveCoverageDigest: string | null;
   preRestoreBackup: BackupReceipt;
@@ -280,6 +232,21 @@ const CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name 
 /** The migration that introduced provenance origin. */
 const PROVENANCE_ORIGIN_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced project content authority (roadmaps). */
+const ROADMAP_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that added coverage to execution migration rows. */
+const EXECUTION_COVERAGE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced project milestones (both tables exist from here). */
+const MILESTONE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced the native Dsh host-state domain. */
+const DSH_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that recorded Dsh ledger legacy provenance columns. */
+const DSH_LEGACY_PROVENANCE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;
 
 /** §4.3: the canonical control harness root that owns this context's store. */
 function controlRootOf(context: StoreContext): string {
@@ -354,7 +321,7 @@ function recoveryFailureHook(stage: "before-replacement" | "after-replacement"):
 // Reading the three authority domains
 // ---------------------------------------------------------------------------
 
-type AuthorityDomain = "issue" | "catalog" | "execution";
+type AuthorityDomain = "issue" | "catalog" | "execution" | "host";
 
 /** One enumerated authority row: its key, its own revision (or presence), its content digest. */
 type AuthorityRow = { domain: AuthorityDomain; key: string; revision: number | null; digest: string };
@@ -368,8 +335,8 @@ type AuthorityTable = {
   key: (row: Record<string, unknown>) => string;
   /** The row's own authority revision column, when the table carries one. */
   revisionColumn?: string;
-  /** True when the table only exists once the catalog/execution migration applied. */
-  requires?: "catalog" | "execution";
+  /** True when the table only exists once its introducing migration applied. */
+  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "host";
 };
 
 function text(row: Record<string, unknown>, column: string): string {
@@ -387,7 +354,7 @@ function number(row: Record<string, unknown>, column: string): number {
 }
 
 /**
- * Every authority table of the three domains (§2 of the primary spec), in the
+ * Every authority table of the four domains (§2 of the primary spec), in the
  * order the inventory reports them. `projection_*` is deliberately absent:
  * contract §5 makes those tables a disposable published generation, so losing
  * one is not an authority loss.
@@ -424,6 +391,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
       "external_id",
       "url",
       "identity_key",
+      "milestone_id",
     ],
     orderBy: "id",
     key: (row) => `issue:${text(row, "id")}`,
@@ -612,19 +580,113 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "execution_migrations",
-    columns: ["manifest_id", "manifest_hash", "phase", "manifest_json", "activation_receipt_json", "retirement_json", "created_at", "updated_at"],
+    columns: [
+      "manifest_id",
+      "manifest_hash",
+      "phase",
+      "manifest_json",
+      "activation_receipt_json",
+      "retirement_json",
+      "created_at",
+      "updated_at",
+      "coverage_json",
+    ],
     orderBy: "manifest_id",
     key: (row) => `migration:${text(row, "manifest_id")}`,
     requires: "execution",
   },
+  {
+    domain: "catalog",
+    table: "project_roadmaps",
+    columns: ["project_id", "project_kind", "content_markdown", "content_hash", "revision", "updated_at"],
+    orderBy: "project_id",
+    key: (row) => `roadmap:${text(row, "project_id")}`,
+    revisionColumn: "revision",
+    requires: "roadmap",
+  },
+  {
+    domain: "catalog",
+    table: "project_milestones",
+    columns: ["milestone_id", "project_id", "project_kind", "name", "target", "status", "ordinal", "revision", "created_at", "updated_at"],
+    orderBy: "milestone_id",
+    key: (row) => `milestone:${text(row, "milestone_id")}`,
+    revisionColumn: "revision",
+    requires: "milestone",
+  },
+  {
+    domain: "host",
+    table: "dsh_ledger_events",
+    columns: ["seq_rowid", "workflow_id", "event_id", "event_json", "recorded_at", "legacy_source_digest", "legacy_line"],
+    orderBy: "seq_rowid",
+    key: (row) => `ledger-event:${text(row, "seq_rowid")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_accepted_identities",
+    columns: ["workflow_id", "event_id", "digest", "accepted_at"],
+    orderBy: "workflow_id, event_id",
+    key: (row) => `accepted:${text(row, "workflow_id")}/${text(row, "event_id")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_scan_bounds",
+    columns: ["workflow_id", "session_id", "next", "stream"],
+    orderBy: "workflow_id, session_id",
+    key: (row) => `scan-bound:${text(row, "workflow_id")}/${text(row, "session_id")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_session_bindings",
+    columns: ["session_id", "cwd", "selected_workflow_id", "execution_binding", "excluded_before_seq", "updated_at"],
+    orderBy: "session_id, cwd",
+    key: (row) => `binding:${text(row, "session_id")}/${text(row, "cwd")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_status_emissions",
+    columns: ["session_id", "cwd", "turn", "emitted_at", "payload_json"],
+    orderBy: "session_id, cwd",
+    key: (row) => `emission:${text(row, "session_id")}/${text(row, "cwd")}`,
+    requires: "host",
+  },
 ];
 
-type TableAvailability = { catalog: boolean; execution: boolean; provenanceOrigin: boolean };
+type TableAvailability = {
+  catalog: boolean;
+  execution: boolean;
+  executionCoverage: boolean;
+  roadmap: boolean;
+  milestone: boolean;
+  host: boolean;
+  provenanceOrigin: boolean;
+  dshLegacyProvenance: boolean;
+};
 
 function available(table: AuthorityTable, availability: TableAvailability): boolean {
   if (table.requires === "catalog") return availability.catalog;
   if (table.requires === "execution") return availability.execution;
+  if (table.requires === "roadmap") return availability.roadmap;
+  if (table.requires === "milestone") return availability.milestone;
+  if (table.requires === "host") return availability.host;
   return true;
+}
+
+/** The columns of one inventory table this store's schema actually carries. */
+function inventoryColumns(table: AuthorityTable, availability: TableAvailability): readonly string[] {
+  let columns = table.columns;
+  if (table.table === "issues" && !availability.milestone) columns = columns.filter((column) => column !== "milestone_id");
+  if (table.table === "execution_migrations" && !availability.executionCoverage) {
+    columns = columns.filter((column) => column !== "coverage_json");
+  }
+  if (!availability.provenanceOrigin) columns = columns.filter((column) => column !== "origin");
+  if (!availability.dshLegacyProvenance) {
+    columns = columns.filter((column) => column !== "legacy_source_digest" && column !== "legacy_line");
+  }
+  return columns;
 }
 
 /** Enumerate every authority row of one store, deterministic key order, duplicate keys refused. */
@@ -633,9 +695,7 @@ function readAuthorityRows(db: StoreDb, availability: TableAvailability): Author
   const seen = new Set<string>();
   for (const table of AUTHORITY_TABLES) {
     if (!available(table, availability)) continue;
-    const columns = availability.provenanceOrigin
-      ? table.columns
-      : table.columns.filter((column) => column !== "origin");
+    const columns = inventoryColumns(table, availability);
     const found = db.prepare(`select ${columns.join(", ")} from ${table.table} order by ${table.orderBy}`).all() as Array<
       Record<string, unknown>
     >;
@@ -883,7 +943,7 @@ async function openLiveReadSnapshot(context: StoreContext): Promise<LiveReadSnap
 }
 
 /**
- * §7 R4/§4.2: the populated coverage generation a store records for its ACTIVE
+ * §4.2: the populated coverage generation a store records for its ACTIVE
  * migration, `null` when the store records none (a staged pre-activation store,
  * or a schema that predates the execution authority). It is read from the
  * store's own `execution_migrations` row, never from a caller's assertion: the
@@ -988,7 +1048,12 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
       const availability: TableAvailability = {
         catalog: handle.schemaVersion >= CATALOG_MIGRATION_VERSION,
         execution: handle.schemaVersion >= EXECUTION_MIGRATION_VERSION,
+        executionCoverage: handle.schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
+        roadmap: handle.schemaVersion >= ROADMAP_MIGRATION_VERSION,
+        milestone: handle.schemaVersion >= MILESTONE_MIGRATION_VERSION,
+        host: handle.schemaVersion >= DSH_MIGRATION_VERSION,
         provenanceOrigin: handle.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
+        dshLegacyProvenance: handle.schemaVersion >= DSH_LEGACY_PROVENANCE_MIGRATION_VERSION,
       };
       // Verified before the inventory is handed back: the capability path read an
       // image of a store with no `-wal`, and that image only IS the live store
@@ -1101,92 +1166,10 @@ function lossDigestOf(input: {
       authorityDifferences: input.preview.authorityDifferences,
       lostOperationIds: input.preview.lostOperationIds,
       resurrectedOperationIds: input.resurrectedOperationIds,
-      retainedDigest: input.preview.retainedDigest,
-      retainedLiveDigest: input.preview.retainedLiveDigest,
-      retainedDifferences: input.preview.retainedDifferences,
       backupCoverageDigest: input.preview.backupCoverageDigest,
       liveCoverageDigest: input.preview.liveCoverageDigest,
     }),
   );
-}
-
-/**
- * §7 R4: compare the point's frozen retained accepted-body inventory with the
- * live bodies.
- *
- * The rule is exactly §7's: a live body whose accepted records still carry the
- * point's records, in order and by exact hash, is an append-only extension and
- * its extra records are PRESERVED (never deleted by a restore, never a loss).
- * A body that was replaced or deleted is a loss the operator has to approve.
- * An unterminated trailing record the point did not record cannot be reconciled
- * by any hash, so it refuses with both stores and every body retained and asks
- * for an explicit salvage scope instead of guessing an accepted identity.
- */
-function compareRetainedBodies(
-  point: string,
-  recorded: RetainedBodyInventory,
-  live: RetainedBodyInventory,
-): ExecutionRecoveryRetainedDifference[] {
-  const differences: ExecutionRecoveryRetainedDifference[] = [];
-  const atPoint = [...recorded.bodies].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const now = [...live.bodies].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  for (const bodies of [atPoint, now]) {
-    for (let index = 1; index < bodies.length; index += 1) {
-      if (bodies[index - 1]!.path === bodies[index]!.path) {
-        throw lossUnaccepted(
-          `the retained inventory records the path ${bodies[index]!.path} twice; a body appears exactly once in one frozen set, so ` +
-            `this inventory cannot describe the live bodies. Nothing was replaced and every body is retained.`,
-        );
-      }
-    }
-  }
-  const lost = (body: RetainedBodyCheckpoint, liveBody: RetainedBodyCheckpoint | undefined): ExecutionRecoveryRetainedDifference => {
-    if (liveBody === undefined) {
-      return {
-        path: body.path,
-        kind: body.selection ? "selection" : "deleted",
-        lostRecords: body.records.length,
-        preservedRecords: 0,
-        pointSha256: body.sha256,
-        liveSha256: null,
-      };
-    }
-    if (liveBody.partial !== body.partial) {
-      throw lossUnaccepted(
-        `the retained body ${body.path} ends with an unterminated record the recovery point at ${point} did not record (live ` +
-          `partial ${liveBody.partial === null ? "\u2014 none" : liveBody.partial.slice(0, 12)}, recorded ` +
-          `${body.partial === null ? "\u2014 none" : body.partial.slice(0, 12)}); an interrupted append has no accepted identity, ` +
-          `so no hash reconciles it. The live store and every retained body are left exactly as they are: name the explicit salvage ` +
-          `scope for ${body.path} (reconcile that ledger through its own lock and re-preview). Nothing was replaced.`,
-      );
-    }
-    let shared = 0;
-    while (shared < body.records.length && body.records[shared] === liveBody.records[shared]) shared += 1;
-    const lostRecords = body.records.length - shared;
-    return {
-      path: body.path,
-      kind: body.selection ? "selection" : lostRecords > 0 ? "replaced" : "preserved",
-      lostRecords,
-      preservedRecords: liveBody.records.length - shared,
-      pointSha256: body.sha256,
-      liveSha256: liveBody.sha256,
-    };
-  };
-  let left = 0;
-  let right = 0;
-  while (left < atPoint.length) {
-    const body = atPoint[left]!;
-    while (right < now.length && now[right]!.path < body.path) right += 1;
-    const liveBody = right < now.length && now[right]!.path === body.path ? now[right]! : undefined;
-    // A body the point froze that is gone is ALWAYS a difference, even an empty
-    // one; a body that is byte-identical is not one at all, while an append-only
-    // extension IS one, because §7 preserves it and the operator is told the
-    // restored state does not include it.
-    const difference = lost(body, liveBody);
-    if (liveBody === undefined || difference.lostRecords > 0 || difference.preservedRecords > 0) differences.push(difference);
-    left += 1;
-  }
-  return differences;
 }
 
 /** Validate the recovery point location before staging any private image. */
@@ -1266,7 +1249,12 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
   const availability: TableAvailability = {
     catalog: live.schemaVersion >= CATALOG_MIGRATION_VERSION,
     execution: live.schemaVersion >= EXECUTION_MIGRATION_VERSION,
+    executionCoverage: live.schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
+    roadmap: live.schemaVersion >= ROADMAP_MIGRATION_VERSION,
+    milestone: live.schemaVersion >= MILESTONE_MIGRATION_VERSION,
+    host: live.schemaVersion >= DSH_MIGRATION_VERSION,
     provenanceOrigin: live.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
+    dshLegacyProvenance: live.schemaVersion >= DSH_LEGACY_PROVENANCE_MIGRATION_VERSION,
   };
   const copy = await readCopyRows(imagePath ?? point, availability);
 
@@ -1315,28 +1303,6 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
   const lostOperationIds = [...liveOperationIds].filter((id) => !copyOperationIds.has(id)).sort();
   const resurrectedOperationIds = [...copyOperationIds].filter((id) => !liveOperationIds.has(id)).sort();
 
-  // §7 R4: the DB copy does not carry the retained accepted bodies, so the
-  // point's frozen inventory is read from beside the copy and compared with the
-  // live bodies. A missing, forged or other-generation inventory refuses: a
-  // restore that cannot describe the body loss it would neither disclose nor
-  // roll back is not a loss-aware restore.
-  const recordedRetained = await readRetainedBodyInventory(point);
-  if (
-    recordedRetained.storeId !== description.storeId ||
-    recordedRetained.epoch !== description.epoch ||
-    recordedRetained.revision !== description.revision
-  ) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the retained-body inventory recorded beside ${point} describes store ${recordedRetained.storeId} epoch ` +
-        `${recordedRetained.epoch} revision ${recordedRetained.revision}, not the point's ${description.storeId} epoch ` +
-        `${description.epoch} revision ${description.revision}. The recorded bodies are not this recovery point's, so the point ` +
-        `is not restored against them. Nothing was replaced.`,
-    );
-  }
-  const liveRetained = freezeRetainedBodies(context, { storeId: live.storeId, epoch: live.epoch, revision: live.revision });
-  const retainedDifferences = compareRetainedBodies(point, recordedRetained, liveRetained);
-
   const withoutDigest: Omit<ExecutionRecoveryPreview, "lossDigest"> = {
     version: EXECUTION_RECOVERY_PROTOCOL_VERSION,
     backupPath: point,
@@ -1345,9 +1311,6 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
     liveEpoch: live.epoch,
     backupEpoch: description.epoch,
     lostOperationIds,
-    retainedDifferences,
-    retainedDigest: recordedRetained.digest,
-    retainedLiveDigest: liveRetained.digest,
     backupCoverageDigest: copy.coverageDigest,
     liveCoverageDigest: live.coverageDigest,
     authorityDifferences: differences,
@@ -1399,7 +1362,7 @@ type ResolvedRestoreInput = {
 function requireDifference(value: unknown, index: number): ExecutionRecoveryAuthorityDifference {
   if (!isPlainObject(value)) throw conflict(`the preview's difference ${index} is not an object`);
   const domain = value.domain;
-  if (domain !== "issue" && domain !== "catalog" && domain !== "execution") {
+  if (domain !== "issue" && domain !== "catalog" && domain !== "execution" && domain !== "host") {
     throw conflict(`the preview's difference ${index} names domain ${JSON.stringify(domain)}`);
   }
   if (!isNonEmptyString(value.key)) throw conflict(`the preview's difference ${index} carries no row key`);
@@ -1437,14 +1400,14 @@ function requireRestoreInput(input: {
   }
   const preview: unknown = raw.preview;
   if (!isPlainObject(preview)) throw conflict("a restore needs the preview object it was taken from");
-  // §7 R4: a loss payload of another generation is refused by NAME. A version-1
-  // preview cannot describe a retained accepted-body loss, and a restore that
-  // accepted it would silently ignore the bodies the point froze.
+  // A loss payload of another generation is refused by NAME: a restore that
+  // accepted a payload of an older inventory would silently approve a loss that
+  // is no longer the complete one.
   if (preview.version !== EXECUTION_RECOVERY_PROTOCOL_VERSION) {
     throw conflict(
       `the preview declares loss-payload version ${JSON.stringify(preview.version)}, not this protocol's ` +
-        `${EXECUTION_RECOVERY_PROTOCOL_VERSION}; a preview of an older generation cannot describe the retained accepted-body loss ` +
-        `a restore would leave in place. Take a fresh preview with \`previewExecutionRestore\`.`,
+        `${EXECUTION_RECOVERY_PROTOCOL_VERSION}; a preview of another generation does not carry this protocol's whole-store ` +
+        `loss inventory. Take a fresh preview with \`previewExecutionRestore\`.`,
     );
   }
   if (!isNonEmptyString(preview.backupPath) || !isNonEmptyString(preview.backupSha256)) {
@@ -1455,12 +1418,6 @@ function requireRestoreInput(input: {
   }
   if (!Array.isArray(preview.lostOperationIds) || !Array.isArray(preview.authorityDifferences)) {
     throw conflict("the preview carries no loss inventory; take one with `previewExecutionRestore`");
-  }
-  if (!isNonEmptyString(preview.retainedDigest) || !isNonEmptyString(preview.retainedLiveDigest) || !Array.isArray(preview.retainedDifferences)) {
-    throw conflict(
-      "the preview carries no retained accepted-body inventory; a restore under this protocol is told which bodies the point froze " +
-        "and which of them the live store no longer matches. Take a fresh preview with `previewExecutionRestore`.",
-    );
   }
   const positive = (value: unknown, field: string): number => {
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
@@ -1488,9 +1445,6 @@ function requireRestoreInput(input: {
       liveEpoch: positive(preview.liveEpoch, "liveEpoch"),
       backupEpoch: positive(preview.backupEpoch, "backupEpoch"),
       lostOperationIds,
-      retainedDifferences: preview.retainedDifferences.map(requireRetainedDifference),
-      retainedDigest: preview.retainedDigest,
-      retainedLiveDigest: preview.retainedLiveDigest,
       backupCoverageDigest: digestOrNull(preview.backupCoverageDigest, "backupCoverageDigest"),
       liveCoverageDigest: digestOrNull(preview.liveCoverageDigest, "liveCoverageDigest"),
       lossDigest: preview.lossDigest,
@@ -1498,38 +1452,6 @@ function requireRestoreInput(input: {
     },
     operator: raw.operator,
     authorization: raw.authorization,
-  };
-}
-
-/** §7 R4: one retained difference, validated field by field into the declared shape. */
-function requireRetainedDifference(value: unknown, index: number): ExecutionRecoveryRetainedDifference {
-  if (!isPlainObject(value)) throw conflict(`the preview's retained difference ${index} is not an object`);
-  const kind = value.kind;
-  if (kind !== "deleted" && kind !== "replaced" && kind !== "preserved" && kind !== "selection") {
-    throw conflict(`the preview's retained difference ${index} names kind ${JSON.stringify(kind)}`);
-  }
-  if (!isNonEmptyString(value.path)) throw conflict(`the preview's retained difference ${index} carries no body path`);
-  const count = (candidate: unknown, field: string): number => {
-    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
-      throw conflict(`the preview's retained difference ${index} carries ${field} ${JSON.stringify(candidate)}`);
-    }
-    return candidate;
-  };
-  if (!isNonEmptyString(value.pointSha256)) throw conflict(`the preview's retained difference ${index} carries no point digest`);
-  let liveSha256: string | null = null;
-  if (value.liveSha256 !== null) {
-    if (!isNonEmptyString(value.liveSha256)) {
-      throw conflict(`the preview's retained difference ${index} carries liveSha256 ${JSON.stringify(value.liveSha256)}`);
-    }
-    liveSha256 = value.liveSha256;
-  }
-  return {
-    path: value.path,
-    kind,
-    lostRecords: count(value.lostRecords, "lostRecords"),
-    preservedRecords: count(value.preservedRecords, "preservedRecords"),
-    pointSha256: value.pointSha256,
-    liveSha256,
   };
 }
 
@@ -1556,13 +1478,7 @@ type ExecutionRecoveryRecord = {
   restoredCopySha256: string;
   restoredCopyPath: string;
   lossDigest: string;
-  /** §7 R4: the point's frozen retained accepted-body inventory digest. */
-  retainedDigest: string;
-  /** §7 R4: the live retained inventory digest this attempt verified. */
-  retainedLiveDigest: string;
-  /** §7 R4: the retained bodies/selection facts the restore does NOT roll back. */
-  retainedDifferences: ExecutionRecoveryRetainedDifference[];
-  /** §7 R4/§4.2: the coverage generation each side recorded for its active migration. */
+  /** §4.2: the coverage generation each side recorded for its active migration. */
   backupCoverageDigest: string | null;
   liveCoverageDigest: string | null;
   /** §8/§2.3: what the operator still owes before a consumer may read the store. */
@@ -1580,9 +1496,9 @@ function requiredRebind(): string {
     "the live store and the recovery point, so a pre-restore handle refuses `store.stale-epoch`, the restored session rows are " +
     "below the new epoch and authorize nothing, and any restored held lease keeps its old `owner_epoch`. Recover each " +
     "workflow's coordinator with `recoverExecutionCoordinator` (naming the recorded prior holder and attesting it stopped), " +
-    "rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. The retained " +
-    "accepted bodies are NOT rolled back (\u00A77 R4): a record appended after the point is preserved, and any replaced or deleted " +
-    "accepted body or selection fact the receipt lists is disclosed rather than resurrected."
+    "rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. A database image " +
+    "does not roll back the append-only logs and documents beside the store: notes, agent-flow history and the launch journal " +
+    "keep every byte they had, so their history is never resurrected or truncated by a restore."
   );
 }
 
@@ -1832,10 +1748,9 @@ async function runRestoreImage(
         `complete. Nothing was replaced.`,
     );
   }
-  // This restore already holds the §4.3 maintenance exclusion and this root's
-  // status write lock, so the safety point is taken through the unlocked form
-  // (a nested acquisition on the same lockdir is not reentrant).
-  const safety = await backupStoreUnderExclusion(context, {
+  // The restore's pre-restore safety point is the same lock-free verified copy
+  // the public `backupStore` verb takes (a single `VACUUM INTO` snapshot).
+  const safety = await backupStore(context, {
     out: join(root, "archived", "store-migration", "backups", `pre-restore-e${before.epoch}-r${before.revision}-${randomUUID()}.db`),
   });
 
@@ -1864,11 +1779,6 @@ async function runRestoreImage(
           `nothing was replaced.`,
       );
     }
-    // §7 R4: the live retained accepted bodies are re-frozen here so the receipt
-    // records the set the replacement did not roll back. The recorded approved
-    // set is never re-compared — a body that moved since the preview is a
-    // description of some other set, not a refusal.
-    const liveRetained = freezeRetainedBodies(context, { storeId: before.storeId, epoch: before.epoch, revision: before.revision });
     const imageSha256 = await sha256OfFile(imagePath);
     const record: ExecutionRecoveryRecord = {
       recoveryVersion: EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -1886,9 +1796,6 @@ async function runRestoreImage(
       restoredCopySha256: imageSha256,
       restoredCopyPath: imagePath,
       lossDigest: inventory.preview.lossDigest,
-      retainedDigest: inventory.preview.retainedDigest,
-      retainedLiveDigest: liveRetained.digest,
-      retainedDifferences: inventory.preview.retainedDifferences,
       backupCoverageDigest: inventory.preview.backupCoverageDigest,
       liveCoverageDigest: inventory.preview.liveCoverageDigest,
       requiredRebind: requiredRebind(),
@@ -1960,9 +1867,6 @@ async function runRestoreImage(
       storeId: installed.storeId,
       epoch: installed.epoch,
       restoredFromSha256: inventory.preview.backupSha256,
-      retainedDigest: inventory.preview.retainedDigest,
-      retainedLiveDigest: liveRetained.digest,
-      retainedDifferences: inventory.preview.retainedDifferences,
       backupCoverageDigest: inventory.preview.backupCoverageDigest,
       liveCoverageDigest: inventory.preview.liveCoverageDigest,
       preRestoreBackup: safety,

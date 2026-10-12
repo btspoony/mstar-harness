@@ -111,7 +111,7 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "store.execution.restore-preview"
           ? "Select a readable execution backup and writable preview destination. Run mstar store execution restore-preview --backup <backup> --out <preview>."
           : id === "store.execution.restore"
-            ? "The backup preview, operator authorization, and target store state must match the diagnostic. Inspect store authority with mstar status validate."
+            ? "The backup preview or operator authorization does not match the diagnostic. Regenerate a current preview with mstar store execution restore-preview --backup <backup> --out <preview>, then retry restore with the same operator and authorization."
             : "Choose a writable export destination or omit --out for stdout. Run mstar store execution export."});
   }
 }
