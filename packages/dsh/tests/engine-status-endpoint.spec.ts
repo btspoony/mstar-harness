@@ -12,18 +12,23 @@
  * waterfall persists the snapshot) and only then calls the endpoint, so the
  * served payload is proven to be the emitted one.
  */
-import { afterEach, describe, expect, it } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { initializeStore, openStore } from '@mstar-harness/engine'
+import { initializeStore, openStore, storeDbPath } from '@mstar-harness/engine'
 import * as entry from '../src/index.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
-import { readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
+// Namespace imports of the two REAL modules the endpoint calls into: the
+// picker-boundary cases interpose a call-through wrapper on ONE exported
+// function per case, so the production handler still reads the real native
+// authority while the test controls exactly when the authority moves.
+import * as endpointStore from '../src/engine-status-store.ts'
+import * as workflowSelection from '../src/gates/workflow-selection.ts'
 import {
   installEngineStatusEndpoint,
   MSTAR_ENGINE_STATUS_METHOD,
@@ -36,9 +41,18 @@ import { bootApp, seedActiveWorkflow, seedHarness, seedStore, v2Root, v2Snapshot
 
 let booted: BootResult | undefined
 
+/**
+ * The picker-boundary interposer a window case arms. Restored after every test
+ * so a failing assertion can never leak the wrapper into the next case (the
+ * mocked reader/writer is a module-level binding shared by the whole file).
+ */
+let boundarySpy: { mockRestore(): void } | undefined
+
 afterEach(async () => {
   await booted?.dispose()
   booted = undefined
+  boundarySpy?.mockRestore()
+  boundarySpy = undefined
 })
 
 /**
@@ -506,6 +520,37 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
     })
   }
 
+  /**
+   * Advance the REAL authority generation of the fixture store, exactly as the
+   * engine's own fixtures do (`execution-store.test.ts`), so the picker compares
+   * two genuinely different authority reads rather than a token the test handed
+   * to a wrapper. Synchronous on purpose: the picker's commit is a synchronous
+   * native call, so the second window's barrier cannot yield between the
+   * automatic validation and the native transaction.
+   */
+  function advanceAuthorityEpoch(harnessDir: string): void {
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      db.prepare('update store_meta set authority_epoch = authority_epoch + 1 where id = 1').run()
+    } finally {
+      db.close()
+    }
+  }
+
+  /** The fixture store's own generation, read back from the native authority. */
+  function authorityEpochOf(harnessDir: string): number {
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      const row = db.prepare('select authority_epoch from store_meta where id = 1').get() as
+        | { authority_epoch?: unknown }
+        | undefined
+      if (typeof row?.authority_epoch !== 'number') throw new Error('fixture generation is unreadable')
+      return row.authority_epoch
+    } finally {
+      db.close()
+    }
+  }
+
   it('refuses invalid/terminal ids, cwd mismatch, non-live sessions and a failed store commit', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedTwoActives(app)
@@ -554,65 +599,114 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
       binding: { selection: { kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' } },
     })
   })
-  it('refuses a picker commit when the authority is replaced after registry selection', async () => {
+  /**
+   * Window 1 — the authority is replaced AFTER the registry read and BEFORE
+   * the automatic source read (`engine-status-endpoint.ts` `pick()` step 2 →
+   * step 3). The interposer is a CALL-THROUGH wrapper on the real reader: the
+   * first (registry) read is delegated verbatim, and only once it has answered
+   * does the test advance the REAL authority generation. The picker's second
+   * read therefore compares two genuinely different authority reads, so the
+   * refusal can only be the source-comparison token — the native commit guard
+   * is never reached.
+   */
+  it('refuses with selection-generation-changed when the authority is replaced between the registry and automatic source reads', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedTwoActives(app)
-    const original = await readExecutionWorkflowSource({ harnessDir: app.harnessDir })
-    if (original.kind !== 'error' || original.storeId === undefined || original.epoch === undefined) {
-      throw new Error('fixture generation must be present')
-    }
+    liveSession(app, 's-A', app.root, 17)
     const endpoint = endpointOf(app)
-    const engineUrl = new URL('../../engine/dist/engine.js', import.meta.url).href
-    const switchSource = `import { openStore } from ${JSON.stringify(engineUrl)}; import { setTimeout } from 'node:timers/promises'; const context={harnessDir:process.env.DSH_HARNESS_DIR}; for(let i=0;i<240;i++){const h=await openStore(context,'write');h.db.prepare('update store_meta set authority_epoch=authority_epoch+1 where id=1').run();h.close();if(i===0)console.log('first-generation-replacement');await setTimeout(1);}`
-    const switcher = spawn(process.execPath, ['--input-type=module', '-e', switchSource], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, DSH_HARNESS_DIR: app.harnessDir },
-    })
-    let switchOutput = ''
-    const { promise: ready, resolve: readySwitch } = Promise.withResolvers<void>()
-    switcher.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-      switchOutput += chunk
-      if (switchOutput.includes('first-generation-replacement')) readySwitch()
-    })
-    switcher.stderr.setEncoding('utf8').on('data', (chunk: string) => { switchOutput += chunk })
-    const { promise: switchResult, resolve: switchDone, reject: switchFailed } = Promise.withResolvers<void>()
-    switcher.on('error', switchFailed)
-    switcher.on('close', (code) => code === 0
-      ? switchDone()
-      : switchFailed(new Error(`authority switcher exit ${code}: ${switchOutput}`)))
-    const sessionIds = Array.from({ length: 48 }, (_, index) => `race-${index}`)
-    for (const sessionId of sessionIds) liveSession(app, sessionId, app.root, 17)
-    try {
-      await Promise.race([
-        ready,
-        switchResult.then(() => { throw new Error('authority switcher exited before its first generation bump') }),
-      ])
-      const answers = await Promise.all(sessionIds.map((sessionId) => endpoint.selectWorkflow(sessionId, app.root, 'wf-a')))
-      await switchResult
-      const current = await readExecutionWorkflowSource({ harnessDir: app.harnessDir })
-      if (current.kind !== 'error' || current.epoch === undefined) throw new Error('replacement generation is unreadable')
-      expect(current.epoch).toBeGreaterThan(original.epoch)
-      const refusedIndex = answers.findIndex((answer) =>
-        answer.status === 'unavailable' &&
-        (answer.reason === 'selection-generation-changed' || answer.reason.includes('store.stale-epoch')),
-      )
-      if (refusedIndex < 0) throw new Error(`no picker request observed the replacement generation: ${answers.map((answer) => answer.status === 'unavailable' ? answer.reason : answer.status).join(',')}`)
-      const refusedSession = sessionIds[refusedIndex]
-      if (refusedSession === undefined) throw new Error('refused request has no session id')
-      expect(readWorkflowSessionBinding(app.harnessDir, refusedSession, app.root)).toEqual({ kind: 'ok' })
 
-      expect(await endpoint.selectWorkflow(refusedSession, app.root, 'wf-a')).toEqual({
-        status: 'selected',
-        sessionId: refusedSession,
-        workflowId: 'wf-a',
-      })
-      expect(readWorkflowSessionBinding(app.harnessDir, refusedSession, app.root)).toMatchObject({
-        kind: 'ok',
-        binding: { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 17 },
-      })
-    } finally {
-      switcher.kill()
-    }
+    const originalEpoch = authorityEpochOf(app.harnessDir)
+
+    const realRead = workflowSelection.readExecutionWorkflowSource
+    let reads = 0
+    let advanced = false
+    boundarySpy = spyOn(workflowSelection, 'readExecutionWorkflowSource').mockImplementation(async (context, hint) => {
+      reads += 1
+      const answer = await realRead(context, hint)
+      if (!advanced) {
+        // The registry read has answered; the authority moves now, i.e. before
+        // the picker's automatic read is even issued.
+        advanced = true
+        advanceAuthorityEpoch(app.harnessDir)
+      }
+      return answer
+    })
+
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'unavailable',
+      reason: 'selection-generation-changed',
+    })
+    // Both source reads were the REAL reader against the REAL store.
+    expect(reads).toBe(2)
+    expect(authorityEpochOf(app.harnessDir)).toBe(originalEpoch + 1)
+    // No preference and no floor: the session has no binding row at all.
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toEqual({ kind: 'ok' })
+
+    // The barriered generation has settled: an unchanged healthy retry commits
+    // the preference and the correct exclusion floor.
+    boundarySpy.mockRestore()
+    boundarySpy = undefined
+    expect(await endpoint.selectWorkflow('s-A', app.root, 'wf-a')).toEqual({
+      status: 'selected',
+      sessionId: 's-A',
+      workflowId: 'wf-a',
+    })
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-A', app.root)).toMatchObject({
+      kind: 'ok',
+      binding: { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 17 },
+    })
   })
 
+  /**
+   * Window 2 — the authority is replaced AFTER the automatic-source validation
+   * and BEFORE the native commit (`pick()` step 3 → step 5). The interposer is
+   * a CALL-THROUGH wrapper on the real native writer: it advances the REAL
+   * generation from the SAME synchronous boundary the picker commits on (the
+   * commit is a synchronous native call, so the bump cannot be async), then
+   * delegates the untouched call through. The native transaction re-reads the
+   * metadata it opened with, so only the picker's forwarded
+   * `selectedGeneration` can refuse it — a caller that dropped that token
+   * would commit here.
+   */
+  it('refuses with the native stale-generation guard when the authority is replaced after automatic validation and before the native commit', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedTwoActives(app)
+    liveSession(app, 's-B', app.root, 17)
+    const endpoint = endpointOf(app)
+
+    const realWrite = endpointStore.updateWorkflowSessionBinding
+    let commits = 0
+    let advanced = false
+    boundarySpy = spyOn(endpointStore, 'updateWorkflowSessionBinding').mockImplementation((harnessDir, sessionId, cwd, update) => {
+      commits += 1
+      if (!advanced) {
+        advanced = true
+        advanceAuthorityEpoch(harnessDir)
+      }
+      return realWrite(harnessDir, sessionId, cwd, update)
+    })
+
+    const refused = await endpoint.selectWorkflow('s-B', app.root, 'wf-a')
+    expect(refused).toEqual({
+      status: 'unavailable',
+      reason:
+        'store-[store.stale-epoch] The selected store identity or epoch changed; resolve the current authority and retry.',
+    })
+    // Exactly one native commit attempt, refused before its body ran.
+    expect(commits).toBe(1)
+    // No preference and no floor: the session has no binding row at all.
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-B', app.root)).toEqual({ kind: 'ok' })
+
+    boundarySpy.mockRestore()
+    boundarySpy = undefined
+    expect(await endpoint.selectWorkflow('s-B', app.root, 'wf-a')).toEqual({
+      status: 'selected',
+      sessionId: 's-B',
+      workflowId: 'wf-a',
+    })
+    expect(readWorkflowSessionBinding(app.harnessDir, 's-B', app.root)).toMatchObject({
+      kind: 'ok',
+      binding: { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 17 },
+    })
+  })
 })
