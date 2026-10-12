@@ -3,13 +3,13 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { readSessionEnvelope, type CoordinationSession } from "./coordination-envelope.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
-import { withStatusWriteLock } from "./lease.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
-import { initializeStore, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
+import { initializeStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
+import { importDshHostStateFiles, type DshHostStateImportReport } from "./host-state-import.js";
 
 export type MinimalImportResult = {
   verdict: "upgraded";
@@ -18,7 +18,7 @@ export type MinimalImportResult = {
   dispositions: string[];
   sourceDigest: string;
 };
-export type MinimalStoreUpgradeResult = MinimalImportResult & { schemaVersion: number; authorityState: "active" };
+export type MinimalStoreUpgradeResult = MinimalImportResult & { schemaVersion: number; authorityState: "active"; dsh: DshHostStateImportReport };
 
 type Binding = ImportedSessionBinding;
 type Plan = ImportedPlan;
@@ -246,63 +246,59 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   const { context, operator, operationId } = input;
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
-  // Concurrency: one operator with the legacy workspace stopped; this lock serializes status/snapshot row writes.
-  // No execution-maintenance lock is needed because this importer creates no ledger projections.
-  return withStatusWriteLock(join(rootOf(context), "status.json"), async () => {
-    const source = discover(context);
-    const requestHash = createHash("sha256").update(JSON.stringify({
-      operation: "store.upgrade",
-      root: source.root,
-      operator,
-      operationId,
-    })).digest("hex");
-    return withExecutionTransaction(context, (tx) => {
-      const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as { request_hash?: unknown; result_json?: unknown } | undefined;
-      if (prior !== undefined) {
-        if (prior.request_hash !== requestHash) throw new ExecutionError("execution.operation-conflict", `operationId ${operationId} was already used for a different store upgrade request.`);
-        return JSON.parse(String(prior.result_json)) as MinimalImportResult;
+  const source = discover(context);
+  const requestHash = createHash("sha256").update(JSON.stringify({
+    operation: "store.upgrade",
+    root: source.root,
+    operator,
+    operationId,
+  })).digest("hex");
+  return withExecutionTransaction(context, (tx) => {
+    const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as { request_hash?: unknown; result_json?: unknown } | undefined;
+    if (prior !== undefined) {
+      if (prior.request_hash !== requestHash) throw new ExecutionError("execution.operation-conflict", `operationId ${operationId} was already used for a different store upgrade request.`);
+      return JSON.parse(String(prior.result_json)) as MinimalImportResult;
+    }
+    const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
+    let imported = 0;
+    const dispositions: string[] = [];
+    for (const row of source.rows) {
+      if (existing.has(row.id)) continue;
+      writeImportedExecutionWorkflow(tx, row);
+      existing.add(row.id);
+      imported++;
+      for (const plan of row.plans) {
+        if (plan.droppedLease) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations`);
+        if (plan.droppedSession) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy plan-PM session binding dropped on import; that seat no longer exists`);
       }
-      const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
-      let imported = 0;
-      const dispositions: string[] = [];
-      for (const row of source.rows) {
-        if (existing.has(row.id)) continue;
-        writeImportedExecutionWorkflow(tx, row);
-        existing.add(row.id);
-        imported++;
-        for (const plan of row.plans) {
-          if (plan.droppedLease) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations`);
-          if (plan.droppedSession) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy plan-PM session binding dropped on import; that seat no longer exists`);
-        }
-        if (row.snapshot.integration_merge_lease !== undefined) {
-          dispositions.push(`workflow ${row.id}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`);
-        }
+      if (row.snapshot.integration_merge_lease !== undefined) {
+        dispositions.push(`workflow ${row.id}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`);
       }
-      const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
-      if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
-        throw new ExecutionError("store.not-active", `issue/catalog authority is ${String(storeAuthority?.authority_state ?? "missing")}; resolve the store state, then rerun \`store upgrade\`.`);
-      }
-      const now = new Date().toISOString();
-      if (tx.execution.authorityState !== "active") {
-        const execution = tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1 and revision = ?")
-          .run(source.rootDoc.updated_at, now, tx.execution.revision) as { changes?: unknown };
-        if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun \`store upgrade\` to enumerate current files.");
-      } else if (imported > 0) {
-        const execution = tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1 and revision = ?")
-          .run(source.rootDoc.updated_at, tx.execution.revision) as { changes?: unknown };
-        if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun \`store upgrade\` to enumerate current files.");
-      }
-      if (storeAuthority.authority_state === "staged") {
-        const store = tx.db.prepare("update store_meta set authority_state = 'active', revision = revision + 1, activated_at = ? where id = 1 and authority_state = 'staged' and authority_epoch = ?")
-          .run(now, tx.epoch) as { changes?: unknown };
-        if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun `store upgrade` against the current store.");
-      } else if (imported > 0) {
-        tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-      }
-      const result: MinimalImportResult = { verdict: "upgraded", imported, skipped: source.skipped, dispositions, sourceDigest: source.sourceDigest };
-      tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash, JSON.stringify(result), new Date().toISOString());
-      return result;
-    });
+    }
+    const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
+    if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
+      throw new ExecutionError("store.not-active", `issue/catalog authority is ${String(storeAuthority?.authority_state ?? "missing")}; resolve the store state, then rerun \`store upgrade\`.`);
+    }
+    const now = new Date().toISOString();
+    if (tx.execution.authorityState !== "active") {
+      const execution = tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1 and revision = ?")
+        .run(source.rootDoc.updated_at, now, tx.execution.revision) as { changes?: unknown };
+      if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
+    } else if (imported > 0) {
+      const execution = tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1 and revision = ?")
+        .run(source.rootDoc.updated_at, tx.execution.revision) as { changes?: unknown };
+      if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
+    }
+    if (storeAuthority.authority_state === "staged") {
+      const store = tx.db.prepare("update store_meta set authority_state = 'active', revision = revision + 1, activated_at = ? where id = 1 and authority_state = 'staged' and authority_epoch = ?")
+        .run(now, tx.epoch) as { changes?: unknown };
+      if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun `store upgrade` against the current store.");
+    } else if (imported > 0) {
+      tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    }
+    const result: MinimalImportResult = { verdict: "upgraded", imported, skipped: source.skipped, dispositions, sourceDigest: source.sourceDigest };
+    tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash, JSON.stringify(result), new Date().toISOString());
+    return result;
   });
 }
 
@@ -316,7 +312,8 @@ export async function upgradeStoreMinimal(input: {
    * treats a thin or unattested stop id as authority.
    */
   attestation?: unknown;
-}): Promise<MinimalImportResult & { schemaVersion: number; authorityState: "active" }> {
+  acknowledgedSkips?: readonly string[];
+}): Promise<MinimalStoreUpgradeResult> {
   const { context } = input;
   const attestation: MigrationContext["attestation"] =
     input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
@@ -329,5 +326,18 @@ export async function upgradeStoreMinimal(input: {
     initialized.close();
   } else schemaVersion = (await upgradeStore(context, { attestation })).schemaVersion;
   const result = await importExecutionMinimal(input);
-  return { ...result, schemaVersion, authorityState: "active" };
+  let dsh: DshHostStateImportReport;
+  try {
+    dsh = await importDshHostStateFiles(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof StoreError) {
+      throw new StoreError(error.code, `Execution-state import committed (${result.imported} workflows); DSH import did not commit. ${message}`, error.details);
+    }
+    if (error instanceof ExecutionError) {
+      throw new ExecutionError(error.code, `Execution-state import committed (${result.imported} workflows); DSH import did not commit. ${message}`);
+    }
+    throw new StoreError("store.upgrade-dsh-failed", `Execution-state import committed (${result.imported} workflows); DSH import did not commit. ${message}`);
+  }
+  return { ...result, schemaVersion, authorityState: "active", dsh };
 }

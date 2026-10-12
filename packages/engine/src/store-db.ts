@@ -79,7 +79,10 @@ export type StoreErrorCode =
   | "execution.consumer-not-ready"
   | "execution.workflow-identity-mismatch"
   | "store.stale-epoch"
-  | "store.not-active";
+  | "store.not-active"
+  | "store.upgrade-dsh-source-refused"
+  | "store.upgrade-dsh-ack-unmatched"
+  | "store.upgrade-dsh-failed";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -1424,6 +1427,14 @@ create table dsh_status_emissions(
 `;
 
 
+export const MIGRATION_11_SQL = `
+alter table dsh_ledger_events add column legacy_source_digest text;
+alter table dsh_ledger_events add column legacy_line integer;
+create unique index dsh_ledger_events_legacy_line
+  on dsh_ledger_events(workflow_id, legacy_source_digest, legacy_line)
+  where legacy_source_digest is not null;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1436,6 +1447,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
   { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
   { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
+  { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

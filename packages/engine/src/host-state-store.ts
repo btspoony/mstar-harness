@@ -288,4 +288,103 @@ export function readDshStatusEmission(
     return undefined;
   }
 }
+export type DshHostStateRows = {
+  workflows: ReadonlyArray<{
+    workflowId: string;
+    identities: ReadonlyArray<{ eventId: string; digest: string; acceptedAt: string }>;
+    tailSourceDigest: string | null;
+    ledgerRows: ReadonlyArray<{ eventId: string | null; lineJson: string; lineIndex: number; recordedAt: string }>;
+    scanBounds: ReadonlyArray<{ sessionId: string; next: number; stream: string | null }>;
+  }>;
+  bindings: ReadonlyArray<{
+    sessionId: string; cwd: string; selectedWorkflowId: string | null;
+    executionBindingJson: string | null; excludedBeforeSeq: number; updatedAt: string;
+  }>;
+  emissions: ReadonlyArray<{ sessionId: string; cwd: string; turn: number; emittedAt: string; payloadJson: string }>;
+};
+
+export function importDshHostStateRows(
+  tx: { db: StoreDb; storeId: string; epoch: number },
+  rows: DshHostStateRows,
+  nowIso: string,
+): {
+  written: { workflows: number; identities: number; ledgerRows: number; scanBounds: number; bindings: number; emissions: number };
+  merged: { scanBoundsAdvanced: number; bindingFloorsRaised: number };
+  refused: Array<{ selector: string; facts: string; reason: string; source: string }>;
+  reusedOrPresent: string[];
+  revisionAdvanced: boolean;
+} {
+  const authority = tx.db.prepare("select store_id, authority_epoch, authority_state from store_meta where id = 1").get() as
+    { store_id?: string; authority_epoch?: number; authority_state?: string } | undefined;
+  if (authority?.store_id !== tx.storeId || authority.authority_epoch !== tx.epoch) {
+    throw new StoreError("store.stale-epoch", "The store identity or epoch changed during legacy host-state import.");
+  }
+  if (authority.authority_state !== "active") {
+    throw new StoreError("store.not-active", `The store authority is ${authority?.authority_state ?? "missing"}; rerun store upgrade.`);
+  }
+  const written = { workflows: 0, identities: 0, ledgerRows: 0, scanBounds: 0, bindings: 0, emissions: 0 };
+  const merged = { scanBoundsAdvanced: 0, bindingFloorsRaised: 0 };
+  const refused: Array<{ selector: string; facts: string; reason: string; source: string }> = [];
+  const reusedOrPresent: string[] = [];
+  if (!Number.isFinite(Date.parse(nowIso))) throw new StoreError("store.corrupt", "The legacy import timestamp is invalid.");
+  let changed = false;
+  const identity = tx.db.prepare("select digest from dsh_accepted_identities where workflow_id = ? and event_id = ?");
+  const insertIdentity = tx.db.prepare("insert into dsh_accepted_identities(workflow_id,event_id,digest,accepted_at) values(?,?,?,?)");
+  const workflowRows = tx.db.prepare("select count(*) as n from dsh_ledger_events where workflow_id = ?");
+  const provenance = tx.db.prepare("select legacy_line from dsh_ledger_events where workflow_id = ? and legacy_source_digest = ? order by legacy_line");
+  const insertLedger = tx.db.prepare("insert into dsh_ledger_events(workflow_id,event_id,event_json,recorded_at,legacy_source_digest,legacy_line) values(?,?,?,?,?,?)");
+  for (const workflow of rows.workflows) {
+    if (!workflow.workflowId) throw new StoreError("store.corrupt", "Imported workflow id must not be empty.");
+    let workflowWritten = false;
+    for (const fact of workflow.identities) {
+      const prior = identity.get(workflow.workflowId, fact.eventId) as { digest: string } | undefined;
+      if (prior && prior.digest !== fact.digest) { refused.push({ selector: `dsh-ledger:${workflow.workflowId}`, facts: fact.eventId, reason: "accepted identity has a different digest", source: `workflows/${workflow.workflowId}` }); continue; }
+      if (!prior) { insertIdentity.run(workflow.workflowId, fact.eventId, fact.digest, fact.acceptedAt); written.identities++; changed = true; workflowWritten = true; }
+      else reusedOrPresent.push(`identity:${workflow.workflowId}:${fact.eventId}`);
+    }
+    if (workflow.tailSourceDigest !== null && workflow.ledgerRows.length) {
+      const origins = provenance.all(workflow.workflowId, workflow.tailSourceDigest) as Array<{ legacy_line: number }>;
+      const expected = workflow.ledgerRows.map((row) => row.lineIndex);
+      const alreadyPresent = origins.length === expected.length && origins.every((origin, index) => origin.legacy_line === expected[index]);
+      const hasRows = Number((workflowRows.get(workflow.workflowId) as { n: number }).n) > 0;
+      if (alreadyPresent) reusedOrPresent.push(`tail:${workflow.workflowId}:${workflow.tailSourceDigest}`);
+      else if (hasRows) refused.push({ selector: `dsh-ledger:${workflow.workflowId}`, facts: `tail rows (${workflow.ledgerRows.length})`, reason: "ordering-unsafe: native or incomplete legacy-provenance rows already exist", source: `workflows/${workflow.workflowId}` });
+      else for (const row of workflow.ledgerRows) {
+        insertLedger.run(workflow.workflowId, row.eventId, row.lineJson, row.recordedAt, workflow.tailSourceDigest, row.lineIndex);
+        written.ledgerRows++; changed = true; workflowWritten = true;
+      }
+    }
+    for (const bound of workflow.scanBounds) {
+      const prior = tx.db.prepare("select next, stream from dsh_scan_bounds where workflow_id = ? and session_id = ?").get(workflow.workflowId, bound.sessionId) as { next: number; stream: string | null } | undefined;
+      if (!prior) { tx.db.prepare("insert into dsh_scan_bounds(workflow_id,session_id,next,stream) values(?,?,?,?)").run(workflow.workflowId,bound.sessionId,bound.next,bound.stream); written.scanBounds++; changed=true; workflowWritten=true; }
+      else if (prior.stream !== bound.stream) reusedOrPresent.push(`shadowed-bound:${workflow.workflowId}:${bound.sessionId}:different-incarnation`);
+      else if (bound.next > prior.next) {
+        tx.db.prepare("update dsh_scan_bounds set next = ? where workflow_id = ? and session_id = ? and stream is ? and next < ?").run(bound.next,workflow.workflowId,bound.sessionId,bound.stream,bound.next);
+        written.scanBounds++; merged.scanBoundsAdvanced++; changed=true; workflowWritten=true;
+      } else reusedOrPresent.push(`bound:${workflow.workflowId}:${bound.sessionId}:already-present`);
+    }
+    if (workflowWritten) written.workflows++;
+  }
+  for (const binding of rows.bindings) {
+    const prior = tx.db.prepare("select excluded_before_seq from dsh_session_bindings where session_id = ? and cwd = ?").get(binding.sessionId,binding.cwd) as { excluded_before_seq: number } | undefined;
+    if (!prior) {
+      tx.db.prepare("insert into dsh_session_bindings(session_id,cwd,selected_workflow_id,execution_binding,excluded_before_seq,updated_at) values(?,?,?,?,?,?)")
+        .run(binding.sessionId,binding.cwd,binding.selectedWorkflowId,binding.executionBindingJson,binding.excludedBeforeSeq,binding.updatedAt);
+      written.bindings++; changed=true;
+    } else if (binding.excludedBeforeSeq > prior.excluded_before_seq) {
+      tx.db.prepare("update dsh_session_bindings set excluded_before_seq = ? where session_id = ? and cwd = ? and excluded_before_seq < ?")
+        .run(binding.excludedBeforeSeq,binding.sessionId,binding.cwd,binding.excludedBeforeSeq);
+      merged.bindingFloorsRaised++; changed=true;
+    } else reusedOrPresent.push(`binding:${binding.sessionId}:${binding.cwd}:already-present`);
+  }
+  for (const emission of rows.emissions) {
+    const prior = tx.db.prepare("select 1 from dsh_status_emissions where session_id = ? and cwd = ?").get(emission.sessionId,emission.cwd);
+    if (!prior) {
+      tx.db.prepare("insert into dsh_status_emissions(session_id,cwd,turn,emitted_at,payload_json) values(?,?,?,?,?)")
+        .run(emission.sessionId,emission.cwd,emission.turn,emission.emittedAt,emission.payloadJson);
+      written.emissions++; changed=true;
+    } else reusedOrPresent.push(`emission:${emission.sessionId}:${emission.cwd}:already-present`);
+  }
+  return { written, merged, refused, reusedOrPresent, revisionAdvanced: changed };
+}
 

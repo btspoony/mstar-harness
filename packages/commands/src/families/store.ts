@@ -31,6 +31,7 @@ const inputSchema = z.object({
   attestation: z.string().optional(),
   out: z.string().optional(),
   operator: z.string().optional(),
+  ackSkipDsh: z.array(z.string()).optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
@@ -43,6 +44,9 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.internal-error`;
+  if (id === "store.upgrade" && code === "store.upgrade-dsh-ack-unmatched") {
+    return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
+  }
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
     : refusalEnvelope({
@@ -55,9 +59,11 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         ? 'For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical file state, run mstar store upgrade.'
         : id === "store.init"
           ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
-          : id === "store.upgrade"
-            ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
-            : id === "store.migrate"
+          : code === "store.upgrade-dsh-source-refused"
+            ? "Rerun mstar store upgrade with --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; ordinary retry remains available."
+            : id === "store.upgrade"
+              ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
+              : id === "store.migrate"
               ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
               : id === "store.backup"
                 ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
@@ -154,11 +160,22 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         const attestation = input.attestation === undefined
           ? undefined
           : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
+        const invalidAck = input.ackSkipDsh?.filter((selector) => {
+          if (selector === "dsh-status") return false;
+          const match = /^dsh-(?:ledger|bounds):(.+)$/.exec(selector);
+          return !match || match[1] === "." || match[1] === ".." || match[1]!.includes("/");
+        }) ?? [];
+        if (invalidAck.length) {
+          throw Object.assign(new SddScriptError(`invalid --ack-skip-dsh selector: ${invalidAck.join(", ")}`, 2), {
+            code: "store.upgrade-dsh-ack-unmatched",
+          });
+        }
         return ok(id, await upgradeStoreMinimal({
           context,
           operator: required(input.operator, "--operator"),
           operationId: randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
+          ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
         }));
       }
       case "store.backup": {
@@ -223,26 +240,29 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const optionFlags: Record<keyof StoreInput, string> = {
     harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
     operator: "--operator <name>",
+    ackSkipDsh: "--ack-skip-dsh <selector...>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator", "attestation"],
-    migrate: ["harness", "apply", "manifest", "out"],
+    upgrade: ["harness", "operator", "attestation", "ackSkipDsh"],
     backup: ["harness", "out"],
+    migrate: ["harness", "apply", "manifest", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
+  const optionKeys = optionsByVerb[verb]!;
   const attestationHelp = activationAttestationDocumentConstraints.map(({ path, rule }) => `${path}: ${rule}`).join(" ");
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
+    ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, or dsh-status. The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
   };
-  const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
   const options = optionKeys.map((key) => ({
     key,
     flags: optionFlags[key],
     required: false,
+    variadic: key === "ackSkipDsh",
     ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
   }));
   return {

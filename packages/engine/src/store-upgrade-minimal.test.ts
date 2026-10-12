@@ -498,7 +498,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
   const refused = await openStore(context, "read");
   try {
-    expect(refused.schemaVersion).toBe(MIGRATIONS.length - 1);
+    expect(refused.schemaVersion).toBe(8);
     // Every protected row is byte-identical: the batch rolled back whole.
     const afterPlan = JSON.parse(JSON.stringify(
       refused.db.prepare("select * from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId),
@@ -784,7 +784,7 @@ test("an unattested retired plan-PM integration mutex refuses the upgrade and ke
   expect(await protectedStore(context)).toEqual(before);
   const store = await openStore(context, "read");
   try {
-    expect(store.schemaVersion).toBe(MIGRATIONS.length - 1);
+    expect(store.schemaVersion).toBe(8);
     expect(store.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 1 });
     expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 1 });
   } finally {
@@ -805,7 +805,7 @@ for (const invalid of [
     expect(existsSync(storeDbPath(empty))).toBe(false);
     const created = await initializeStore(empty, { attestation: stopDocument("retired") });
     try {
-      expect(created.schemaVersion).toBe(9);
+      expect(created.schemaVersion).toBe(MIGRATIONS.length);
     } finally {
       created.close();
     }
@@ -813,7 +813,7 @@ for (const invalid of [
     const before = await protectedStore(context);
     await expect(upgradeStore(context, { attestation: invalid.document })).rejects.toMatchObject({ code: invalid.code });
     expect(await protectedStore(context)).toEqual(before);
-    expect(await upgradeStore(context, { attestation: stopDocument(sessionId) })).toEqual({ schemaVersion: 9 });
+    expect(await upgradeStore(context, { attestation: stopDocument(sessionId) })).toEqual({ schemaVersion: MIGRATIONS.length });
   });
 }
 
@@ -842,7 +842,7 @@ for (const boundary of [
       expect(await protectedStore(context)).toEqual(before);
     }
     const accepted = boundary.accepted ? document : stopDocument(sessionId);
-    expect(await upgradeStore(context, { attestation: accepted })).toEqual({ schemaVersion: 9 });
+    expect(await upgradeStore(context, { attestation: accepted })).toEqual({ schemaVersion: MIGRATIONS.length });
     const upgraded = await openStore(context, "read");
     try {
       const row = upgraded.db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?")

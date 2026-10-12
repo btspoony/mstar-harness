@@ -257,5 +257,33 @@ describe("store and execution command surface", () => {
     if (rejected.status === "refused") expect(rejected.code).toBe("store.activation-stale");
     expect(await storeSnapshot(harness)).toEqual(before);
   });
+  test("store upgrade exposes source-scoped DSH recovery and reports the acknowledged loss", async () => {
+    const root = fixture("store-upgrade-dsh-recovery");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initialized = await initializeStore({ harnessDir: harness });
+    initialized.close();
+    const workflowDir = join(harness, "workflows", "wf-recovery");
+    mkdirSync(workflowDir, { recursive: true });
+    const identityPath = join(workflowDir, "agent-flow-ids.jsonl");
+    const source = '{"id":"accepted","d":"digest"}\\nmalformed\\n';
+    writeFileSync(identityPath, source);
+    const command = definition("store.upgrade");
+    const refused = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused", exitCode: 1 });
+    expect(refused.message).toContain("dsh-ledger:wf-recovery");
+    expect(refused.message).toContain("Recovery:");
+    expect(refused.details).toMatchObject({ recovery: expect.stringContaining("--ack-skip-dsh") });
+    const unmatched = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-status"] }, root);
+    expect(unmatched).toMatchObject({ status: "usage", code: "store.upgrade-dsh-ack-unmatched", exitCode: 2 });
+    const recovered = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-ledger:wf-recovery"] }, root);
+    expect(recovered.status).toBe("ok");
+    const result = dataOf(recovered);
+    expect(result.dsh).toMatchObject({ verdict: "partially-imported" });
+    expect(JSON.parse(JSON.stringify(result.dsh))).toMatchObject({
+      findings: [expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-recovery" })],
+    });
+    expect(readFileSync(identityPath, "utf8")).toBe(source);
+  });
 
 });
