@@ -895,7 +895,7 @@ export function refusePendingRegistration(
     "catalog.registration-pending",
     `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed ` +
       `(operation ${JSON.stringify(pending.operationId)}); registration must refuse until the legacy journal is settled. ` +
-      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its identity-verified failed snapshot; both retain source bytes. Read the current revision with "mstar catalog export".`,
+      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its identity-verified failed snapshot. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
   );
 }
 
@@ -1060,7 +1060,7 @@ export async function purgeCatalogRegistration(
     if (row.phase !== "aborted") {
       const current = readJournalVersions(db).catalogRevision;
       if (current !== input.expectedCatalogRevision) {
-        throw new CatalogError("catalog.revision-conflict", `expected catalog revision ${input.expectedCatalogRevision}; current revision is ${current}; read the current value with \`mstar catalog export\` and retry purge-registration`);
+        throw new CatalogError("catalog.revision-conflict", `expected catalog revision ${input.expectedCatalogRevision}; current revision is ${current}; retry purge-registration with this current value`);
       }
     }
     let after: unknown;

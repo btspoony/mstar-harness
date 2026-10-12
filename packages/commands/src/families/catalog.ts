@@ -108,8 +108,8 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
                     : id === "catalog.export"
                       ? "Choose a writable catalog export destination. Run mstar catalog export --out <path>."
                       : id === "catalog.reconcile"
-                        ? "Inspect pending registrations with mstar catalog reconcile --list, abandon an unregistered journal with mstar catalog reconcile --abort --operation-id <id>, or settle an identity-verified failed snapshot with mstar catalog purge-registration --workflow <workflow-id> --operation <id> --expect <catalog-revision> --actor <role>; read the revision with mstar catalog export. Source bytes remain."
-                        : "Verify the recorded workflow, failed-registration operation, current catalog revision (from mstar catalog export), actor and snapshot identity. Run mstar catalog purge-registration --workflow <workflow-id> --operation <operation-id> --expect <revision> --actor <actor>."});
+                        ? "Inspect pending registrations with mstar catalog reconcile --list; abandon an unregistered journal with mstar catalog reconcile --abort --operation-id <id>, or settle a failed snapshot with mstar catalog purge-registration --workflow <workflow-id> --operation <id> --expect <catalog-revision> --actor <role>. If stale, retry with the current revision printed in the refusal. Source bytes remain."
+                        : "Verify the recorded workflow, failed-registration operation, catalog revision and actor. Run mstar catalog purge-registration --workflow <workflow-id> --operation <operation-id> --expect <revision> --actor <actor>."});
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
@@ -328,7 +328,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
         return refusalEnvelope({
           command: id, status: "refused", code: "catalog.verb-retired", exitCode: 1,
           message: "catalog reconcile's finish/adopt route is retired; there is no orphan-file recovery. Abandon a pending journal with --abort, or settle an identity-verified failed snapshot with purge-registration. Both retain the original source bytes.",
-          recovery: "Run mstar catalog reconcile --list; use --abort --operation-id <id> for an unregistered journal, or read the current revision with mstar catalog export and run mstar catalog purge-registration --workflow <workflow-id> --operation <id> --expect <catalog-revision> --actor <role> for a failed snapshot.",
+          recovery: "Run mstar catalog reconcile --list; use --abort --operation-id <id> for an unregistered journal, or use the `current revision` printed by a catalog.revision-conflict refusal and retry mstar catalog purge-registration --workflow <workflow-id> --operation <id> --expect <catalog-revision> --actor <role>.",
         });
       }
       requireAll(input, ["operationId"]);
