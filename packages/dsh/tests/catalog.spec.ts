@@ -522,6 +522,7 @@ Implement the invalidation.
     // invalidation observable is the record's own line (no out-of-band write).
     plugin.recordDispatch({
       harnessDir,
+      workflowId: 'wf-1',
       resolvedWorkflowDir: join(harnessDir, 'workflows/wf-1'),
       selectedGeneration: selectedGenerationFor(harnessDir),
       prompt: ASSIGNMENT,
@@ -592,6 +593,7 @@ Implement the invalidation.
     // observable is the record's own line (no out-of-band write).
     plugin.recordDispatch({
       harnessDir: join(wsA, '.mstar'),
+      workflowId: 'wf-1',
       resolvedWorkflowDir: join(wsA, '.mstar/workflows/wf-1'),
       selectedGeneration: selectedGenerationFor(join(wsA, '.mstar')),
       prompt: ASSIGNMENT,
@@ -1160,6 +1162,7 @@ Pick.
 
     plugin.recordDispatch({
       harnessDir,
+      workflowId: 'wf-a',
       resolvedWorkflowDir: join(harnessDir, 'workflows/wf-a'),
       selectedGeneration: selectedGenerationFor(harnessDir),
       prompt: ASSIGNMENT,

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openStore, readDshScanBound } from '@mstar-harness/engine'
-import { readAgentFlow, recordDispatch, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
+import { readAgentFlow, recordDispatch, recordSettle, recordSubagentLink, recordWorkflowEvent } from '../src/gates/agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from '../src/gates/agent-flow.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
@@ -52,7 +52,7 @@ describe('workflow event native acceptance and scan bound', () => {
     ctx.provide('sessions', { list: () => [session], get: (id: string) => id === 'session-1' ? session : undefined } as never)
     registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events).toMatchObject([{ kind: 'workflow-run', runId: 'run-1', name: 'audit' }])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toMatchObject([{ kind: 'workflow-run', runId: 'run-1', name: 'audit' }])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
   it('serializes cold source rows ahead of a concurrent live event on the verified stream', async () => {
@@ -93,7 +93,7 @@ describe('workflow event native acceptance and scan bound', () => {
     })
     release()
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['live-run', 'cold-run'])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['live-run', 'cold-run'])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
   it('refuses a source event when the resolved original generation is superseded before commit', async () => {
@@ -128,7 +128,7 @@ describe('workflow event native acceptance and scan bound', () => {
     registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveThenSupersede)
     await awaitWorkflowLedgerIdle()
     expect(changed).toBe(true)
-    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
     const restore = await openStore({ harnessDir }, 'write')
     try {
       restore.db.prepare('update store_meta set authority_epoch = ? where id = 1').run(selectedGeneration.epoch)
@@ -137,11 +137,11 @@ describe('workflow event native acceptance and scan bound', () => {
     }
     ctx.events.emit({}, 'session/created', session)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'stale-run')).toHaveLength(1)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'stale-run')).toHaveLength(1)
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
     ctx.events.emit({}, 'session/created', session)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'stale-run')).toHaveLength(1)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'stale-run')).toHaveLength(1)
   })
   it('keeps a bound row eligible across transient target refusal and retries the same log exactly once', async () => {
     const { root, harnessDir, workflowDir } = await activeFixture()
@@ -173,14 +173,14 @@ describe('workflow event native acceptance and scan bound', () => {
     await awaitWorkflowLedgerIdle()
     const afterRefusal = readWorkflowSessionBinding(harnessDir, 'session-1', root)
     expect(('binding' in afterRefusal ? afterRefusal.binding?.excludedBeforeSeq : undefined) ?? 0).toBe(floorBefore)
-    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
 
     ctx.events.emit({}, 'session/created', session)
     await awaitWorkflowLedgerIdle()
     ctx.events.emit({}, 'session/created', session)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'transient-run')).toHaveLength(1)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events.filter((event) => event.kind === 'workflow-run' && event.runId === 'transient-run')).toHaveLength(1)
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
     const afterRecovery = readWorkflowSessionBinding(harnessDir, 'session-1', root)
     expect(('binding' in afterRecovery ? afterRecovery.binding?.excludedBeforeSeq : undefined) ?? 0).toBe(floorBefore)
@@ -202,7 +202,7 @@ describe('workflow event native acceptance and scan bound', () => {
     ctx.provide('sessions', { list: () => [session], get: () => session } as never)
     registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'unbound-session')).toBeUndefined()
   })
   it('advances an isolated valid agent-end without a display row and refuses malformed agent-end positions', async () => {
@@ -232,7 +232,7 @@ describe('workflow event native acceptance and scan bound', () => {
     registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
-    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
 
     const valid = source(1_700_000_000_093, {
       type: 'tool-workflow/agent-end', seq: 0, time: 13,
@@ -242,7 +242,7 @@ describe('workflow event native acceptance and scan bound', () => {
     validContext.provide('sessions', { list: () => [valid], get: () => valid } as never)
     registerWorkflowLedger(validContext, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
   })
   it('re-registers created-session backfill idempotently and keeps live intake healthy after list/read failures', async () => {
@@ -270,7 +270,7 @@ describe('workflow event native acceptance and scan bound', () => {
     provideSessions(first, () => [session])
     registerWorkflowLedger(first, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflowDir)?.events.filter((event) => event.kind === 'workflow-run')).toHaveLength(1)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events.filter((event) => event.kind === 'workflow-run')).toHaveLength(1)
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
 
     const replay = new Context()
@@ -292,7 +292,7 @@ describe('workflow event native acceptance and scan bound', () => {
       data: { runId: 'replayed-run', stopReason: 'completed' },
     })
     await awaitWorkflowLedgerIdle()
-    const events = readAgentFlow(workflowDir)?.events ?? []
+    const events = readAgentFlow(workflowDir, 'wf-1')?.events ?? []
     expect(events.map((event) => event.kind)).toEqual(['workflow-run-end', 'workflow-run'])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 3 })
   })
@@ -341,7 +341,7 @@ describe('workflow event native acceptance and scan bound', () => {
     const rebuiltBound = readDshScanBound({ harnessDir }, 'wf-1', 'session-1')
     expect(rebuiltBound).toMatchObject({ next: 1 })
     expect(rebuiltBound?.stream).not.toBe(oldBound?.stream)
-    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual([
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual([
       'rebuilt-run',
       'workflow-run-end',
       'first-run',
@@ -356,7 +356,7 @@ describe('workflow event native acceptance and scan bound', () => {
     })
     await awaitWorkflowLedgerIdle()
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toEqual(rebuiltBound)
-    expect(readAgentFlow(workflowDir)?.events).toHaveLength(3)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toHaveLength(3)
   })
 
   it('isolates two bound workflows while an unbound fork and foreign-session target remain ineligible', async () => {
@@ -421,10 +421,10 @@ describe('workflow event native acceptance and scan bound', () => {
     }
     expect(readDshScanBound({ harnessDir }, 'wf-2', 'session-2')).toMatchObject({ next: 1 })
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toBeUndefined()
-    expect(readAgentFlow(workflows.second)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['only-second'])
+    expect(readAgentFlow(workflows.second, 'wf-2')?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['only-second'])
     releaseFirst()
     await awaitWorkflowLedgerIdle()
-    expect(readAgentFlow(workflows.first)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['only-first'])
+    expect(readAgentFlow(workflows.first, 'wf-1')?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['only-first'])
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'unbound-fork')).toBeUndefined()
     expect(readDshScanBound({ harnessDir }, 'wf-2', 'foreign-session')).toBeUndefined()
@@ -462,7 +462,7 @@ describe('workflow event native acceptance and scan bound', () => {
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
       await awaitWorkflowLedgerIdle()
       expect(warnings).toHaveLength(3)
-      expect(readAgentFlow(workflowDir)?.events).toHaveLength(7)
+      expect(readAgentFlow(workflowDir, 'wf-1')?.events).toHaveLength(7)
       expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 7 })
     } finally {
       setWorkflowLedgerLogger(previousLogger)
@@ -495,7 +495,7 @@ describe('workflow event native acceptance and scan bound', () => {
     ctx.provide('sessions', { list: () => [session], get: () => session } as never)
     registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
-    const view = readAgentFlow(workflowDir)
+    const view = readAgentFlow(workflowDir, 'wf-1')
     expect(view?.events.map((event) => event.kind)).toEqual([
       'workflow-run-end', 'workflow-run', 'workflow-run-end', 'workflow-agent', 'workflow-agent', 'workflow-run',
     ])
@@ -519,9 +519,9 @@ describe('workflow event native acceptance and scan bound', () => {
     expect(view?.summary.map((bucket) => bucket.outcome)).toEqual(expect.arrayContaining([
       'workflow-run', 'workflow-agent', 'workflow-run-end',
     ]))
-    expect(readAgentFlow(workflowDir, 0)?.events).toEqual([])
-    expect(readAgentFlow(workflowDir, 4)?.events).toHaveLength(4)
-    expect(readAgentFlow(workflowDir, 4)?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(4)
+    expect(readAgentFlow(workflowDir, 'wf-1', 0)?.events).toEqual([])
+    expect(readAgentFlow(workflowDir, 'wf-1', 4)?.events).toHaveLength(4)
+    expect(readAgentFlow(workflowDir, 'wf-1', 4)?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(4)
     ctx.events.emit({}, 'session/event', session, {
       type: 'tool-workflow/run-start',
       seq: 12.5,
@@ -530,11 +530,11 @@ describe('workflow event native acceptance and scan bound', () => {
     })
     await awaitWorkflowLedgerIdle()
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 12 })
-    expect(readAgentFlow(workflowDir)?.events).toHaveLength(6)
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toHaveLength(6)
     recordDispatch({
       harnessDir,
+      workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
-      selectedGeneration: selectedGenerationFor(harnessDir),
       prompt: `## Assignment
 
 **Execute as**: @fullstack-dev
@@ -542,19 +542,19 @@ describe('workflow event native acceptance and scan bound', () => {
       violations: [],
       hard: false,
     })
-    const mixed = readAgentFlow(workflowDir, 7)
+    const mixed = readAgentFlow(workflowDir, 'wf-1', 7)
     expect(mixed?.events).toHaveLength(7)
     expect(mixed?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(7)
     expect(mixed?.summary).toContainEqual({ role: 'fullstack-dev', outcome: 'ok', count: 1 })
     expect(mixed?.summary).toContainEqual({ role: 'workflow', outcome: 'workflow-run', count: 2 })
-    expect(readAgentFlow(workflowDir, 1)?.summary).toEqual([{ role: 'fullstack-dev', outcome: 'ok', count: 1 }])
+    expect(readAgentFlow(workflowDir, 'wf-1', 1)?.summary).toEqual([{ role: 'fullstack-dev', outcome: 'ok', count: 1 }])
   })
 
   it('accepts, replays, and refuses conflicting source identity atomically', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const source = { sessionId: 'session-1', streamId: 'stream-a', seq: 4 }
     const event: AgentFlowWorkflowEvent = { v: 1, ts: 10, kind: 'workflow-run', runId: 'run-1', name: 'audit' }
-    const first = { harnessDir, workflowDir, event, source, selectedGeneration }
+    const first = { harnessDir, workflowId: 'wf-1', workflowDir, event, source, selectedGeneration }
     expect(recordWorkflowEvent(first)).toBe(true)
     expect(recordWorkflowEvent(first)).toBe(true)
     expect(recordWorkflowEvent({ ...first, event: { ...event, name: 'different' } })).toBe(false)
@@ -564,14 +564,55 @@ describe('workflow event native acceptance and scan bound', () => {
   it('replaces a bound when the verified stream incarnation changes', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const event: AgentFlowWorkflowEvent = { v: 1, ts: 10, kind: 'workflow-run', runId: 'run-1', name: 'audit' }
-    expect(recordWorkflowEvent({ harnessDir, workflowDir, event, source: { sessionId: 'session-1', streamId: 'old', seq: 20 }, selectedGeneration })).toBe(true)
-    expect(recordWorkflowEvent({ harnessDir, workflowDir, event, source: { sessionId: 'session-1', streamId: 'new', seq: 2 }, selectedGeneration })).toBe(true)
+    expect(recordWorkflowEvent({ harnessDir, workflowId: 'wf-1', workflowDir, event, source: { sessionId: 'session-1', streamId: 'old', seq: 20 }, selectedGeneration })).toBe(true)
+    expect(recordWorkflowEvent({ harnessDir, workflowId: 'wf-1', workflowDir, event, source: { sessionId: 'session-1', streamId: 'new', seq: 2 }, selectedGeneration })).toBe(true)
     expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toEqual({ next: 3, stream: 'new' })
+  })
+  it('attributes native workflow evidence to the selected id, not a nested directory basename', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-selected-id-'))
+    roots.push(root)
+    const harnessDir = join(root, '.agents')
+    await seedActiveWorkflow(harnessDir, 'wf-a', [], {}, 'session-a', root)
+    await seedActiveWorkflow(harnessDir, 'current', [], {}, 'session-current', root)
+    const selectedGeneration = selectedGenerationFor(harnessDir)
+    const workflowDir = join(harnessDir, 'workflows', 'custom', 'current')
+    const event: AgentFlowWorkflowEvent = { v: 1, ts: 10, kind: 'workflow-run', runId: 'run-a', name: 'audit' }
+    expect(recordWorkflowEvent({
+      harnessDir,
+      workflowId: 'wf-a',
+      workflowDir,
+      event,
+      source: { sessionId: 'session-a', streamId: 'selected-stream', seq: 1 },
+      selectedGeneration,
+    })).toBe(true)
+    expect(recordDispatch({
+      harnessDir,
+      workflowId: 'wf-a',
+      resolvedWorkflowDir: workflowDir,
+      selectedGeneration,
+      prompt: '**Execute as**: fullstack-dev',
+      violations: [],
+      hard: false,
+    })).toBeUndefined()
+    recordSettle({ harnessDir, workflowId: 'wf-a', workflowDir, selectedGeneration, outcome: 'ok', role: 'fullstack-dev' })
+    recordSubagentLink({
+      ref: { harnessDir, workflowId: 'wf-a', workflowDir, selectedGeneration, role: 'fullstack-dev' },
+      childId: 'child-a',
+      label: 'worker',
+    })
+    const selectedEvents = readAgentFlow(workflowDir, 'wf-a', undefined, harnessDir)?.events ?? []
+    expect(selectedEvents.map((row) => row.kind)).toContain('workflow-run')
+    expect(selectedEvents.map((row) => row.kind)).toContain('dispatch')
+    expect(selectedEvents.map((row) => row.kind)).toContain('settle')
+    expect(selectedEvents.map((row) => row.kind)).toContain('subagent-link')
+    expect(readAgentFlow(join(harnessDir, 'workflows', 'current'), 'current')?.events).toEqual([])
+    expect(readDshScanBound({ harnessDir }, 'wf-a', 'session-a')).toMatchObject({ next: 2 })
+    expect(readDshScanBound({ harnessDir }, 'current', 'session-a')).toBeUndefined()
   })
 
   it('does not fabricate an event projection when native authority is unavailable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-events-unavailable-'))
     roots.push(root)
-    expect(readAgentFlow(join(root, '.agents', 'workflows', 'wf-1'))).toBeNull()
+    expect(readAgentFlow(join(root, '.agents', 'workflows', 'wf-1'), 'wf-1')).toBeNull()
   })
 })

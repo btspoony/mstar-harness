@@ -30,7 +30,6 @@
  * public event APIs are re-exported by the entry.
  */
 import { createHash } from 'node:crypto'
-import { basename } from 'node:path'
 import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
@@ -339,12 +338,9 @@ export type AgentFlowEvent =
 export interface AgentFlowDispatchRef {
   /** The resolved `{HARNESS_DIR}` the dispatch was attributed to. */
   harnessDir: string
-  /**
-   * The ACTIVE workflow dir the dispatch event was appended to; paired
-   * writers retain it even if the active set changes later.
-   */
+  workflowId: string
+  /** The ACTIVE workflow directory; process target only, not machine identity. */
   workflowDir: string
-  /** The original store and epoch selection for all paired writes. */
   selectedGeneration: DshSelectedGeneration
   /** The dispatching session's stable id ('' when the exec carried none). */
   agent?: string
@@ -683,7 +679,7 @@ export function digestOfLedgerLine(line: string): string {
  * Append one live Dsh record under the originally selected authority generation.
  */
 function appendEvent(
-  workflowDir: string,
+  workflowId: string,
   event: AgentFlowEvent,
   identity: AgentFlowRecordIdentity | undefined,
   harnessDir: string,
@@ -691,7 +687,7 @@ function appendEvent(
 ): boolean {
   const result = appendDshLedgerRow(
     { harnessDir },
-    basename(workflowDir),
+    workflowId,
     ledgerLineOf(event, identity),
     identity?.eventId,
     selectedGeneration,
@@ -738,7 +734,8 @@ export function recordDispatch(input: {
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
-  /** ACTIVE execution graph target resolved by the asynchronous host gate. */
+  workflowId: string
+  /** ACTIVE execution graph directory target resolved by the asynchronous host gate. */
   resolvedWorkflowDir: string
   selectedGeneration: DshSelectedGeneration
 }): void {
@@ -779,7 +776,7 @@ export function recordDispatch(input: {
       verdict: verdictOf(input.violations, input.hard),
       hard: input.hard,
     }
-    if (!appendEvent(workflowDir, event, callIdentity('dispatch', agent, callId), input.harnessDir, input.selectedGeneration)) return
+    if (!appendEvent(input.workflowId, event, callIdentity('dispatch', agent, callId), input.harnessDir, input.selectedGeneration)) return
     try {
       invalidator?.(input.harnessDir)
     } catch (error) {
@@ -792,6 +789,7 @@ export function recordDispatch(input: {
         if (key !== undefined) {
           const ref: AgentFlowDispatchRef = {
             harnessDir: input.harnessDir,
+            workflowId: input.workflowId,
             workflowDir,
             selectedGeneration: input.selectedGeneration,
             ...(agent !== undefined ? { agent } : {}),
@@ -833,9 +831,8 @@ export function recordDispatch(input: {
  * retained so clients can match the settle to its dispatch.
  */
 export function recordSettle(input: {
-  harnessDir: string
+  workflowId: string
   workflowDir: string
-  agent?: string
   outcome: SettleOutcome
   durationMs?: number
   role?: string
@@ -868,7 +865,7 @@ export function recordSettle(input: {
       ...(childId !== undefined ? { childId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
-    if (appendEvent(workflowDir, event, callIdentity('settle', input.agent, input.callId), input.harnessDir, input.selectedGeneration)) {
+    if (appendEvent(input.workflowId, event, callIdentity('settle', input.agent, input.callId), input.harnessDir, input.selectedGeneration)) {
       try {
         invalidator?.(input.harnessDir)
       } catch (error) {
@@ -886,6 +883,7 @@ export function recordSettle(input: {
  */
 export function recordWorkflowEvent(input: {
   harnessDir: string
+  workflowId: string
   workflowDir: string
   event: AgentFlowWorkflowEvent
   source: AgentFlowEventSource
@@ -899,7 +897,7 @@ export function recordWorkflowEvent(input: {
   const eventId = workflowEventId(input.event, input.source)
   const lineJson = ledgerLineOf(input.event, { eventId, source: input.source })
   const result = appendDshWorkflowEvent({ harnessDir: input.harnessDir }, {
-    workflowId: basename(input.workflowDir),
+    workflowId: input.workflowId,
     eventId,
     digest: digestOfLedgerLine(lineJson),
     lineJson,
@@ -941,6 +939,7 @@ export interface WorkflowVerdictInput {
   /** The policy violation code (advisory/ask/denied rows only). */
   code?: string
   /** The authorized directory and original generation selected by the gate. */
+  workflowId: string
   resolvedWorkflowDir: string
   selectedGeneration: DshSelectedGeneration
 }
@@ -989,7 +988,7 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
       verdict: input.verdict,
       ...(input.code !== undefined && input.code !== '' ? { code: input.code } : {}),
     }
-    if (appendEvent(workflowDir, event, callIdentity('workflow-verdict', agent, callId), input.harnessDir, input.selectedGeneration)) {
+    if (appendEvent(input.workflowId, event, callIdentity('workflow-verdict', agent, callId), input.harnessDir, input.selectedGeneration)) {
       try {
         invalidator?.(input.harnessDir)
       } catch (error) {
@@ -1334,10 +1333,10 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
     .sort((a, b) => b.count - a.count || a.role.localeCompare(b.role) || a.outcome.localeCompare(b.outcome))
 }
 
-/** Read the latest native event window; unavailable authority is not empty. */
-export function readAgentFlow(workflowDir: string, limit?: number): AgentFlowView | null {
+/** Read the latest native event window; workflowId is the selected machine identity. */
+export function readAgentFlow(workflowDir: string, workflowId: string, limit?: number, harnessDir = dirname(dirname(workflowDir))): AgentFlowView | null {
   const n = limit === undefined ? AGENT_FLOW_DEFAULT_LIMIT : Math.max(0, Math.floor(limit))
-  const lines = readDshLedgerWindow({ harnessDir: dirname(dirname(workflowDir)) }, basename(workflowDir), n)
+  const lines = readDshLedgerWindow({ harnessDir }, workflowId, n)
   if (lines === null) return null
   const events: AgentFlowEvent[] = []
   for (const line of lines) {
@@ -1371,9 +1370,8 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
   const settleChildId = childId ?? ref.childId
   recordSettle({
     harnessDir: ref.harnessDir,
-    // The dispatch ref retains the native target and exact selected generation.
+    workflowId: ref.workflowId,
     workflowDir: ref.workflowDir,
-    ...(ref.callId !== undefined ? { callId: ref.callId } : {}),
     ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
     outcome,
     ...(durationMs !== undefined && Number.isFinite(durationMs) ? { durationMs } : {}),
@@ -1887,7 +1885,7 @@ export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: 
       ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
     }
-    if (appendEvent(ref.workflowDir, event, callIdentity('subagent-link', ref.agent, ref.callId), ref.harnessDir, ref.selectedGeneration)) {
+    if (appendEvent(ref.workflowId, event, callIdentity('subagent-link', ref.agent, ref.callId), ref.harnessDir, ref.selectedGeneration)) {
       try {
         invalidator?.(ref.harnessDir)
       } catch (error) {

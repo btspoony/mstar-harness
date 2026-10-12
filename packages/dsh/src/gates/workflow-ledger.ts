@@ -515,6 +515,7 @@ export function registerWorkflowLedger(
     if (
       recordWorkflowEvent({
         harnessDir,
+        workflowId,
         workflowDir,
         event: row.event,
         source: { sessionId: sid, streamId, seq: row.seq },

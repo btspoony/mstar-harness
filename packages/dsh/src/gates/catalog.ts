@@ -667,7 +667,7 @@ function harnessStateSource(
       // Read the selected workflow's native event window through the store.
       // `null` means no authoritative window is available; it is not an empty
       // success and no retired JSONL path is consulted.
-      agentFlow: readAgentFlow(join(harnessDir, 'workflows', selection.workflowId), 50),
+      agentFlow: readAgentFlow(join(harnessDir, selection.dir), selection.workflowId, 50, harnessDir),
     }
   } catch {
     return null // advisory degrade — the state section is absent, never hardening

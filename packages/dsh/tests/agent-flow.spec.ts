@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appendDshLedgerRow, openStore, readDshLedgerWindow } from '@mstar-harness/engine'
-import { callIdentity, readAgentFlow, recordDispatch, recordJobSettle, recordSettle, registerSettleListener, registerSubagentCatalogListener, SETTLE_SEAM, setAgentFlowInvalidator, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
+import { callIdentity, readAgentFlow as readSelectedAgentFlow, recordDispatch, recordJobSettle, recordSettle, registerSettleListener, registerSubagentCatalogListener, SETTLE_SEAM, setAgentFlowInvalidator, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
@@ -22,22 +22,23 @@ async function activeFixture() {
   await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, 'session-1', root)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows', 'wf-1'), selectedGeneration: selectedGenerationFor(harnessDir) }
 }
+const readFlow = (dir: string, workflowId = 'wf-1') => readSelectedAgentFlow(dir, workflowId)
 
 describe('agent-flow native event rows', () => {
   it('records dispatch and settle attribution in the selected workflow store', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     recordDispatch({
       harnessDir,
+      workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
       selectedGeneration,
       prompt: '## Assignment\n\n**Execute as**: fullstack-dev\n**Task category**: logic\n',
       violations: [],
       hard: false,
     })
-    recordSettle({ harnessDir, workflowDir, selectedGeneration, agent: 'session-1', outcome: 'ok', role: 'fullstack-dev' })
-
-    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
-    expect(readAgentFlow(workflowDir)?.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
+    recordSettle({ harnessDir, workflowId: 'wf-1', workflowDir, selectedGeneration, agent: 'session-1', outcome: 'ok', role: 'fullstack-dev' })
+    expect(readFlow(workflowDir, 'wf-1')?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
+    expect(readFlow(workflowDir, 'wf-1')?.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
     expect(readDshLedgerWindow({ harnessDir }, 'wf-1', 10)).toHaveLength(2)
   })
   it('pairs the real post-execute settle to its selected-generation dispatch', async () => {
@@ -52,8 +53,8 @@ describe('agent-flow native event rows', () => {
     const exec = { callId: 'call-1', name: 'subagent', agent: { id: 'session-1' } }
     recordDispatch({
       harnessDir,
+      workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
-      selectedGeneration,
       exec,
       pairing,
       prompt: `## Assignment
@@ -66,8 +67,8 @@ describe('agent-flow native event rows', () => {
     // Cordis accepts runtime event names beyond its declared event map.
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
     emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'foreground', runId: 'child-session' } })
-    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
-    expect(readAgentFlow(workflowDir)?.events[0]).toMatchObject({ kind: 'settle', role: 'fullstack-dev', childId: 'child-session' })
+    expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
+    expect(readFlow(workflowDir)?.events[0]).toMatchObject({ kind: 'settle', role: 'fullstack-dev', childId: 'child-session' })
     expect(pairing.dispatchByCallId.size).toBe(0)
     const persisted = readDshLedgerWindow({ harnessDir }, 'wf-1', 10)?.map((line) => JSON.parse(line) as { kind: string; eventId?: string }) ?? []
     const settle = persisted.find((event) => event.kind === 'settle')
@@ -79,7 +80,7 @@ describe('agent-flow native event rows', () => {
     const row = JSON.stringify({ v: 1, ts: 1, kind: 'settle', outcome: 'ok' })
     expect(appendDshLedgerRow({ harnessDir }, 'wf-1', row, undefined, selectedGeneration).kind).toBe('written')
     expect(appendDshLedgerRow({ harnessDir }, 'wf-1', row, undefined, selectedGeneration).kind).toBe('written')
-    expect(readAgentFlow(workflowDir)?.events).toHaveLength(2)
+    expect(readFlow(workflowDir)?.events).toHaveLength(2)
   })
 
   it('filters malformed native rows while projecting only derived dispatch fields', async () => {
@@ -93,7 +94,7 @@ describe('agent-flow native event rows', () => {
 
 SECRET_PROMPT_BODY_MUST_NOT_PERSIST
 `
-    recordDispatch({ harnessDir, resolvedWorkflowDir: workflowDir, selectedGeneration, prompt, violations: [], hard: false })
+    recordDispatch({ harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration, prompt, violations: [], hard: false })
     expect(appendDshLedgerRow(
       { harnessDir },
       'wf-1',
@@ -125,7 +126,7 @@ SECRET_PROMPT_BODY_MUST_NOT_PERSIST
     ).kind).toBe('written')
     const raw = readDshLedgerWindow({ harnessDir }, 'wf-1', 20) ?? []
     expect(raw.join('\\n')).not.toContain('SECRET_PROMPT_BODY_MUST_NOT_PERSIST')
-    const view = readAgentFlow(workflowDir)
+    const view = readFlow(workflowDir)
     expect(view?.events).toContainEqual(expect.objectContaining({ kind: 'dispatch', role: 'fullstack-dev', planId: 'native-flow', taskId: 'T7' }))
     const malformedOptionalSettle = view?.events.find((event) => event.kind === 'settle' && event.outcome === 'error')
     expect(malformedOptionalSettle).toBeDefined()
@@ -174,7 +175,7 @@ Catalog correlation regression.
       agent: { id: 'session-1', session: parent },
       arguments: { description: 'early' },
     }
-    recordDispatch({ harnessDir, resolvedWorkflowDir: workflowDir, selectedGeneration, exec: earlyExec, pairing, prompt: assignment, violations: [], hard: false })
+    recordDispatch({ harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration, exec: earlyExec, pairing, prompt: assignment, violations: [], hard: false })
     source[1] = {
       type: 'subagent/catalog', seq: 1, time: 2,
       data: { version: 0, childCreatedAt: 2, childId: 'wrong-label', label: 'not-early', mode: 'continuable' },
@@ -196,7 +197,7 @@ Catalog correlation regression.
       agent: { id: 'session-1', session: parent },
       arguments: { description: 'late' },
     }
-    recordDispatch({ harnessDir, resolvedWorkflowDir: workflowDir, selectedGeneration, exec: lateExec, pairing, prompt: assignment, violations: [], hard: false })
+    recordDispatch({ harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration, exec: lateExec, pairing, prompt: assignment, violations: [], hard: false })
     emitter.emit(SETTLE_SEAM, lateExec, { isError: false, value: { kind: 'background', jobId: 'job-identity' } })
     recordJobSettle({ id: 'job-identity', status: 'killed', startedAt: 100, finishedAt: 150 }, pairing)
     const foreignParent = { ...parent, eventAt: () => ({
@@ -214,7 +215,7 @@ Catalog correlation regression.
     parent.seq = 5
     ctx.events.emit({}, 'session/event', parent, source[4])
 
-    const events = readAgentFlow(workflowDir)?.events ?? []
+    const events = readFlow(workflowDir)?.events ?? []
     expect(events.filter((event) => event.kind === 'subagent-link')).toHaveLength(2)
     expect(events).toContainEqual(expect.objectContaining({
       kind: 'subagent-link', childId: 'early-child', label: 'early', planId: 'ledger-plan', taskId: 'T1', role: 'fullstack-dev',
@@ -226,7 +227,7 @@ Catalog correlation regression.
     expect(killed).toMatchObject({ taskRef: 'job-identity' })
     expect(killed).not.toHaveProperty('childId')
     expect(events.filter((event) => event.kind === 'subagent-link').every((event) => !('outcome' in event))).toBe(true)
-    expect(readAgentFlow(workflowDir)?.summary).toContainEqual({ role: 'fullstack-dev', outcome: 'subagent-link', count: 2 })
+    expect(readFlow(workflowDir)?.summary).toContainEqual({ role: 'fullstack-dev', outcome: 'subagent-link', count: 2 })
   })
   it('keeps job terminal, error precedence, continuable, and same-call session pairings truthful', async () => {
     const { root, harnessDir, workflowDir, selectedGeneration } = await activeFixture()
@@ -248,7 +249,7 @@ Catalog correlation regression.
 `
     const dispatch = (callId: string, agentId = 'session-1', targetDir = workflowDir, generation = selectedGeneration) => {
       const exec = { callId, name: 'subagent', agent: { id: agentId } }
-      recordDispatch({ harnessDir, resolvedWorkflowDir: targetDir, selectedGeneration: generation, exec, pairing, prompt, violations: [], hard: false })
+      recordDispatch({ harnessDir, workflowId: targetDir === secondTarget!.workflowDir ? 'wf-2' : 'wf-1', resolvedWorkflowDir: targetDir, selectedGeneration: generation, exec, pairing, prompt, violations: [], hard: false })
       return exec
     }
     const postExecute = (exec: unknown, result: unknown) => emitter.emit(SETTLE_SEAM, exec, result)
@@ -257,8 +258,8 @@ Catalog correlation regression.
     postExecute(running, { isError: false, value: { kind: 'background', jobId: 'running-job' } })
     recordJobSettle({ id: 'running-job', status: 'running', startedAt: 10 }, pairing)
     recordJobSettle({ id: 'not-paired', status: 'completed', startedAt: 10, finishedAt: 20 }, pairing)
-    expect(readAgentFlow(workflowDir)?.events.map((event) => event.kind)).toContain('dispatch')
-    expect(readAgentFlow(workflowDir)?.events.some((event) => event.kind === 'settle')).toBe(false)
+    expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toContain('dispatch')
+    expect(readFlow(workflowDir)?.events.some((event) => event.kind === 'settle')).toBe(false)
 
     const continuable = dispatch('continuable-call')
     postExecute(continuable, { isError: false, value: { kind: 'continuable', subagentId: 'child-still-running' } })
@@ -282,8 +283,8 @@ Catalog correlation regression.
     expect(await resolveExecutionLedgerTarget('session-1', root)).toBeNull()
     postExecute(sameCallSecond, { isError: false, value: { kind: 'foreground', runId: 'second-child' } })
     postExecute(sameCallFirst, { isError: false, value: { kind: 'foreground', runId: 'first-child' } })
-    const events = readAgentFlow(workflowDir)?.events ?? []
-    const secondEvents = readAgentFlow(secondWorkflowDir)?.events ?? []
+    const events = readFlow(workflowDir)?.events ?? []
+    const secondEvents = readFlow(secondWorkflowDir, 'wf-2')?.events ?? []
     expect(events).toContainEqual(expect.objectContaining({ kind: 'settle', outcome: 'denied', taskRef: 'killed-job', durationMs: 40 }))
     expect(events).toContainEqual(expect.objectContaining({ kind: 'settle', outcome: 'error', taskRef: 'failed-job', durationMs: 50 }))
     expect(events).toContainEqual(expect.objectContaining({ kind: 'settle', outcome: 'error', agent: 'session-1' }))
@@ -324,8 +325,8 @@ Catalog correlation regression.
       }
       recordDispatch({
         harnessDir,
+        workflowId: 'wf-1',
         resolvedWorkflowDir: workflowDir,
-        selectedGeneration,
         exec: { callId: 'stale-call', name: 'subagent', agent: { id: 'session-1' } },
         pairing,
         prompt: '**Execute as**: fullstack-dev',
@@ -333,7 +334,7 @@ Catalog correlation regression.
         hard: false,
       })
       expect(readDshLedgerWindow({ harnessDir }, 'wf-1', 10)).toEqual([])
-      expect(readAgentFlow(workflowDir)?.events).toEqual([])
+      expect(readFlow(workflowDir)?.events).toEqual([])
       expect(pairing.dispatchByCallId.size).toBe(0)
       expect(invalidations).toBe(0)
       expect(levels).toContain('warning')
@@ -345,6 +346,6 @@ Catalog correlation regression.
   it('returns unavailable without native authority', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agent-flow-unavailable-'))
     roots.push(root)
-    expect(readAgentFlow(join(root, '.agents', 'workflows', 'wf-1'))).toBeNull()
+    expect(readFlow(join(root, '.agents', 'workflows', 'wf-1'))).toBeNull()
   })
 })

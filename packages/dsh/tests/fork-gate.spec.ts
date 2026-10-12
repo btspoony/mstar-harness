@@ -120,7 +120,7 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
 function flowOf(app: BootResult): AgentFlowView {
   // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
   // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
-  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))
+  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')
   expect(view).not.toBeNull()
   return view!
 }
@@ -292,10 +292,11 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
       // the adapter's shared `dispatchGate` core).
       recordDispatch({
         harnessDir,
+        workflowId: 'wf-1',
         exec: forkDispatchExec('fork-c1', 'sess-1', VALID_FORK),
-        prompt: VALID_FORK,
         violations: [],
         hard: false,
+        workflowId: 'wf-1',
         resolvedWorkflowDir: workflowDir,
         selectedGeneration: selectedGenerationFor(harnessDir),
         pairing,
@@ -310,7 +311,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
         { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } },
       )
 
-      const view = readAgentFlow(workflowDir)!
+      const view = readAgentFlow(workflowDir, 'wf-1')!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
     } finally {

@@ -304,6 +304,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
             violations,
             hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
             pairing: this.pairing,
+            workflowId: source.workflowId,
             resolvedWorkflowDir: join(harnessDir, source.dir),
             selectedGeneration: { storeId: source.storeId, epoch: source.epoch },
           })

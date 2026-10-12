@@ -534,8 +534,8 @@ describe('dispatchGate — D4 session hint derivation', () => {
 
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-b', app.root)))
 
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events.map((e) => e.kind)).toEqual(['dispatch'])
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'), 'wf-b')!.events.map((e) => e.kind)).toEqual(['dispatch'])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'), 'wf-a')!.events).toEqual([])
   })
 
   it('an UNBOUND session writes no ledger row (the gate verdict still returns) and reports the discovery state honestly', async () => {
@@ -553,8 +553,8 @@ describe('dispatchGate — D4 session hint derivation', () => {
 
     const result = await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-none', app.root)))
     expect(result.ok).toBe(false) // the assignment still gates (anti-recursion empty binding)
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'), 'wf-a')!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'), 'wf-b')!.events).toEqual([])
   })
 
   it('an unreadable binding store is UNAVAILABLE — reported, no ledger row, never a fabricated empty hint', async () => {
@@ -584,7 +584,7 @@ describe('dispatchGate — D4 session hint derivation', () => {
     for (const workflowId of ['wf-a', 'wf-b']) {
       const workflowDir = join(app.harnessDir, 'workflows', workflowId)
       expect(existsSync(join(workflowDir, 'agent-flow.jsonl'))).toBe(false)
-      expect(readAgentFlow(workflowDir)).toBeNull()
+      expect(readAgentFlow(workflowDir, workflowId)).toBeNull()
     }
   })
 
@@ -594,6 +594,6 @@ describe('dispatchGate — D4 session hint derivation', () => {
 
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE))
 
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))!.events.map((e) => e.kind)).toEqual(['dispatch'])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')!.events.map((e) => e.kind)).toEqual(['dispatch'])
   })
 })
