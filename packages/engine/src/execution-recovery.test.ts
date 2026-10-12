@@ -40,7 +40,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -64,7 +64,6 @@ import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
 import { assignIssueMilestone, captureIssue, getIssue } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
-import { withStatusWriteLock } from "./lease.js";
 import {
   assertAuthorityCurrent,
   backupStore,
@@ -654,13 +653,18 @@ describe("execution-restore", () => {
       { workflow_id: WF },
     ]);
 
-    // The durable receipt is external, on disk, and describes the replacement:
-    // read it before any later access re-establishes WAL on the installed file.
+    // The durable record is the OPERATOR-facing copy of a record the store
+    // itself committed in the same transaction as the authority it describes.
     const record = JSON.parse(readFileSync(receipt.recoveryReceiptPath, "utf8")) as Record<string, unknown>;
     expect(record.phase).toBe("replaced");
     expect(record.newEpoch).toBe(receipt.epoch);
     expect(record.verified).toMatchObject({ integrity: "ok", foreignKeys: "ok" });
     expect(String(record.requiredRebind)).toContain("recoverExecutionCoordinator");
+    const committedRecord = rawGet<{ result_json: string }>(
+      world.dbPath,
+      "select result_json from store_operations where operation_id like 'restore-attempt:%'",
+    );
+    expect(JSON.parse(committedRecord!.result_json)).toMatchObject({ newEpoch: receipt.epoch, phase: "replaced" });
 
     // The pre-restore state is recoverable: the safety point holds the work
     // the restore disclosed as loss.
@@ -690,32 +694,23 @@ describe("execution-restore", () => {
 
   });
 
-  test("execution-restore-receipt-identifies-a-crash-around-the-replacement", async () => {
+  test("execution-restore-identifies-a-crash-before-and-after-the-commit", async () => {
     const world = await recoveryWorld("restore-crash");
     const point = await recoveryPoint(world, "crash-point");
-    // Hold a store connection open for the whole case. SQLite folds and deletes
-    // a WAL only when the LAST connection closes, so while this one is open
-    // every commit `mutateEveryDomain` makes stays as an un-checkpointed frame
-    // in the live `-wal` instead of being folded away by whichever earlier
-    // handle happened to close last. That makes the precondition this case
-    // needs — the store PROVABLY has pending WAL frames when `liveBefore` is
-    // taken, so quiescing it must rewrite the database bytes — a fact of the
-    // fixture rather than a side effect of when the runtime finalizes its own
-    // handles. Without it the live bytes can already be current at `liveBefore`
-    // and the byte assertion below would measure cleanup timing, not protocol.
+    // Hold a store connection open for the whole case, so every commit
+    // `mutateEveryDomain` makes stays as an un-checkpointed frame in the live
+    // `-wal` rather than being folded away by whichever earlier handle closed
+    // last: the pre-commit crash below is decided on a store with real pending
+    // frames, not on a coincidence of runtime finalization.
     const held = await openStore(world.context, "write");
     try {
       await mutateEveryDomain(world, "crash");
       const preview = await previewExecutionRestore(world.context, point.backupPath);
       const liveFootprint = footprint(world.dbPath);
-      // The frames are really there to be folded: a non-empty WAL sidecar
-      // beside the database is what the checkpoint below has to consume, so a
-      // fixture that lost its pending frames fails HERE instead of quietly
-      // making the byte assertion below vacuous.
-      expect(existsSync(`${world.dbPath}-wal`) ? statSync(`${world.dbPath}-wal`).size : 0).toBeGreaterThan(0);
+      const liveInode = statSync(world.dbPath).ino;
 
-      // A crash AFTER the receipt is written but BEFORE the rename: the original
-      // is still authoritative, and the receipt proves the restore never landed.
+      // A failure BEFORE the commit: the transaction rolls back as a unit, so the
+      // original generation is still authoritative and its epoch is unmoved.
       const beforeFailure = await errorOf(async () => {
         process.env.MSTAR_STORE_TEST_RUNNER = "1";
         process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-replacement";
@@ -731,15 +726,17 @@ describe("execution-restore", () => {
         }
       });
       expect(beforeFailure.message).toContain("before-replacement");
-      // The store's STATE is untouched; its bytes are not, because the restore
-      // checkpoints the live WAL as part of quiescing it, which is not a loss.
+      // Nothing about the store's AUTHORITY moved, and no receipt was written:
+      // a pre-commit interruption is a mutation-free outcome, which is what the
+      // same public retry can identify.
       expect(footprint(world.dbPath)).toEqual(liveFootprint);
-      const afterFirst = recoveryRecords(world);
-      expect(afterFirst).toHaveLength(1);
-      const pending = afterFirst[0]!;
-      expect(pending.phase).toBe("replacing");
-      // A crash AFTER the rename: the live store IS the prepared copy, and the
-      // same receipt says so; verification resumes against the installed store.
+      expect(existsSync(join(world.harness, "archived", "store-migration", "recovery"))).toBe(false);
+      expect(statSync(world.dbPath).ino).toBe(liveInode);
+
+      // A failure AFTER the commit: the replacement IS the committed outcome. The
+      // store already holds the new epoch AND the complete recovery record in its
+      // own ledger, so the outcome is identifiable from the store alone and the
+      // operator-facing file is a copy of that same committed record.
       const afterFailure = await errorOf(async () => {
         process.env.MSTAR_STORE_TEST_RUNNER = "1";
         process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
@@ -755,54 +752,67 @@ describe("execution-restore", () => {
         }
       });
       expect(afterFailure.message).toContain("after-replacement");
-      const installed = recoveryRecords(world)[1]!;
-      expect(installed.phase).toBe("replacing");
-      // The installed store IS the selected recovery point's state, at the epoch
-      // the receipt names — verification resumes, it does not restart.
+      const committed = recoveryRecords(world);
+      expect(committed).toHaveLength(1);
+      expect(committed[0]!.phase).toBe("replaced");
+      const newEpoch = committed[0]!.newEpoch;
       const resumed = footprint(world.dbPath);
-      expect(resumed.epoch).toBe(installed.newEpoch);
+      expect(resumed.epoch).toBe(newEpoch);
       expect(resumed.issues).toBe(0);
       expect(resumed.workflows).toBe(1);
-      await expect(readExecutionState(world.context)).resolves.toMatchObject({ epoch: installed.newEpoch });
+      expect(statSync(world.dbPath).ino).toBe(liveInode);
+      // The committed record is IN the store, in the same commit as the authority
+      // it describes — not only in the file beside it.
+      expect(
+        rawGet<{ result_json: string }>(
+          world.dbPath,
+          "select result_json from store_operations where operation_id like 'restore-attempt:%'",
+        )!.result_json,
+      ).toContain(`"newEpoch":${newEpoch}`);
+      await expect(readExecutionState(world.context)).resolves.toMatchObject({ epoch: newEpoch });
+
+      // The same public retry (a fresh preview of a store now at the new epoch)
+      // is refused rather than replacing anything again: a committed outcome is
+      // not silently redone.
+      const retried = await previewExecutionRestore(world.context, point.backupPath);
+      expect(retried.liveEpoch).toBe(newEpoch);
+      const receipt = await restoreExecutionBackup(world.context, {
+        preview: retried,
+        operator: OPERATOR,
+        authorization: AUTHORIZATION,
+      });
+      expect(receipt.epoch).toBe(newEpoch + 1);
     } finally {
       held.close();
     }
   });
 
-  test("execution-restore-refuses-a-sidecar-that-appears-in-the-replacement-window", async () => {
-    const world = await recoveryWorld("restore-sidecar-window");
-    const point = await recoveryPoint(world, "sidecar-window-point");
-    await mutateEveryDomain(world, "sidecar-window");
+  test("execution-restore-refuses-a-competitor-commit-at-the-admission-boundary", async () => {
+    const world = await recoveryWorld("restore-admission-window");
+    const point = await recoveryPoint(world, "admission-window-point");
     const preview = await previewExecutionRestore(world.context, point.backupPath);
     const liveFootprint = footprint(world.dbPath);
-    const walPath = `${world.dbPath}-wal`;
+    const liveInode = statSync(world.dbPath).ino;
 
-    // A writer that commits while the replacement is being decided writes the
-    // store's WAL, and those frames are NOT in the database bytes the checkpoint
-    // covers — so the replacement may not proceed past them. The window to reach
-    // is the one INSIDE the replacement sequence, after the sidecar identities
-    // were snapshotted and before the rename: the prepared scratch image's
-    // epoch is advanced in that window, and the sequence then awaits its
-    // verification, so the injector keys on that epoch and lands a fresh
-    // sidecar file in the yield.
-    const sidecarBytes = Buffer.alloc(4096, 0x7a);
-    const scratchPath = `${walPath}.appearing-writer`;
-    const scratchImageExists = (): boolean =>
-      readdirSync(world.harness).some((name) =>
-        name.startsWith(".store-restore-") && name.endsWith(".db") &&
-        rawGet<{ authority_epoch: number }>(join(world.harness, name), "select authority_epoch from store_meta where id = 1")!.authority_epoch > preview.liveEpoch,
-      );
+    // The competitor commits INSIDE the restore's own admission window: the
+    // barrier is the pre-restore safety point, which the sequence takes after it
+    // has staged and verified the image and before it opens the owning write
+    // transaction. The safety directory appearing is therefore proof the restore
+    // is already past staging and has not yet re-derived the loss, and the write
+    // below lands in the exact gap the in-transaction re-read exists to close.
+    const safetyDir = join(world.harness, "archived", "store-migration", "backups");
     let injected = false;
     let stop = false;
     const injector = (async () => {
       while (!stop) {
         await nextTurn();
-        if (injected || !scratchImageExists()) continue;
-        // A new file, moved into the WAL's own name: the sidecar a writer
-        // creates is a file the checkpoint never saw, not a rewrite of one it
-        // did.
-        writeFileSync(scratchPath, sidecarBytes);
-        renameSync(scratchPath, walPath);
+        if (injected) continue;
+        if (!existsSync(safetyDir)) continue;
+        if (!readdirSync(safetyDir).some((name) => name.startsWith("pre-restore-"))) continue;
+        await captureIssue(world.context, issueInput("Competitor at the admission boundary"), {
+          operationId: "op-admission-boundary-competitor",
+          actor: "project-manager",
+        });
         injected = true;
       }
     })();
@@ -821,85 +831,93 @@ describe("execution-restore", () => {
       await injector;
     }
 
+    // The competitor really did land in the window, and the refusal named the
+    // unapproved loss rather than discarding it.
     expect(injected).toBe(true);
     expect(refusal!.code).toBe("execution.recovery-loss-unaccepted");
-    expect(refusal!.message).toContain("appeared after the checkpoint");
+    expect(refusal!.message).toContain("outside the authorized loss inventory");
 
-    // The refusal came from the replacement sequence itself — its durable
-    // receipt was already written — and it replaced nothing: the receipt still
-    // names the ORIGINAL bytes as the live store, and the writer's sidecar is
-    // still beside it, untouched.
-    const records = recoveryRecords(world);
-    expect(records).toHaveLength(1);
-    const pending = records[0]!;
-    expect(pending.phase).toBe("replacing");
+    // Nothing was replaced and nothing was lost: the competitor's issue is still
+    // live, the authority generation is unmoved, and the live file is the SAME
+    // inode — this restore never renames the live database.
+    expect(footprint(world.dbPath).issues).toBe(liveFootprint.issues + 1);
+    expect(footprint(world.dbPath).epoch).toBe(liveFootprint.epoch);
+    expect(statSync(world.dbPath).ino).toBe(liveInode);
 
-    // …and the store's own authority is exactly the state the pre-restore
-    // checkpoint left, at the same epoch. Only the writer's WAL was in the way,
-    // so the sidecars are cleared before the store is read here — the checkpoint
-    // proved every committed frame already landed in the file.
-    rmSync(walPath, { force: true });
-    rmSync(`${world.dbPath}-shm`, { force: true });
-    expect(footprint(world.dbPath)).toEqual(liveFootprint);
+    // The public retry path is a fresh preview plus the same restore: the
+    // competitor's work is disclosed as loss, and the operator decides again.
+    const current = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview: current,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+    expect(receipt.epoch).toBe(Math.max(liveFootprint.epoch, point.epoch) + 1);
+    expect(footprint(world.dbPath).issues).toBe(liveFootprint.issues);
+    expect(statSync(world.dbPath).ino).toBe(liveInode);
   });
 
-  test("execution-restore-reclaims-an-abandoned-attempts-scratch-and-keeps-an-installed-copy", async () => {
+  test("execution-restore-reclaims-only-a-committed-attempts-scratch-and-preserves-a-live-peer", async () => {
     const world = await recoveryWorld("restore-sweep");
     const point = await recoveryPoint(world, "sweep-point");
     await mutateEveryDomain(world, "sweep");
 
-    // The live store's own bytes as the replacement sequence will read them:
-    // the loss preview and the re-inventory run before the sweep are reads (the
-    // untouched-preview cases above pin that), and the one step that rewrites
-    // these bytes — the quiescing checkpoint — runs after it.
-    const preview = await previewExecutionRestore(world.context, point.backupPath);
-
-    // The crash-time states: an in-progress attempt with its staging image,
-    // a completed rename with its staging path consumed, and an unreceipted image.
+    // The staged images under the control root. Reclamation requires POSITIVE
+    // evidence from the store; anything the ledger does not name is preserved,
+    // because an attempt with no committed record is indistinguishable from a
+    // live peer that has staged its image and not yet reached its transaction.
     const receiptDir = join(world.harness, "archived", "store-migration", "recovery");
     mkdirSync(receiptDir, { recursive: true });
-    const plant = (
-      attemptId: string,
-      bytes: Buffer,
-      restoredCopySha256: string,
-      phase: string,
-    ): { image: string; receiptPath: string } => {
+    const plant = (attemptId: string, bytes: Buffer, committed: boolean): { image: string; receiptPath: string } => {
       const image = join(world.harness, `.store-restore-${attemptId}.db`);
       const receiptPath = join(receiptDir, `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
       writeFileSync(image, bytes);
       writeFileSync(`${image}-journal`, Buffer.from("stranded by a crash mid-transaction"));
       writeFileSync(`${image}-wal`, Buffer.from("stranded wal"));
       writeFileSync(`${image}-shm`, Buffer.from("stranded shm"));
-      writeFileSync(receiptPath, JSON.stringify({ phase, restoredCopySha256 }));
+      writeFileSync(receiptPath, JSON.stringify({ phase: "replaced", restoredCopySha256: "0".repeat(64) }));
+      if (committed) {
+        // The ONLY durable witness that an attempt committed: the recovery record
+        // it wrote into `store_operations` in the same transaction as the
+        // authority it describes.
+        rawRun(
+          world.dbPath,
+          "insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)",
+          `restore-attempt:${attemptId}`,
+          "0".repeat(64),
+          JSON.stringify({ phase: "replaced" }),
+          TS,
+        );
+      }
       return { image, receiptPath };
     };
 
-    // (1) The crash landed BEFORE replacement: the durable phase remains
-    // `replacing` and the attempt-owned staging image still exists.
-    const abandonedBytes = Buffer.from("a prepared store image that never landed");
-    const abandoned = plant(randomUUID(), abandonedBytes, sha256OfBytes(abandonedBytes), "replacing");
+    // (1) A COMMITTED attempt whose crash left its image behind: the store names
+    // its commit, so its staging bytes are provably inert scratch.
+    const committedBytes = Buffer.from("a staged image whose commit landed");
+    const committed = plant(randomUUID(), committedBytes, true);
 
-    // (2) The crash landed AFTER rename: the phase is terminal and the
-    // attempt-owned staging path has been consumed by the live-store rename.
-    const installed = plant(randomUUID(), readFileSync(world.dbPath), "0".repeat(64), "replaced");
-    rmSync(installed.image);
-    rmSync(`${installed.image}-journal`);
-    rmSync(`${installed.image}-wal`);
-    rmSync(`${installed.image}-shm`);
+    // (2) A LIVE PEER: an image staged by an attempt that has not committed yet
+    // — exactly the state a real concurrent restore occupies between staging and
+    // its owning transaction now that no maintenance lock serializes it. The
+    // store does not name it, so the sweep must preserve it byte for byte.
+    const peerImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
+    const peerBytes = Buffer.from("a live peer's staged image, not yet committed");
+    writeFileSync(peerImage, peerBytes);
+    writeFileSync(`${peerImage}-journal`, Buffer.from("the peer's own staging journal"));
+    writeFileSync(`${peerImage}-wal`, Buffer.from("the peer's own staged wal"));
 
-    // (3) A terminal attempt receipt with a stale scratch artifact is kept as
-    // an archival record; cleanup does not discard completed receipts.
-    const finishedBytes = Buffer.from("a copy of a completed replacement");
-    const finished = plant(randomUUID(), finishedBytes, sha256OfBytes(finishedBytes), "replaced");
-
-    // (4) An image with no receipt is reclaimed because it cannot belong to a
-    // completed replacement; only the active attempt could stage an owned name,
-    // and this restore holds that attempt's maintenance lock.
-    const unreceiptedBytes = Buffer.from("an image copied before the attempt recorded anything");
+    // A crashed attempt that never committed anything is preserved for the same
+    // reason as the peer: with no positive evidence, the sweep cannot tell them
+    // apart, so it deletes neither.
     const unreceiptedImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
-    writeFileSync(unreceiptedImage, unreceiptedBytes);
+    writeFileSync(unreceiptedImage, Buffer.from("an image staged before any commit"));
     writeFileSync(`${unreceiptedImage}-journal`, Buffer.from("stranded by a crash mid-transaction"));
 
+    // The approval is taken AFTER the fixtures are planted, so the committed
+    // attempt's witness row is inside the loss the operator authorizes — which is
+    // what a real operator sees: the row is part of the generation being replaced.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
       operator: OPERATOR,
@@ -907,18 +925,22 @@ describe("execution-restore", () => {
     });
     expect(receipt.storeId).toBe(world.storeId);
 
-    // The abandoned attempt's image AND the `-journal`/`-wal`/`-shm` its crash
-    // stranded are reclaimed — receipt or no receipt...
-    expect(existsSync(abandoned.image)).toBe(false);
-    expect(existsSync(`${abandoned.image}-journal`)).toBe(false);
-    expect(existsSync(`${abandoned.image}-wal`)).toBe(false);
-    expect(existsSync(`${abandoned.image}-shm`)).toBe(false);
-    expect(existsSync(unreceiptedImage)).toBe(false);
-    expect(existsSync(`${unreceiptedImage}-journal`)).toBe(false);
-    // The replacement receipt and completed artifact remain available.
-    expect(existsSync(abandoned.receiptPath)).toBe(true);
-    expect(existsSync(installed.receiptPath)).toBe(true);
-    expect(existsSync(finished.receiptPath)).toBe(true);
+    // The committed attempt's image and the sidecars its crash stranded are
+    // reclaimed, and its durable receipt stays as evidence.
+    expect(existsSync(committed.image)).toBe(false);
+    expect(existsSync(`${committed.image}-journal`)).toBe(false);
+    expect(existsSync(`${committed.image}-wal`)).toBe(false);
+    expect(existsSync(`${committed.image}-shm`)).toBe(false);
+    expect(existsSync(committed.receiptPath)).toBe(true);
+
+    // The live peer's staged image and its own sidecars survive BYTE FOR BYTE,
+    // so a peer suspended in staging/verification still has its input, and no
+    // uncommitted image is ever removed on a guess.
+    expect(readFileSync(peerImage)).toEqual(peerBytes);
+    expect(existsSync(`${peerImage}-journal`)).toBe(true);
+    expect(existsSync(`${peerImage}-wal`)).toBe(true);
+    expect(readFileSync(unreceiptedImage, "utf8")).toBe("an image staged before any commit");
+    expect(existsSync(`${unreceiptedImage}-journal`)).toBe(true);
   });
 
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {
@@ -942,29 +964,47 @@ describe("execution-restore", () => {
     expect(rawGet<{ n: number }>(world.dbPath, "select count(*) as n from issues")!.n).toBe(point.counts.issues + 1);
   });
 
-  test("execution-restore-serializes-with-the-migration-maintenance-lock", async () => {
-    const world = await recoveryWorld("restore-lock");
-    const point = await recoveryPoint(world, "lock-point");
+  test("execution-restore-keeps-the-live-store-pathname-and-inode-and-leaves-legacy-markers-alone", async () => {
+    const world = await recoveryWorld("restore-same-live-file");
+    const point = await recoveryPoint(world, "same-live-point");
     const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const key = join(canonicalPath(world.harness), ".execution-maintenance", "execution-migration");
-    mkdirSync(dirname(key), { recursive: true });
+    const before = statSync(world.dbPath);
 
-    // Holding the migration maintenance lock blocks the restore, so a restore
-    // can never interleave with a migration/retire step.
-    const blocked = await errorOf(() =>
-      withStatusWriteLock(
-        key,
-        () =>
-          restoreExecutionBackup(world.context, {
-            preview,
-            operator: OPERATOR,
-            authorization: AUTHORIZATION,
-          }),
-        { timeoutMs: 200, pollMs: 5 },
-      ),
-    );
-    expect(blocked.message).toContain(".execution-maintenance");
-    expect(footprint(world.dbPath).epoch).toBe(world.epoch);
+    // Leftover homemade mutex markers from a pre-cutover checkout: an operator
+    // must not have to remove them, and a restore must neither consult nor
+    // delete them. Their presence is never permission to delete anything.
+    const markers = [
+      join(world.harness, ".status-write.lockdir"),
+      join(world.harness, ".execution-maintenance", ".status-write.lockdir"),
+      join(world.harness, "workflows", WF, ".ledger-write.lockdir"),
+    ];
+    for (const marker of markers) {
+      mkdirSync(marker, { recursive: true });
+      writeFileSync(join(marker, "holder.pid"), `${process.pid}\n`);
+    }
+
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+    expect(footprint(world.dbPath).epoch).toBe(receipt.epoch);
+
+    // §8: the SAME live database, not a replaced one — same pathname, same
+    // inode, and no WAL/SHM of an old generation removed. Nothing in the restore
+    // takes or clears a lock, so every marker and its holder file are intact.
+    const after = statSync(world.dbPath);
+    expect(after.ino).toBe(before.ino);
+    expect(world.dbPath).toBe(join(world.harness, "store.db"));
+    for (const marker of markers) {
+      expect(existsSync(marker)).toBe(true);
+      expect(readFileSync(join(marker, "holder.pid"), "utf8")).toBe(`${process.pid}\n`);
+    }
+    // …and the restore is not blocked by them: it ran with a marker held by a
+    // live pid for this very process, which is exactly what the deleted lock
+    // would have refused.
+    expect(existsSync(receipt.recoveryReceiptPath)).toBe(true);
+    expect(receipt.recoveryReceiptPath.startsWith(canonicalPath(world.harness))).toBe(true);
   });
 
   test("execution-restore-preview-leaves-the-live-store-file-state-untouched", async () => {
@@ -978,19 +1018,26 @@ describe("execution-restore", () => {
       authorization: AUTHORIZATION,
     });
 
-    // The replacement leaves the verified image exactly as the copy verdict read
-    // it — VACUUM INTO's rollback journal and no sidecars — until something asks
-    // the store for a writer connection.
+    // The restore replaced the live database's CONTENTS in place: it never swaps
+    // the file for a VACUUM INTO image, so the store keeps the journal mode and
+    // the sidecars its own connection established (a writer open sets WAL). No
+    // `store.db`-adjacent artifact of an old generation is installed or removed.
     const journalMode = (): string => rawGet<{ journal_mode: string }>(world.dbPath, "pragma journal_mode")!.journal_mode;
-    expect(journalMode()).toBe("delete");
+    expect(journalMode()).toBe("wal");
 
     // A second loss preview reads that store. §8 says the preview mutates
-    // nothing, so reading the loss may not reconfigure the live store's journal,
+    // nothing, so reading the loss may not reconfigure the live store's journal
+    // mode and may not invent or drop sidecars.
+    const before = {
+      journalMode: journalMode(),
+      wal: existsSync(`${world.dbPath}-wal`),
+      shm: existsSync(`${world.dbPath}-shm`),
+    };
     const again = await previewExecutionRestore(world.context, point.backupPath);
     expect(again.liveEpoch).toBe(receipt.epoch);
-    expect(journalMode()).toBe("delete");
-    expect(existsSync(`${world.dbPath}-wal`)).toBe(false);
-    expect(existsSync(`${world.dbPath}-shm`)).toBe(false);
+    expect({ journalMode: journalMode(), wal: existsSync(`${world.dbPath}-wal`), shm: existsSync(`${world.dbPath}-shm`) }).toEqual(
+      before,
+    );
   });
 
   test("execution-restore-preview-reads-a-quiesced-wal-store-and-leaves-its-file-state-untouched", async () => {
@@ -1441,5 +1488,111 @@ describe("schema-owned loss inventory", () => {
       liveRevision: 2,
       backupRevision: 2,
     });
+  });
+
+  test("restore-installs-every-schema-owned-fact-of-all-four-domains", async () => {
+    const world = await recoveryWorld("restore-whole-domain");
+    await registerCatalogEntity(
+      world.context,
+      { kind: "project", id: PROJECT_ID, title: "Whole-domain project", rootKind: "projects", relativePath: `projects/${PROJECT_ID}` },
+      { operationId: "op-whole-domain-project", actor: OPERATOR },
+    );
+    const storeRevision = (): number => rawGet<{ revision: number }>(world.dbPath, "select revision from store_meta where id = 1")!.revision;
+    const milestone = await addMilestone(world.context, { projectId: PROJECT_ID, name: "Whole-domain", target: null, ordinal: 0 }, {
+      operationId: "op-whole-domain-milestone",
+      expectedStoreRevision: storeRevision(),
+    });
+    const finding = await captureIssue(world.context, { ...issueInput("Whole-domain finding"), projectId: PROJECT_ID }, {
+      operationId: "op-whole-domain-issue",
+      actor: "project-manager",
+    });
+    // A real milestone association (migration 7's `issues.milestone_id`), a real
+    // coverage document on an execution migration row (migration 5's
+    // `coverage_json`), and a native host-state row (the fifth Dsh domain) — the
+    // three facts T4a's F1 correction named plus the host domain.
+    await assignIssueMilestone(
+      contextOf(world.context, world.caller),
+      finding.issueId,
+      { projectId: PROJECT_ID, milestoneId: milestone.milestoneId, reason: "whole-domain restore" },
+      { operationId: "op-whole-domain-assign", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: storeRevision() },
+    );
+    rawRun(
+      world.dbPath,
+      "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at, coverage_json) values (?, ?, 'retired', '{}', ?, ?, ?)",
+      "whole-domain-migration",
+      "b".repeat(64),
+      TS,
+      TS,
+      '{"generation":"retired-coverage"}',
+    );
+    rawRun(
+      world.dbPath,
+      "insert into dsh_scan_bounds(workflow_id, session_id, next, stream) values (?, ?, 7, 'agent-flow')",
+      WF,
+      "session-whole-domain",
+    );
+
+    // A verified point of ALL of that, then post-point work in every domain the
+    // restore must discard.
+    const point = await recoveryPoint(world, "whole-domain-point");
+    const selected = {
+      milestoneId: rawGet<{ milestone_id: string | null }>(
+        point.backupPath,
+        `select milestone_id from issues where id = '${finding.issueId}'`,
+      )!.milestone_id,
+      coverage: rawGet<{ coverage_json: string }>(
+        point.backupPath,
+        "select coverage_json from execution_migrations where manifest_id = 'whole-domain-migration'",
+      )!.coverage_json,
+      scanNext: rawGet<{ next: number }>(
+        point.backupPath,
+        `select next from dsh_scan_bounds where session_id = 'session-whole-domain'`,
+      )!.next,
+    };
+    expect(selected).toEqual({ milestoneId: milestone.milestoneId, coverage: '{"generation":"retired-coverage"}', scanNext: 7 });
+    await mutateEveryDomain(world, "whole-domain");
+    rawRun(world.dbPath, "update issues set milestone_id = null where id = ?", finding.issueId);
+    rawRun(
+      world.dbPath,
+      "update execution_migrations set coverage_json = ? where manifest_id = 'whole-domain-migration'",
+      '{"generation":"live-coverage"}',
+    );
+    rawRun(world.dbPath, "update dsh_scan_bounds set next = 99 where session_id = 'session-whole-domain'");
+
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+    expect(receipt.epoch).toBe(Math.max(world.epoch, point.epoch) + 1);
+
+    // Every schema-owned fact of the selected generation is installed, read back
+    // through the store's own schema rather than through the inventory:
+    // the membership association, the retired migration row's WHOLE coverage
+    // document, the host-state row's own stream cursor, and the four domains'
+    // row counts.
+    expect(rawGet<{ milestone_id: string | null }>(
+      world.dbPath,
+      `select milestone_id from issues where id = '${finding.issueId}'`,
+    )!.milestone_id).toBe(selected.milestoneId);
+    expect(rawGet<{ coverage_json: string }>(
+      world.dbPath,
+      "select coverage_json from execution_migrations where manifest_id = 'whole-domain-migration'",
+    )!.coverage_json).toBe(selected.coverage);
+    expect(rawAll<{ next: number; stream: string }>(
+      world.dbPath,
+      "select next, stream from dsh_scan_bounds order by session_id",
+    )).toEqual([{ next: selected.scanNext, stream: "agent-flow" }]);
+    expect(footprint(world.dbPath)).toMatchObject({
+      issues: 1,
+      catalogEntities: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from catalog_entities")!.n,
+      workflows: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from execution_workflows")!.n,
+      sessions: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from execution_sessions")!.n,
+    });
+    // …and the consumer that reads the membership still sees it.
+    const restored = await getIssue(world.context, finding.issueId);
+    expect(restored.milestoneId).toBe(milestone.milestoneId);
+    expect(restored.revision).toBe(2);
   });
 });

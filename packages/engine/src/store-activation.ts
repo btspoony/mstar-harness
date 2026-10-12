@@ -60,7 +60,6 @@ import {
   type RawTable,
 } from "./catalog-import.js";
 import { writeJson } from "./core.js";
-import { withStatusWriteLock } from "./lease.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIN_BUN_VERSION,
@@ -533,36 +532,6 @@ export async function currentAuthorityHandle(context: StoreContext): Promise<Sto
  */
 export async function assertAuthorityCurrent(context: StoreContext, handle: StoreAuthorityHandle): Promise<void> {
   refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
-}
-
-// ---------------------------------------------------------------------------
-// §4.3 — the maintenance exclusion, spelled once
-// ---------------------------------------------------------------------------
-
-/**
- * §4.3's outer exclusion: the ONE key every file-touching migration,
- * retirement and restore step still takes first
- * (`<root>/.execution-maintenance/execution-migration`, which
- * `withStatusWriteLock` turns into
- * `<root>/.execution-maintenance/.status-write.lockdir`). Backup no longer
- * takes it: a `VACUUM INTO` copy is a single SQLite snapshot and needs no
- * frozen window. The key lives here — the lowest module that needs it — so the
- * migration/recovery spellings cannot drift apart. Its remaining callers are
- * the restore path's own; deleting the ladder is that task's cutover.
- */
-export async function withExecutionMaintenanceLock<T>(context: StoreContext, fn: () => Promise<T>): Promise<T> {
-  const key = join(canonicalPath(dirname(storeDbPath(context))), ".execution-maintenance", "execution-migration");
-  mkdirSync(dirname(key), { recursive: true });
-  return withStatusWriteLock(key, fn, { timeoutMs: executionMaintenanceLockWaitMs() });
-}
-
-/** The bounded wait for an operation that is not the caller's to interrupt. */
-export function executionMaintenanceLockWaitMs(): number {
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
-    const parsed = Number.parseInt(process.env.MSTAR_EXECUTION_MIGRATION_LOCK_WAIT_MS ?? "", 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return 30_000;
 }
 
 /**
