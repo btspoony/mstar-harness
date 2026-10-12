@@ -85,7 +85,7 @@ import {
 } from "./execution-store.js";
 import { resolveSddDir } from "./path.js";
 import { backupStore } from "./store-activation.js";
-import { initializeStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { upgradeStoreMinimal } from "./store-upgrade-minimal.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
 import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
@@ -474,40 +474,56 @@ async function registeredStore(label: string): Promise<StoreContext> {
     join(context.harnessDir, planDir, `${CROSS_PLAN}.md`),
     `# ${planTitle}\n\n**plan_id:** ${CROSS_PLAN}\n`,
   );
-  await commitExecutionRegistration(
-    { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) },
-    {
-      operationId: `register-${CROSS_WORKFLOW}`,
-      actor: "execution-consumers.test",
-      expectedCatalogRevision: 0,
-      workflow: {
-        kind: "plan",
-        workflowId: CROSS_WORKFLOW,
-        options: {
-          harnessDir: context.harnessDir,
-          plan: { id: CROSS_PLAN, title: planTitle, file: planFile },
-          deliveryKind: "development",
-          branchSource: `feature/${CROSS_WORKFLOW}`,
-          branchTarget: "main",
-          project: "_default",
-          startedAt: TS,
-        },
+  const execution = { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) };
+  const request = {
+    operationId: `register-${CROSS_WORKFLOW}`,
+    actor: "execution-consumers.test",
+    expectedCatalogRevision: 0,
+    workflow: {
+      kind: "plan" as const,
+      workflowId: CROSS_WORKFLOW,
+      options: {
+        harnessDir: context.harnessDir,
+        plan: { id: CROSS_PLAN, title: planTitle, file: planFile },
+        deliveryKind: "development" as const,
+        branchSource: `feature/${CROSS_WORKFLOW}`,
+        branchTarget: "main",
+        project: "_default",
+        startedAt: TS,
       },
-      delta: {
-        entities: [
-          {
-            kind: "plan",
-            id: CROSS_PLAN,
-            title: "Cross-domain accepted plan",
-            rootKind: "plans",
-            relativePath: `${CROSS_PLAN}.md`,
-          },
-        ],
-        binding: { catalogKind: "plan", catalogId: CROSS_PLAN },
-      },
-      expected: initialized.token,
     },
-  );
+    delta: {
+      entities: [{
+        kind: "plan" as const,
+        id: CROSS_PLAN,
+        title: "Cross-domain accepted plan",
+        rootKind: "plans" as const,
+        relativePath: `${CROSS_PLAN}.md`,
+      }],
+      binding: { catalogKind: "plan" as const, catalogId: CROSS_PLAN },
+    },
+    expected: initialized.token,
+  };
+  const committed = await commitExecutionRegistration(execution, request);
+  const receiptStore = await openStore(context, "read");
+  try {
+    const selected = receiptStore.db.prepare(
+      "select result_json from execution_operations where operation_id = ?",
+    ).get(request.operationId);
+    if (
+      typeof selected !== "object" || selected === null || !("result_json" in selected) ||
+      typeof selected.result_json !== "string"
+    ) throw new Error("the catalog-registration receipt row is missing result_json");
+    const persisted: unknown = JSON.parse(selected.result_json);
+    if (typeof persisted !== "object" || persisted === null || Array.isArray(persisted))
+      throw new Error("the catalog-registration receipt is not an object");
+    const receipt = persisted as Record<string, unknown>;
+    expect(receipt.slim).toBeUndefined();
+    expect(receipt.data).toEqual(committed);
+  } finally {
+    receiptStore.close();
+  }
+  expect(await commitExecutionRegistration(execution, request)).toEqual(committed);
   return context;
 }
 
@@ -873,6 +889,24 @@ describe("retained evidence at the completion consumer", () => {
       });
       expect(completion.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
       expect(completion.integration).toBeUndefined();
+      const receiptStore = await openStore(fixture.context, "read");
+      try {
+        const selected = receiptStore.db.prepare(
+          "select result_json from execution_operations where operation_id = ?",
+        ).get("complete-retained-ok");
+        if (
+          typeof selected !== "object" || selected === null || !("result_json" in selected) ||
+          typeof selected.result_json !== "string"
+        ) throw new Error("the plan-operation receipt row is missing result_json");
+        const parsed: unknown = JSON.parse(selected.result_json);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+          throw new Error("the plan-operation receipt is not an object");
+        const receipt = parsed as Record<string, unknown>;
+        expect(receipt.slim).toBeUndefined();
+        expect(receipt.data).toEqual(completed.data);
+      } finally {
+        receiptStore.close();
+      }
       expect(completed.data.plan.metadata).toMatchObject({
         working_branch: `feature/${RETAINED_PLAN}`, worktree_path: fixture.worktreePath,
       });

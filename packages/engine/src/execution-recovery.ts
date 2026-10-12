@@ -14,7 +14,18 @@
  *   then inventories the WHOLE store — issue, catalog, execution and host
  *   state — against the live authority, and returns the canonical `lossDigest`
  *   of that inventory. It writes no authority row, no receipt and no artifact
- *   of its own, so it is safe to run at any time.
+ *   of its own, so it is safe to run at any time. Receipt retention is an
+ *   expected source of backup-only `execution` operation rows: a terminal close
+ *   or adoption prunes that workflow's operation receipts (each listed in a
+ *   preview of an older point with `liveRevision: null`), the init-time purge
+ *   beside the in-place epoch bump clears the superseded epoch's, and a restore
+ *   preserves prior-epoch receipt rows as history under its frozen
+ *   bytes-plus-one-epoch contract, outside the current epoch's replay scope, so
+ *   restoring any of them is harmless and re-arms nothing. `result_json`
+ *   payloads are write-time versioned: graph rows written before the slimming
+ *   change keep their full form, later rows carry the slim envelope, so
+ *   inventory digests compare write-time bytes per row and mixed forms never
+ *   produce same-key content drift.
  * - `restoreExecutionBackup` is the destructive step. It stages and verifies the
  *   selected recovery point as a private image, takes a fresh pre-restore
  *   recovery point, and then installs the staged authority in ONE native write

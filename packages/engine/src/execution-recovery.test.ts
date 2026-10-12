@@ -50,17 +50,19 @@ import {
   previewExecutionRestore,
   restoreExecutionBackup,
   EXECUTION_RECOVERY_PROTOCOL_VERSION,
+  type ExecutionRecoveryPreview,
 } from "./execution-recovery.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
   readExecutionState,
+  serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionSessionRef,
   type ExecutionToken,
 } from "./execution-store.js";
-import { mutateExecutionWorkflow } from "./execution-workflow.js";
+import { recoverExecutionCoordinator, mutateExecutionWorkflow } from "./execution-workflow.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
 import { assignIssueMilestone, captureIssue, getIssue } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
@@ -70,6 +72,8 @@ import {
   canonicalPath,
   currentAuthorityHandle,
   type BackupReceipt,
+  ACTIVATION_PROTOCOL_VERSION,
+  type ActivationAttestation,
 } from "./store-activation.js";
 import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
@@ -1122,6 +1126,376 @@ describe("execution-restore", () => {
 
     expect(liveState()).toEqual(before);
   });
+
+  test("execution-restore-preview-declares-receipt-retention-as-backup-only-operation-rows", async () => {
+    const world = await recoveryWorld("pruned-receipts");
+    const tokenNow = async (): Promise<ExecutionToken> =>
+      (await readExecutionState(world.context)).data.workflows[0]!.workflowToken;
+    // A committed receipt of a still-live lifecycle, so the point below holds a
+    // receipt set larger than the create/bind pair.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-pause-retained",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "retention fixture" },
+    });
+    const point = await recoveryPoint(world, "pruned-receipts-point");
+    const retained = rawAll<{ epoch: number; operation_id: string }>(
+      point.backupPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by operation_id`,
+    );
+    expect(retained.map((row) => row.operation_id)).toEqual(["op-pause-retained", "pruned-receipts-bind", "pruned-receipts-create"]);
+
+    // While the lifecycle is live the point is current: those receipt rows are
+    // on BOTH sides, so nothing about them is listed.
+    const live = await previewExecutionRestore(world.context, point.backupPath);
+    expect(live.authorityDifferences).toEqual([]);
+    expect(live.lostOperationIds).toEqual([]);
+
+    // The terminal close prunes the earlier receipts but retains its own durable
+    // replay anchor.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-close-pruned",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "retention fixture close" },
+    });
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}'`,
+    )).toEqual([{ epoch: retained[0]!.epoch, operation_id: "op-close-pruned" }]);
+
+    // The pruned rows are DECLARED, not silent: each one is now a backup-only
+    // execution-domain row, listed with `liveRevision: null`.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    for (const row of retained) {
+      const key = `operation:${row.epoch}/${row.operation_id}`;
+      const entry = preview.authorityDifferences.find((difference) => difference.domain === "execution" && difference.key === key);
+      expect(entry).toBeDefined();
+      expect(entry!.liveRevision).toBeNull();
+      // The presence marker of a row whose table carries no revision of its own.
+      expect(entry!.backupRevision).toBe(1);
+      // Resurrected, never lost: retention removes replay/recovery state, not work.
+      expect(preview.lostOperationIds).not.toContain(`execution:${row.epoch}:${row.operation_id}`);
+    }
+    // The terminal receipt was committed after this backup, so it is live-only
+    // and will not survive restoring the earlier point.
+    expect(preview.lostOperationIds).toEqual([`execution:${retained[0]!.epoch}:op-close-pruned`]);
+    // `previewExecutionRestore` carries the resurrected-receipt fact only
+    // through `lossDigest` (the preview shape and its protocol version are
+    // frozen), so the same fact is read from the two store files: the point's
+    // committed receipt ids the live store no longer holds are exactly the
+    // pruned set.
+    const receiptIds = (dbPath: string): string[] =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        "select epoch, operation_id from execution_operations order by epoch, operation_id",
+      ).map((row) => `execution:${row.epoch}:${row.operation_id}`);
+    const liveIds = new Set(receiptIds(world.dbPath));
+    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id)).sort()).toEqual(
+      retained.map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
+    );
+    expect(preview.lossDigest).not.toBe(live.lossDigest);
+  });
+
+  /** The frozen preview shape: a mixed-form inventory may add no field to it. */
+  const PREVIEW_KEYS: readonly (keyof ExecutionRecoveryPreview)[] = [
+    "version", "backupPath", "backupSha256", "liveStoreId", "liveEpoch", "backupEpoch", "lostOperationIds",
+    "backupCoverageDigest", "liveCoverageDigest", "lossDigest", "authorityDifferences",
+  ];
+
+  /**
+   * The loss-payload generation this protocol ships, pinned as a literal: the
+   * guard must fail when the shipped generation moves, not move with it.
+   */
+  const FROZEN_PROTOCOL_VERSION = 3;
+
+  /**
+   * The §8 loss digest `buildLossInventory` composes, recomputed from the
+   * PRODUCTION preview plus the facts the engine reads directly from the two
+   * store files. `lossDigestOf` folds the point-only (resurrected) receipt ids
+   * into this serialization, so recomposing it here is what makes a dropped or
+   * different resurrection contribution FAIL instead of agreeing with a
+   * fixture-only expectation.
+   */
+  const productionLossDigest = (
+    preview: ExecutionRecoveryPreview,
+    pointPath: string,
+    livePath: string,
+    resurrectedOperationIds: readonly string[],
+  ): string => {
+    const meta = (dbPath: string): { state: string; epoch: number } => {
+      const row = rawGet<{ authority_state: string; authority_epoch: number }>(
+        dbPath,
+        "select authority_state, authority_epoch from store_meta where id = 1",
+      )!;
+      return { state: row.authority_state, epoch: row.authority_epoch };
+    };
+    const schemaVersion = (dbPath: string): number =>
+      rawGet<{ n: number }>(dbPath, "select max(version) as n from schema_version")!.n;
+    const execution = (dbPath: string): Record<string, unknown> | null => {
+      const row = rawGet<Record<string, unknown>>(
+        dbPath,
+        "select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1",
+      );
+      return row === undefined
+        ? null
+        : {
+            protocolVersion: row.protocol_version,
+            authorityState: row.authority_state,
+            revision: row.revision,
+            rootUpdatedAt: row.root_updated_at,
+            manifestId: (row.manifest_id as string | null | undefined) ?? null,
+            activatedAt: (row.activated_at as string | null | undefined) ?? null,
+          };
+    };
+    const hasTable = (dbPath: string, table: string): boolean =>
+      rawGet<{ n: number }>(dbPath, `select count(*) as n from sqlite_master where type = 'table' and name = '${table}'`)!.n > 0;
+    const count = (dbPath: string, table: string): number =>
+      rawGet<{ n: number }>(dbPath, `select count(*) as n from ${table}`)!.n;
+    const backupCounts: Record<string, number> = {
+      issues: count(pointPath, "issues"),
+      occurrences: count(pointPath, "occurrences"),
+      transitions: count(pointPath, "issue_transitions"),
+      migrationReceipts: count(pointPath, "migration_receipts"),
+      ...(hasTable(pointPath, "catalog_entities") ? { catalogEntities: count(pointPath, "catalog_entities") } : {}),
+      ...(hasTable(pointPath, "catalog_links") ? { catalogLinks: count(pointPath, "catalog_links") } : {}),
+    };
+    return sha256OfBytes(
+      Buffer.from(
+        serializeExecutionValue({
+          format: "execution-restore-loss-v1",
+          version: FROZEN_PROTOCOL_VERSION,
+          backupPath: preview.backupPath,
+          backupSha256: sha256OfFile(pointPath),
+          backupEpoch: meta(pointPath).epoch,
+          backupAuthorityState: meta(pointPath).state,
+          backupSchemaVersion: schemaVersion(pointPath),
+          backupExecution: execution(pointPath),
+          backupCounts,
+          liveStoreId: preview.liveStoreId,
+          liveEpoch: meta(livePath).epoch,
+          liveAuthorityState: meta(livePath).state,
+          liveSchemaVersion: schemaVersion(livePath),
+          liveExecution: execution(livePath),
+          authorityDifferences: preview.authorityDifferences,
+          lostOperationIds: preview.lostOperationIds,
+          resurrectedOperationIds,
+          backupCoverageDigest: preview.backupCoverageDigest,
+          liveCoverageDigest: preview.liveCoverageDigest,
+        }),
+      ),
+    );
+  };
+
+  /**
+   * Constraint 2's restore face, mechanism-asserted: a store holding BOTH receipt
+   * forms — the slim envelope T1's writer persists for the graph class and the
+   * full receipt a pre-change build left behind — inventories without same-key
+   * content drift, and every receipt the terminal prune removes stays a DECLARED
+   * backup-only row, the hand-inserted fat row included.
+   */
+  test("execution-restore-preview-lists-mixed-fat-and-slim-receipt-forms-without-content-drift", async () => {
+    const world = await recoveryWorld("mixed-receipt-forms");
+    const tokenNow = async (): Promise<ExecutionToken> =>
+      (await readExecutionState(world.context)).data.workflows[0]!.workflowToken;
+    // T1's writer: the creation receipt and this transition receipt are slim.
+    const slim = await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-slim-pause",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "mixed-form fixture" },
+    });
+    // The pre-change form, hand-inserted: the FULL receipt envelope — exactly the
+    // `{data, token, storeId, epoch}` object a pre-slim build persisted and this
+    // build still RETURNS to callers.
+    const fatOperationId = "op-fat-prechange";
+    rawRun(
+      world.dbPath,
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, ?, ?)",
+      world.epoch, fatOperationId, "prechange-fixture", world.storeId, WF,
+      JSON.stringify({ data: slim.data, token: slim.token, storeId: slim.storeId, epoch: slim.epoch }), TS,
+    );
+    const payload = (dbPath: string, operationId: string): Record<string, unknown> =>
+      JSON.parse(
+        rawGet<{ result_json: string }>(
+          dbPath,
+          `select result_json from execution_operations where operation_id = '${operationId}'`,
+        )!.result_json,
+      ) as Record<string, unknown>;
+    // Mixed forms are really in the live store, in the declared shapes.
+    expect(Object.keys(payload(world.dbPath, "op-slim-pause")).sort()).toEqual(["epoch", "slim", "storeId", "token"]);
+    expect(payload(world.dbPath, fatOperationId).slim).toBeUndefined();
+    expect(payload(world.dbPath, fatOperationId).data).toBeDefined();
+
+    const point = await recoveryPoint(world, "mixed-forms-point");
+
+    // A row is compared by its WRITE-TIME bytes, so an unmodified point holding
+    // both forms is current: mixed forms alone are not a loss, and the same-key
+    // fat row is on both sides with identical content.
+    expect(payload(point.backupPath, fatOperationId)).toEqual(payload(world.dbPath, fatOperationId));
+    const clean = await previewExecutionRestore(world.context, point.backupPath);
+    expect(clean.authorityDifferences).toEqual([]);
+    expect(clean.lostOperationIds).toEqual([]);
+    // On the UNMOVED store the clean preview recomposes from the same §8
+    // serialization with an EMPTY resurrection set.
+    expect(productionLossDigest(clean, point.backupPath, world.dbPath, [])).toBe(clean.lossDigest);
+
+    // The terminal close prunes that workflow's earlier receipts — BOTH forms —
+    // and retains its own slim durable replay anchor.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-close-mixed-forms",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "mixed-form fixture close" },
+    });
+
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    // No preview-shape or protocol change travels with the mixed-form inventory.
+    expect(preview.version).toBe(FROZEN_PROTOCOL_VERSION);
+    expect(Object.keys(preview).sort()).toEqual([...PREVIEW_KEYS].sort());
+
+    // Every receipt row of either form, per side, as the two preview classes
+    // spell it: `operation:<epoch>/<id>` in the authority list and
+    // `execution:<epoch>:<id>` in the operation-id lists.
+    const workflowReceipts = (dbPath: string): Array<{ epoch: number; operation_id: string }> =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by epoch, operation_id`,
+      );
+    const prunedKeys = workflowReceipts(point.backupPath).map((row) => `operation:${row.epoch}/${row.operation_id}`);
+    const liveKeys = workflowReceipts(world.dbPath).map((row) => `operation:${row.epoch}/${row.operation_id}`);
+    expect(prunedKeys).toContain(`operation:${world.epoch}/${fatOperationId}`);
+    expect(liveKeys).toEqual([`operation:${world.epoch}/op-close-mixed-forms`]);
+
+    const listedReceipts = preview.authorityDifferences
+      .filter((difference) => difference.domain === "execution" && difference.key.startsWith("operation:"))
+      .map((difference) => difference.key);
+    const known = new Set([...prunedKeys, ...liveKeys]);
+    // No entry is unclassified: every listed receipt row is one of the two
+    // enumerated classes, and both classes are fully listed.
+    expect(listedReceipts.filter((key) => !known.has(key))).toEqual([]);
+    expect([...listedReceipts].sort()).toEqual([...known].sort());
+    for (const pruned of prunedKeys) {
+      const entry = preview.authorityDifferences.find((difference) => difference.key === pruned)!;
+      expect(entry.liveRevision).toBeNull();
+      // The presence marker of a row whose table carries no revision of its own.
+      expect(entry.backupRevision).toBe(1);
+    }
+    const terminal = preview.authorityDifferences.find(
+      (difference) => difference.key === `operation:${world.epoch}/op-close-mixed-forms`,
+    )!;
+    expect(terminal.liveRevision).toBe(1);
+    expect(terminal.backupRevision).toBeNull();
+    expect(preview.lostOperationIds).toEqual([`execution:${world.epoch}:op-close-mixed-forms`]);
+
+    // The point-only receipts `lostOperationIds` does not list are the
+    // resurrected set, which the frozen preview carries through `lossDigest`
+    // alone. The digest is the §8 canonical serialization, so recomposing it
+    // from the production preview plus the store files' own facts proves the
+    // engine's resurrection contribution is really folded in — the point-only
+    // receipts, the hand-inserted fat row included — instead of agreeing with an
+    // expectation this fixture wrote down twice.
+    const receiptIds = (dbPath: string): string[] =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        "select epoch, operation_id from execution_operations order by epoch, operation_id",
+      ).map((row) => `execution:${row.epoch}:${row.operation_id}`);
+    const prunedReceiptIds = (() => {
+      const live = new Set(receiptIds(world.dbPath));
+      return receiptIds(point.backupPath).filter((id) => !live.has(id)).sort();
+    })();
+    expect(prunedReceiptIds).toEqual(
+      workflowReceipts(point.backupPath).map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
+    );
+    expect(prunedReceiptIds).toContain(`execution:${world.epoch}:${fatOperationId}`);
+    expect(productionLossDigest(preview, point.backupPath, world.dbPath, prunedReceiptIds)).toBe(preview.lossDigest);
+    // A different resurrection contribution is a different digest, so the
+    // comparison above cannot pass by ignoring the component.
+    expect(productionLossDigest(preview, point.backupPath, world.dbPath, [...prunedReceiptIds, "execution:0:not-committed"])).not.toBe(
+      preview.lossDigest,
+    );
+    expect(prunedReceiptIds.length).toBeGreaterThan(0);
+
+    // The pruned-row declaration stands beside the mixed forms: the surviving
+    // anchor is slim, and the point's fat row KEPT its write-time form because
+    // no restore and no prune ever rewrites `result_json`.
+    expect(payload(world.dbPath, "op-close-mixed-forms").slim).toBe(true);
+    expect(payload(point.backupPath, fatOperationId).slim).toBeUndefined();
+    expect(preview.lossDigest).not.toBe(clean.lossDigest);
+  });
+
+  test("terminal prune keeps only the current-epoch row when a restored old receipt reuses its operation id", async () => {
+    const world = await recoveryWorld("restore-terminal-reused-id");
+    const operationId = "op-terminal-reused-after-restore";
+    rawRun(
+      world.dbPath,
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, '{}', ?)",
+      world.epoch, operationId, "prior-epoch-fixture", world.storeId, WF, TS,
+    );
+    const point = await recoveryPoint(world, "terminal-reused-id-point");
+    const pause = await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-before-reused-id-restore",
+      session: world.sessionRef,
+      expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "advance beyond recovery point" },
+    });
+    expect(pause.replayed).toBe(false);
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const restored = await restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(restored.epoch).toBe(world.epoch + 1);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' and operation_id = '${operationId}'`,
+    )).toEqual([{ epoch: world.epoch, operation_id: operationId }]);
+
+    const afterRestore = await readExecutionState(world.context);
+    const reboundCaller = callerOf(WF, "post-restore-coordinator");
+    const recovered = await recoverExecutionCoordinator(contextOf(world.context, reboundCaller), {
+      expected: afterRestore.data.workflows.find((workflow) => workflow.state.id === WF)!.workflowToken,
+      operationId: "op-recover-after-restore",
+      priorSessionId: world.caller.sessionId,
+      reason: "replace the pre-restore coordinator",
+      attestation: {
+        version: ACTIVATION_PROTOCOL_VERSION,
+        attestedAt: TS,
+        operator: { actor: OPERATOR, authorizationRef: AUTHORIZATION },
+        consumers: [{
+          entryId: "coordinator-test",
+          kind: "coordinator",
+          entrypoint: "/opt/mstar/coordinator",
+          runtime: "bun",
+          runtimeVersion: "99.0.0",
+          version: "test",
+          current: true,
+          disposition: "reloaded",
+        }],
+        stoppedSessions: [{ sessionId: world.caller.sessionId, host: "omp", state: "stopped" }],
+      } satisfies ActivationAttestation,
+    });
+    const terminal = await mutateExecutionWorkflow(contextOf(world.context, reboundCaller), {
+      operationId,
+      session: recovered.data,
+      expected: (await readExecutionState(world.context)).data.workflows.find((workflow) => workflow.state.id === WF)!.workflowToken,
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "terminal receipt reuses prior epoch id" },
+    });
+    expect(terminal.replayed).toBe(false);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by epoch, operation_id`,
+    )).toEqual([{ epoch: restored.epoch, operation_id: operationId }]);
+  });
+
 
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
     const world = await recoveryWorld("restore-malformed-row");

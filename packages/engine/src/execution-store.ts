@@ -1512,6 +1512,7 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
       .run(now, now);
     tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
     assertNoLegacyExecutionSources(context);
+    tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
   });
   return readExecutionState(context);
 }
@@ -1793,7 +1794,7 @@ function readCommittedReceipt<T>(
   if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
     throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
   }
-  if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
+  if (receipt.slim !== true && !isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
   const recovery = receipt.operationRecovery;
   if (recovery !== undefined) {
     // Historical DB receipts stay READABLE: the envelope's own recovery fields
@@ -1817,6 +1818,10 @@ function readCommittedReceipt<T>(
   // Stored diagnostic payload; its envelope was checked above and a retired
   // `details` provenance is passed through unchanged for the reader.
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
+  if (receipt.slim === true) {
+    const live = readExecutionStateGraph(tx);
+    return { ...live, ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }) } as ExecutionRead<T>;
+  }
   return {
     data: receipt.data as T,
     token: recordedToken as ExecutionToken,
@@ -1989,13 +1994,16 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
  * whose `stoppedSessions` name EVERY addressed ACTIVE session as
  * stopped/reloaded, revoking exactly those rows, never the identity making the
  * call. The attested stop is the trust boundary (the engine cannot observe a
- * dead process), so an unattested holder is never silently revoked, an
- * explicitly supplied malformed proof refuses before any store access, and a
- * changed proof under a committed operation id is an operation conflict rather
- * than a silent replay. An omitted expectedRevision is resolved from the
- * addressed row inside this transaction; an explicit expectedRevision remains
- * a strict CAS. The committed receipt records the settled targets and the
- * approving operator/attestation provenance.
+ * dead process), so an unattested holder is never silently revoked, and an
+ * explicitly supplied malformed proof refuses before any store access. A changed
+ * proof under this committed operation id conflicts while its receipt remains
+ * (`execution.operation-conflict`). Adoption prunes the workflow's OTHER receipts
+ * on commit and keeps its own terminal receipt as the current-epoch replay
+ * anchor, so an identical retry replays; a retry under a DIFFERENT operation id
+ * reaches the terminal header instead — a stale explicit revision refuses
+ * `execution.header-revision-conflict`, an omitted or current revision refuses
+ * `execution.adoption-refused` with read-back guidance.
+ * The committed receipt records settled targets and approving provenance.
  */
 export async function adoptTerminalWorkflow(
   context: ExecutionContext,
@@ -2042,9 +2050,10 @@ export async function adoptTerminalWorkflow(
     intent: {
       expectedRevision: input.expectedRevision ?? "current",
       reason: input.reason,
-      // The proof document is part of the request's semantic selection: a retry
-      // carrying a DIFFERENT attestation is a different intent — an operation
-      // conflict, never a silent replay of the first settlement.
+      // The attestation contributes to the fingerprint, so a changed proof under
+      // this operation id conflicts while its retained terminal receipt remains;
+      // an identical retry replays that anchor, and another operation id is
+      // answered by the terminal header instead (stale CAS or read-back refusal).
       ...(attestation === undefined ? {} : { attestation }),
     },
   });
@@ -2184,7 +2193,8 @@ export async function adoptTerminalWorkflow(
       epoch: tx.epoch,
       ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
-    writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
+    writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now, slim: true });
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
       ...publicReceipt,
@@ -2266,12 +2276,7 @@ export async function createExecutionWorkflow(
       storeId: store.storeId,
       epoch: store.epoch,
     };
-    tx.db
-      .prepare(
-        "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
-          "values (?, ?, ?, ?, ?, null, ?, ?)",
-      )
-      .run(tx.epoch, operationId, requestHash, tx.storeId, creation.workflowId, JSON.stringify(receipt), now);
+    writeOperationReceipt(tx, { operationId, requestHash, workflowId: creation.workflowId, planId: null, receipt, now, slim: true });
     return { ...receipt, operationId, replayed: false };
   });
 }
@@ -3008,6 +3013,7 @@ export function writeOperationReceipt(
     planId: string | null;
     receipt: ExecutionRead<unknown>;
     now: string;
+    slim?: true;
   },
 ): void {
   tx.db
@@ -3022,9 +3028,31 @@ export function writeOperationReceipt(
       tx.storeId,
       input.workflowId,
       input.planId,
-      JSON.stringify(input.receipt),
+      JSON.stringify(
+        input.slim === true
+          ? {
+              slim: true,
+              token: input.receipt.token,
+              storeId: tx.storeId,
+              epoch: tx.epoch,
+              ...(input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }),
+            }
+          : input.receipt,
+      ),
       input.now,
     );
+}
+/**
+ * Terminal workflows retain their header as history; all their operation
+ * receipts EXCEPT the terminal mutation's own are pruned — the retained
+ * terminal receipt is the durable replay anchor that lets a caller that lost
+ * the success response replay the exact close/adoption instead of hitting a
+ * refusal (contract: an exact same request replays its recorded receipt).
+ */
+export function pruneWorkflowOperationReceipts(tx: ExecutionTransaction, workflowId: string, keepOperationId: string): void {
+  tx.db
+    .prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)")
+    .run(workflowId, tx.epoch, keepOperationId);
 }
 
 /** §2.3 the authorization one session-authorized plan address resolves to. */
