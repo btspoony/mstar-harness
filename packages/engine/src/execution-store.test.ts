@@ -957,46 +957,67 @@ try {
     expect(existsSync(join(context.harnessDir, ".execution-maintenance"))).toBe(false);
   }, 60_000);
 
-  test("refuses a live legacy execution source without touching the store", async () => {
-    // Disposition: the pre-activation file route is retired (§4.3), so a
-    // status.json / snapshot tree is no longer an authority source that
-    // initialization converts. A second initialization of the ACTIVE store
-    // created by `initializeStore` is refused create-only, and leftover file
-    // state changes nothing about that refusal.
-    const { context, epoch } = await freshStore("initialize-legacy-source");
-    writeFileSync(
-      join(context.harnessDir, "status.json"),
-      JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }),
-    );
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
-
-    // Snapshots, session envelopes and notes ledgers live under the workflow tree.
-    rmSync(join(context.harnessDir, "status.json"));
-    mkdirSync(join(context.harnessDir, "workflows", "wf-1"), { recursive: true });
-    writeFileSync(join(context.harnessDir, "workflows", "wf-1", "snapshot.json"), "{}");
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
-    rmSync(join(context.harnessDir, "workflows", "wf-1", "snapshot.json"));
-    mkdirSync(join(context.harnessDir, "workflows", "wf-1", "sessions"), { recursive: true });
-    writeFileSync(join(context.harnessDir, "workflows", "wf-1", "sessions", "session.json"), "{}");
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
-
-    // Neither refusal committed anything: the authority stays ACTIVE and at
-    // its activation revision.
-    const raw = rawDb(storePath(context));
+  test("rejects only legacy execution authority before initialization and preserves the notes ledger", async () => {
+    const context = controlRoot("initialize-legacy-sources");
+    createV3Store(context);
+    const prep = rawDb(storePath(context));
     try {
-      expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
-        authority_state: "active",
-        revision: 1,
-      });
-      expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
+      prep.exec("delete from catalog_execution_bindings");
     } finally {
-      raw.close();
+      prep.close();
     }
+    await upgradeStore(context);
+    const executionState = () => {
+      const db = rawDb(storePath(context));
+      try {
+        return one(db, "select authority_state, revision from execution_meta where id = 1");
+      } finally {
+        db.close();
+      }
+    };
+    const before = executionState();
+    if (typeof before.revision !== "number") throw new Error("execution revision is unavailable");
 
-    // Removing the leftover files does not re-open initialization either: the
-    // live ACTIVE authority is never reset.
-    rmSync(join(context.harnessDir, "workflows"), { recursive: true, force: true });
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+    const statusPath = join(context.harnessDir, "status.json");
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }));
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(statusPath),
+    });
+    expect(executionState()).toEqual(before);
+    rmSync(statusPath);
+
+    const workflowDir = join(context.harnessDir, "workflows", "wf-1");
+    mkdirSync(workflowDir, { recursive: true });
+    const snapshotPath = join(workflowDir, "snapshot.json");
+    writeFileSync(snapshotPath, "{}");
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(snapshotPath),
+    });
+    expect(executionState()).toEqual(before);
+    rmSync(snapshotPath);
+
+    const sessionPath = join(workflowDir, "sessions", "session.json");
+    mkdirSync(join(workflowDir, "sessions"), { recursive: true });
+    writeFileSync(sessionPath, "{}");
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(sessionPath),
+    });
+    expect(executionState()).toEqual(before);
+    rmSync(sessionPath);
+
+    const notesPath = join(workflowDir, "notes.jsonl");
+    const notesBytes = Buffer.from('{"id":"note-1","text":"ordinary history"}\n');
+    writeFileSync(notesPath, notesBytes);
+    const initialized = await initializeExecutionAuthority(context);
+    expect(initialized.data.workflows).toEqual([]);
+    expect(executionState()).toEqual({
+      authority_state: "active",
+      revision: before.revision + 1,
+    });
+    expect(readFileSync(notesPath)).toEqual(notesBytes);
   });
 
   test("refuses a nonempty execution domain without clearing it", async () => {

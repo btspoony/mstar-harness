@@ -89,15 +89,16 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string):
     const raw = converted.data as unknown as Record<string, unknown>;
     const rawInventory = legacySnapshotInventory(raw);
     const snapshot = projectLegacySnapshot(raw);
-    if (snapshot.integration_merge_lease !== undefined) {
-      const lease = snapshot.integration_merge_lease;
-      if (!isPlainObject(lease) || !isNonEmptyString(lease.holder) || !isNonEmptyString(lease.claimed_at) ||
-          !isNonEmptyString(lease.source_branch) || !isNonEmptyString(lease.target_branch)) {
-        conflict(`workflow ${converted.id} has malformed historical integration lease fields; preserve the original root and resolve the lease through its integration owner before rerunning store upgrade.`);
-      }
-      delete snapshot.integration_merge_lease;
+    const historicalMetadata = snapshot.legacy_metadata;
+    const historicalLease = historicalMetadata?.integration_merge_lease;
+    if (historicalMetadata && historicalLease !== undefined) {
+      const holder = isPlainObject(historicalLease) && isNonEmptyString(historicalLease.holder)
+        ? historicalLease.holder
+        : "unidentified holder";
+      delete historicalMetadata.integration_merge_lease;
+      if (Object.keys(historicalMetadata).length === 0) delete snapshot.legacy_metadata;
       legacy.dispositions.push(
-        `workflow ${converted.id}: historical v1 integration merge lease for ${lease.holder} was not carried into the new authority; operator ${JSON.stringify(operator)} requested this store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`,
+        `workflow ${converted.id}: historical v1 integration merge lease for ${holder} was not imported as a live lease; operator ${JSON.stringify(operator)} requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`,
       );
     }
     const plans: Plan[] = [];

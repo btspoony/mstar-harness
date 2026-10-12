@@ -15,6 +15,8 @@ import { executionInputHash, executionInputSelection, resolveProcessHarnessDir }
 import { previewExecutionRestore, restoreExecutionBackup } from "./execution-recovery.js";
 import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
+import { registerCatalogEntity } from "./catalog.js";
+import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
 afterAll(() => {
@@ -1566,7 +1568,7 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
     });
     expect(iteration.integration_merge_lease).toBeUndefined();
     expect(result.dispositions).toContain(
-      "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not carried into the new authority; operator \"operator\" requested this store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+      "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
     );
     // The standalone Todo row imports paused and continuable.
     const standalone = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
@@ -1592,6 +1594,84 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   // Ordinary retry is the same public operation and imports nothing new.
   const replay = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-direct-2" });
   expect(replay.imported).toBe(0);
+});
+test("malformed v1 lease metadata is retired with an explicit operator disposition", async () => {
+  const { context } = legacyV1Workspace("v1-malformed-historical-lease");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { metadata: Record<string, unknown> };
+  status.metadata.integration_merge_lease = { holder: "legacy-coordinator" };
+  const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
+  writeFileSync(statusPath, sourceBytes);
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-malformed-lease" });
+  expect(result.imported).toBe(2);
+  expect(result.dispositions).toContain(
+    "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+  );
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+  const store = await openStore(context, "read");
+  try {
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("iter-v1") as { state_json: string };
+    const iteration = JSON.parse(header.state_json) as Record<string, unknown>;
+    expect(iteration.integration_merge_lease).toBeUndefined();
+    expect(iteration.legacy_metadata).not.toHaveProperty("integration_merge_lease");
+  } finally {
+    store.close();
+  }
+});
+test("no-active-iteration metadata is recoverably disclosed while malformed leases do not block import", async () => {
+  const { context } = legacyV1Workspace("v1-no-active-iteration");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as {
+    metadata: Record<string, unknown>;
+  };
+  status.metadata.integration_merge_lease = { holder: "legacy-coordinator" };
+  const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
+  writeFileSync(statusPath, sourceBytes);
+  rmSync(join(context.harnessDir, "iterations", "iter-v1"), { recursive: true, force: true });
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.dispositions).toContain(
+    "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+  );
+  expect(result.dispositions).toContain(
+    "root metadata integration_merge_lease is historical data only and is not converted to a live store lease; the direct store-upgrade import leaves status.json unchanged, and future integration ownership uses the native serial lease operation",
+  );
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+
+  const project = await registerCatalogEntity(
+    context,
+    { kind: "project", id: "_default", title: "Default project", rootKind: "projects", relativePath: "_default/roadmap.md" },
+    { operationId: "op-register-default-roadmap", actor: "store-upgrade-minimal.test" },
+  );
+  expect(project.id).toBe("_default");
+  const current = await readRoadmapAuthority(context, "_default");
+  expect(current).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  const roadmap = [
+    "---",
+    "project_id: _default",
+    "title: Recovered legacy roadmap",
+    "status: active",
+    "created_at: 2026-10-04",
+    "---",
+    "",
+    "## Direction",
+    "",
+    "Recovered from the preserved program_roadmap source.",
+    "",
+    "## Goals",
+    "",
+    "- [ ] Keep the original roadmap goal",
+    "",
+  ].join("\n");
+  await replaceRoadmapAuthority(
+    context,
+    { projectId: "_default", expectedProjectRevision: current.projectRevision, expectedRoadmapRevision: "absent", contentMarkdown: roadmap },
+    { operationId: "op-recover-default-roadmap" },
+  );
+  expect((await readRoadmapAuthority(context, "_default")).roadmap?.contentMarkdown).toBe(roadmap);
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
 });
 
 test("a v1 root whose lift is unacceptable reports the committed schema and authority state", async () => {

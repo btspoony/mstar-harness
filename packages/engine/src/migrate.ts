@@ -141,7 +141,6 @@ const ROOT_METADATA_LIFT_KEYS: Record<string, true> = {
   target_branch: true,
   spec_integration_branch: true,
   control_worktree_path: true,
-  integration_merge_lease: true,
   updated_at: true,
 };
 
@@ -361,9 +360,6 @@ function applyRootMetadataLift(
   if (typeof metadata.control_worktree_path === "string" && metadata.control_worktree_path !== "") {
     data.integration_worktree_path = metadata.control_worktree_path;
   }
-  if (isPlainObject(metadata.integration_merge_lease)) {
-    data.integration_merge_lease = metadata.integration_merge_lease as WorkflowSnapshot["integration_merge_lease"];
-  }
 
   const legacyMetadata: Record<string, unknown> = isPlainObject(data.legacy_metadata)
     ? { ...data.legacy_metadata }
@@ -494,6 +490,16 @@ export function convertLegacyV1Tree(root: string): LegacyV1Conversion {
   } else if (Object.keys(metadata).length > 0) {
     dispositions.push(
       "no active iteration snapshot found \u2014 root metadata execution-policy/branch keys have no lift home and stay unconverted (the legacy root file keeps them)",
+    );
+  }
+  if (activeIterations.length === 0 && metadata.program_roadmap !== undefined) {
+    dispositions.push(
+      "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+    );
+  }
+  if (activeIterations.length === 0 && metadata.integration_merge_lease !== undefined) {
+    dispositions.push(
+      "root metadata integration_merge_lease is historical data only and is not converted to a live store lease; the direct store-upgrade import leaves status.json unchanged, and future integration ownership uses the native serial lease operation",
     );
   }
 

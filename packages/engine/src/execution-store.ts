@@ -1351,10 +1351,10 @@ export function readExecutionStateGraph(tx: ExecutionTransaction): ExecutionRead
 
 /**
  * Live legacy execution sources of a control harness. The v2/v1 root register is
- * the file at the harness root; snapshots, `sessions/*.json` envelopes and
- * `notes.jsonl` ledgers all live under the workflow tree. Archived history under
- * `<harness>/archived/` is read-only provenance rather than a live source, so it
- * does not block an empty initialization.
+ * the file at the harness root; snapshots and `sessions/*.json` envelopes live
+ * under the workflow tree. Append-only notes are a separate history ledger, not
+ * execution authority. Archived history under `<harness>/archived/` is read-only
+ * provenance and does not block an empty initialization.
  */
 function assertNoLegacyExecutionSources(context: StoreContext): void {
   const harnessDir = dirname(storeDbPath(context));
@@ -1390,14 +1390,12 @@ function assertNoLegacyExecutionSources(context: StoreContext): void {
         continue;
       }
       if (!entry.isDirectory()) continue;
-      for (const name of [WORKFLOW_SNAPSHOT_FILE, "notes.jsonl"]) {
-        const path = join(dir, name);
-        try {
-          lstatSync(path);
-          sources.push(path);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${path} (unreadable)`);
-        }
+      const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+      try {
+        lstatSync(path);
+        sources.push(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${path} (unreadable)`);
       }
       const sessionsDir = join(dir, "sessions");
       try {
