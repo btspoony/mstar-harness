@@ -1636,6 +1636,39 @@ test("an acknowledged DSH-only symlinked child recovers through --ack-skip-dsh w
   expect([...readFileSync(join(workflowsDir, "wf-symlinked-dsh-child", "unknown.bin"))]).toEqual([...unknownBytes]);
 });
 
+test("an acknowledged DSH selector cannot widen the skip to a registered symlinked workflow", async () => {
+  const { context } = legacyWorkspace("symlinked-registered");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  // The SAME child shape, but registered: the registration is an execution
+  // source, so the acknowledgement must not defer it. The in-root target keeps
+  // the containment guard out of the way so the per-entry no-follow guard is the
+  // one that answers.
+  const realInRoot = join(context.harnessDir, "real-in-root", "wf-symlinked-registered");
+  mkdirSync(realInRoot, { recursive: true });
+  const linkedIds = '{"id":"wfe1:registered","d":"registered-digest"}\n';
+  writeFileSync(join(realInRoot, "agent-flow-ids.jsonl"), linkedIds);
+  const linkPath = join(workflowsDir, "wf-symlinked-registered");
+  rmSync(linkPath, { recursive: true, force: true });
+  symlinkSync(realInRoot, linkPath);
+
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-symlinked-registered",
+    acknowledgedSkips: ["dsh-ledger:wf-symlinked-registered"],
+  })).rejects.toMatchObject({
+    code: "execution.migration-conflict",
+    message: expect.stringContaining("is not a real in-root directory"),
+  });
+  // The acknowledged selector discarded nothing: no execution row, no DSH row,
+  // and the link target was never followed or rewritten.
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(realInRoot, "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+});
+
 test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
   const { context, statusBytes } = legacyV1Workspace("v1-direct");
   const compassBytes = readFileSync(join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md"));
