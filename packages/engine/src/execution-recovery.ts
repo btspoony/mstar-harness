@@ -16,13 +16,12 @@
  *   inventory. It writes no authority row, no receipt and no artifact of its
  *   own, so it is safe to run at any time. Receipt retention is an expected
  *   source of backup-only `execution` operation rows: a terminal close or
- *   adoption prunes that workflow's operation receipts and an authority epoch
- *   advance purges the superseded epoch's, so a preview of a point older than
- *   either anchor lists them in `authorityDifferences` with `liveRevision: null`
- *   and among the point's resurrected operation ids, and restoring them is
- *   harmless because a resurrected receipt only re-arms idempotent replay whose
- *   effect the restored bytes already carry or whose retry refuses on terminal
- *   header state.
+ *   adoption prunes that workflow's operation receipts (each listed in a
+ *   preview of an older point with `liveRevision: null`), the init-time purge
+ *   beside the in-place epoch bump clears the superseded epoch's, and a restore
+ *   preserves prior-epoch receipt rows as history under its frozen
+ *   bytes-plus-one-epoch contract, outside the current epoch's replay scope, so
+ *   restoring any of them is harmless and re-arms nothing.
  * - `restoreExecutionBackup` is the destructive step. It re-derives the loss
  *   inventory under the maintenance lock and records it as the honest account
  *   of what the replacement costs; the operator and authorization reference are
