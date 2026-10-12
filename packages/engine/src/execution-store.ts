@@ -1467,6 +1467,7 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
         )
         .run(now, now);
       tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+      tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
       assertNoLegacyExecutionSources(context);
     });
     return readExecutionState(context);
@@ -2142,6 +2143,7 @@ export async function adoptTerminalWorkflow(
       ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
+    pruneWorkflowOperationReceipts(tx, input.workflowId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
       ...publicReceipt,
@@ -2983,6 +2985,13 @@ export function writeOperationReceipt(
       input.now,
     );
 }
+/**
+ * Terminal workflows retain their header as history; their operation receipts
+ * no longer have a live replay or recovery consumer.
+ */
+export function pruneWorkflowOperationReceipts(tx: ExecutionTransaction, workflowId: string): void {
+  tx.db.prepare("delete from execution_operations where workflow_id = ?").run(workflowId);
+}
 
 /** §2.3 the authorization one session-authorized plan address resolves to. */
 export type ResolvedPlanRead = {
@@ -3402,7 +3411,7 @@ export function readExecutionWorkflowWitness(
     throw new CoordinationError(
       "coordination.workflow-not-found",
       `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle \u2014 a terminal or unregistered workflow stays ` +
-        `as history and is never amended`,
+        `as history and is never amended. Inspect its recorded state with mstar status validate.`,
       { workflow_id: read.workflowId },
     );
   }

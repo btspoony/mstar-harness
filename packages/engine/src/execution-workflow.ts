@@ -109,6 +109,7 @@ import {
   serializeExecutionValue,
   withExecutionTransaction,
   withRecoveryDetails,
+  pruneWorkflowOperationReceipts,
   writeOperationReceipt,
   writeWorkflowState,
   type ExecutionCaller,
@@ -1082,9 +1083,9 @@ export async function mutateExecutionWorkflow(
     // registry membership loss adds the ROOT advance without a second store
     // bump, so the accepted operation advances the store revision exactly once.
     advanceWorkflowHeaderRevision(tx, { workflowId: witness.workflowId, now: at });
-    let receipt: ExecutionRead<ExecutionState>;
+    let applied: AppliedWorkflowOperation;
     try {
-      receipt = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
+      applied = applyWorkflowOperation({ tx, witness, read: resolved.read, operation, evidence, at });
     } catch (error) {
       throw workflowConflictCause(error, { workflowId, operation, state: stored.state });
     }
@@ -1093,11 +1094,12 @@ export async function mutateExecutionWorkflow(
       requestHash,
       workflowId: witness.workflowId,
       planId: null,
-      receipt,
+      receipt: applied.receipt,
       now: at,
     });
+    if (applied.membershipLost) pruneWorkflowOperationReceipts(tx, witness.workflowId);
     return {
-      ...receipt,
+      ...applied.receipt,
       operationId: resolved.call.operationId,
       replayed: false,
       recovery: workflowRecovery({
@@ -1132,6 +1134,7 @@ export async function mutateExecutionWorkflow(
  * integration claim here, and the terminal decision then judges exactly the
  * ownership this transaction leaves behind.
  */
+type AppliedWorkflowOperation = { receipt: ExecutionRead<ExecutionState>; membershipLost: boolean };
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
   witness: ExecutionWorkflowWitness;
@@ -1139,7 +1142,7 @@ function applyWorkflowOperation(input: {
   operation: WorkflowExecutionOperation;
   evidence: WorkflowEvidence;
   at: string;
-}): ExecutionRead<ExecutionState> {
+}): AppliedWorkflowOperation {
   const { tx, witness, read, operation, evidence, at } = input;
   const workflowId = witness.workflowId;
   const current = witness.view.state as unknown as WorkflowSnapshot;
@@ -1196,7 +1199,7 @@ function applyWorkflowOperation(input: {
   assertHeaderValid(workflowId, header);
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
-  return readExecutionStateGraph(tx);
+  return { receipt: readExecutionStateGraph(tx), membershipLost };
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */

@@ -1052,6 +1052,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(stored!.status).toBe("completed");
     expect(String(stored!.ended_at)).not.toBe("");
     expect(stored!.plans).toBe(1);
+    expect(rows(fixture.context, `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`)[0]!.n).toBe(0);
     // One operation: the workflow and the store each advance once, and the
     // registry loss advances the root once.
     expect(revisions(fixture.context)).toEqual({
@@ -1106,16 +1107,15 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(receipt.token).toBe(after.token);
     expect(receipt.data.root.updated_at).toBe(after.data.root.updated_at);
 
-    // §3.1 the identical retry replays that same post-close receipt, so a caller
-    // holding it addresses the authority the close actually left behind.
-    const replay = await workflowMutation(
+    // Terminal history is retained in the header; retries get supported read-back guidance.
+    const retry = await refusalOf(() => workflowMutation(
       fixture,
       "op-close-token",
       { kind: "lifecycle", status: "completed", reason: "delivery tail verified" },
       { expected },
-    );
-    expect(replay.replayed).toBe(true);
-    expect(replay.token).toBe(after.token);
+    ));
+    expect(retry.code).toBe("coordination.workflow-not-found");
+    expect(retry.message).toContain("mstar status validate");
   });
 
   test("pause and resume keep the lifecycle and never touch the integration claim", async () => {
@@ -2283,21 +2283,20 @@ describe("execution-close-composition: R10/A20 the terminal close's residue repa
     // The recorded outcome and its time are PRESERVED, never rewritten.
     expect(stored!.status).toBe("completed");
     expect(stored!.ended_at).toBe(endedAt);
+    expect(rows(fixture.context, `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`)[0]!.n).toBe(0);
     // One accepted operation: the workflow and the store each advance once, and
     // the membership loss advances the root once.
     const after = revisions(fixture.context);
     expect(after).toEqual({ root: before.root + 1, store: before.store + 1, workflow: before.workflow + 1 });
 
-    // §R6/A28 the identical retry converges on the SAME effect: the recorded
-    // receipt is served, nothing is re-registered and no second cleanup runs.
-    const replay = await workflowMutation(
+    const retry = await refusalOf(() => workflowMutation(
       fixture,
       "op-close-residue",
       { kind: "lifecycle", status: "completed", reason: "residue repaired" },
       { expected },
-    );
-    expect(replay.replayed).toBe(true);
-    expect(replay.recovery?.outcome).toBe("already-satisfied");
+    ));
+    expect(retry.code).toBe("coordination.workflow-not-found");
+    expect(retry.message).toContain("mstar status validate");
     expect(revisions(fixture.context)).toEqual(after);
   });
 
