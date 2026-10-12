@@ -1,6 +1,6 @@
 ---
 name: mstar-compound
-description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀为结构化知识文档，存入 `{KNOWLEDGE_DIR}`；迭代收口时从 `{ITERATION_DIR}/<iteration-id>/` package 提升 specs/guides。支持 Bug track 与 Knowledge track 双轨。含重叠检测、可发现性检查、CONCEPTS.md 协同。本技能只拥有**执行步骤**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据）；调用来自迭代收口（`mstar-iteration` Phase 3）或单 plan 交付尾段（`mstar-roles/references/project-manager/plan-management.md`），触发时机 / 写入面 / 记录面由调用方声明。产出：`{KNOWLEDGE_DIR}/<category>/<slug>.md`；无结晶时以 reasoned `skipped` 结束。
+description: Morning Star 知识结晶 —— 将已解决问题的经验沉淀为结构化知识文档，存入 `{KNOWLEDGE_DIR}`；迭代收口时从 `{ITERATION_DIR}/<iteration-id>/` package 提升 specs/guides。支持 Bug track 与 Knowledge track 双轨。含重叠检测、可发现性检查、CONCEPTS.md 协同。本技能只拥有**执行步骤**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据）；由生命周期流程调用（迭代收口、单 plan 交付尾段），触发时机 / 写入面 / 记录面由调用方声明。产出：`{KNOWLEDGE_DIR}/<category>/<slug>.md`；无结晶时以 reasoned `skipped` 结束。
 ---
 
 # mstar-compound（知识结晶）
@@ -29,13 +29,13 @@ Knowledge that isn't captured evaporates when the session ends. Knowledge that i
 
 ## Integration with mstar lifecycle
 
-Compound 是**被生命周期流程调用**的知识结晶流程：本 SKILL 只拥有**执行步骤**（下方 + `references/compound-workflow.md`）；**触发时机、cwd、写入面与结果记录面由调用方流程声明** —— 迭代收口 → `mstar-iteration` Phase 3（`references/phase-3-iteration-close.md` §3.2）；单 plan 交付尾段 → `mstar-roles/references/project-manager/plan-management.md`。本 SKILL **不复述调用方细节**。
+Compound 是**被生命周期流程调用**的知识结晶流程：本 SKILL 只拥有**执行步骤**（下方 + `references/compound-workflow.md`）；**触发时机、cwd、写入面与结果记录面由调用方流程声明**。本 SKILL **不复述调用方细节，也不维护调用方清单** —— 调用方各自指向本技能的步骤文件。
 
 `iteration-start → [plan lifecycle × N] → iteration-close → mstar-compound → {KNOWLEDGE_DIR} → feeds next iteration's specify/plan`。per-plan `Done` **不是**触发点：迭代内 plan 行不各自运行（迭代整体收口时一次），独立交付 plan 走其交付尾段 disposition，**不强制新文档**（reasoned `skipped` 有效）。
 
 ### Iteration package promotion（package 盘点方法）
 
-调用方声明需要盘点迭代 package 时（迭代收口流程强制 —— 见 `mstar-iteration` Phase 3 §3.2），compound 的盘点方法如下。
+调用方声明需要盘点迭代 package 时，compound 的盘点方法如下。
 
 **路径**：`{ITERATION_DIR}/<iteration-id>/**`（含 `guides/`、`specs/`、扁平 `.md`；**默认排除** `delivery-compass.md` 除非 PM 显式纳入。Legacy 根目录 `*-delivery-compass.md` 同理排除）。
 
@@ -82,7 +82,7 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 3. **Write** — path + frontmatter（SSOT `references/schema.yaml`）+ body（`assets/resolution-template.md`）+ YAML validate
 4. **Discoverability** — 若 root `AGENTS.md`/`CLAUDE.md` 未提 `{KNOWLEDGE_DIR}`，提议最小补充（需用户同意；拒绝则仅跳过该编辑，doc 仍写）
 5. **CONCEPTS.md** — 项目特定领域词满足 qualifying bar 时提议入 `CONCEPTS.md`（规则见 `references/concepts-vocabulary.md`）；全仓 bootstrap 归 `mstar-compound-refresh`
-6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。**iteration-close gate**：每篇新 doc 必须完成本 Phase
+6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。每篇新 doc 必须完成本 Phase
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐 `/pm compound-refresh <scope>`（不自动跑，仅 flag）
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertKnowledgeCatalogCompleteness } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The former README index-row assert is retired: the `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
@@ -108,4 +108,4 @@ In Cursor, Full mode dispatches subagents via Task tool. PM selects mode.
 
 ## Evidence
 
-正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ catalog 登记为 `kind=document`（`document_kind=knowledge`，Phase 6 Catalog；`mstar catalog list` 可查到，iteration-close 强制）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）。
+正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ catalog 登记为 `kind=document`（`document_kind=knowledge`，Phase 6 Catalog；`mstar catalog list` 可查到）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）。
