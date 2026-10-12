@@ -507,16 +507,13 @@ describe('workflow event native acceptance and scan bound', () => {
     if (longMember?.kind === 'workflow-agent') {
       expect(longMember.label).toBeDefined()
       expect(longMember.phase).toBeDefined()
-      expect(Array.from(longMember.label ?? '').length).toBeLessThanOrEqual(512)
-      expect(Array.from(longMember.phase ?? '').length).toBeLessThanOrEqual(512)
-      expect(longMember.label).toContain('🧭')
-      expect(longMember.phase).toContain('🧭')
+      expect(longMember.label).toBe(`${'🧭'.repeat(511)}…`)
+      expect(longMember.phase).toBe(`${'🧭'.repeat(511)}…`)
     }
     const longRun = view?.events.find((event) => event.kind === 'workflow-run' && event.runId === 'run-b')
     expect(longRun?.kind).toBe('workflow-run')
     if (longRun?.kind === 'workflow-run') {
-      expect(Array.from(longRun.name ?? '').length).toBeLessThanOrEqual(1_024)
-      expect(longRun.name).toContain('🧭')
+      expect(longRun.name).toBe(`${'🧭'.repeat(1_023)}…`)
     }
     expect(view?.summary.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(6)
     expect(view?.summary.map((bucket) => bucket.outcome)).toEqual(expect.arrayContaining([
