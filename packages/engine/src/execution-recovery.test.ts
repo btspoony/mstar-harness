@@ -62,7 +62,7 @@ import {
 } from "./execution-store.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
-import { captureIssue } from "./issue.js";
+import { assignIssueMilestone, captureIssue, getIssue } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
 import { withStatusWriteLock } from "./lease.js";
 import {
@@ -1386,6 +1386,60 @@ describe("schema-owned loss inventory", () => {
       key: "migration:coverage-inventory",
       liveRevision: 1,
       backupRevision: 1,
+    });
+  });
+  test("inventory retains issue milestone membership, through the real assignment producer and as row content", async () => {
+    const world = await recoveryWorld("inventory-issue-milestone");
+    await registerCatalogEntity(
+      world.context,
+      { kind: "project", id: PROJECT_ID, title: "Membership project", rootKind: "projects", relativePath: `projects/${PROJECT_ID}` },
+      { operationId: "op-membership-project", actor: OPERATOR },
+    );
+    const storeRevision = (): number => rawGet<{ revision: number }>(world.dbPath, "select revision from store_meta where id = 1")!.revision;
+    const first = await addMilestone(world.context, { projectId: PROJECT_ID, name: "First", target: null, ordinal: 0 }, {
+      operationId: "op-membership-first",
+      expectedStoreRevision: storeRevision(),
+    });
+    const second = await addMilestone(world.context, { projectId: PROJECT_ID, name: "Second", target: null, ordinal: 1 }, {
+      operationId: "op-membership-second",
+      expectedStoreRevision: storeRevision(),
+    });
+    const membership = await captureIssue(world.context, { ...issueInput("Milestone membership finding"), projectId: PROJECT_ID }, {
+      operationId: "op-membership-issue",
+      actor: "project-manager",
+    });
+    const point = await recoveryPoint(world, "issue-milestone-point");
+
+    // A real membership move AFTER the point, through the published verb: the
+    // inventoried issue row must disclose that the association moved.
+    await assignIssueMilestone(
+      contextOf(world.context, world.caller),
+      membership.issueId,
+      { projectId: PROJECT_ID, milestoneId: first.milestoneId, reason: "inventory regression" },
+      { operationId: "op-membership-assign", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: storeRevision() },
+    );
+    const assigned = await previewExecutionRestore(world.context, point.backupPath);
+    expect(assigned.authorityDifferences).toContainEqual({
+      domain: "issue",
+      key: `issue:${membership.issueId}`,
+      liveRevision: 2,
+      backupRevision: 1,
+    });
+    expect((await getIssue(world.context, membership.issueId)).milestoneId).toBe(first.milestoneId);
+
+    // The association is inventoried CONTENT, not the revision it happens to
+    // arrive with: a membership change that leaves the row revision alone is
+    // still a disclosed difference, so a row-replacing consumer cannot drop it
+    // without reporting the loss.
+    const assignedPoint = await recoveryPoint(world, "issue-milestone-assigned-point");
+    rawRun(world.dbPath, "update issues set milestone_id = ? where id = ?", second.milestoneId, membership.issueId);
+    expect(rawGet<{ revision: number }>(world.dbPath, `select revision from issues where id = '${membership.issueId}'`)!.revision).toBe(2);
+    const moved = await previewExecutionRestore(world.context, assignedPoint.backupPath);
+    expect(moved.authorityDifferences).toContainEqual({
+      domain: "issue",
+      key: `issue:${membership.issueId}`,
+      liveRevision: 2,
+      backupRevision: 2,
     });
   });
 });

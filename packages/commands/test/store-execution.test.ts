@@ -265,20 +265,38 @@ describe("store and execution command surface", () => {
     const backupPath = join(harness, "point.db");
     expect((await invoke(definition("store.backup"), { harness, out: backupPath }, root)).status).toBe("ok");
     const firstPreview = join(root, "first-preview.json");
-    expect((await invoke(definition("store.execution.restore-preview"), { harness, backup: backupPath, out: firstPreview }, root)).status).toBe("ok");
+    const first = await invoke(definition("store.execution.restore-preview"), { harness, backup: backupPath, out: firstPreview }, root);
+    expect(first.status).toBe("ok");
+    expect(dataOf(first).version).toBe(3);
+    // An older loss-payload generation than the build's own protocol: the
+    // public refusal must name the cause and the same-root verb that
+    // regenerates a current preview, never the unrelated status self-check.
     const oldPreview = join(root, "old-preview.json");
     writeJson(oldPreview, { ...(JSON.parse(readFileSync(firstPreview, "utf8")) as Record<string, unknown>), version: 2 });
+    const before = await storeSnapshot(harness);
     const refused = await invoke(definition("store.execution.restore"), {
       harness, preview: oldPreview, operator: "fixture-operator", authorization: "fixture-audit-reference",
     }, root);
     expect(refused).toMatchObject({ status: "refused", code: "execution.migration-conflict" });
-    expect(refused.recovery).toContain("mstar store execution restore-preview --backup <backup> --out <preview>");
-    expect(refused.recovery).not.toContain("status validate");
+    expect(refused.message).toContain("loss-payload version 2");
+    const recovery = refused.status === "refused" ? refused.details?.recovery : undefined;
+    expect(recovery).toContain("mstar store execution restore-preview --backup <backup> --out <preview>");
+    expect(recovery).not.toContain("status validate");
+    // The refusal changed nothing.
+    expect(await storeSnapshot(harness)).toEqual(before);
+
+    // The recovery the refusal names is a real public verb on this build: it
+    // regenerates a current preview that a retry accepts.
     const regenerated = await invoke(definition("store.execution.restore-preview"), {
       harness, backup: backupPath, out: join(root, "regenerated-preview.json"),
     }, root);
     expect(regenerated.status).toBe("ok");
     expect(dataOf(regenerated).version).toBe(3);
+    const retried = await invoke(definition("store.execution.restore"), {
+      harness, preview: join(root, "regenerated-preview.json"), operator: "fixture-operator", authorization: "fixture-audit-reference",
+    }, root);
+    expect(retried.status).toBe("ok");
+    expect(typeof dataOf(retried).restoredFromSha256).toBe("string");
   });
   test("store upgrade exposes source-scoped DSH recovery and reports the acknowledged loss", async () => {
     const root = fixture("store-upgrade-dsh-recovery");
