@@ -257,6 +257,29 @@ describe("store and execution command surface", () => {
     if (rejected.status === "refused") expect(rejected.code).toBe("store.activation-stale");
     expect(await storeSnapshot(harness)).toEqual(before);
   });
+  test("old loss payload refusal points to public preview regeneration", async () => {
+    const root = fixture("execution-old-preview");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    expect((await invoke(definition("store.init"), { harness }, root)).status).toBe("ok");
+    const backupPath = join(harness, "point.db");
+    expect((await invoke(definition("store.backup"), { harness, out: backupPath }, root)).status).toBe("ok");
+    const firstPreview = join(root, "first-preview.json");
+    expect((await invoke(definition("store.execution.restore-preview"), { harness, backup: backupPath, out: firstPreview }, root)).status).toBe("ok");
+    const oldPreview = join(root, "old-preview.json");
+    writeJson(oldPreview, { ...(JSON.parse(readFileSync(firstPreview, "utf8")) as Record<string, unknown>), version: 2 });
+    const refused = await invoke(definition("store.execution.restore"), {
+      harness, preview: oldPreview, operator: "fixture-operator", authorization: "fixture-audit-reference",
+    }, root);
+    expect(refused).toMatchObject({ status: "refused", code: "execution.migration-conflict" });
+    expect(refused.recovery).toContain("mstar store execution restore-preview --backup <backup> --out <preview>");
+    expect(refused.recovery).not.toContain("status validate");
+    const regenerated = await invoke(definition("store.execution.restore-preview"), {
+      harness, backup: backupPath, out: join(root, "regenerated-preview.json"),
+    }, root);
+    expect(regenerated.status).toBe("ok");
+    expect(dataOf(regenerated).version).toBe(3);
+  });
   test("store upgrade exposes source-scoped DSH recovery and reports the acknowledged loss", async () => {
     const root = fixture("store-upgrade-dsh-recovery");
     const harness = join(root, ".mstar");

@@ -235,6 +235,9 @@ const PROVENANCE_ORIGIN_MIGRATION_VERSION =
 /** The migration that introduced project content authority (roadmaps). */
 const ROADMAP_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that added coverage to execution migration rows. */
+const EXECUTION_COVERAGE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced project milestones (both tables exist from here). */
 const MILESTONE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
@@ -351,7 +354,7 @@ function number(row: Record<string, unknown>, column: string): number {
 }
 
 /**
- * Every authority table of the three domains (§2 of the primary spec), in the
+ * Every authority table of the four domains (§2 of the primary spec), in the
  * order the inventory reports them. `projection_*` is deliberately absent:
  * contract §5 makes those tables a disposable published generation, so losing
  * one is not an authority loss.
@@ -388,6 +391,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
       "external_id",
       "url",
       "identity_key",
+      "milestone_id",
     ],
     orderBy: "id",
     key: (row) => `issue:${text(row, "id")}`,
@@ -576,7 +580,17 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "execution_migrations",
-    columns: ["manifest_id", "manifest_hash", "phase", "manifest_json", "activation_receipt_json", "retirement_json", "created_at", "updated_at"],
+    columns: [
+      "manifest_id",
+      "manifest_hash",
+      "phase",
+      "manifest_json",
+      "activation_receipt_json",
+      "retirement_json",
+      "created_at",
+      "updated_at",
+      "coverage_json",
+    ],
     orderBy: "manifest_id",
     key: (row) => `migration:${text(row, "manifest_id")}`,
     requires: "execution",
@@ -644,6 +658,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
 type TableAvailability = {
   catalog: boolean;
   execution: boolean;
+  executionCoverage: boolean;
   roadmap: boolean;
   milestone: boolean;
   host: boolean;
@@ -663,6 +678,10 @@ function available(table: AuthorityTable, availability: TableAvailability): bool
 /** The columns of one inventory table this store's schema actually carries. */
 function inventoryColumns(table: AuthorityTable, availability: TableAvailability): readonly string[] {
   let columns = table.columns;
+  if (table.table === "issues" && !availability.milestone) columns = columns.filter((column) => column !== "milestone_id");
+  if (table.table === "execution_migrations" && !availability.executionCoverage) {
+    columns = columns.filter((column) => column !== "coverage_json");
+  }
   if (!availability.provenanceOrigin) columns = columns.filter((column) => column !== "origin");
   if (!availability.dshLegacyProvenance) {
     columns = columns.filter((column) => column !== "legacy_source_digest" && column !== "legacy_line");
@@ -1029,6 +1048,7 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
       const availability: TableAvailability = {
         catalog: handle.schemaVersion >= CATALOG_MIGRATION_VERSION,
         execution: handle.schemaVersion >= EXECUTION_MIGRATION_VERSION,
+        executionCoverage: handle.schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
         roadmap: handle.schemaVersion >= ROADMAP_MIGRATION_VERSION,
         milestone: handle.schemaVersion >= MILESTONE_MIGRATION_VERSION,
         host: handle.schemaVersion >= DSH_MIGRATION_VERSION,
@@ -1229,6 +1249,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
   const availability: TableAvailability = {
     catalog: live.schemaVersion >= CATALOG_MIGRATION_VERSION,
     execution: live.schemaVersion >= EXECUTION_MIGRATION_VERSION,
+    executionCoverage: live.schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
     roadmap: live.schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: live.schemaVersion >= MILESTONE_MIGRATION_VERSION,
     host: live.schemaVersion >= DSH_MIGRATION_VERSION,

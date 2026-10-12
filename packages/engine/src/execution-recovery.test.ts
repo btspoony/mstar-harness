@@ -1367,4 +1367,25 @@ describe("schema-owned loss inventory", () => {
     expect(oldGeneration.code).toBe("execution.migration-conflict");
     expect(oldGeneration.message).toContain("loss-payload version");
   });
+  test("inventory includes execution migration coverage content", async () => {
+    const world = await recoveryWorld("inventory-execution-coverage");
+    rawRun(
+      world.dbPath,
+      "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at, coverage_json) values (?, ?, 'retired', '{}', ?, ?, ?)",
+      "coverage-inventory",
+      "a".repeat(64),
+      TS,
+      TS,
+      '{"generation":"before"}',
+    );
+    const point = await recoveryPoint(world, "coverage-inventory-point");
+    rawRun(world.dbPath, "update execution_migrations set coverage_json = ? where manifest_id = ?", '{"generation":"after"}', "coverage-inventory");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    expect(preview.authorityDifferences).toContainEqual({
+      domain: "execution",
+      key: "migration:coverage-inventory",
+      liveRevision: 1,
+      backupRevision: 1,
+    });
+  });
 });
