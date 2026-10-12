@@ -376,8 +376,21 @@ describe("execution-ledgers: plain-log append semantics", () => {
       refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, note("note-1", "body"))),
     );
     expect(refusal.code).toBe("execution-ledgers.target-replaced");
-    expect(ledgerBytes(shared).toString("utf8")).toBe("replacement inode canonical bytes\n");
-    expect(readFileSync(`${shared.ledgerPath}.displaced`, "utf8")).toBe(original);
+    expect(ledgerBytes(shared).toString("utf8")).toBe("replacement inode canonical bytes (before-commit)\n");
+    expect(readFileSync(`${shared.ledgerPath}.displaced-before-commit`, "utf8")).toBe(original);
+  });
+
+  test("an atomic replacement after fsync refuses instead of issuing a success receipt", async () => {
+    const original = `${LEGACY_LINE}${lineOf(note("note-fsync", "before replacement"))}`;
+    shared.seed({ ledger: original });
+    const refusal = await withEnv({ MSTAR_LEDGER_REPLACE_AFTER_FSYNC: shared.ledgerPath }, () =>
+      refusalOf(() => appendWorkflowNote(shared.coordContext, shared.session, note("note-fsync", "after fsync"))),
+    );
+    expect(refusal.code).toBe("execution-ledgers.target-replaced");
+    expect(ledgerBytes(shared).toString("utf8")).toBe("replacement inode canonical bytes (after-fsync)\n");
+    const displaced = readFileSync(`${shared.ledgerPath}.displaced-after-fsync`, "utf8");
+    expect(displaced).toContain(lineOf(note("note-fsync", "after fsync")));
+    expect(ledgerBytes(shared).toString("utf8")).not.toContain('"id":"note-fsync"');
   });
 
   test("a peer's partial write between the creator's open and its write still leaves the note readable", async () => {

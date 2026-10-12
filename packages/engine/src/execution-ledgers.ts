@@ -31,16 +31,17 @@
  * `appendWorkflowNote` proves the control root exists, resolves (and, when
  * genuinely absent and already authorized, materializes) the retained workflow
  * body dir, then takes C1's synchronous current-session assertion immediately
- * before a **single `O_APPEND` write** of the complete framed record. It checks
- * that the opened descriptor still names the canonical leaf immediately before
- * writing. There is no file lock, no maintenance exclusion, no whole-file read,
- * no dedup decision, no tail repair, no truncation and no rewrite of peer bytes.
- * A later external rotation can still move an already-written inode; this
- * observer is not a rotation lock. **Every** frame carries a leading LF,
- * including the one that creates the leaf, so its line survives when a peer
- * writes a partial record after open and before this write. A stale epoch, a
- * revoked session or a foreign caller refuses before any byte is written, and
- * append success means the frame is fsynced.
+ * before a **single `O_APPEND` write** of the complete framed record. The opened
+ * descriptor must still name the canonical leaf immediately before writing and
+ * again after fsync, before a success receipt is issued. There is no file lock,
+ * no maintenance exclusion, no whole-file read, no dedup decision, no tail
+ * repair, no truncation and no rewrite of peer bytes. A later external rotation
+ * can still move an already-written inode after the final observation; this is
+ * not a rotation lock. **Every** frame carries a leading LF, including the one
+ * that creates the leaf, so its line survives when a peer writes a partial
+ * record after open and before this write. A stale epoch, a revoked session or
+ * a foreign caller refuses before any byte is written, and append success means
+ * the frame is fsynced.
  *
  * ## Leaf trust
  *
@@ -292,18 +293,22 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
 }
 
 /**
- * Test-runner-only replacement between the leaf open and frame write.
+ * Test-runner-only atomic replacement at an append boundary.
  */
-function interleavingSeam(path: string): void {
+function replaceLedgerForTest(path: string, stage: "before-commit" | "after-fsync"): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path) {
-    const displaced = `${path}.displaced`;
-    const replacement = `${path}.replacement`;
-    renameSync(path, displaced);
-    writeFileSync(replacement, "replacement inode canonical bytes\n");
-    renameSync(replacement, path);
-    return;
-  }
+  if (process.env[`MSTAR_LEDGER_REPLACE_${stage.replace("-", "_").toUpperCase()}`] !== path) return;
+  const displaced = `${path}.displaced-${stage}`;
+  const replacement = `${path}.replacement-${stage}`;
+  renameSync(path, displaced);
+  writeFileSync(replacement, `replacement inode canonical bytes (${stage})\n`);
+  renameSync(replacement, path);
+}
+
+function interleavingSeam(path: string): void {
+  replaceLedgerForTest(path, "before-commit");
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
+  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path) return;
   const peer = process.env.MSTAR_LEDGER_PEER_PARTIAL_SCRIPT;
   if (peer !== undefined && peer !== "") execFileSync("bun", [peer, path], { stdio: "ignore" });
 }
@@ -346,8 +351,27 @@ function fsyncDirectory(dir: string): void {
  * leaf that already ended with LF, or into a freshly created empty leaf, is an
  * empty line, which readers skip.
  */
+function assertLedgerPathIdentity(path: string, opened: Stats, phase: "before append" | "before success receipt"): void {
+  let current: Stats;
+  try {
+    current = lstatSync(path);
+  } catch {
+    throw new ExecutionLedgerError(
+      "execution-ledgers.target-replaced",
+      `${path} changed ${phase}; no success receipt was issued.`,
+    );
+  }
+  if (current.dev !== opened.dev || current.ino !== opened.ino) {
+    throw new ExecutionLedgerError(
+      "execution-ledgers.target-replaced",
+      `${path} now names a different file than the opened ledger ${phase}; no success receipt was issued.`,
+    );
+  }
+}
+
 function commitLedgerFrame(path: string, frame: Buffer): void {
   let fd: number;
+  let opened: Stats;
   let created = false;
   try {
     fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
@@ -357,29 +381,15 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
     fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND);
   }
   try {
-    const info = fstatSync(fd);
-    if (!info.isFile()) {
+    opened = fstatSync(fd);
+    if (!opened.isFile()) {
       throw new ExecutionLedgerError(
         "execution-ledgers.target-untrusted",
         `${path} is not a regular file; nothing was written.`,
       );
     }
     interleavingSeam(path);
-    let current: Stats;
-    try {
-      current = lstatSync(path);
-    } catch {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.target-replaced",
-        `${path} changed after it was opened; nothing was written.`,
-      );
-    }
-    if (current.dev !== info.dev || current.ino !== info.ino) {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.target-replaced",
-        `${path} now names a different file than the opened ledger; nothing was written.`,
-      );
-    }
+    assertLedgerPathIdentity(path, opened, "before append");
     const line = Buffer.concat([Buffer.from("\n", "utf8"), frame]);
     const written = writeSync(fd, line, 0, writeRequestLength(line), null);
     if (written !== line.length) {
@@ -390,10 +400,12 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
       );
     }
     fsyncSync(fd);
+    replaceLedgerForTest(path, "after-fsync");
   } finally {
     closeSync(fd);
   }
   if (created) fsyncDirectory(dirname(path));
+  assertLedgerPathIdentity(path, opened, "before success receipt");
 }
 
 /* ------------------------------------------------------------------------ *
