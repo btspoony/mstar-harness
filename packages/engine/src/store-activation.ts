@@ -27,7 +27,7 @@
  *   table that still carries one of its reviewed row identities; every other
  *   byte — narrative, unrelated tables, rows added after review — stays.
  * - The archived registers are historical migration input, never a rollback
- *   path: recovery after activation is the quiesced SQLite-consistent backup
+ *   path: recovery after activation is the verified SQLite-consistent backup
  *   plus reconciliation (§7), and the marker says so explicitly.
  * - Nothing here reads or writes a lease, session, workflow snapshot or
  *   `status.json`. The migration path cannot steal, release or rebind a lease,
@@ -49,9 +49,8 @@ import {
   unlinkSync,
   writeFileSync,
   type Dirent,
-  type Stats,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import {
   detectIndexFamily,
@@ -62,7 +61,6 @@ import {
 } from "./catalog-import.js";
 import { writeJson } from "./core.js";
 import { withStatusWriteLock } from "./lease.js";
-import { resolveWorkflowDir } from "./path.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIN_BUN_VERSION,
@@ -83,20 +81,14 @@ import {
 export const ACTIVATION_PROTOCOL_VERSION = 1;
 
 /**
- * §7 R4: the generation of the retained accepted-body inventory a recovery
- * point freezes, and of the one document that records it next to the copy.
- * Bumping it means a previously written inventory is refused by name rather
- * than decoded as if it still described this protocol.
- */
-export const RETAINED_BODY_PROTOCOL_VERSION = 1;
-
-/**
- * §7 R4: the backup RECEIPT generation. Version 2 adds `retained` — the
- * retained accepted-body inventory frozen with the same maintenance exclusion
- * as the copy. A version-1 receipt stays readable for the migration gate (which
- * needs no bodies), but it is never a restore input: the recovery protocol
- * refuses a point whose receipt cannot describe its retained bodies rather than
- * silently restoring without them.
+ * §7: the backup RECEIPT generation. Version 2 is the whole-image receipt:
+ * the store identity, schema version, execution identity and row counts are
+ * read from the copy itself (§8 "read metadata from the backup itself"). The
+ * file-native accepted-body inventory an earlier generation recorded beside
+ * the copy is gone — notes, agent-flow ledgers, cursors, the launch journal
+ * and the selection snapshot are ordinary retained files, not a second
+ * transactionally frozen authority, and a SQLite image does not roll them
+ * back. A version-1 receipt stays readable for the migration gate.
  */
 export const BACKUP_RECEIPT_VERSION = 2;
 
@@ -219,12 +211,6 @@ export type BackupReceipt = {
   walPending: boolean;
   bytes: number;
   takenAt: string;
-  /**
-   * §7 R4: the retained accepted-body inventory frozen with this point under
-   * the same maintenance exclusion as the copy — the DB copy alone does not
-   * back up the file-native ledgers. `null` on a version-1 receipt only.
-   */
-  retained: RetainedBodyInventory | null;
 };
 
 export type ActivationReceipt = {
@@ -554,14 +540,15 @@ export async function assertAuthorityCurrent(context: StoreContext, handle: Stor
 // ---------------------------------------------------------------------------
 
 /**
- * §4.3's outer lock: the ONE key every file-touching migration, retirement,
- * freeze and restore step takes first
+ * §4.3's outer exclusion: the ONE key every file-touching migration,
+ * retirement and restore step still takes first
  * (`<root>/.execution-maintenance/execution-migration`, which
  * `withStatusWriteLock` turns into
- * `<root>/.execution-maintenance/.status-write.lockdir`). It lives here — the
- * lowest module that needs it — so the migration/recovery/backup spellings
- * cannot drift apart: two keys would mean two exclusions that do not exclude
- * each other.
+ * `<root>/.execution-maintenance/.status-write.lockdir`). Backup no longer
+ * takes it: a `VACUUM INTO` copy is a single SQLite snapshot and needs no
+ * frozen window. The key lives here — the lowest module that needs it — so the
+ * migration/recovery spellings cannot drift apart. Its remaining callers are
+ * the restore path's own; deleting the ladder is that task's cutover.
  */
 export async function withExecutionMaintenanceLock<T>(context: StoreContext, fn: () => Promise<T>): Promise<T> {
   const key = join(canonicalPath(dirname(storeDbPath(context))), ".execution-maintenance", "execution-migration");
@@ -578,357 +565,17 @@ export function executionMaintenanceLockWaitMs(): number {
   return 30_000;
 }
 
-// ---------------------------------------------------------------------------
-// §7 R4 — the retained accepted-body inventory a recovery point freezes
-// ---------------------------------------------------------------------------
-//
-// A whole-store SQLite copy is not a backup of the file-native ledgers: notes,
-// agent-flow tail/identity-index/cursor/history, the launch journal and the
-// durable selection/cache snapshot live beside the store, in their own files,
-// with their own accepted records. §7 R4 therefore freezes, under the SAME
-// maintenance exclusion that quiesces the copy, one inventory of those bodies —
-// their bytes, their ordered accepted-record identities and their checkpoint —
-// and records it beside the copy. Backup and restore both refuse a workflow
-// that holds §5's transient `agent-flow-compaction.json`: a tail/index/cursor/
-// history set with an unfinished compaction cannot be captured or restored, and
-// a partial restore that omits that in-flight transaction would be corruption,
-// not an accepted duplicate-history residual.
-
-/** The retained accepted-body files one workflow dir owns (§4.1/§5). */
-const RETAINED_WORKFLOW_BODIES: readonly string[] = [
-  "notes.jsonl",
-  "agent-flow.jsonl",
-  "agent-flow-ids.jsonl",
-  "workflow-ledger-cursors.json",
-  "omp-launches.json",
-];
-/** §5: the sealed archive chunks of the agent-flow ledger. */
-const AGENT_FLOW_HISTORY_DIR = "agent-flow-history";
-const AGENT_FLOW_HISTORY_CHUNK = /^chunk-\d{6}\.jsonl$/;
-/** §5: the ONE transient compaction journal. A present one is an unfinished transaction. */
-export const AGENT_FLOW_COMPACTION_JOURNAL = "agent-flow-compaction.json";
-/** §4.1 S6: the root-level durable selection/cache body. */
-const ENGINE_STATUS_BODY = "snapshots/engine-status.json";
-
 /**
- * §7 R4: one retained accepted body, checkpointed. `records` is the ordered
- * SHA-256 of every LF-terminated line's bytes (the LF excluded, exactly the
- * rule §5's identity index uses), which is the append-only record identity for
- * the ledgers and the byte checkpoint for the single-document bodies;
- * `partial` is the SHA-256 of an unterminated trailing line, `null` when the
- * body ends clean.
- */
-export type RetainedBodyCheckpoint = Readonly<{
-  /** Control-root-relative canonical path. */
-  path: string;
-  /** SHA-256 of the body's whole byte content. */
-  sha256: string;
-  /**
-   * The ordered SHA-256 of every LF-terminated line's bytes (the LF excluded,
-   * exactly §5's identity-index rule) — the append-only record identity for the
-   * ledgers, and the byte checkpoint for the single-document bodies. This, not a
-   * size, is what a restore compares.
-   */
-  records: readonly string[];
-  /** SHA-256 of an unterminated trailing line, `null` when the body ends clean. */
-  partial: string | null;
-  /** True when this body carries the durable selection/cache facts (§6 F3). */
-  selection: boolean;
-}>;
-
-/** §7 R4: the retained accepted-body inventory one recovery point freezes. */
-export type RetainedBodyInventory = Readonly<{
-  version: number;
-  protocol: "retained-body-inventory-v1";
-  storeId: string;
-  epoch: number;
-  revision: number;
-  bodies: readonly RetainedBodyCheckpoint[];
-  digest: string;
-}>;
-
-/** The canonical digest of a retained inventory: every recorded fact, no derived field. */
-function retainedInventoryDigest(inventory: Omit<RetainedBodyInventory, "digest">): string {
-  return sha256Bytes(
-    Buffer.from(
-      JSON.stringify({
-        version: inventory.version,
-        protocol: inventory.protocol,
-        storeId: inventory.storeId,
-        epoch: inventory.epoch,
-        revision: inventory.revision,
-        bodies: inventory.bodies.map((body) => ({
-          path: body.path,
-            sha256: body.sha256,
-          records: [...body.records],
-          partial: body.partial,
-          selection: body.selection,
-        })),
-      }),
-      "utf8",
-    ),
-  );
-}
-
-/** The control-root-relative, slash-separated path of one discovered body. */
-function retainedBodyPath(root: string, absolute: string, what: string): string {
-  // LEXICAL relative path, never the canonicalized one: a body that is itself a
-  // symlink must stay visible as the link it is so `checkpointRetainedBody`'s
-  // `lstat` refuses it, instead of being silently recorded under its target's
-  // name. An ancestor link is already refused before this point (the workflow
-  // dir guard), and a configured workflow root that leaves the control root
-  // shows up here as a traversal, which refuses too.
-  const segments = relative(root, absolute)
-    .split(sep)
-    .filter((segment) => segment !== "");
-  if (segments.length === 0 || segments.includes("..")) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `${what} lives at ${absolute}, outside the control root ${root}; a recovery point freezes exactly the retained bodies it ` +
-        `protects, so a body outside the root refuses the freeze instead of being copied by guesswork.`,
-    );
-  }
-  return segments.join("/");
-}
-
-/** One body's checkpoint, read from its own bytes. A non-regular body refuses. */
-function checkpointRetainedBody(root: string, relativeBodyPath: string, selection: boolean): RetainedBodyCheckpoint {
-  const absolute = join(root, ...relativeBodyPath.split("/"));
-  let info: Stats;
-  try {
-    info = lstatSync(absolute);
-  } catch (error) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the retained body ${relativeBodyPath} disappeared while the inventory was being frozen (${(error as Error).message}); ` +
-        `the set is not the set that was discovered. Nothing was written.`,
-    );
-  }
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the retained body ${relativeBodyPath} is not a regular file (a symlink or a non-file is not a retained accepted body); the ` +
-        `inventory cannot be frozen over it.`,
-    );
-  }
-  const bytes = readFileSync(absolute);
-  const records: string[] = [];
-  let start = 0;
-  for (let index = 0; index < bytes.length; index += 1) {
-    if (bytes[index] !== 0x0a) continue;
-    records.push(sha256Bytes(bytes.subarray(start, index)));
-    start = index + 1;
-  }
-  return {
-    path: relativeBodyPath,
-    sha256: sha256Bytes(bytes),
-    records,
-    partial: start < bytes.length ? sha256Bytes(bytes.subarray(start)) : null,
-    selection,
-  };
-}
-
-/**
- * §7 R4: discover and checkpoint the live retained accepted bodies.
+ * §7 — the recovery-point contract of this module.
  *
- * Reads only, and touches no store: a refusal here (a present
- * `agent-flow-compaction.json`, a body that is not a regular file, a configured
- * workflow root outside the control root) happens before a store connection
- * exists, so it cannot leave a `-wal`/`-shm` beside the live store or fold its
- * pending frames. The workflow set is the configured `{WORKFLOW_DIR}` (§4.1
- * root resolution), so a terminal/unregistered workflow's bodies are read
- * exactly like a running one's.
+ * A whole-store SQLite copy IS the backup: `VACUUM INTO` produces one
+ * independent, transactionally consistent image of every authority domain the
+ * store owns. The file-native ledgers and documents beside the store (notes,
+ * agent-flow history, cursors, the launch journal, the selection snapshot) are
+ * ordinary retained files — process evidence, never a second transactionally
+ * frozen authority — so a recovery point neither freezes, checkpoints nor
+ * requires them, and a SQLite image does not roll their bytes back.
  */
-function readRetainedBodyCheckpoints(context: StoreContext): RetainedBodyCheckpoint[] {
-  const root = canonicalPath(dirname(storeDbPath(context)));
-  const paths: Array<{ path: string; selection: boolean }> = [];
-  if (existsSync(join(root, ...ENGINE_STATUS_BODY.split("/")))) {
-    paths.push({ path: ENGINE_STATUS_BODY, selection: true });
-  }
-  const workflowsDir = resolveWorkflowDir(root, { harnessDir: root });
-  let entries: Dirent[] = [];
-  try {
-    entries = readdirSync(workflowsDir, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-  const unfinished: string[] = [];
-  const workflowEntries = entries.filter((candidate) => {
-    if (candidate.isSymbolicLink()) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `${join(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so ` +
-          `the live retained set cannot be enumerated through it. Nothing was frozen.`,
-      );
-    }
-    return candidate.isDirectory();
-  });
-  for (const entry of workflowEntries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
-    const dir = join(workflowsDir, entry.name);
-    const prefix = retainedBodyPath(root, dir, `the workflow body dir of ${entry.name}`);
-    if (existsSync(join(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
-      unfinished.push(`${prefix}/${AGENT_FLOW_COMPACTION_JOURNAL}`);
-      continue;
-    }
-    for (const file of RETAINED_WORKFLOW_BODIES) {
-      const absolute = join(dir, file);
-      if (existsSync(absolute)) paths.push({ path: retainedBodyPath(root, absolute, `the retained body ${file}`), selection: false });
-    }
-    const historyDir = join(dir, AGENT_FLOW_HISTORY_DIR);
-    let chunks: Dirent[] = [];
-    try {
-      chunks = readdirSync(historyDir, { withFileTypes: true });
-    } catch {
-      chunks = [];
-    }
-    for (const chunk of chunks.filter((candidate) => AGENT_FLOW_HISTORY_CHUNK.test(candidate.name)).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      const absolute = join(historyDir, chunk.name);
-      if (existsSync(absolute)) paths.push({ path: retainedBodyPath(root, absolute, `the history chunk ${chunk.name}`), selection: false });
-    }
-  }
-  if (unfinished.length > 0) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the workflow ${unfinished.length === 1 ? "body dir" : "body dirs"} ${unfinished.sort().join(", ")} hold ` +
-        `${AGENT_FLOW_COMPACTION_JOURNAL}: \u00A75's transient ledger compaction journal pins the exact before/after tail bytes and the ` +
-        `removed archive range, so this retained set is IN FLIGHT. A recovery point that captured or restored it would be a ` +
-        `partial copy of an unfinished transaction \u2014 corruption, not an accepted duplicate-history residual. Nothing was ` +
-        `frozen; resolve the compaction through the ledger lock and retry.`,
-    );
-  }
-  return paths
-    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-    .map((entry) => checkpointRetainedBody(root, entry.path, entry.selection));
-}
-
-/** §7 R4: stamp one read body set with the authority generation it belongs to. */
-function stampRetainedInventory(
-  identity: { storeId: string; epoch: number; revision: number },
-  bodies: readonly RetainedBodyCheckpoint[],
-): RetainedBodyInventory {
-  const withoutDigest: Omit<RetainedBodyInventory, "digest"> = {
-    version: RETAINED_BODY_PROTOCOL_VERSION,
-    protocol: "retained-body-inventory-v1",
-    storeId: identity.storeId,
-    epoch: identity.epoch,
-    revision: identity.revision,
-    bodies,
-  };
-  return { ...withoutDigest, digest: retainedInventoryDigest(withoutDigest) };
-}
-
-/**
- * §7 R4: freeze the live retained accepted-body set for one known authority
- * generation.
- */
-export function freezeRetainedBodies(
-  context: StoreContext,
-  identity: { storeId: string; epoch: number; revision: number },
-): RetainedBodyInventory {
-  return stampRetainedInventory(identity, readRetainedBodyCheckpoints(context));
-}
-
-/** §7 R4: the document that records one recovery point's retained inventory. */
-export function retainedInventoryPath(backupPath: string): string {
-  return `${backupPath}.retained.json`;
-}
-
-/** Record the frozen inventory beside its copy: the receipt a restore requires. */
-function writeRetainedInventory(backupPath: string, inventory: RetainedBodyInventory): void {
-  writeTextAtomic(retainedInventoryPath(backupPath), `${JSON.stringify(inventory)}\n`);
-}
-
-/** Validate one recorded inventory document, field by field. A forged one refuses by name. */
-function requireRetainedInventory(value: unknown, what: string): RetainedBodyInventory {
-  // Every check THROWS the refusal it names, so TypeScript narrows the field on
-  // the statement after it: the projection below reads typed locals and needs no
-  // `as` per field.
-  const invalid = (detail: string): StoreActivationError => new StoreActivationError("store.activation-stale", `${what} ${detail}`);
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid("is not an object");
-  const raw = value as Record<string, unknown>;
-  if (raw.version !== RETAINED_BODY_PROTOCOL_VERSION) {
-    throw invalid(
-      `declares version ${JSON.stringify(raw.version)}, not this protocol's ${RETAINED_BODY_PROTOCOL_VERSION}; a retained-body ` +
-        `inventory of another generation is refused by name rather than decoded as if it described this one`,
-    );
-  }
-  if (raw.protocol !== "retained-body-inventory-v1") throw invalid(`declares protocol ${JSON.stringify(raw.protocol)}`);
-  const storeId = raw.storeId;
-  if (typeof storeId !== "string" || storeId.trim() === "") throw invalid("carries no storeId");
-  const digest = raw.digest;
-  if (typeof digest !== "string" || digest.trim() === "") throw invalid("carries no digest");
-  const epoch = raw.epoch;
-  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch)) throw invalid(`carries epoch ${JSON.stringify(epoch)}`);
-  const revision = raw.revision;
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision)) throw invalid(`carries revision ${JSON.stringify(revision)}`);
-  if (!Array.isArray(raw.bodies)) throw invalid("carries no bodies array");
-  const recorded: unknown[] = raw.bodies;
-  const bodies: RetainedBodyCheckpoint[] = [];
-  for (const [index, candidate] of recorded.entries()) {
-    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) throw invalid(`body ${index} is not an object`);
-    const body = candidate as Record<string, unknown>;
-    const path = body.path;
-    if (typeof path !== "string" || path.trim() === "") throw invalid(`body ${index} carries no path`);
-    const sha256 = body.sha256;
-    if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) throw invalid(`body ${index} carries no byte digest`);
-    if (!Array.isArray(body.records)) throw invalid(`body ${index} carries a malformed accepted-record list`);
-    const records: string[] = [];
-    for (const record of body.records) {
-      if (typeof record !== "string" || !/^[0-9a-f]{64}$/.test(record)) throw invalid(`body ${index} carries a malformed accepted-record list`);
-      records.push(record);
-    }
-    let partial: string | null = null;
-    if (body.partial !== null) {
-      const value = body.partial;
-      if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw invalid(`body ${index} carries a malformed partial-record digest`);
-      partial = value;
-    }
-    const selection = body.selection;
-    if (typeof selection !== "boolean") throw invalid(`body ${index} carries no selection flag`);
-    bodies.push({ path, sha256, records, partial, selection });
-  }
-  const inventory: Omit<RetainedBodyInventory, "digest"> = {
-    version: RETAINED_BODY_PROTOCOL_VERSION,
-    protocol: "retained-body-inventory-v1",
-    storeId,
-    epoch,
-    revision,
-    bodies,
-  };
-  return { ...inventory, digest };
-}
-
-/**
- * §7 R4: read the retained-body inventory a recovery point recorded.
- *
- * A missing, unreadable, non-canonical or forged document refuses — with the
- * store and every body left exactly where they are — because a restore under
- * this protocol cannot disclose a body loss it was never told about.
- */
-export async function readRetainedBodyInventory(backupPath: string): Promise<RetainedBodyInventory> {
-  const path = retainedInventoryPath(backupPath);
-  const bytes = readIfExists(path);
-  if (bytes === undefined) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the recovery point at ${backupPath} records no retained-body inventory (${path} is absent); a whole-store SQLite copy ` +
-        `alone does not back up the file-native ledgers, so this point cannot describe the body loss a restore would cause. ` +
-        `Take the point with \`backupStore\`, which freezes and records that inventory. Nothing was replaced.`,
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bytes.toString("utf8"));
-  } catch (error) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the retained-body inventory at ${path} is not readable JSON (${(error as Error).message}); the point cannot be restored ` +
-        `without it. Nothing was replaced.`,
-    );
-  }
-  return requireRetainedInventory(parsed, `the retained-body inventory at ${path}`);
-}
-
 
 /** The verification view of a backup: what the copy says about itself (§8). */
 export type BackupInspection = {
@@ -1065,32 +712,26 @@ function defaultBackupPath(context: StoreContext, meta: LiveMeta, label?: string
 
 /**
  * Take (or, for the activation resume path, re-verify) one consistent backup.
- * `VACUUM INTO` reads through the WAL, so committed-but-uncheckpointed data is
- * in the copy; the copy is reopened read-only and its identity, schema version
- * and row counts must equal the source before the path is accepted.
+ *
+ * The copy is ONE native `VACUUM INTO` statement on the live store's own
+ * connection — never inside a transaction, never a rename, and without any
+ * frozen or quiesced window — so it is one committed generation of the store
+ * whatever a concurrent writer commits before or after it. Every fact the
+ * receipt records is then read from the image itself (`inspectBackupCopy`):
+ * identity, epoch, revision, catalog revision, authority state, schema
+ * version, execution identity and row counts. A differently timed live read or
+ * row-count snapshot is never compared against the copy, so a real concurrent
+ * writer can neither make a coherent copy falsely mismatched nor make the
+ * receipt describe a generation the bytes do not hold.
  */
 async function takeVerifiedBackup(
   context: StoreContext,
   options: { out?: string; label?: string; reuseMatchingIdentity: boolean },
 ): Promise<BackupReceipt> {
   const dbPath = storeDbPath(context);
-  // §7 R4: the retained accepted bodies are READ FIRST, before the store is even
-  // opened, so a freeze refusal (a present `agent-flow-compaction.json`, a body
-  // that is not a regular file, a configured root outside the control root)
-  // cannot leave a `-wal`/`-shm` beside the live store, fold its pending frames
-  // or reconfigure its journal mode: the refusal writes nothing at all.
-  const retainedBodies = readRetainedBodyCheckpoints(context);
   const handle = await openStore(context, "write");
   try {
     const meta = readMetaRow(handle.db);
-    const retained = stampRetainedInventory({ storeId: meta.storeId, epoch: meta.epoch, revision: meta.revision }, retainedBodies);
-    const schemaVersion = schemaVersionOf(handle.db);
-    const counts = countsOf(handle.db);
-    // §8: the copy must describe the SAME execution authority as the live
-    // store — protocol version, state, root revision, root timestamp and
-    // manifest identity included. A copy that predates the execution schema
-    // (`null`) never matches an execution-bearing live store.
-    const execution = liveExecutionMeta(handle.execution);
     let walPending = false;
     try {
       walPending = statSync(`${dbPath}-wal`).size > 0;
@@ -1106,23 +747,25 @@ async function takeVerifiedBackup(
             `recorded recovery point.`,
         );
       }
-      let existing: BackupInspection;
-      try {
-        existing = await inspectBackupCopy(targetPath);
-      } catch (error) {
+      // Activation resume: the point at the deterministic pre-activation path
+      // is re-verified as THIS staged authority generation's. Activation runs
+      // only on an attested QUIESCED store, so the staged identity the caller
+      // resumed is the one stable identity this comparison may read live.
+      const existing = await inspectBackupCopy(targetPath).catch((error: unknown) => {
         throw new StoreActivationError(
           "store.activation-stale",
           `the existing backup at ${targetPath} cannot be verified (${(error as Error).message}). Refusing to overwrite a ` +
             `recorded recovery point.`,
         );
-      }
+      });
+      const execution = liveExecutionMeta(handle.execution);
       if (
         existing.storeId !== meta.storeId ||
         existing.epoch !== meta.epoch ||
         existing.revision !== meta.revision ||
         existing.catalogRevision !== meta.catalogRevision ||
         existing.authorityState !== meta.authorityState ||
-        existing.schemaVersion !== schemaVersion ||
+        existing.schemaVersion !== schemaVersionOf(handle.db) ||
         !sameExecution(existing.execution, execution)
       ) {
         throw new StoreActivationError(
@@ -1131,28 +774,6 @@ async function takeVerifiedBackup(
             `Refusing to overwrite a recorded recovery point.`,
         );
       }
-      // §7 R4: the point's recorded retained inventory stays the point's. When
-      // none was recorded (or it is unreadable), the freeze taken above is what
-      // this resume records; a recorded one that describes another authority
-      // generation refuses rather than being silently re-bound.
-      const sidecarBytes = readIfExists(retainedInventoryPath(targetPath));
-      let recorded = retained;
-      if (sidecarBytes !== undefined) {
-        recorded = requireRetainedInventory(
-          JSON.parse(sidecarBytes.toString("utf8")) as unknown,
-          `the retained-body inventory at ${retainedInventoryPath(targetPath)}`,
-        );
-        if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
-          throw new StoreActivationError(
-            "store.activation-stale",
-            `the retained-body inventory at ${retainedInventoryPath(targetPath)} describes store ${recorded.storeId} epoch ` +
-              `${recorded.epoch}, not this point's ${meta.storeId} epoch ${meta.epoch}; the recorded bodies are not this ` +
-              `authority generation's. Refusing to re-bind one recovery point to another generation's bodies.`,
-          );
-        }
-      } else {
-        writeRetainedInventory(targetPath, retained);
-      }
       return {
         receiptVersion: BACKUP_RECEIPT_VERSION,
         backupPath: targetPath,
@@ -1160,44 +781,29 @@ async function takeVerifiedBackup(
         walPending,
         bytes: statSync(targetPath).size,
         takenAt: new Date().toISOString(),
-        retained: recorded,
       };
     }
     mkdirSync(dirname(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
-    let verified: BackupInspection;
-    try {
-      verified = await inspectBackupCopy(targetPath);
-    } catch (error) {
+    const verified = await inspectBackupCopy(targetPath).catch((error: unknown) => {
       rmSync(targetPath, { force: true });
       throw new StoreActivationError(
         "store.activation-stale",
         `the backup written to ${targetPath} could not be reopened for verification (${(error as Error).message}); ` +
           `the unverified copy was removed. Nothing was activated.`,
       );
-    }
-    if (
-      verified.storeId !== meta.storeId ||
-      verified.epoch !== meta.epoch ||
-      verified.revision !== meta.revision ||
-      verified.catalogRevision !== meta.catalogRevision ||
-      verified.authorityState !== meta.authorityState ||
-      verified.schemaVersion !== schemaVersion ||
-      !sameExecution(verified.execution, execution) ||
-      !sameCounts(verified.counts, counts)
-    ) {
+    });
+    // Same-store: `store_id` is written once at store creation and no writer,
+    // upgrade or restore changes it, so it is the one live fact a fresh copy is
+    // checked against — never a mutable generation or row-count snapshot.
+    if (verified.storeId !== meta.storeId) {
       rmSync(targetPath, { force: true });
       throw new StoreActivationError(
         "store.activation-stale",
-        `the backup written to ${targetPath} does not match the source store (identity, schema or row counts); ` +
+        `the backup written to ${targetPath} describes store ${verified.storeId}, not the live store ${meta.storeId}; ` +
           `the unverified copy was removed. Nothing was activated.`,
       );
     }
-    // §7 R4: the frozen inventory is recorded beside the verified copy, so this
-    // point describes its bodies from the moment it exists. Nothing was written
-    // on the failure paths above: the document lands only after the copy is the
-    // requested store's.
-    writeRetainedInventory(targetPath, retained);
     return {
       receiptVersion: BACKUP_RECEIPT_VERSION,
       backupPath: targetPath,
@@ -1205,7 +811,6 @@ async function takeVerifiedBackup(
       walPending,
       bytes: statSync(targetPath).size,
       takenAt: new Date().toISOString(),
-      retained,
     };
   } finally {
     handle.close();
@@ -1213,26 +818,16 @@ async function takeVerifiedBackup(
 }
 
 /**
- * §7 R4: the same freeze for a caller that ALREADY holds the §4.3 maintenance
- * exclusion and this root's status write lock — the recovery module's restore
- * takes both and then takes its own fresh pre-restore point.
- */
-export async function backupStoreUnderExclusion(context: StoreContext, options: { out?: string } = {}): Promise<BackupReceipt> {
-  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
-}
-
-/**
  * `backupStore` — the explicit recovery-point verb. A consistent `VACUUM INTO`
- * copy that records the store identity (store_id, epoch, revision, catalog
- * revision, authority state, schema version) and the row counts verified in
- * the copy itself, plus §7 R4's retained accepted-body inventory frozen under
- * the same maintenance exclusion.
+ * copy of the whole store that records, from the copy itself, the store
+ * identity (store_id, epoch, revision, catalog revision, authority state,
+ * schema version), the execution identity and the row counts it verified. It
+ * takes no filesystem mutex and freezes no process log: SQLite's own snapshot
+ * is the whole concurrency story, and the file-native ledgers beside the store
+ * are ordinary retained files a database image does not roll back.
  */
 export async function backupStore(context: StoreContext, options: { out?: string } = {}): Promise<BackupReceipt> {
-  const root = canonicalPath(dirname(storeDbPath(context)));
-  return withExecutionMaintenanceLock(context, () =>
-    withStatusWriteLock(join(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })),
-  );
+  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
 }
 
 /** The reviewed authority a recovery point has to belong to (primary spec §6 item 2). */
@@ -2131,7 +1726,7 @@ function markerText(ledger: RetirementLedger, receipt: RetirementReceipt | null)
     "",
     "These archived bytes are historical migration input, not a post-activation rollback path: they were the",
     "pre-activation authority and are superseded history, and restoring them would recreate a second authority.",
-    "Recovery after activation uses the quiesced SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
+    "Recovery after activation uses the verified SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
     "",
     "The per-item retirement ledger (`ledger.json`, same directory) is the resumable record of exactly which",
     "bytes and sections were moved and verified.",
