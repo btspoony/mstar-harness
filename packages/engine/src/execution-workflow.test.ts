@@ -1120,7 +1120,13 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
     expect(recoveryContinuation.replayed).toBe(true);
     expect(recoveryContinuation.data).toEqual(siblingRecovery.data);
-    // One operation: the workflow and the store each advance once, and the
+    const recoveryReceipt = JSON.parse(String(rows(
+      fixture.context,
+      "select result_json from execution_operations where operation_id = 'op-recover-sibling'",
+    )[0]!.result_json)) as Record<string, unknown>;
+    expect(recoveryReceipt.slim).toBeUndefined();
+    expect(recoveryReceipt.data).toMatchObject({ sessionId: siblingRecovery.data.sessionId, role: siblingRecovery.data.role });
+    expect(recoveryReceipt.recovery).toBeDefined();
     // registry loss advances the root once.
     expect(revisions(fixture.context)).toEqual({
       root: before.root + 1,
@@ -1348,6 +1354,31 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(again.recovery?.commitState).toBe("committed");
     expect(await workflowFootprint(fixture.context)).toEqual(settled);
   });
+  test("persisted transition graph receipts stay bounded as plan count grows", async () => {
+    const receiptSize = async (count: number) => {
+      const fixture = await workflowFixture(
+        `bounded-transition-${count}`,
+        Array.from({ length: count - 1 }, (_, index) => `plan-${index}`),
+      );
+      const committed = await workflowMutation(fixture, `bounded-transition-op-${count}`, {
+        kind: "execution-policy",
+        policy: { plan_parallelism: "parallel" },
+      });
+      const payload = String(rows(
+        fixture.context,
+        `select result_json from execution_operations where operation_id = 'bounded-transition-op-${count}'`,
+      )[0]!.result_json);
+      const envelope = JSON.parse(payload) as Record<string, unknown>;
+      expect(Object.keys(envelope).sort()).toEqual(["epoch", "slim", "storeId", "token"]);
+      return { bytes: Buffer.byteLength(payload), fatBytes: Buffer.byteLength(JSON.stringify(committed)) };
+    };
+    const small = await receiptSize(2);
+    const large = await receiptSize(25);
+    expect(small.bytes).toBeLessThanOrEqual(512);
+    expect(large.bytes).toBeLessThanOrEqual(512);
+    expect(Math.abs(large.bytes - small.bytes)).toBeLessThanOrEqual(32);
+    expect(large.fatBytes).toBeGreaterThan(large.bytes * 10);
+  });
 
   test("semantic replay: a distinct operation id re-applies the effect against current state (A12)", async () => {
     const fixture = await workflowFixture("satisfied-effect");
@@ -1491,16 +1522,17 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     });
     expect(pause.replayed).toBe(false);
     // A later accepted operation moves the SAME field on.
-    await workflowMutation(fixture, "op-supersede-on", { kind: "lifecycle", status: "running", reason: "operator release" });
+    const released = await workflowMutation(fixture, "op-supersede-on", { kind: "lifecycle", status: "running", reason: "operator release" });
     const current = await workflowFootprint(fixture.context);
     expect(parsedJson(current.workflow_state).status).toBe("running");
 
-    // The SAME operation id repeats its recorded receipt exactly: there is no
-    // effect-held comparison, so a receipt whose effect a later operation
-    // superseded is still the recorded receipt of its own intent.
+    // The same id replays the committed operation while serving the live graph
+    // and token produced by the later transition, without revision churn.
     const replay = await workflowMutation(fixture, "op-supersede", { kind: "lifecycle", status: "paused", reason: "operator hold" });
     expect(replay.replayed).toBe(true);
     expect(replay.recovery?.outcome).toBe("already-satisfied");
+    expect(replay.data).toEqual(released.data);
+    expect(replay.token).toBe(released.token);
     expect(await workflowFootprint(fixture.context)).toEqual(current);
 
     // A DISTINCT operation id is a fresh operation acting on current state: it

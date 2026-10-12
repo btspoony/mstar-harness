@@ -1424,6 +1424,23 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     expect(fatReplay.data).toEqual(committed.data);
     expect(fatReplay.token).toBe(committed.token);
   });
+  test("an immediate creation retry returns the committed receipt byte-for-byte", async () => {
+    const { context } = await freshStore("immediate-domain-replay");
+    const initialized = await readExecutionState(context);
+    await registerPlan(context, "p-immediate");
+    const request = creationInput("wf-immediate", [planRow("p-immediate")]);
+    const committed = await createExecutionWorkflow(domainContext(context, domainCaller("wf-immediate")), {
+      ...request, expected: initialized.token, operationId: "immediate-retry",
+    });
+    const beforeReplay = executionFootprint(context);
+    const replay = await createExecutionWorkflow(domainContext(context, domainCaller("wf-immediate")), {
+      ...request, expected: initialized.token, operationId: "immediate-retry",
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.data).toEqual(committed.data);
+    expect(replay.token).toBe(committed.token);
+    expect(executionFootprint(context)).toEqual(beforeReplay);
+  });
   test("workflow graph receipts stay bounded as registered plan count grows", async () => {
     const receiptSize = async (count: number) => {
       const { context } = await freshStore(`bounded-receipt-${count}`);
@@ -1823,6 +1840,12 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
       expect(
         one(db, "select epoch, workflow_id, plan_id from execution_operations where operation_id = 'bind-coordinator'"),
       ).toEqual({ epoch, workflow_id: "wf-1", plan_id: null });
+      const bindReceipt = JSON.parse(String(one(
+        db,
+        "select result_json from execution_operations where operation_id = 'bind-coordinator'",
+      ).result_json)) as Record<string, unknown>;
+      expect(bindReceipt.slim).toBeUndefined();
+      expect(bindReceipt.data).toEqual(bound.data);
     } finally {
       db.close();
     }
