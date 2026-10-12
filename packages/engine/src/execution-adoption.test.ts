@@ -36,13 +36,16 @@ async function strandedTerminal(): Promise<StrandedFixture> {
   const receiptDb = await openStore(context, "write");
   try {
     const storeRow = receiptDb.db.prepare("select store_id from store_meta where id = 1").get();
-    if (storeRow === undefined || typeof storeRow.store_id !== "string") throw new Error("fixture: missing store id");
+    const storeIdValue = typeof storeRow === "object" && storeRow !== null && "store_id" in storeRow
+      ? storeRow.store_id
+      : undefined;
+    if (typeof storeIdValue !== "string") throw new Error("fixture: missing store id");
     const insertReceipt = receiptDb.db.prepare(
       "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
         "values (?, ?, ?, ?, ?, null, '{}', ?)",
     );
-    insertReceipt.run(authority.epoch, "prior-addressed-receipt", "fixture-hash", storeRow.store_id, "wf-stranded", "2026-10-01T00:30:00.000Z");
-    insertReceipt.run(authority.epoch, "prior-sibling-receipt", "fixture-hash", storeRow.store_id, "wf-sibling", "2026-10-01T00:30:00.000Z");
+    insertReceipt.run(authority.epoch, "prior-addressed-receipt", "fixture-hash", storeIdValue, "wf-stranded", "2026-10-01T00:30:00.000Z");
+    insertReceipt.run(authority.epoch, "prior-sibling-receipt", "fixture-hash", storeIdValue, "wf-sibling", "2026-10-01T00:30:00.000Z");
   } finally { receiptDb.close(); }
   return { context, caller: { sessionId: "adopter-session", role: "coordinator", workflowId: "wf-stranded" }, epoch: authority.epoch };
 }
