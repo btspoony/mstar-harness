@@ -60,7 +60,7 @@ import {
   type ExecutionSessionRef,
   type ExecutionToken,
 } from "./execution-store.js";
-import { mutateExecutionWorkflow } from "./execution-workflow.js";
+import { recoverExecutionCoordinator, mutateExecutionWorkflow } from "./execution-workflow.js";
 import { captureIssue } from "./issue.js";
 import { withStatusWriteLock } from "./lease.js";
 import {
@@ -71,6 +71,8 @@ import {
   readRetainedBodyInventory,
   retainedInventoryPath,
   type BackupReceipt,
+  ACTIVATION_PROTOCOL_VERSION,
+  type ActivationAttestation,
 } from "./store-activation.js";
 import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
@@ -1120,6 +1122,73 @@ describe("execution-restore", () => {
     );
     expect(preview.lossDigest).not.toBe(live.lossDigest);
   });
+
+  test("terminal prune keeps only the current-epoch row when a restored old receipt reuses its operation id", async () => {
+    const world = await recoveryWorld("restore-terminal-reused-id");
+    const operationId = "op-terminal-reused-after-restore";
+    rawRun(
+      world.dbPath,
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, '{}', ?)",
+      world.epoch, operationId, "prior-epoch-fixture", world.storeId, WF, TS,
+    );
+    const point = await recoveryPoint(world, "terminal-reused-id-point");
+    const pause = await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-before-reused-id-restore",
+      session: world.sessionRef,
+      expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "advance beyond recovery point" },
+    });
+    expect(pause.replayed).toBe(false);
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const restored = await restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(restored.epoch).toBe(world.epoch + 1);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' and operation_id = '${operationId}'`,
+    )).toEqual([{ epoch: world.epoch, operation_id: operationId }]);
+
+    const afterRestore = await readExecutionState(world.context);
+    const reboundCaller = callerOf(WF, "post-restore-coordinator");
+    const recovered = await recoverExecutionCoordinator(contextOf(world.context, reboundCaller), {
+      expected: afterRestore.data.workflows.find((workflow) => workflow.state.id === WF)!.workflowToken,
+      operationId: "op-recover-after-restore",
+      priorSessionId: world.caller.sessionId,
+      reason: "replace the pre-restore coordinator",
+      attestation: {
+        version: ACTIVATION_PROTOCOL_VERSION,
+        attestedAt: TS,
+        operator: { actor: OPERATOR, authorizationRef: AUTHORIZATION },
+        consumers: [{
+          entryId: "coordinator-test",
+          kind: "coordinator",
+          entrypoint: "/opt/mstar/coordinator",
+          runtime: "bun",
+          runtimeVersion: "99.0.0",
+          version: "test",
+          current: true,
+          disposition: "reloaded",
+        }],
+        stoppedSessions: [{ sessionId: world.caller.sessionId, host: "omp", state: "stopped" }],
+      } satisfies ActivationAttestation,
+    });
+    const terminal = await mutateExecutionWorkflow(contextOf(world.context, reboundCaller), {
+      operationId,
+      session: recovered.data,
+      expected: (await readExecutionState(world.context)).data.workflows.find((workflow) => workflow.state.id === WF)!.workflowToken,
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "terminal receipt reuses prior epoch id" },
+    });
+    expect(terminal.replayed).toBe(false);
+    expect(rawAll<{ epoch: number; operation_id: string }>(
+      world.dbPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by epoch, operation_id`,
+    )).toEqual([{ epoch: restored.epoch, operation_id: operationId }]);
+  });
+
 
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
     const world = await recoveryWorld("restore-malformed-row");

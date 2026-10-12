@@ -2995,8 +2995,8 @@ export function writeOperationReceipt(
  */
 export function pruneWorkflowOperationReceipts(tx: ExecutionTransaction, workflowId: string, keepOperationId: string): void {
   tx.db
-    .prepare("delete from execution_operations where workflow_id = ? and operation_id != ?")
-    .run(workflowId, keepOperationId);
+    .prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)")
+    .run(workflowId, tx.epoch, keepOperationId);
 }
 
 /** §2.3 the authorization one session-authorized plan address resolves to. */
