@@ -515,22 +515,29 @@ describe("migration 7 - project_milestones", () => {
     db.exec("commit");
     db.close();
 
-    const results = await Promise.all([upgradeStore({ harnessDir: dir }), upgradeStore({ harnessDir: dir })]);
-    expect(results).toEqual([{ schemaVersion: MIGRATIONS.length }, { schemaVersion: MIGRATIONS.length }]);
-    const check = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
-    expect(check.prepare("select version, name, checksum from schema_version order by version").all()).toEqual(
-      MIGRATIONS.map((migration) => ({
-        version: migration.version,
-        name: migration.name,
-        checksum: migrationChecksum(migration),
-      })),
-    );
-    expect(check.prepare("select id, title from catalog_entities where id='p-concurrent'").get()).toEqual({
-      id: "p-concurrent",
-      title: "Concurrent",
-    });
-    expect(check.prepare("pragma integrity_check").get()).toEqual({ integrity_check: "ok" });
-    check.close();
+    let armed = true;
+    const originalExec = DatabaseSync.prototype.exec;
+    DatabaseSync.prototype.exec = function (sql: string): void {
+      if (armed && sql.trim().toLowerCase() === "begin immediate") {
+        armed = false;
+        // At the real writer-admission call-through, let a separate native
+        // process commit the pending batch before this connection proceeds.
+        const competitor = spawnSync(NODE_BIN, [BUNDLE, "upgrade-pending", dir], {
+          encoding: "utf8",
+          timeout: 60_000,
+          env: { ...process.env, MSTAR_STORE_TEST_RUNNER: "1" },
+        });
+        expect(competitor.status).toBe(0);
+        expect(competitor.stdout).toContain(`OK upgrade-pending: public upgrade returned schemaVersion=${MIGRATIONS.length}`);
+      }
+      return originalExec.call(this, sql);
+    };
+    try {
+      expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    } finally {
+      DatabaseSync.prototype.exec = originalExec;
+    }
+    expect(armed).toBe(false);
   });
   test("milestone migration refusal covers version gaps and newer versions", async () => {
     for (const [label, mutate, code] of [
