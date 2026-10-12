@@ -22520,14 +22520,17 @@ function validateQcReport(text4) {
 function legacyStatusDocPath(harnessRoot) {
   return join24(harnessRoot, "status.json");
 }
-function resolveArtifactPath(harnessRoot, ref) {
-  const { kind, key } = ref;
+function assertKindAdmitted(kind) {
   if (kind === "residuals") {
     throw new Error("ArtifactStore no longer persists project registers — the issue store (store.db) is the only findings authority; a residuals.json is migration history");
   }
   if (kind === "status" || kind === "snapshot") {
-    throw new CoordinationError("coordination.direct-write-refused", `ArtifactStore no longer admits the ${String(kind)} kind — the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`, { kind: String(kind) });
+    throw new CoordinationError("coordination.direct-write-refused", `ArtifactStore no longer admits the ${kind} kind — the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`, { kind });
   }
+}
+function resolveArtifactPath(harnessRoot, ref) {
+  const { kind, key } = ref;
+  assertKindAdmitted(kind);
   if (kind === "json") {
     if (!isAbsolute12(key)) {
       throw new Error(`ArtifactStore json key must be an absolute path — got ${JSON.stringify(key)}`);
@@ -22560,9 +22563,6 @@ function readDirEntries(dir) {
   }
 }
 function assertNotRetiredRegisterTarget(root, ref, filePath) {
-  if (ref.kind === "residuals") {
-    throw new Error("ArtifactStore no longer persists project registers — the issue store (store.db) is the only findings authority; a residuals.json is migration history");
-  }
   if (ref.kind === "json") {
     const canonical2 = canonicalTarget(filePath);
     if (basename15(canonical2) !== "residuals.json")
@@ -22653,12 +22653,10 @@ function processControlRoot() {
   return resolveProcessHarnessDir(process.cwd()) ?? resolve18(process.cwd());
 }
 function assertInjectedAccessAllowed(ref) {
-  const retirableKind = ref.kind === "residuals";
-  const aliasKind = ref.kind === "json";
-  if (!retirableKind && !aliasKind)
+  assertKindAdmitted(ref.kind);
+  if (ref.kind !== "json")
     return;
-  const controlRoot = processControlRoot();
-  assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
+  assertNotRetiredRegisterTarget(processControlRoot(), ref, ref.key);
 }
 function guardInjectedStore(store) {
   const guarded = {
@@ -22680,7 +22678,10 @@ function guardInjectedStore(store) {
   }
   const list2 = store.list;
   if (list2 !== undefined) {
-    guarded.list = (kind) => list2.call(store, kind);
+    guarded.list = async (kind) => {
+      assertKindAdmitted(kind);
+      return list2.call(store, kind);
+    };
   }
   return guarded;
 }
@@ -23201,6 +23202,8 @@ Recovery (supported path): rerun \`mstar store upgrade\` with \`--ack-skip-dsh <
 }
 function lossStatement(refusal) {
   switch (refusal.category) {
+    case "workflows":
+      return "Loss: the legacy workflow tree at the named source was not read (a symlinked source tree is never followed), so no legacy identity, display row or scan bound under it imports; consumers may require a workflow re-pick or may backfill rows below the old exclusion floor.";
     case "status":
       return "Loss: legacy session bindings (workflow picks, execution witnesses, and exclusion floors) and newest emissions were not imported; consumers may require a workflow re-pick or may backfill rows below the old exclusion floor.";
     case "bounds":
@@ -23234,12 +23237,32 @@ function evaluate(context, now2) {
   const dirs = join26(root, "workflows");
   try {
     const rootInfo = lstatSync8(dirs);
-    if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory())
+    if (rootInfo.isSymbolicLink())
+      refusals.push({
+        selector: "dsh-workflows",
+        category: "workflows",
+        facts: "the legacy host-state source tree",
+        discarded: "every legacy DSH fact under workflows/",
+        reason: "the workflows root is a symlink and is never followed",
+        source: "workflows"
+      });
+    else if (!rootInfo.isDirectory())
       findings.push({ source: "workflows", kind: "ignored" });
     else
       for (const entry of readdirSync14(dirs, { withFileTypes: true })) {
         const dir = join26(dirs, entry.name), source = `workflows/${entry.name}`;
-        if (entry.isSymbolicLink() || !entry.isDirectory()) {
+        if (entry.isSymbolicLink()) {
+          refusals.push({
+            selector: `dsh-ledger:${entry.name}`,
+            category: "workflows",
+            facts: "this workflow's legacy host-state facts",
+            discarded: `the legacy identity registry, display tail and scan bounds of ${entry.name}`,
+            reason: "the workflow directory is a symlink and is never followed",
+            source
+          });
+          continue;
+        }
+        if (!entry.isDirectory()) {
           findings.push({ source, kind: "ignored" });
           continue;
         }
@@ -23547,13 +23570,13 @@ async function importDshHostStateFiles(input) {
   const evaluated = evaluate(input.context, new Date().toISOString());
   const acknowledgements = input.acknowledgedSkips ?? [];
   const invalid4 = acknowledgements.filter((selector) => {
-    if (selector === "dsh-status")
+    if (selector === "dsh-status" || selector === "dsh-workflows")
       return false;
     const match = /^dsh-(?:ledger|bounds):(.+)$/.exec(selector);
     return !match || match[1] === "." || match[1] === ".." || match[1].includes("/");
   });
   if (invalid4.length)
-    throw new StoreError("store.upgrade-dsh-ack-unmatched", `Invalid --ack-skip-dsh selector ${invalid4.join(", ")}; use dsh-status, dsh-ledger:<workflowId>, or dsh-bounds:<workflowId>.`);
+    throw new StoreError("store.upgrade-dsh-ack-unmatched", `Invalid --ack-skip-dsh selector ${invalid4.join(", ")}; use dsh-status, dsh-workflows, dsh-ledger:<workflowId>, or dsh-bounds:<workflowId>.`);
   const runAt = new Date().toISOString();
   return withExecutionTransaction(input.context, (tx) => {
     if (tx.storeId !== selected.storeId || tx.epoch !== selected.epoch) {
@@ -23620,6 +23643,23 @@ function conflict2(message) {
 }
 function rootOf(context) {
   return canonicalPath(dirname16(storeDbPath(context)));
+}
+function assertWorkflowTreeIsReal(root) {
+  const workflowsDir = join27(root, "workflows");
+  let info;
+  try {
+    info = lstatSync9(workflowsDir);
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory())
+    conflict2(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
+  for (const dirent of readdirSync15(workflowsDir, { withFileTypes: true })) {
+    if (dirent.isSymbolicLink())
+      conflict2(`workflow directory ${join27(workflowsDir, dirent.name)} is a symlink; replace it with an in-root directory or remove it, then rerun store upgrade.`);
+  }
 }
 function binding(value) {
   if (!isPlainObject(value))
@@ -23717,6 +23757,7 @@ function discoverV1(root, legacy, operator) {
 }
 function discover(context, operator) {
   const root = rootOf(context);
+  assertWorkflowTreeIsReal(root);
   const statusPath = join27(root, "status.json");
   const skipped = [];
   const sourceFiles = new Set;
@@ -23755,13 +23796,8 @@ function discover(context, operator) {
   const registeredIds = new Set(safeEntries.flatMap((entry) => isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
   const workflowsDir = join27(root, "workflows");
   if (existsSync21(workflowsDir)) {
-    const workflowsInfo = lstatSync9(workflowsDir);
-    if (workflowsInfo.isSymbolicLink() || !workflowsInfo.isDirectory())
-      conflict2(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
     for (const dirent of readdirSync15(workflowsDir, { withFileTypes: true })) {
       const dir = join27(workflowsDir, dirent.name);
-      if (dirent.isSymbolicLink())
-        conflict2(`workflow directory ${dir} is a symlink; replace it with an in-root directory or remove it, then rerun store upgrade.`);
       if (!dirent.isDirectory() || registeredIds.has(dirent.name))
         continue;
       const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);
