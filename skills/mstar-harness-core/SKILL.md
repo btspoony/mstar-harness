@@ -32,7 +32,7 @@ description: Morning Star lifecycle and authorization authority — source prior
 
 ## 最小交付循环
 
-**per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。独立交付 development plan 在 Done 后继续交付尾段 `compound disposition → submit PR → merge-ready（resumable milestone）→ verify merge → terminal close/unregister/reconcile`（`verification/report-only` 按注册声明的替代完成政策，无强制 PR；注册与尾段语义/失败行为的权威 = 冻结契约 **`mstar-artifacts/references/plan-workflow-lifecycle-contract.md`**，PM 步骤序列 → **`mstar-roles/references/project-manager/plan-management.md`**）。迭代内 plan 行不各自走尾段，迭代整体走一次（见下行）。
+**per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。独立交付 development plan 在 Done 后继续交付尾段 `compound disposition → submit PR → merge-ready（resumable milestone）→ verify merge → terminal close/unregister/reconcile`（`verification/report-only` 按注册声明的替代完成政策，无强制 PR；注册与尾段语义/失败行为的权威 = 冻结契约 **`mstar-artifacts/references/plan-workflow-lifecycle-contract.md`**，PM 步骤序列 → **`mstar-roles/references/project-manager/plan-management.md`**，`compound disposition` 步骤 → **`mstar-compound/references/compound-workflow.md`**）。迭代内 plan 行不各自走尾段，迭代整体走一次（见下行）。
 
 **迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。细则 → **`mstar-iteration`**。
 

@@ -1,6 +1,22 @@
 # mstar-compound — 工作流详情
 
 > Loaded by `mstar-compound` SKILL.md at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-conventions`.
+>
+> **接口边界（HARD）**：本文件是 compound **执行步骤**的唯一 SSOT。触发时机、cwd、写入面与结果记录面属于**调用方流程**，由调用方自身声明并引用本文件 —— 本文件**不复述、也不定义**它们（迭代收口 → `mstar-iteration/references/phase-3-iteration-close.md` §3.2；单 plan 交付尾段 → `mstar-roles/references/project-manager/plan-management.md`）。
+
+## Compound 执行流程（唯一流程）
+
+所有调用共用同一套步骤，不存在"迭代版 / 单 plan 版"两份流程：
+
+1. **自检** — 对候选知识逐条回答 Q1–Q8（下文），按决策矩阵处置；跳过需写原因。
+2. **Phase 1 Gather** — 收集调用方声明范围内的素材，分类 track / category。
+3. **Phase 2 Overlap** — 高重叠 → 更新既有文档，**不新建**。
+4. **Phase 3 Write** — 结构化重写进 `{KNOWLEDGE_DIR}/<category>/<slug>.md`（**禁止**整文件复制）；frontmatter 过 schema 校验。
+5. **Phase 4 Discoverability** / **Phase 5 CONCEPTS.md** — 按需；被拒绝的编辑不阻塞文档写入。
+6. **Phase 6 Catalog** — 每篇新 doc 登记 `kind=document` / `document_kind=knowledge`。
+7. **Phase 7 Refresh trigger** — 仅 flag `mstar-compound-refresh`，不自动运行。
+
+产出判据（与调用方无关）：catalog 登记完成；高重叠时更新既有文档；无结晶时以 reasoned `skipped` 结束（记录到哪由调用方承载）。
 
 ## 是否值得结晶 —— 完整自检（Q1–Q8）
 

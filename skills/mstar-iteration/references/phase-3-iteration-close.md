@@ -41,18 +41,12 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 
 ## 3.2 知识结晶（Compound）—— 迭代级核心收口
 
-**Compound 在此执行，不在 per-plan Done 后独立执行。** 工作流 SSOT → **`mstar-compound`**（Q1–Q8、Phase 1–7、store catalog 发现/登记）。
+**Compound 在此执行，不在 per-plan Done 后独立执行。** 执行步骤 SSOT → **`mstar-compound`**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据；package 盘点方法见其 SKILL.md「Iteration package promotion」）。**调用面（时机 / cwd / 写入面 / 记录面）属本 Phase**，由本节声明，不在 compound 侧定义：
 
-PM 批量触发后须：
-
-1. 收集本迭代 plan 实现 / debug / review 素材，筛候选知识
-2. **盘点** `{ITERATION_DIR}/<iteration-id>/**` package（`guides/`、`specs/`；默认排除 `delivery-compass.md`）— **`mstar-compound`**「Iteration package promotion」；提升值得保留者进 `{KNOWLEDGE_DIR}/`
-3. **specs 提升**：满足 `{SPECS_DIR}` 准入条件的已审 package specs（锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威——`iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）由 PM 以 compound 结构化重写（非整文件复制）**直接写入 integration worktree（`integration_worktree_path`，检出 `spec_integration_branch`）中 tracked 的 `{SPECS_DIR}/`**——主 checkout（control root）只承载 gitignored 进程产物；该写入随 §3.5 的 close commit 进入 integration 分支。提升同时完成既有登记面：package `README.md` 的 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用指向提升后的权威路径，以及 catalog 登记（`mstar catalog register` / `mstar catalog link`——文档归属与 project/iteration 关系，contract §1/§4；登记指向提升后的 `{SPECS_DIR}` 权威路径，该文件在 close 与 PR review 期间位于 integration worktree 同路径，合并后随 integration 分支出现在各 checkout）
-4. 逐条过 `mstar-compound` 自检；跳过项记入 compass `## Compound Round Summary`
-5. 在 integration worktree 中写入或更新 tracked 的 `{KNOWLEDGE_DIR}/<category>/<slug>.md`（主 checkout 只承载 gitignored 进程产物；写入随 §3.5 的 close commit 进入 integration 分支）；新领域词更新同处的 `CONCEPTS.md`
-6. **每篇**新 doc 完成 catalog 登记（`mstar catalog register` 或 reviewed `discover` → `import`），关系经 `mstar catalog link`；README 仅散文
-
-若无结晶且无 package 提升，仍在 `## Compound Round Summary` 写明 `无可结晶知识` / package 盘点结论及原因。
+- **cwd / 写入面**：在本 Phase 的 integration worktree（`integration_worktree_path`，检出 `spec_integration_branch`）直写 tracked 的 `{KNOWLEDGE_DIR}/<category>/<slug>.md`、准入后的 `{SPECS_DIR}/` 与 `CONCEPTS.md`；主 checkout（control root）只承载 gitignored 进程产物。这些写入随 §3.5 的 close commit 进入 integration 分支（**禁止**在主 checkout commit，见 §3.5）。
+- **package 盘点**：`{ITERATION_DIR}/<iteration-id>/**`（`guides/`、`specs/`、扁平 `.md`；默认排除 `delivery-compass.md`）强制盘点 → **`mstar-compound`「Iteration package promotion」**；提升同时完成 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用改指提升后的权威路径，以及 catalog `derived-from` 关系。
+- **specs 提升**：满足 `{SPECS_DIR}` 准入（已锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威 —— `iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）的已审 package specs，由 PM 以 compound **结构化重写**（**非**整文件复制）写入上述 integration worktree 的 tracked `{SPECS_DIR}/`；随后完成 catalog 登记（`mstar catalog register` / `mstar catalog link` —— 文档归属与 project/iteration 关系，contract §1/§4；登记指向提升后的权威路径，该文件在 close 与 PR review 期间位于 integration worktree 同路径，合并后随 integration 分支出现在各 checkout）。
+- **记录面**：§3.4 填充 compass `## Compound Round Summary`（提升篇数、保留快照、跳过及原因）；每篇新 doc 完成 catalog 登记（Phase 6，强制 gate）；README 仅散文。**若无结晶且无 package 提升，仍须写明 `无可结晶知识` / package 盘点结论及原因**，不得静默。
 
 ## 3.3 更新 roadmap
 
