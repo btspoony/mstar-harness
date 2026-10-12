@@ -1176,7 +1176,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       { expected },
     ));
     expect(retry.code).toBe("coordination.workflow-not-found");
-    expect(retry.message).toContain("mstar status validate");
+    expect(retry.message).toContain("wf-1 is not registered as an ACTIVE lifecycle");
   });
 
   test("pause and resume keep the lifecycle and never touch the integration claim", async () => {
@@ -2357,7 +2357,7 @@ describe("execution-close-composition: R10/A20 the terminal close's residue repa
       { expected },
     ));
     expect(retry.code).toBe("coordination.workflow-not-found");
-    expect(retry.message).toContain("mstar status validate");
+    expect(retry.message).toContain("wf-1 is not registered as an ACTIVE lifecycle");
     expect(revisions(fixture.context)).toEqual(after);
   });
 

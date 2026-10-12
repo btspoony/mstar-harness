@@ -3412,7 +3412,7 @@ export function readExecutionWorkflowWitness(
     throw new CoordinationError(
       "coordination.workflow-not-found",
       `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle \u2014 a terminal or unregistered workflow stays ` +
-        `as history and is never amended. Inspect its recorded state with mstar status validate.`,
+        `as history and is never amended`,
       { workflow_id: read.workflowId },
     );
   }
