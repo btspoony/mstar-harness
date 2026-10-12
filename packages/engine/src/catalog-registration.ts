@@ -627,48 +627,19 @@ function nowRfc3339(): string {
  * Catalog registration recovery shares the native execution transaction:
  * authority identity, epoch, CAS and domain guards are read on its handle.
  */
-async function withJournalWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
+async function withJournalWrite<T>(context: StoreContext, fn: (db: StoreDb, generation: { storeId: string; epoch: number }) => T): Promise<T> {
   // Avoid the execution-store → coordination → catalog-registration cycle.
   const { withExecutionTransaction } = await import("./execution-store.js");
   return await withExecutionTransaction(context, (tx) => {
     assertStoreActive(tx.db);
-    return fn(tx.db);
+    return fn(tx.db, { storeId: tx.storeId, epoch: tx.epoch });
   });
 }
 function refuseActiveCatalogRecovery(db: StoreDb, workflowId: string, recoveryCommand: string): void {
   const active = db.prepare("select 1 from execution_registry where workflow_id = ?").get(workflowId) !== undefined;
-  const hasPlanLeases = db.prepare("select 1 from sqlite_master where type = 'table' and name = 'execution_leases'").get() !== undefined;
-  const hasIntegrationLeases = db.prepare("select 1 from sqlite_master where type = 'table' and name = 'execution_integration_leases'").get() !== undefined;
-  const planLeases = hasPlanLeases
-    ? db.prepare("select plan_id, lease_json from execution_leases where workflow_id = ?").all(workflowId) as Array<{ plan_id?: unknown; lease_json?: unknown }>
-    : [];
-  const integrationLease = hasIntegrationLeases
-    ? db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(workflowId) as { lease_json?: unknown } | undefined
-    : undefined;
-  const heldPlan = planLeases.find((row) => {
-    let status: unknown = "held";
-    try {
-      const lease: unknown = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
-      if (isPlainObject(lease) && lease.status !== undefined) status = lease.status;
-    } catch {
-      // Unreadable lease bytes are retained as active.
-    }
-    return status !== "released";
-  });
-  let integrationStatus: unknown = "released";
-  if (integrationLease !== undefined) {
-    integrationStatus = "held";
-    try {
-      const lease: unknown = typeof integrationLease.lease_json === "string" ? JSON.parse(integrationLease.lease_json) : undefined;
-      if (isPlainObject(lease) && lease.status !== undefined) integrationStatus = lease.status;
-    } catch {
-      // Unreadable lease bytes are retained as active.
-    }
-  }
-  if (active || heldPlan !== undefined || (integrationLease !== undefined && integrationStatus !== "released")) {
-    const lease = heldPlan === undefined ? "" : `; native plan lease ${JSON.stringify(heldPlan.plan_id)} remains active`;
+  if (active) {
     failReconcile(
-      `workflow ${JSON.stringify(workflowId)} is active or retains an unreleased native lease${lease}; keep it intact and complete/stop it with ` +
+      `workflow ${JSON.stringify(workflowId)} is still registered as active; keep its native execution intact and complete/stop it with ` +
         `\`mstar workflow lifecycle --workflow ${workflowId} --status <completed|stopped|failed> --reason <text>\` using its bound coordinator identity, ` +
         `then retry \`${recoveryCommand}\``,
     );
@@ -1021,7 +992,7 @@ export async function purgeCatalogRegistration(
   const workflowId = requireText(input.workflowId, "workflowId");
   const operationId = requireText(input.operationId, "operationId");
   const actor = requireText(input.actor, "actor");
-  const initial = await withJournalWrite(context, (db) => {
+  const initial = await withJournalWrite(context, (db, generation) => {
     const row = readRow(db, operationId);
     if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `no failed registration record exists for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the matching operation id`);
@@ -1041,7 +1012,7 @@ export async function purgeCatalogRegistration(
     if (!snapshotPath.startsWith(`${harnessDir}${sep}`)) {
       throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal without snapshot verification using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
-    return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, phase: row.phase };
+    return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, phase: row.phase, generation };
   });
   if (initial.phase !== "aborted" && existsSync(initial.snapshotPath)) {
     const observedDigest = createHash("sha256").update(readFileSync(initial.snapshotPath)).digest("hex");
@@ -1052,7 +1023,10 @@ export async function purgeCatalogRegistration(
       );
     }
   }
-  return await withJournalWrite(context, (db) => {
+  return await withJournalWrite(context, (db, generation) => {
+    if (generation.storeId !== initial.generation.storeId || generation.epoch !== initial.generation.epoch) {
+      throw new CatalogError("store.operation-conflict", "the selected store identity or authority epoch changed during purge-registration; re-read the pending registration and retry against the current authority");
+    }
     const row = readRow(db, operationId);
     if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `failed registration record disappeared for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the current operation id`);
