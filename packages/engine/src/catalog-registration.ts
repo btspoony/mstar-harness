@@ -835,7 +835,7 @@ export async function abortCatalogExecution(
     const journal = parseJournalDelta(row);
     if (row.phase === "aborted") return { operationId: id, workflowId: journal.workflow.workflowId, phase: "aborted", sourceBytesRetained: true };
     if (row.phase === "committed") {
-      failReconcile(`operation ${JSON.stringify(id)} is committed (workflow ${JSON.stringify(journal.workflow.workflowId)} is registered); a completed registration is never aborted — remove that workflow through its own lifecycle instead`);
+      failReconcile(`operation ${JSON.stringify(id)} is committed (workflow ${JSON.stringify(journal.workflow.workflowId)} is registered); a completed registration is never aborted \u2014 remove that workflow through its own lifecycle instead`);
     }
     refuseActiveCatalogRecovery(
       db,

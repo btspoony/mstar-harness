@@ -3580,43 +3580,36 @@ function resolveAll(constructs2, events, context) {
 }
 function resolveAllAttention(events, context) {
   let index = -1;
-  let open;
-  let group;
-  let text;
-  let openingSequence;
-  let closingSequence;
-  let use;
   let nextEvents;
-  let offset;
   while (++index < events.length) {
     if (events[index][0] === "enter" && events[index][1].type === "attentionSequence" && events[index][1]._close) {
-      open = index;
+      let open = index;
       while (open--) {
         if (events[open][0] === "exit" && events[open][1].type === "attentionSequence" && events[open][1]._open && context.sliceSerialize(events[open][1]).charCodeAt(0) === context.sliceSerialize(events[index][1]).charCodeAt(0)) {
           if ((events[open][1]._close || events[index][1]._open) && (events[index][1].end.offset - events[index][1].start.offset) % 3 && !((events[open][1].end.offset - events[open][1].start.offset + events[index][1].end.offset - events[index][1].start.offset) % 3)) {
             continue;
           }
-          use = events[open][1].end.offset - events[open][1].start.offset > 1 && events[index][1].end.offset - events[index][1].start.offset > 1 ? 2 : 1;
+          const use = events[open][1].end.offset - events[open][1].start.offset > 1 && events[index][1].end.offset - events[index][1].start.offset > 1 ? 2 : 1;
           const start = { ...events[open][1].end };
           const end = { ...events[index][1].start };
           movePoint(start, -use);
           movePoint(end, use);
-          openingSequence = {
+          const openingSequence = {
             type: use > 1 ? types.strongSequence : types.emphasisSequence,
             start,
             end: { ...events[open][1].end }
           };
-          closingSequence = {
+          const closingSequence = {
             type: use > 1 ? types.strongSequence : types.emphasisSequence,
             start: { ...events[index][1].start },
             end
           };
-          text = {
+          const text = {
             type: use > 1 ? types.strongText : types.emphasisText,
             start: { ...events[open][1].end },
             end: { ...events[index][1].start }
           };
-          group = {
+          const group = {
             type: use > 1 ? types.strong : types.emphasis,
             start: { ...openingSequence.start },
             end: { ...closingSequence.end }
@@ -3644,14 +3637,13 @@ function resolveAllAttention(events, context) {
             ["exit", closingSequence, context],
             ["exit", group, context]
           ]);
+          let offset = 0;
           if (events[index][1].end.offset - events[index][1].start.offset) {
             offset = 2;
             nextEvents = push(nextEvents, [
               ["enter", events[index][1], context],
               ["exit", events[index][1], context]
             ]);
-          } else {
-            offset = 0;
           }
           splice(events, open - 1, index - open + 3, nextEvents);
           index = open + nextEvents.length - offset - 2;
@@ -3688,8 +3680,8 @@ function tokenizeAttention(effects, ok2) {
     const token = effects.exit("attentionSequence");
     const after = classifyCharacter(code);
     ok(attentionMarkers, "expected `attentionMarkers` to be populated");
-    const open = !after || after === constants.characterGroupPunctuation && before || attentionMarkers.includes(code);
-    const close = !before || before === constants.characterGroupPunctuation && after || attentionMarkers.includes(previous);
+    const open = !after || after === constants.characterGroupPunctuation && before || attentionMarkers.includes(code) && code !== codes.asterisk && code !== codes.underscore;
+    const close = !before || before === constants.characterGroupPunctuation && after || attentionMarkers.includes(previous) && previous !== codes.asterisk && previous !== codes.underscore;
     token._open = Boolean(marker === codes.asterisk ? open : open && (before || !close));
     token._close = Boolean(marker === codes.asterisk ? close : close && (after || !open));
     return ok2(code);
@@ -3815,10 +3807,56 @@ var init_autolink = __esm(() => {
   init_default();
   autolink = { name: "autolink", tokenize: tokenizeAutolink };
 });
+function factorySpace2(effects, ok2, type, max) {
+  const limit = max ? max - 1 : Infinity;
+  let size = 0;
+  return start;
+  function start(code) {
+    if (markdownSpace(code)) {
+      effects.enter(type);
+      return prefix(code);
+    }
+    return ok2(code);
+  }
+  function prefix(code) {
+    if (markdownSpace(code) && size++ < limit) {
+      effects.consume(code);
+      return prefix;
+    }
+    effects.exit(type);
+    return ok2(code);
+  }
+}
+function factorySpaceMinMax(effects, ok2, nok, type, min, max) {
+  let size = 0;
+  return start;
+  function start(code) {
+    if (max > 0 && markdownSpace(code)) {
+      effects.enter(type);
+      return prefix(code);
+    }
+    return after(code);
+  }
+  function prefix(code) {
+    if (markdownSpace(code) && size < max) {
+      effects.consume(code);
+      size++;
+      return prefix;
+    }
+    effects.exit(type);
+    return after(code);
+  }
+  function after(code) {
+    return size >= min ? ok2(code) : nok(code);
+  }
+}
+var init_dev7 = __esm(() => {
+  init_dev4();
+});
 function tokenizeBlankLine(effects, ok2, nok) {
   return start;
   function start(code) {
-    return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
+    return markdownSpace(code) ? factorySpace2(effects, after, types.linePrefix)(code) : after(code);
   }
   function after(code) {
     return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
@@ -3826,7 +3864,7 @@ function tokenizeBlankLine(effects, ok2, nok) {
 }
 var blankLine;
 var init_blank_line = __esm(() => {
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   blankLine = { partial: true, tokenize: tokenizeBlankLine };
@@ -3868,7 +3906,7 @@ function tokenizeBlockQuoteContinuation(effects, ok2, nok) {
   function contStart(code) {
     if (markdownSpace(code)) {
       ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      return factorySpace(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+      return factorySpace2(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
     }
     return contBefore(code);
   }
@@ -3882,7 +3920,7 @@ function exit(effects) {
 var blockQuote;
 var init_block_quote = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   blockQuote = {
@@ -3994,6 +4032,33 @@ var init_character_reference = __esm(() => {
     tokenize: tokenizeCharacterReference
   };
 });
+function tokenizeNonLazyContinuation(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return after;
+  }
+  function after(code) {
+    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
+  }
+}
+var nonLazyContinuation;
+var init_partial_non_lazy_continuation = __esm(() => {
+  init_development();
+  init_dev4();
+  init_default();
+  nonLazyContinuation = {
+    partial: true,
+    tokenize: tokenizeNonLazyContinuation
+  };
+});
 function tokenizeCodeFenced(effects, ok2, nok) {
   const self = this;
   const closeStart = { partial: true, tokenize: tokenizeCloseStart };
@@ -4024,7 +4089,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
       return nok(code);
     }
     effects.exit(types.codeFencedFenceSequence);
-    return markdownSpace(code) ? factorySpace(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
+    return markdownSpace(code) ? factorySpace2(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
   }
   function infoBefore(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -4044,7 +4109,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     if (markdownSpace(code)) {
       effects.exit(types.chunkString);
       effects.exit(types.codeFencedFenceInfo);
-      return factorySpace(effects, metaBefore, types.whitespace)(code);
+      return factorySpace2(effects, metaBefore, types.whitespace)(code);
     }
     if (code === codes.graveAccent && code === marker) {
       return nok(code);
@@ -4084,7 +4149,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     return contentStart;
   }
   function contentStart(code) {
-    return initialPrefix > 0 && markdownSpace(code) ? factorySpace(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
+    return initialPrefix > 0 && markdownSpace(code) ? factorySpace2(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
   }
   function beforeContentChunk(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -4118,7 +4183,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     function start2(code) {
       ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
       effects2.enter(types.codeFencedFence);
-      return markdownSpace(code) ? factorySpace(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
+      return markdownSpace(code) ? factorySpace2(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
     }
     function beforeSequenceClose(code) {
       if (code === marker) {
@@ -4135,7 +4200,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
       }
       if (size >= sizeOpen) {
         effects2.exit(types.codeFencedFenceSequence);
-        return markdownSpace(code) ? factorySpace(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
+        return markdownSpace(code) ? factorySpace2(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
       }
       return nok2(code);
     }
@@ -4148,34 +4213,13 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     }
   }
 }
-function tokenizeNonLazyContinuation(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return lineStart;
-  }
-  function lineStart(code) {
-    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
-  }
-}
-var nonLazyContinuation;
 var codeFenced;
 var init_code_fenced = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
-  nonLazyContinuation = {
-    partial: true,
-    tokenize: tokenizeNonLazyContinuation
-  };
+  init_partial_non_lazy_continuation();
   codeFenced = {
     concrete: true,
     name: "codeFenced",
@@ -4183,16 +4227,11 @@ var init_code_fenced = __esm(() => {
   };
 });
 function tokenizeCodeIndented(effects, ok2, nok) {
-  const self = this;
   return start;
   function start(code) {
     ok(markdownSpace(code));
     effects.enter(types.codeIndented);
-    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
-  }
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? atBreak(code) : nok(code);
+    return factorySpaceMinMax(effects, atBreak, nok, types.linePrefix, constants.tabSize, constants.tabSize)(code);
   }
   function atBreak(code) {
     if (code === codes.eof) {
@@ -4230,18 +4269,17 @@ function tokenizeFurtherStart(effects, ok2, nok) {
       effects.exit(types.lineEnding);
       return furtherStart2;
     }
-    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
+    return factorySpaceMinMax(effects, ok2, onNotEnoughPrefix, types.linePrefix, constants.tabSize, constants.tabSize)(code);
   }
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? ok2(code) : markdownLineEnding(code) ? furtherStart2(code) : nok(code);
+  function onNotEnoughPrefix(code) {
+    return markdownLineEnding(code) ? furtherStart2(code) : nok(code);
   }
 }
 var codeIndented;
 var furtherStart;
 var init_code_indented = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   codeIndented = {
@@ -4607,7 +4645,7 @@ function subcontent(events, eventIndex) {
   }
   return gaps;
 }
-var init_dev7 = __esm(() => {
+var init_dev8 = __esm(() => {
   init_development();
   init_dev();
   init_default();
@@ -4665,7 +4703,7 @@ function tokenizeContinuation(effects, ok2, nok) {
     effects.enter(types.lineEnding);
     effects.consume(code);
     effects.exit(types.lineEnding);
-    return factorySpace(effects, prefixed, types.linePrefix);
+    return factorySpace2(effects, prefixed, types.linePrefix);
   }
   function prefixed(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -4683,9 +4721,9 @@ var content2;
 var continuationConstruct;
 var init_content2 = __esm(() => {
   init_development();
-  init_dev5();
-  init_dev4();
   init_dev7();
+  init_dev4();
+  init_dev8();
   init_default();
   content2 = { resolve: resolveContent, tokenize: tokenizeContent };
   continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
@@ -4776,7 +4814,7 @@ function factoryDestination(effects, ok2, nok, type, literalType, literalMarkerT
     return raw(code);
   }
 }
-var init_dev8 = __esm(() => {
+var init_dev9 = __esm(() => {
   init_dev4();
   init_default();
 });
@@ -4834,7 +4872,7 @@ function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
     return labelInside(code);
   }
 }
-var init_dev9 = __esm(() => {
+var init_dev10 = __esm(() => {
   init_development();
   init_dev4();
   init_default();
@@ -4897,7 +4935,7 @@ function factoryTitle(effects, ok2, nok, type, markerType, stringType) {
     return inside(code);
   }
 }
-var init_dev10 = __esm(() => {
+var init_dev11 = __esm(() => {
   init_dev5();
   init_dev4();
   init_default();
@@ -4919,7 +4957,7 @@ function factoryWhitespace(effects, ok2) {
     return ok2(code);
   }
 }
-var init_dev11 = __esm(() => {
+var init_dev12 = __esm(() => {
   init_dev5();
   init_dev4();
   init_default();
@@ -4956,7 +4994,7 @@ function tokenizeDefinition(effects, ok2, nok) {
     return effects.attempt(titleBefore, after, after)(code);
   }
   function after(code) {
-    return markdownSpace(code) ? factorySpace(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
+    return markdownSpace(code) ? factorySpace2(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
   }
   function afterWhitespace(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -4976,7 +5014,7 @@ function tokenizeTitleBefore(effects, ok2, nok) {
     return factoryTitle(effects, titleAfter, nok, types.definitionTitle, types.definitionTitleMarker, types.definitionTitleString)(code);
   }
   function titleAfter(code) {
-    return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
+    return markdownSpace(code) ? factorySpace2(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
   }
   function titleAfterOptionalWhitespace(code) {
     return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
@@ -4986,11 +5024,11 @@ var definition;
 var titleBefore;
 var init_definition = __esm(() => {
   init_development();
-  init_dev8();
   init_dev9();
-  init_dev5();
   init_dev10();
+  init_dev7();
   init_dev11();
+  init_dev12();
   init_dev4();
   init_dev3();
   init_default();
@@ -5026,8 +5064,6 @@ var init_hard_break_escape = __esm(() => {
 function resolveHeadingAtx(events, context) {
   let contentEnd = events.length - 2;
   let contentStart = 3;
-  let content3;
-  let text;
   if (events[contentStart][1].type === types.whitespace) {
     contentStart += 2;
   }
@@ -5038,12 +5074,12 @@ function resolveHeadingAtx(events, context) {
     contentEnd -= contentStart + 1 === contentEnd ? 2 : 4;
   }
   if (contentEnd > contentStart) {
-    content3 = {
+    const content3 = {
       type: types.atxHeadingText,
       start: events[contentStart][1].start,
       end: events[contentEnd][1].end
     };
-    text = {
+    const text = {
       type: types.chunkText,
       start: events[contentStart][1].start,
       end: events[contentEnd][1].end,
@@ -5091,7 +5127,7 @@ function tokenizeHeadingAtx(effects, ok2, nok) {
       return ok2(code);
     }
     if (markdownSpace(code)) {
-      return factorySpace(effects, atBreak, types.whitespace)(code);
+      return factorySpace2(effects, atBreak, types.whitespace)(code);
     }
     effects.enter(types.atxHeadingText);
     return data(code);
@@ -5116,7 +5152,7 @@ function tokenizeHeadingAtx(effects, ok2, nok) {
 var headingAtx;
 var init_heading_atx = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_dev();
   init_default();
@@ -5459,7 +5495,7 @@ function tokenizeHtmlFlow(effects, ok2, nok) {
     return continuation;
   }
   function continuationStart(code) {
-    return effects.check(nonLazyContinuationStart, continuationStartNonLazy, continuationAfter)(code);
+    return effects.check(nonLazyContinuation, continuationStartNonLazy, continuationAfter)(code);
   }
   function continuationStartNonLazy(code) {
     ok(markdownLineEnding(code));
@@ -5538,22 +5574,6 @@ function tokenizeHtmlFlow(effects, ok2, nok) {
     return ok2(code);
   }
 }
-function tokenizeNonLazyContinuationStart(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
-  }
-}
 function tokenizeBlankLineBefore(effects, ok2, nok) {
   return start;
   function start(code) {
@@ -5566,13 +5586,13 @@ function tokenizeBlankLineBefore(effects, ok2, nok) {
 }
 var htmlFlow;
 var blankLineBefore;
-var nonLazyContinuationStart;
 var init_html_flow = __esm(() => {
   init_development();
   init_dev4();
   init_micromark_util_html_tag_name();
   init_default();
   init_blank_line();
+  init_partial_non_lazy_continuation();
   htmlFlow = {
     concrete: true,
     name: "htmlFlow",
@@ -5580,10 +5600,6 @@ var init_html_flow = __esm(() => {
     tokenize: tokenizeHtmlFlow
   };
   blankLineBefore = { partial: true, tokenize: tokenizeBlankLineBefore };
-  nonLazyContinuationStart = {
-    partial: true,
-    tokenize: tokenizeNonLazyContinuationStart
-  };
 });
 function tokenizeHtmlText(effects, ok2, nok) {
   const self = this;
@@ -5882,7 +5898,7 @@ function tokenizeHtmlText(effects, ok2, nok) {
   }
   function lineEndingAfter(code) {
     ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return markdownSpace(code) ? factorySpace(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
+    return markdownSpace(code) ? factorySpace2(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
   }
   function lineEndingAfterPrefix(code) {
     effects.enter(types.htmlTextData);
@@ -5892,7 +5908,7 @@ function tokenizeHtmlText(effects, ok2, nok) {
 var htmlText;
 var init_html_text = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   htmlText = { name: "htmlText", tokenize: tokenizeHtmlText };
@@ -5917,12 +5933,11 @@ function resolveAllLabelEnd(events) {
 function resolveToLabelEnd(events, context) {
   let index = events.length;
   let offset = 0;
-  let token;
   let open;
   let close;
   let media;
   while (index--) {
-    token = events[index][1];
+    const token = events[index][1];
     if (open) {
       if (token.type === types.link || token.type === types.labelLink && token._inactive) {
         break;
@@ -5980,14 +5995,14 @@ function resolveToLabelEnd(events, context) {
 }
 function tokenizeLabelEnd(effects, ok2, nok) {
   const self = this;
-  let index = self.events.length;
+  const labelStarts = self._labelStarts;
   let labelStart;
   let defined;
-  while (index--) {
-    if ((self.events[index][1].type === types.labelImage || self.events[index][1].type === types.labelLink) && !self.events[index][1]._balanced) {
-      labelStart = self.events[index][1];
-      break;
+  if (labelStarts) {
+    while (labelStarts.length > 0 && labelStarts[labelStarts.length - 1]._balanced) {
+      labelStarts.pop();
     }
+    labelStart = labelStarts[labelStarts.length - 1];
   }
   return start;
   function start(code) {
@@ -6019,6 +6034,8 @@ function tokenizeLabelEnd(effects, ok2, nok) {
     return effects.attempt(referenceCollapsedConstruct, labelEndOk, labelEndNok)(code);
   }
   function labelEndOk(code) {
+    ok(labelStarts, "expected `labelStarts` to be populated");
+    labelStarts.pop();
     return ok2(code);
   }
   function labelEndNok(code) {
@@ -6112,10 +6129,10 @@ var referenceFullConstruct;
 var referenceCollapsedConstruct;
 var init_label_end = __esm(() => {
   init_development();
-  init_dev8();
   init_dev9();
   init_dev10();
   init_dev11();
+  init_dev12();
   init_dev4();
   init_dev();
   init_dev3();
@@ -6132,6 +6149,7 @@ var init_label_end = __esm(() => {
 });
 function tokenizeLabelStartImage(effects, ok2, nok) {
   const self = this;
+  let labelImage;
   return start;
   function start(code) {
     ok(code === codes.exclamationMark, "expected `!`");
@@ -6146,13 +6164,18 @@ function tokenizeLabelStartImage(effects, ok2, nok) {
       effects.enter(types.labelMarker);
       effects.consume(code);
       effects.exit(types.labelMarker);
-      effects.exit(types.labelImage);
+      labelImage = effects.exit(types.labelImage);
       return after;
     }
     return nok(code);
   }
   function after(code) {
-    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
+    if (code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs) {
+      return nok(code);
+    }
+    self._labelStarts = self._labelStarts || [];
+    self._labelStarts.push(labelImage);
+    return ok2(code);
   }
 }
 var labelStartImage;
@@ -6168,6 +6191,7 @@ var init_label_start_image = __esm(() => {
 });
 function tokenizeLabelStartLink(effects, ok2, nok) {
   const self = this;
+  let labelLink;
   return start;
   function start(code) {
     ok(code === codes.leftSquareBracket, "expected `[`");
@@ -6175,11 +6199,16 @@ function tokenizeLabelStartLink(effects, ok2, nok) {
     effects.enter(types.labelMarker);
     effects.consume(code);
     effects.exit(types.labelMarker);
-    effects.exit(types.labelLink);
+    labelLink = effects.exit(types.labelLink);
     return after;
   }
   function after(code) {
-    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
+    if (code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs) {
+      return nok(code);
+    }
+    self._labelStarts = self._labelStarts || [];
+    self._labelStarts.push(labelLink);
+    return ok2(code);
   }
 }
 var labelStartLink;
@@ -6200,13 +6229,13 @@ function tokenizeLineEnding(effects, ok2) {
     effects.enter(types.lineEnding);
     effects.consume(code);
     effects.exit(types.lineEnding);
-    return factorySpace(effects, ok2, types.linePrefix);
+    return factorySpace2(effects, ok2, types.linePrefix);
   }
 }
 var lineEnding;
 var init_line_ending = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   lineEnding = { name: "lineEnding", tokenize: tokenizeLineEnding };
@@ -6242,13 +6271,13 @@ function tokenizeThematicBreak(effects, ok2, nok) {
       return sequence;
     }
     effects.exit(types.thematicBreakSequence);
-    return markdownSpace(code) ? factorySpace(effects, atBreak, types.whitespace)(code) : atBreak(code);
+    return markdownSpace(code) ? factorySpace2(effects, atBreak, types.whitespace)(code) : atBreak(code);
   }
 }
 var thematicBreak;
 var init_thematic_break = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   thematicBreak = {
@@ -6333,7 +6362,7 @@ function tokenizeListContinuation(effects, ok2, nok) {
     ok(self.containerState, "expected state");
     ok(typeof self.containerState.size === "number", "expected size");
     self.containerState.furtherBlankLines = self.containerState.furtherBlankLines || self.containerState.initialBlankLine;
-    return factorySpace(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
+    return factorySpace2(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
   }
   function notBlank(code) {
     ok(self.containerState, "expected state");
@@ -6351,14 +6380,14 @@ function tokenizeListContinuation(effects, ok2, nok) {
     self.containerState._closeFlow = true;
     self.interrupt = undefined;
     ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return factorySpace(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+    return factorySpace2(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
   }
 }
 function tokenizeIndent(effects, ok2, nok) {
   const self = this;
   ok(self.containerState, "expected state");
   ok(typeof self.containerState.size === "number", "expected size");
-  return factorySpace(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
+  return factorySpace2(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
   function afterPrefix(code) {
     ok(self.containerState, "expected state");
     const tail = self.events[self.events.length - 1];
@@ -6373,7 +6402,7 @@ function tokenizeListEnd(effects) {
 function tokenizeListItemPrefixWhitespace(effects, ok2, nok) {
   const self = this;
   ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-  return factorySpace(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
+  return factorySpace2(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
   function afterPrefix(code) {
     const tail = self.events[self.events.length - 1];
     return !markdownSpace(code) && tail && tail[1].type === types.listItemPrefixWhitespace ? ok2(code) : nok(code);
@@ -6384,7 +6413,7 @@ var listItemPrefixWhitespaceConstruct;
 var indentConstruct;
 var init_list = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   init_blank_line();
@@ -6401,7 +6430,66 @@ var init_list = __esm(() => {
   };
   indentConstruct = { partial: true, tokenize: tokenizeIndent };
 });
+
+class EditMap {
+  constructor() {
+    this.index = new Map;
+    this.map = [];
+  }
+  add(index, remove, add) {
+    addImplementation(this, index, remove, add, false);
+  }
+  addBefore(index, remove, add) {
+    addImplementation(this, index, remove, add, true);
+  }
+  consume(events) {
+    this.map.sort(function(a, b) {
+      return a[0] - b[0];
+    });
+    if (this.map.length === 0) {
+      return;
+    }
+    let index = this.map.length;
+    const vecs = [];
+    while (index > 0) {
+      index -= 1;
+      vecs.push(events.slice(this.map[index][0] + this.map[index][1]), this.map[index][2]);
+      events.length = this.map[index][0];
+    }
+    vecs.push(events.slice());
+    events.length = 0;
+    let slice = vecs.pop();
+    while (slice) {
+      for (const element of slice) {
+        events.push(element);
+      }
+      slice = vecs.pop();
+    }
+    this.map.length = 0;
+    this.index.clear();
+  }
+}
+function addImplementation(editMap, at, remove, add, before) {
+  if (remove === 0 && add.length === 0) {
+    return;
+  }
+  const existing = editMap.index.get(at);
+  if (existing) {
+    existing[1] += remove;
+    if (before) {
+      add.push(...existing[2]);
+      existing[2] = add;
+    } else {
+      existing[2].push(...add);
+    }
+    return;
+  }
+  const change = [at, remove, add];
+  editMap.map.push(change);
+  editMap.index.set(at, change);
+}
 function resolveToSetextUnderline(events, context) {
+  const editMap = new EditMap;
   let index = events.length;
   let content3;
   let text;
@@ -6417,7 +6505,7 @@ function resolveToSetextUnderline(events, context) {
       }
     } else {
       if (events[index][1].type === types.content) {
-        events.splice(index, 1);
+        editMap.add(index, 1, []);
       }
       if (!definition2 && events[index][1].type === types.definition) {
         definition2 = index;
@@ -6435,13 +6523,14 @@ function resolveToSetextUnderline(events, context) {
   };
   events[text][1].type = types.setextHeadingText;
   if (definition2) {
-    events.splice(text, 0, ["enter", heading, context]);
-    events.splice(definition2 + 1, 0, ["exit", events[content3][1], context]);
+    editMap.add(text, 0, [["enter", heading, context]]);
+    editMap.add(definition2 + 1, 0, [["exit", events[content3][1], context]]);
     events[content3][1].end = { ...events[definition2][1].end };
   } else {
     events[content3][1] = heading;
   }
-  events.push(["exit", heading, context]);
+  editMap.add(events.length, 0, [["exit", heading, context]]);
+  editMap.consume(events);
   return events;
 }
 function tokenizeSetextUnderline(effects, ok2, nok) {
@@ -6475,7 +6564,7 @@ function tokenizeSetextUnderline(effects, ok2, nok) {
       return inside;
     }
     effects.exit(types.setextHeadingLineSequence);
-    return markdownSpace(code) ? factorySpace(effects, after, types.lineSuffix)(code) : after(code);
+    return markdownSpace(code) ? factorySpace2(effects, after, types.lineSuffix)(code) : after(code);
   }
   function after(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -6488,7 +6577,7 @@ function tokenizeSetextUnderline(effects, ok2, nok) {
 var setextUnderline;
 var init_setext_underline = __esm(() => {
   init_development();
-  init_dev5();
+  init_dev7();
   init_dev4();
   init_default();
   setextUnderline = {
@@ -6497,7 +6586,7 @@ var init_setext_underline = __esm(() => {
     tokenize: tokenizeSetextUnderline
   };
 });
-var init_dev12 = __esm(() => {
+var init_dev13 = __esm(() => {
   init_attention();
   init_autolink();
   init_blank_line();
@@ -6553,7 +6642,7 @@ function initializeFlow(effects) {
 var flow;
 var init_flow = __esm(() => {
   init_development();
-  init_dev12();
+  init_dev13();
   init_dev5();
   init_dev4();
   init_default();
@@ -6720,7 +6809,7 @@ var insideSpan;
 var attentionMarkers;
 var disable;
 var init_constructs = __esm(() => {
-  init_dev12();
+  init_dev13();
   init_default();
   init_text();
   document3 = {
@@ -7753,7 +7842,7 @@ function postprocess(events) {
   return events;
 }
 var init_postprocess = __esm(() => {
-  init_dev7();
+  init_dev8();
 });
 function preprocess() {
   let column = 1;
@@ -7839,7 +7928,7 @@ var init_preprocess = __esm(() => {
   init_default();
   search = /[\0\t\n\r]/g;
 });
-var init_dev13 = __esm(() => {
+var init_dev14 = __esm(() => {
   init_parse();
   init_postprocess();
   init_preprocess();
@@ -7860,7 +7949,7 @@ function decode($0, $1, $2) {
   return decodeNamedCharacterReference($2) || $0;
 }
 var characterEscapeOrReference;
-var init_dev14 = __esm(() => {
+var init_dev15 = __esm(() => {
   init_decode_named_character_reference();
   init_dev2();
   init_default();
@@ -8595,16 +8684,16 @@ var own2;
 var init_lib2 = __esm(() => {
   init_development();
   init_mdast_util_to_string();
-  init_dev13();
-  init_dev2();
   init_dev14();
+  init_dev2();
+  init_dev15();
   init_dev3();
   init_default();
   init_decode_named_character_reference();
   init_unist_util_stringify_position();
   own2 = {}.hasOwnProperty;
 });
-var init_dev15 = __esm(() => {
+var init_dev16 = __esm(() => {
   init_lib2();
 });
 function ccount(value, character) {
@@ -9561,7 +9650,7 @@ var init_syntax = __esm(() => {
   text3[codes.uppercaseW] = [emailAutolink, wwwAutolink];
   text3[codes.lowercaseW] = [emailAutolink, wwwAutolink];
 });
-var init_dev16 = __esm(() => {
+var init_dev17 = __esm(() => {
   init_syntax();
 });
 function gfmFootnote() {
@@ -9819,14 +9908,14 @@ function tokenizeIndent2(effects, ok3, nok) {
 var indent;
 var init_syntax2 = __esm(() => {
   init_development();
-  init_dev12();
+  init_dev13();
   init_dev5();
   init_dev4();
   init_dev3();
   init_default();
   indent = { tokenize: tokenizeIndent2, partial: true };
 });
-var init_dev17 = __esm(() => {
+var init_dev18 = __esm(() => {
   init_syntax2();
 });
 function gfmStrikethrough(options) {
@@ -9933,17 +10022,17 @@ var init_syntax3 = __esm(() => {
   init_dev6();
   init_default();
 });
-var init_dev18 = __esm(() => {
+var init_dev19 = __esm(() => {
   init_syntax3();
 });
 
-class EditMap {
+class EditMap2 {
   constructor() {
     this.map = [];
     this.index = new Map;
   }
   add(index2, remove, add) {
-    addImplementation(this, index2, remove, add);
+    addImplementation2(this, index2, remove, add);
   }
   consume(events) {
     this.map.sort(function(a, b) {
@@ -9972,7 +10061,7 @@ class EditMap {
     this.index.clear();
   }
 }
-function addImplementation(editMap, at, remove, add) {
+function addImplementation2(editMap, at, remove, add) {
   if (remove === 0 && add.length === 0) {
     return;
   }
@@ -10251,7 +10340,7 @@ function resolveTable(events, context) {
   let currentTable;
   let currentBody;
   let currentCell;
-  const map = new EditMap;
+  const map = new EditMap2;
   while (++index2 < events.length) {
     const event = events[index2];
     const token = event[1];
@@ -10406,7 +10495,7 @@ var init_syntax4 = __esm(() => {
   init_default();
   init_infer();
 });
-var init_dev19 = __esm(() => {
+var init_dev20 = __esm(() => {
   init_syntax4();
 });
 function gfmTaskListItem() {
@@ -10477,7 +10566,7 @@ var init_syntax5 = __esm(() => {
   init_default();
   tasklistCheck = { name: "tasklistCheck", tokenize: tokenizeTasklistCheck };
 });
-var init_dev20 = __esm(() => {
+var init_dev21 = __esm(() => {
   init_syntax5();
 });
 function gfm(options) {
@@ -10491,11 +10580,11 @@ function gfm(options) {
 }
 var init_micromark_extension_gfm = __esm(() => {
   init_micromark_util_combine_extensions();
-  init_dev16();
   init_dev17();
   init_dev18();
   init_dev19();
   init_dev20();
+  init_dev21();
 });
 function readJson(filePath) {
   if (!existsSync3(filePath))
@@ -11236,7 +11325,7 @@ function parseRoadmapContent(contentMarkdown) {
 var ROADMAP_STATUSES;
 var DATE_RE3;
 var init_roadmap_content = __esm(() => {
-  init_dev15();
+  init_dev16();
   init_mdast_util_gfm();
   init_micromark_extension_gfm();
   init_iteration();

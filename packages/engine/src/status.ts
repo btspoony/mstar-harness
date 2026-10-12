@@ -500,7 +500,7 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``,
+          `status.json schema version 2 required \u2014 got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``,
           `run \`${upgrade}\``,
         ),
       ],
@@ -513,7 +513,7 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``,
+          `v1-shaped status.json (root plans[]) is not a v2 document \u2014 import legacy state with \`${upgrade}\``,
           `run \`${upgrade}\``,
         ),
       ],
@@ -531,7 +531,7 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``,
+          `v1-shaped status.json (root residual_findings) is not a v2 document \u2014 import legacy state with \`${upgrade}\``,
           `run \`${upgrade}\``,
         ),
       ],

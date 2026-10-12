@@ -28,7 +28,7 @@ export type DshHostStateImportReport = {
 type Evaluation = { rows: DshHostStateRows; findings: Finding[]; refusals: Refusal[]; sourceDigest: string };
 
 function refused(refusals: readonly Refusal[]): never {
-  throw new StoreError("store.upgrade-dsh-source-refused", `store upgrade refused: ${refusals.length} legacy DSH host-state fact group(s) could not be imported.\n${refusals.map((r) => `- ${r.selector}: ${r.facts} — ${r.discarded}: ${r.reason}`).join("\n")}\nRecovery (supported path): rerun \`mstar store upgrade\` with \`--ack-skip-dsh <selector>\` for each listed selector. The invocation imports every other decidable fact and drops exactly the refused facts for acknowledged selectors. Original bytes remain unchanged; ordinary upgrade remains retryable.`);
+  throw new StoreError("store.upgrade-dsh-source-refused", `store upgrade refused: ${refusals.length} legacy DSH host-state fact group(s) could not be imported.\n${refusals.map((r) => `- ${r.selector}: ${r.facts} \u2014 ${r.discarded}: ${r.reason}`).join("\n")}\nRecovery (supported path): rerun \`mstar store upgrade\` with \`--ack-skip-dsh <selector>\` for each listed selector. The invocation imports every other decidable fact and drops exactly the refused facts for acknowledged selectors. Original bytes remain unchanged; ordinary upgrade remains retryable.`);
 }
 
 /** Loss disclosure keyed by the actual fact category, never by a filename substring. */
@@ -45,7 +45,7 @@ function lossStatement(refusal: Refusal): string {
     case "tail":
       return `Loss: ${refusal.discarded}. These held-back display rows never appear. Verified identities and scan bounds are independent facts and import per their own rules.`;
     case "identity":
-      return `Loss: ${refusal.discarded}. This historical conflicting legacy digest is not registered; the existing native accepted identity and its replay behavior are unchanged — a same-digest native replay stays deduplicated and a different-digest replay stays a conflict. Every other identity, the tail and the scan bounds are unaffected.`;
+      return `Loss: ${refusal.discarded}. This historical conflicting legacy digest is not registered; the existing native accepted identity and its replay behavior are unchanged \u2014 a same-digest native replay stays deduplicated and a different-digest replay stays a conflict. Every other identity, the tail and the scan bounds are unaffected.`;
   }
 }
 

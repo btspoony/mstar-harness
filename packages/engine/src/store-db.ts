@@ -2223,7 +2223,7 @@ function publicationRefusal(step: string, error: unknown, dbPath: string): Store
   const cause = publicationCause(error);
   return new StoreError(
     "store.publication-failed",
-    `The fresh store could not be ${step}: ${cause}. NO store was published at ${dbPath} — the canonical path ` +
+    `The fresh store could not be ${step}: ${cause}. NO store was published at ${dbPath} \u2014 the canonical path ` +
       `holds no store and nothing was written to it. Resolve the filesystem condition named above (permissions, ` +
       `space, hard-link support) and rerun the same command, or select a harness on a filesystem that supports ` +
       `atomic hard links with --harness.`,
@@ -2328,7 +2328,7 @@ export async function initializeStore(
         "store.publication-failed",
         `The staged store could not be folded into one self-contained database file before publication ` +
           `(journal mode is ${String(folded?.journal_mode ?? "unknown")}, not "delete"). NO store was published at ` +
-          `${dbPath} — the canonical path holds no store and nothing was written to it. Rerun the same command; if ` +
+          `${dbPath} \u2014 the canonical path holds no store and nothing was written to it. Rerun the same command; if ` +
           `it recurs, select a harness on a filesystem that supports atomic hard links with --harness.`,
         { path: dbPath, cause: `journal mode ${String(folded?.journal_mode ?? "unknown")} after fold` },
       );
