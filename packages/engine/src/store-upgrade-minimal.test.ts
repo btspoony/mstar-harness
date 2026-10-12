@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1000,15 +1001,34 @@ test("a logical missing-plan claim refuses unchanged and recovers from its genui
   const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath, "utf8"));
   expect(recoveryRecord).toMatchObject({
     phase: "replaced", operator: "fixture-operator", authorization: "restore-pre-corruption-point",
-    backupPath: backup.backupPath, backupSha256: preview.backupSha256,
+    // The SELECTED recovery point is what the record names. The staged image the
+    // rows were read from is this attempt's own scratch (`restoredCopyPath`,
+    // removed on every exit path), never a location the operator keeps.
+    backupSha256: preview.backupSha256,
     verified: { integrity: "ok", foreignKeys: "ok", schemaVersion: 8, executionAuthorityState: "active" },
   });
+  expect(recoveryRecord.backupSha256).toBe(
+    createHash("sha256").update(readFileSync(backup.backupPath)).digest("hex"),
+  );
+  expect(existsSync(String(recoveryRecord.restoredCopyPath))).toBe(false);
   const recovered = await protectedStore(context);
   expect(recovered.schema).toEqual(before.schema);
   const originalMeta = JSON.parse(before.tables.store_meta![0]!);
   const restoredMeta = JSON.parse(recovered.tables.store_meta![0]!);
   expect(restoredMeta).toEqual({ ...originalMeta, authority_epoch: restored.epoch });
+  // Every authority row is the selected point's, with ONE intended addition:
+  // the restore commits its complete recovery record into the store's own
+  // operation ledger in the same transaction as the authority it describes, so
+  // the record and the restored generation are observable together.
+  const restoreReceipts = (rows: readonly string[] | undefined): string[] =>
+    (rows ?? []).filter((row) => row.includes('"operation_id":"restore-attempt:'));
+  expect(restoreReceipts(recovered.tables.store_operations)).toHaveLength(1);
   for (const table of Object.keys(before.tables).filter((table) => table !== "store_meta")) {
+    if (table === "store_operations") {
+      expect((recovered.tables[table] ?? []).filter((row) => !row.includes('"operation_id":"restore-attempt:')))
+        .toEqual(before.tables[table] ?? []);
+      continue;
+    }
     expect(recovered.tables[table]).toEqual(before.tables[table]);
   }
   await upgradeStoreMinimal({
