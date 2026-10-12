@@ -4,11 +4,11 @@
  *
  * The ledger is `<control root>/workflows/<id>/notes.jsonl` — the same file the
  * v1 migration already emits (`migrate.ts` `NOTES_LEDGER_FILE`, one
- * `{kind:"note",ts,text}` line per legacy row note). Its disposition under the
- * active execution authority is **retain**: bytes stay files with identity,
- * provenance and append order (D11 — no DB copy of an accepted ledger record),
- * so this module never converts a note into a DB event and never rewrites
- * history to add metadata.
+ * `{kind:"note",ts,text}` line per legacy row note). It is a plain append-only
+ * process log, **not** an accepted-operation ledger: bytes stay files with
+ * provenance and append order (no DB copy of a note), a record id is caller
+ * metadata rather than a dedup key, and this module never converts a note into a
+ * DB event and never rewrites history to add metadata.
  *
  * ## What this module owns
  *
@@ -20,52 +20,49 @@
  *   `workflowId`/`sessionId` are checked against the session the engine is
  *   already authorizing, never used as its source.
  * - `normalizeWorkflowNotesCoverage` — a pure projection of the retained bytes
- *   into the inspectable facts a coverage producer (C3's manifest v2 / C2's
- *   `notes-v1` validator) needs: the canonical path, the file hash, the ordered
- *   historical lines with their `(source-file-sha256, line-index)` identity, the
- *   ordered accepted record ids with their line hashes, the unaccepted tail and
- *   the counts. It never reads or writes anything.
+ *   into the inspectable facts a coverage producer needs: the canonical path,
+ *   the file hash, the ordered historical lines with their
+ *   `(source-file-sha256, line-index)` identity, the ordered records with their
+ *   line hashes, the unaccepted tail and the counts. It never reads or writes
+ *   anything.
  *
- * ## Durability and ordering (contract §4.3)
+ * ## One framed append — no lock, no read (contract §4.3)
  *
- * `appendWorkflowNote` proves the control root exists, then takes the
- * **maintenance exclusion** and the **per-workflow file lock** (contract §4.3
- * order: maintenance → root → workflow → local ledger → SQL; this writer takes
- * no root lock and no SQL write). Inside them the sequence is: resolve (and, if
- * genuinely absent and already authorized, materialize) the retained workflow
- * body dir → read → classify → dedup → C1's synchronous current-session
- * assertion → fsynced append. That assertion is the last step before the
- * byte-level mutation and there is no `await` between the two, so a stale
- * epoch, a revoked session or a foreign caller can never land a line. Append
- * success means fsynced bytes; nothing here is advertised as a distributed
- * transaction with the DB.
+ * `appendWorkflowNote` proves the control root exists, resolves (and, when
+ * genuinely absent and already authorized, materializes) the retained workflow
+ * body dir, then takes C1's synchronous current-session assertion immediately
+ * before a **single `O_APPEND` write** of the complete framed record. There is
+ * no file lock, no maintenance exclusion, no whole-file read, no dedup
+ * decision, no tail repair, no truncation and no rewrite of a peer's bytes: one
+ * write call lands the whole frame or reports the short append. A leading LF
+ * frames the record on an existing leaf, so its line survives even when a peer's
+ * earlier append stopped mid-record; a leaf this call created is empty and needs
+ * no boundary. A stale epoch, a revoked session or a foreign caller refuses
+ * before any byte is written, and append success means the frame is fsynced.
  *
  * ## Leaf trust
  *
  * The retained leaf is opened with `O_NOFOLLOW` and verified with `fstat`: it
- * must be a regular file with the retained device/inode identity. Cooperative
- * writers share the workflow lock; content changes are not an integrity gate.
- * Every commit appends at EOF and never truncates retained history.
+ * must be a regular file. A symlinked leaf, a non-file, a symlinked body dir and
+ * a missing control root refuse instead of being followed or materialized.
  *
- * ## Crash and replay semantics (S3)
+ * ## Reader and failure semantics (S3)
  *
- * A retry of the same stable record id and request fields replays without a
- * duplicate note; a changed request under that id conflicts. An unterminated
- * tail is preserved and separated from the next record by LF. A complete note
- * missing only its final LF participates in deduplication before that LF is
- * appended. Partial or unrecognized historical content never blocks a new note.
+ * Repeated ids and repeated submissions append repeated records — the log makes
+ * no replay or conflict promise. A short append leaves exactly the bytes that
+ * landed and reports the failure; it never removes or repairs a peer's bytes.
+ * Readers tolerate blank, unrecognized and truncated records and continue to
+ * later valid records, so a partial record never blocks a later append and a
+ * record boundary always survives an earlier partial record.
  */
 import {
   closeSync,
   constants as fsConstants,
   fstatSync,
   fsyncSync,
-  ftruncateSync,
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
-  rmSync,
   type Stats,
   writeFileSync,
   writeSync,
@@ -74,7 +71,6 @@ import { dirname, join } from "node:path";
 import { canonicalTarget, isNonEmptyString, isPlainObject, sha256Bytes } from "./coordination-write.js";
 import { assertExecutionSessionCurrent } from "./execution-session.js";
 import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js";
-import { withStatusWriteLock } from "./lease.js";
 import { NOTES_LEDGER_FILE } from "./migrate.js";
 import { assertSafePathComponent, resolveWorkflowDir } from "./path.js";
 import { storeDbPath, type StoreContext } from "./store-db.js";
@@ -84,9 +80,10 @@ import { storeDbPath, type StoreContext } from "./store-db.js";
  * ------------------------------------------------------------------------ */
 
 /**
- * One new-format ledger record (§5). `id` is the caller's stable record
- * identity — the dedup key — and `workflowId`/`sessionId` are the provenance
- * the engine preserves; the note text carries no authority of any kind.
+ * One new-format ledger record (§5). `id` is the caller's record identity —
+ * metadata carried for correlation, deliberately NOT a dedup key: the same id
+ * may be appended again. `workflowId`/`sessionId` are the provenance the engine
+ * preserves; the note text carries no authority of any kind.
  */
 export type WorkflowNote = Readonly<{
   version: 1;
@@ -98,8 +95,8 @@ export type WorkflowNote = Readonly<{
   text: string;
 }>;
 
-/** The append receipt: the record id and whether it was already accepted. */
-export type WorkflowNoteAppendReceipt = Readonly<{ id: string; replayed: boolean }>;
+/** The append receipt: the record id this append wrote. */
+export type WorkflowNoteAppendReceipt = Readonly<{ id: string }>;
 
 type WorkflowNoteRequest = Omit<WorkflowNote, "ts"> & Readonly<{ ts?: string }>;
 
@@ -107,10 +104,8 @@ type WorkflowNoteRequest = Omit<WorkflowNote, "ts"> & Readonly<{ ts?: string }>;
 export const EXECUTION_LEDGER_ERROR_CODES = [
   "execution-ledgers.record-invalid",
   "execution-ledgers.scope-mismatch",
-  "execution-ledgers.id-conflict",
-  "execution-ledgers.ledger-foreign",
   "execution-ledgers.target-untrusted",
-  "execution-ledgers.target-replaced",
+  "execution-ledgers.append-short",
 ] as const;
 
 export type ExecutionLedgerErrorCode = (typeof EXECUTION_LEDGER_ERROR_CODES)[number];
@@ -202,17 +197,22 @@ function canonicalNoteLine(note: WorkflowNote & { ts: string }): string {
 type LedgerLine =
   | Readonly<{ format: "legacy-note"; record: Readonly<{ kind: "note"; ts: string; text: string }> }>
   | Readonly<{ format: "versioned-note-v1"; record: WorkflowNote }>
+  | Readonly<{ format: "blank" }>
   | Readonly<{ format: "unrecognized" }>;
 
 const UNRECOGNIZED_LINE: LedgerLine = { format: "unrecognized" };
 
 /**
- * Classify one LF-terminated line. A v1 `{kind:"note",ts,text}` line is the
- * historical format the migration emitted; a `version:1` record is this
- * module's format; everything else (including a `version` field that is not a
- * valid record) is unrecognized — reported, never guessed.
+ * Classify one LF-terminated line. An empty line is `blank` — the framing byte
+ * this writer puts before a record when the leaf already existed, and an
+ * artifact no reader should report as a corrupt record. A v1
+ * `{kind:"note",ts,text}` line is the historical format the migration emitted; a
+ * `version:1` record is this module's format; everything else (including a
+ * `version` field that is not a valid record) is unrecognized — reported, never
+ * guessed.
  */
 function parseLedgerLine(bytes: Buffer): LedgerLine {
+  if (bytes.length === 0) return { format: "blank" };
   let value: unknown;
   try {
     value = JSON.parse(bytes.toString("utf8"));
@@ -237,16 +237,16 @@ type LedgerScanLine = Readonly<{ index: number; bytes: Buffer; line: LedgerLine 
 
 type LedgerScan = Readonly<{
   lines: readonly LedgerScanLine[];
-  /** Bytes after the last LF — an unterminated (unaccepted) record, if any. */
+  /** Bytes after the last LF — a partial record a reader must skip, if any. */
   tail: Buffer;
 }>;
 
 /**
  * Scan retained bytes without decoding them as one string: lines are split on
  * the LF byte (one native scan, no per-byte loop), and any trailing partial line
- * is kept aside as the unaccepted tail. Nothing is hashed, normalized, rewritten
- * or dropped here — hashing belongs to the coverage projection, which is the
- * only consumer that needs it.
+ * is kept aside as the tail. Nothing is hashed, normalized, rewritten or dropped
+ * here — hashing belongs to the coverage projection, which is the only consumer
+ * that needs it.
  */
 function scanLedger(bytes: Buffer): LedgerScan {
   const lines: LedgerScanLine[] = [];
@@ -262,41 +262,8 @@ function scanLedger(bytes: Buffer): LedgerScan {
 }
 
 /* ------------------------------------------------------------------------ *
- * Append decision
- * ------------------------------------------------------------------------ */
-
-type AppendDecision = Readonly<{ kind: "replay" | "append"; terminateTail: boolean }>;
-
-/** Deduplicate by record id and request fields, never serialized byte identity. */
-function decideAppend(scan: LedgerScan, note: WorkflowNoteRequest): AppendDecision {
-  let replayed = false;
-  for (let index = 0; index <= scan.lines.length; index++) {
-    const entry = index < scan.lines.length ? scan.lines[index]!.line : parseLedgerLine(scan.tail);
-    if (entry.format !== "versioned-note-v1" || entry.record.id !== note.id) continue;
-    const record = entry.record;
-    if (
-      record.workflowId !== note.workflowId || record.sessionId !== note.sessionId ||
-      (note.ts !== undefined && record.ts !== note.ts) || record.text !== note.text
-    ) {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.id-conflict",
-        `record id ${JSON.stringify(note.id)} is already recorded with a different request. ` +
-          `Use a new record id for a new note; nothing was written.`,
-      );
-    }
-    replayed = true;
-  }
-  return { kind: replayed ? "replay" : "append", terminateTail: scan.tail.length > 0 };
-}
-
-/* ------------------------------------------------------------------------ *
  * Durable byte-level commit
  * ------------------------------------------------------------------------ */
-
-type RetainedLedger =
-  | Readonly<{ kind: "absent" }>
-  /** The retained bytes AND the file identity they were read from. */
-  | Readonly<{ kind: "present"; bytes: Buffer; dev: number; ino: number; fd: number }>;
 
 /**
  * Open one leaf without ever following a symbolic link; a link refuses. The
@@ -320,64 +287,27 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
 }
 
 /**
- * Read the retained leaf, or report it absent. The trust decision is the
- * `O_NOFOLLOW` open plus the `fstat` of that same descriptor: a symlink or a
- * non-regular leaf refuses, and the regular file's identity (device + inode) is
- * returned so the commit can verify the destination identity.
- */
-function readRetainedLedger(path: string): RetainedLedger {
-  let fd: number;
-  try {
-    fd = openWithoutFollowing(path, fsConstants.O_RDONLY);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
-    throw error;
-  }
-  try {
-    const info = fstatSync(fd);
-    if (!info.isFile()) {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.target-untrusted",
-        `${path} is not a regular file (a symlink or a non-file has no retained bytes to append to).`,
-      );
-    }
-    // Pin the retained inode until commit; unlink/recreate must not recycle its
-    // identity between the read and the final destination check.
-    return { kind: "present", bytes: readFileSync(fd), dev: info.dev, ino: info.ino, fd };
-  } catch (error) {
-    closeSync(fd);
-    throw error;
-  }
-}
-
-/**
- * Test-runner-only fault seam between the retained read and commit.
- * Replacing the destination exercises path identity; rewriting in place
- * exercises append-at-EOF without a content-integrity gate.
+ * Test-runner-only fault seam between the leaf open and the frame write: the
+ * case where a peer removed or replaced the leaf inside that window. It never
+ * changes retained content of a leaf this append then writes.
  */
 function replaceLeafSeam(path: string): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
   if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT !== path) return;
-  if (process.env.MSTAR_LEDGER_REPLACE_MODE === "in-place") {
-    const fd = openSync(path, "r+");
-    try {
-      ftruncateSync(fd, 0);
-      writeSync(fd, "replaced in place between the read and the commit\n");
-    } finally {
-      closeSync(fd);
-    }
-    return;
-  }
-  rmSync(path, { force: true });
-  writeFileSync(path, "replaced between the read and the commit\n");
+  writeFileSync(path, "replaced between the open and the write\n");
 }
 
-/** Write the whole line, tolerating a short write; `offset < 0` means the append-at-EOF mode. */
-function writeAll(fd: number, line: Buffer, offset: number): void {
-  let written = 0;
-  while (written < line.length) {
-    written += writeSync(fd, line, written, line.length - written, offset < 0 ? null : offset + written);
-  }
+/**
+ * Test-runner-only shortening of the single write call's requested length, so a
+ * frame is provably incomplete without mocking the driver. Production always
+ * requests the whole frame, and both cases take the same ordinary refusal path:
+ * the descriptor reports fewer bytes than the frame, which is exactly what a
+ * short append (full filesystem, resource limit) produces.
+ */
+function writeRequestLength(line: Buffer): number {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return line.length;
+  const parsed = Number.parseInt(process.env.MSTAR_LEDGER_WRITE_CAPACITY_BYTES ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 && parsed < line.length ? parsed : line.length;
 }
 
 /** Fsync one directory's own entry (used only when this append created a file). */
@@ -390,13 +320,21 @@ function fsyncDirectory(dir: string): void {
   }
 }
 
-/** Append under the workflow lock; no retained content is rewritten or deleted. */
-function commitLedgerLine(input: {
-  path: string;
-  retained: RetainedLedger;
-  line: Buffer;
-}): void {
-  const { path, retained, line } = input;
+/**
+ * Append one complete framed record in a SINGLE `O_APPEND` write. Nothing is
+ * read first: there is no whole-file admission, no dedup decision, no peer-tail
+ * repair and no truncation. A short append is reported as a failure and leaves
+ * exactly the bytes that landed, so a later record is still reachable.
+ *
+ * A record written into an already-existing leaf is prefixed with one LF. That
+ * boundary is what keeps the frame readable when a peer's earlier append stopped
+ * mid-record: it is decided from the open alone (this call created the leaf, or
+ * it did not) and never from a read of the peer's bytes, so no race can leave
+ * this record fused to an unterminated line. A leaf this call created is empty
+ * and needs no boundary; a boundary written into a leaf that already ended with
+ * LF is an empty line, which readers skip.
+ */
+function commitLedgerFrame(path: string, frame: Buffer): void {
   let fd: number;
   let created = false;
   try {
@@ -414,13 +352,16 @@ function commitLedgerLine(input: {
         `${path} is not a regular file; nothing was written.`,
       );
     }
-    if (retained.kind === "present" && (info.dev !== retained.dev || info.ino !== retained.ino)) {
+    replaceLeafSeam(path);
+    const line = created ? frame : Buffer.concat([Buffer.from("\n", "utf8"), frame]);
+    const written = writeSync(fd, line, 0, writeRequestLength(line), null);
+    if (written !== line.length) {
       throw new ExecutionLedgerError(
-        "execution-ledgers.target-replaced",
-        `${path} no longer identifies the retained file; retry the append against the current destination.`,
+        "execution-ledgers.append-short",
+        `only ${written} of ${line.length} bytes of the framed note reached ${path}; the partial bytes stay in place ` +
+          `and are never repaired or truncated in a peer's name. Retry the append with a new record id.`,
       );
     }
-    writeAll(fd, line, -1);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -492,51 +433,6 @@ function prepareWorkflowBodyDir(context: ExecutionContext, session: ExecutionSes
 }
 
 /* ------------------------------------------------------------------------ *
- * Locking (§4.3)
- * ------------------------------------------------------------------------ */
-
-const LEDGER_LOCK_WAIT_MS = 30_000;
-
-/** The bounded wait of this writer; the test-runner-gated override lets a fixture prove the lock without a 30s run. */
-function ledgerLockWaitMs(): number {
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
-    const parsed = Number.parseInt(process.env.MSTAR_EXECUTION_LEDGER_LOCK_WAIT_MS ?? "", 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return LEDGER_LOCK_WAIT_MS;
-}
-
-/**
- * The §4.3 outer **maintenance exclusion**, keyed EXACTLY like
- * `withExecutionMaintenanceLock` in `execution-recovery.ts`
- * (`<root>/.execution-maintenance/execution-migration`, which
- * `withStatusWriteLock` turns into `<root>/.execution-maintenance/.status-write.lockdir`).
- * The two spellings must stay identical: a restore never interleaves with a
- * cooperative ledger append, and the append never interleaves with it.
- *
- * The control root is proven to exist BEFORE the lock key is materialized:
- * `withStatusWriteLock` needs the key's parent directory, and creating one under
- * a path that is not the real control root would let a refused call leave a
- * directory side effect behind.
- */
-async function withExecutionMaintenanceLock<T>(context: StoreContext, fn: () => Promise<T>): Promise<T> {
-  const root = controlRootOf(context);
-  assertRealDirectory(root, "the control root");
-  const key = join(root, ".execution-maintenance", "execution-migration");
-  mkdirSync(dirname(key), { recursive: true });
-  return withStatusWriteLock(key, fn, { timeoutMs: ledgerLockWaitMs() });
-}
-
-/*
- * The per-workflow file lock around the append is `withStatusWriteLock` on the
- * ledger path itself: its lockdir lands in `<workflow dir>` (dirname of the
- * ledger), i.e. the same per-workflow status lock every snapshot/ledger writer
- * of that workflow takes, and it is removed again on release. It is acquired
- * only after the body dir exists, and every read/classify/dedup/append step of
- * one workflow runs inside it.
- */
-
-/* ------------------------------------------------------------------------ *
  * Append (§5)
  * ------------------------------------------------------------------------ */
 
@@ -561,21 +457,18 @@ function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNoteRequest
 }
 
 /**
- * Append one note to the workflow's retained ledger, or replay an already
- * accepted record id.
+ * Append one note to the workflow's retained ledger.
  *
- * Active route only. The order is: prove the control root exists → take the
- * maintenance exclusion → resolve the retained workflow body dir (creating it
- * only after the current-session guard has authorized a genuinely absent one) →
- * take the per-workflow lock → read the retained bytes → classify → dedup → the
- * SAME synchronous current-session guard again, immediately before the fsynced
- * append. A stale epoch, a revoked/suspended session, a foreign caller or a
- * mismatched scope therefore refuses with the store's own codes (or this
- * module's), every retained byte stays in place, and a refused call leaves no
- * directory side effect behind.
- *
- * A replay never duplicates an accepted note. An unterminated tail is preserved
- * and terminated before a new note, rather than compared or truncated.
+ * Active route only, and the whole path is: prove the control root exists →
+ * resolve the retained workflow body dir (materialized only after the
+ * current-session guard has authorized a genuinely absent one) → the SAME
+ * synchronous current-session guard again, immediately before the byte
+ * mutation → one fsynced `O_APPEND` frame. There is no file lock, no
+ * maintenance exclusion, no read of retained bytes and no replay/conflict
+ * decision: a stale epoch, a revoked/suspended session, a foreign caller or a
+ * mismatched scope still refuses with the store's own codes (or this module's),
+ * every retained byte stays in place, and a refused call leaves no directory
+ * side effect behind. A repeated id appends a second record.
  */
 export async function appendWorkflowNote(
   context: ExecutionContext,
@@ -583,37 +476,14 @@ export async function appendWorkflowNote(
   note: WorkflowNoteRequest,
 ): Promise<WorkflowNoteAppendReceipt> {
   assertNoteScope(session, note);
+  assertRealDirectory(controlRootOf(context), "the control root");
   const ledgerPath = workflowNotesLedgerPath(context, session.workflowId);
-  return withExecutionMaintenanceLock(context, async () => {
-    prepareWorkflowBodyDir(context, session, dirname(ledgerPath));
-    return withStatusWriteLock(
-      ledgerPath,
-      async () => {
-        const retained = readRetainedLedger(ledgerPath);
-        try {
-          if (retained.kind === "present") replaceLeafSeam(ledgerPath);
-          const scan = retained.kind === "absent" ? null : scanLedger(retained.bytes);
-          const decision = scan === null ? ({ kind: "append", terminateTail: false } as const) : decideAppend(scan, note);
-          // The final synchronous identity check, immediately before the mutation.
-          assertExecutionSessionCurrent(context, session);
-          if (decision.terminateTail || decision.kind === "append") {
-            const appended = decision.kind === "append"
-              ? Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}\n`, "utf8")
-              : Buffer.from("\n");
-            commitLedgerLine({
-              path: ledgerPath,
-              retained,
-              line: decision.terminateTail && decision.kind === "append" ? Buffer.concat([Buffer.from("\n"), appended]) : appended,
-            });
-          }
-          return { id: note.id, replayed: decision.kind === "replay" };
-        } finally {
-          if (retained.kind === "present") closeSync(retained.fd);
-        }
-      },
-      { timeoutMs: ledgerLockWaitMs() },
-    );
-  });
+  prepareWorkflowBodyDir(context, session, dirname(ledgerPath));
+  const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}\n`, "utf8");
+  // The final synchronous identity check, immediately before the byte mutation.
+  assertExecutionSessionCurrent(context, session);
+  commitLedgerFrame(ledgerPath, frame);
+  return { id: note.id };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -633,8 +503,8 @@ export type WorkflowNoteHistoricalRecord = Readonly<{
   record: Readonly<{ kind: string; ts: string; text: string }> | null;
 }>;
 
-/** One accepted new-format record, in append order. */
-export type WorkflowNoteAcceptedRecord = Readonly<{
+/** One retained new-format record, in append order. */
+export type WorkflowNoteRecord = Readonly<{
   id: string;
   lineIndex: number;
   sha256: string;
@@ -650,7 +520,12 @@ export type WorkflowNoteAcceptedRecord = Readonly<{
  */
 export type WorkflowNotesFormat = "absent" | "empty" | "legacy" | "versioned" | "unrecognized" | "mixed";
 
-/** The normalized, inspectable facts of one retained notes surface. */
+/**
+ * The normalized, inspectable facts of one retained notes surface: the physical
+ * records a reader can see, never a claim about which ids were transactionally
+ * accepted (the log makes no such promise, so a repeated id is simply a second
+ * record).
+ */
 export type WorkflowNotesCoverageFacts = Readonly<{
   version: 1;
   protocol: "notes-v1";
@@ -660,23 +535,18 @@ export type WorkflowNotesCoverageFacts = Readonly<{
   bytes: number;
   fileSha256: string | null;
   historical: readonly WorkflowNoteHistoricalRecord[];
-  records: readonly WorkflowNoteAcceptedRecord[];
-  /** Accepted record ids, in append order — the ordered identity C3 pins. */
-  acceptedIds: readonly string[];
-  /** Accepted ids recorded more than once; a non-empty list refuses coverage. */
-  duplicateIds: readonly string[];
-  counts: Readonly<{ historical: number; accepted: number; unrecognized: number }>;
-  /** Bytes after the last LF — an unaccepted, unterminated tail, if present. */
+  records: readonly WorkflowNoteRecord[];
+  counts: Readonly<{ historical: number; records: number; unrecognized: number }>;
+  /** Bytes after the last LF — a partial record a reader must skip. */
   tail: Readonly<{ sha256: string; bytes: number }> | null;
 }>;
 
 /**
  * Pure projection of one retained notes ledger's bytes into coverage facts.
- * Input bytes are the caller's own fresh read (C3 owns safe IO and the
+ * Input bytes are the caller's own fresh read (the caller owns safe IO and the
  * existence/symlink/root checks); this function hashes and classifies them and
- * writes nothing. An unrecognized line, a duplicated id or an unterminated tail
- * is reported rather than hidden, so a validator can refuse instead of reading
- * corruption as absence.
+ * writes nothing. An unrecognized line or a partial tail is reported rather than
+ * hidden, so a validator can refuse instead of reading corruption as absence.
  */
 export function normalizeWorkflowNotesCoverage(input: {
   workflowId: string;
@@ -694,9 +564,7 @@ export function normalizeWorkflowNotesCoverage(input: {
       fileSha256: null,
       historical: [],
       records: [],
-      acceptedIds: [],
-      duplicateIds: [],
-      counts: { historical: 0, accepted: 0, unrecognized: 0 },
+      counts: { historical: 0, records: 0, unrecognized: 0 },
       tail: null,
     };
   }
@@ -706,10 +574,7 @@ export function normalizeWorkflowNotesCoverage(input: {
   const scan = scanLedger(buffer);
   const fileSha256 = sha256Bytes(buffer);
   const historical: WorkflowNoteHistoricalRecord[] = [];
-  const records: WorkflowNoteAcceptedRecord[] = [];
-  const acceptedIds: string[] = [];
-  const seenIds = new Set<string>();
-  const duplicateIds = new Set<string>();
+  const records: WorkflowNoteRecord[] = [];
   let legacy = 0;
   let versioned = 0;
   let unrecognized = 0;
@@ -737,10 +602,11 @@ export function normalizeWorkflowNotesCoverage(input: {
       });
       continue;
     }
+    if (entry.line.format === "blank") {
+      // The writer's own framing byte: a reader skips it, never counts it.
+      continue;
+    }
     versioned += 1;
-    if (seenIds.has(entry.line.record.id)) duplicateIds.add(entry.line.record.id);
-    else seenIds.add(entry.line.record.id);
-    acceptedIds.push(entry.line.record.id);
     records.push({
       id: entry.line.record.id,
       lineIndex: entry.index,
@@ -765,9 +631,7 @@ export function normalizeWorkflowNotesCoverage(input: {
     fileSha256,
     historical,
     records,
-    acceptedIds,
-    duplicateIds: [...duplicateIds],
-    counts: { historical: historical.length, accepted: records.length, unrecognized },
+    counts: { historical: historical.length, records: records.length, unrecognized },
     tail: scan.tail.length === 0 ? null : { sha256: sha256Bytes(scan.tail), bytes: scan.tail.length },
   };
 }

@@ -346,7 +346,7 @@ describe("schema contract witness", () => {
   });
 });
 describe("workflow note bounded consumers", () => {
-  test("append, replay, and coverage resolve through the public registry in three calls", async () => {
+  test("append, a repeated append, and coverage resolve through the public registry in three calls", async () => {
     const fixture = await activeNotesContext();
     const interaction: Interaction = { label: "append and inspect a workflow note", context: "warm", extraDependency: "", calls: [] };
     const input = {
@@ -359,13 +359,16 @@ describe("workflow note bounded consumers", () => {
       harness: fixture.harness,
     };
     const first = await countedCall(interaction, "execute", "workflow-note.append", input, fixture.context);
-    expect(first).toMatchObject({ status: "ok", data: { id: "note-bounded-1", replayed: false } });
+    expect(first).toMatchObject({ status: "ok", data: { id: "note-bounded-1" } });
     const ledger = join(fixture.harness, "workflows", fixture.workflow, "notes.jsonl");
-    const bytesBeforeReplay = readFileSync(ledger, "utf8");
+    const bytesAfterFirst = readFileSync(ledger, "utf8");
 
-    const replay = await countedCall(interaction, "execute", "workflow-note.append", input, fixture.context);
-    expect(replay).toMatchObject({ status: "ok", data: { id: "note-bounded-1", replayed: true } });
-    expect(readFileSync(ledger, "utf8")).toBe(bytesBeforeReplay);
+    // The ledger is a plain append log: the same id is a second record.
+    const repeated = await countedCall(interaction, "execute", "workflow-note.append", input, fixture.context);
+    expect(repeated).toMatchObject({ status: "ok", data: { id: "note-bounded-1" } });
+    const bytesAfterSecond = readFileSync(ledger, "utf8");
+    expect(bytesAfterSecond.startsWith(bytesAfterFirst)).toBe(true);
+    expect(bytesAfterSecond.length).toBeGreaterThan(bytesAfterFirst.length);
 
     const coverage = await countedCall(interaction, "execute", "workflow-note.coverage", {
       workflow: fixture.workflow,
@@ -375,8 +378,8 @@ describe("workflow note bounded consumers", () => {
     if (coverage.status === "ok") {
       expect(coverage.data).toMatchObject({
         format: "versioned",
-        acceptedIds: ["note-bounded-1"],
-        counts: { accepted: 1 },
+        records: [{ id: "note-bounded-1" }, { id: "note-bounded-1" }],
+        counts: { records: 2 },
       });
     }
     expect(audit(interaction, {
