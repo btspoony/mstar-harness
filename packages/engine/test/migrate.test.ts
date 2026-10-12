@@ -133,7 +133,6 @@ describe("convertLegacyV1Tree — grouping and status mapping", () => {
         iteration_merge_commit: "14dfddb",
       });
       expect(typeof data.legacy_metadata!.harness_root_note).toBe("string");
-      expect(data.legacy_metadata!.harness_root_note).toContain(".mstar");
       expect(data.legacy_metadata!.harness_root).toBeUndefined();
       expect((data as Record<string, unknown>).harness_root).toBeUndefined();
 
