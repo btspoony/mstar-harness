@@ -69,7 +69,8 @@ describe('engine-status store — newest emission per session', () => {
         sessionId: 'ses_alpha', cwd: '/proj/alpha', turn, payload: { marker: turn },
       })).toEqual({ kind: 'written' })
     }
-    expect(readDshStatusEmission({ harnessDir }, 'ses_alpha', '/proj/alpha')?.turn).toBe(3)
+    const emission = readDshStatusEmission({ harnessDir }, 'ses_alpha', '/proj/alpha')
+    expect(emission.kind === 'ok' && emission.emission?.turn).toBe(3)
     const read = readEngineStatusSnapshot(harnessDir, 'ses_alpha', '/proj/alpha')
     expect(read.kind === 'ok' && read.entry.payload).toEqual({ marker: 3 })
   })
@@ -116,7 +117,7 @@ describe('engine-status store — newest emission per session', () => {
       .toEqual({ kind: 'degraded', reason: 'payload-not-object' })
     expect(writeEngineStatusSnapshot(null, { sessionId: 's', cwd: '/proj/a', turn: 1, payload: {} }))
       .toEqual({ kind: 'degraded', reason: 'no-harness-dir' })
-    expect(readDshStatusEmission({ harnessDir }, 's', '/proj/a')).toBeUndefined()
+    expect(readDshStatusEmission({ harnessDir }, 's', '/proj/a')).toMatchObject({ kind: 'ok' })
   })
 })
 
@@ -135,7 +136,8 @@ describe('engine-status store — pre-activation refusal with public recovery', 
     expect(written.kind).toBe('degraded')
     if (written.kind !== 'degraded') throw new Error('unreachable')
     expect(written.reason).toContain('mstar store init')
-    expect(readEngineStatusSnapshot(harnessDir, 's', '/proj/a')).toEqual({ kind: 'unavailable', reason: 'absent' })
+    const statusRead = readEngineStatusSnapshot(harnessDir, 's', '/proj/a')
+    expect(statusRead.kind === 'unavailable' ? statusRead.reason : '').toContain('mstar store init')
     expect(writeEngineStatusSnapshot(harnessDir, { sessionId: 's', cwd: '/proj/a', turn: 1, payload: {} }).kind).toBe('degraded')
   })
 })

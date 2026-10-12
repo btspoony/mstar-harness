@@ -98,14 +98,16 @@ describe('engine-status emission — written at the real digest-gated emission',
       )
     }
     // Same-turn re-emission is digest-gated AND the store keeps one row.
-    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)?.turn).toBe(7)
+    const sameTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
+    expect(sameTurn.kind === 'ok' && sameTurn.emission?.turn).toBe(7)
     // The next turn is a new emission: it UPSERTs the same session row.
     await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_alpha', app.root, inbox, 8, 1),
       defaultEnter(inbox),
     )
-    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)?.turn).toBe(8)
+    const nextTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
+    expect(nextTurn.kind === 'ok' && nextTurn.emission?.turn).toBe(8)
   })
 
   it('does not write a cached emission into a replacement authority generation', async () => {
@@ -117,7 +119,7 @@ describe('engine-status emission — written at the real digest-gated emission',
       stepPayloadOf('ses_generation', app.root, inbox, 1),
       defaultEnter(inbox),
     )
-    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)).toBeDefined()
+    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root).kind).toBe('ok')
 
     for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
     const replacement = await initializeStore({ harnessDir: app.harnessDir })
@@ -129,7 +131,8 @@ describe('engine-status emission — written at the real digest-gated emission',
       defaultEnter(inbox),
     )
     expect(decision.kind).toBe('enter')
-    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)).toBeUndefined()
+    const replacementRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
+    expect(replacementRead.kind === 'ok' && replacementRead.emission).toBeUndefined()
   })
 
   it('keys independent sessions separately', async () => {
@@ -156,6 +159,7 @@ describe('engine-status emission — written at the real digest-gated emission',
     // The advisory row is unaffected — only the emission write is skipped (a
     // keyless write would have to invent an identity).
     expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 1)
-    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)).toBeUndefined()
+    const absentRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
+    expect(absentRead.kind === 'ok' && absentRead.emission).toBeUndefined()
   })
 })

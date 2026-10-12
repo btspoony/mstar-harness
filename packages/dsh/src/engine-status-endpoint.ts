@@ -283,10 +283,12 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     const harnessDir = this.bootHarnessDir ?? this.resolver.forWorkspace(session.cwd)
     if (harnessDir === null || harnessDir === '') return unavailable('no-harness-dir')
 
-    // (4) An entry for THAT session must exist — an absent/torn/unknown store
-    // answers unavailable, never a best-effort parse.
+    // (4) An entry for THAT session must exist — native authority refusals
+    // retain their cause/recovery, never masquerading as a missing row.
     const read = readEngineStatusSnapshot(harnessDir, sid, session.cwd)
-    if (read.kind !== 'ok') return unavailable(`store-${read.reason}`)
+    if (read.kind !== 'ok') return unavailable(
+      read.reason.startsWith('[store.') ? read.reason : `store-${read.reason}`,
+    )
     const entry: EngineStatusSnapshotEntry = read.entry
 
     // (5) The asserted cwd must match the record, and the record must match the

@@ -35,12 +35,10 @@
  * @module @mstar-harness/dsh/engine-status-store
  */
 
-import { existsSync } from 'node:fs'
 import {
   readDshSessionBinding,
   readDshStatusEmission,
   recordDshStatusEmission,
-  storeDbPath,
   writeDshSessionBinding,
   type DshSelectedGeneration,
   type ExecutionBinding,
@@ -67,15 +65,8 @@ export interface EngineStatusSnapshotEntry {
   readonly payload: Record<string, unknown>
 }
 
-/** Why a snapshot read could not produce the stored entry (every path explicit). */
-export type EngineStatusSnapshotUnavailableReason =
-  | 'no-harness-dir'
-  | 'absent'
-  | 'unreadable'
-  | 'invalid-json'
-  | 'envelope-schema'
-  | 'no-session-entry'
-  | 'entry-schema'
+/** Store-read refusal text is retained verbatim from the native authority. */
+export type EngineStatusSnapshotUnavailableReason = string
 
 /** The explicit "no answer" result — never a best-effort parse. */
 export interface EngineStatusUnavailable {
@@ -152,10 +143,7 @@ export type WorkflowSessionBindingWrite =
   | { readonly kind: 'written' }
   | { readonly kind: 'degraded'; readonly reason: string }
 
-/** The explicit unavailable result (single constructor — one shape everywhere). */
-export function engineStatusUnavailable(
-  reason: EngineStatusSnapshotUnavailableReason,
-): EngineStatusUnavailable {
+export function engineStatusUnavailable(reason: string): EngineStatusUnavailable {
   return { kind: 'unavailable', reason }
 }
 
@@ -189,13 +177,12 @@ function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined
 }
 
 /**
- * Read one session's newest stored emission for the given authoritative cwd.
- *
- * Every failure path is explicit: `{HARNESS_DIR}` unresolved (`no-harness-dir`),
- * no store on disk (`absent`), no row for this exact `(sessionId, cwd)` pair
- * (`no-session-entry`), and a stored payload that is not usable JSON
- * (`invalid-json`) or not an object (`entry-schema`). A row belonging to
- * another workspace is never served — it is not addressable by this pair.
+ * Every failure path is explicit: unresolved `{HARNESS_DIR}` (`no-harness-dir`),
+ * no row for this exact `(sessionId, cwd)` pair (`no-session-entry`), a native
+ * authority refusal carrying the engine's complete cause/recovery text, or a
+ * stored payload that is not usable JSON (`invalid-json`) / not an object
+ * (`entry-schema`). A row belonging to another workspace is never served — it
+ * is not addressable by this pair.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none resolved).
  * @param sessionId - the session whose snapshot is requested.
  * @param cwd - the authoritative session workspace the row was written for.
@@ -208,10 +195,10 @@ export function readEngineStatusSnapshot(
 ): EngineStatusSnapshotRead {
   if (harnessDir === null || harnessDir === '') return engineStatusUnavailable('no-harness-dir')
   if (sessionId === '' || cwd === '') return engineStatusUnavailable('no-session-entry')
-  const emission = readDshStatusEmission({ harnessDir }, sessionId, cwd)
-  if (emission === undefined) {
-    return engineStatusUnavailable(existsSync(storeDbPath({ harnessDir })) ? 'no-session-entry' : 'absent')
-  }
+  const read = readDshStatusEmission({ harnessDir }, sessionId, cwd)
+  if (read.kind === 'unavailable') return engineStatusUnavailable(read.reason)
+  const emission = read.emission
+  if (emission === undefined) return engineStatusUnavailable('no-session-entry')
   let payload: unknown
   try {
     payload = JSON.parse(emission.payloadJson)

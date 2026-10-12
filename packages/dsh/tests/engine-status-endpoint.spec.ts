@@ -13,14 +13,17 @@
  * served payload is proven to be the emitted one.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { initializeStore, openStore } from '@mstar-harness/engine'
 import * as entry from '../src/index.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
 import {
   installEngineStatusEndpoint,
   MSTAR_ENGINE_STATUS_METHOD,
@@ -212,13 +215,38 @@ describe('engineStatus endpoint — validation chain', () => {
     })
   })
 
-  it('answers unavailable when no snapshot was ever emitted for the session', async () => {
+  it('preserves absent, staged, corrupt and schema refusal causes at the endpoint', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     liveSession(app, 'ses_alpha', app.root)
-    expect(await endpointOf(app).engineStatus('ses_alpha', app.root)).toEqual({
-      status: 'unavailable',
-      reason: 'store-absent',
-    })
+    const endpoint = endpointOf(app)
+
+    const absent = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(absent.status === 'unavailable' ? absent.reason : '').toContain('[store.not-initialized]')
+    expect(absent.status === 'unavailable' ? absent.reason : '').toContain('mstar store init')
+
+    let handle = await initializeStore({ harnessDir: app.harnessDir })
+    handle.db.prepare("update execution_meta set authority_state='staged' where id=1").run()
+    handle.close()
+    const staged = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(staged.status === 'unavailable' ? staged.reason : '').toContain('[store.not-active]')
+    expect(staged.status === 'unavailable' ? staged.reason : '').toContain('reviewed activation')
+
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
+    await seedStore(app.harnessDir)
+    handle = await openStore({ harnessDir: app.harnessDir }, 'write')
+    handle.db.exec('delete from schema_version where version = 4')
+    handle.close()
+    const schemaPath = join(app.harnessDir, 'store.db')
+    const beforeSchemaRead = readFileSync(schemaPath)
+    const schema = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(schema.status === 'unavailable' ? schema.reason : '').toContain('[store.schema-drift]')
+    expect(schema.status === 'unavailable' ? schema.reason : '').toContain('nothing was modified')
+    expect(readFileSync(schemaPath).equals(beforeSchemaRead)).toBe(true)
+
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
+    mkdirSync(join(app.harnessDir, 'store.db'))
+    const corrupt = await endpoint.engineStatus('ses_alpha', app.root)
+    expect(corrupt.status === 'unavailable' ? corrupt.reason : '').toContain('[store.corrupt]')
   })
 
   it('never answers with another session data (cross-session probes)', async () => {
@@ -526,5 +554,65 @@ describe('selectWorkflow endpoint — D4 picker commit', () => {
       binding: { selection: { kind: 'active', workflowId: 'wf-a', dir: 'workflows/wf-a' } },
     })
   })
-})
+  it('refuses a picker commit when the authority is replaced after registry selection', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake' }))
+    await seedTwoActives(app)
+    const original = await readExecutionWorkflowSource({ harnessDir: app.harnessDir })
+    if (original.kind !== 'error' || original.storeId === undefined || original.epoch === undefined) {
+      throw new Error('fixture generation must be present')
+    }
+    const endpoint = endpointOf(app)
+    const engineUrl = new URL('../../engine/dist/engine.js', import.meta.url).href
+    const switchSource = `import { openStore } from ${JSON.stringify(engineUrl)}; import { setTimeout } from 'node:timers/promises'; const context={harnessDir:process.env.DSH_HARNESS_DIR}; for(let i=0;i<240;i++){const h=await openStore(context,'write');h.db.prepare('update store_meta set authority_epoch=authority_epoch+1 where id=1').run();h.close();if(i===0)console.log('first-generation-replacement');await setTimeout(1);}`
+    const switcher = spawn(process.execPath, ['--input-type=module', '-e', switchSource], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, DSH_HARNESS_DIR: app.harnessDir },
+    })
+    let switchOutput = ''
+    const { promise: ready, resolve: readySwitch } = Promise.withResolvers<void>()
+    switcher.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      switchOutput += chunk
+      if (switchOutput.includes('first-generation-replacement')) readySwitch()
+    })
+    switcher.stderr.setEncoding('utf8').on('data', (chunk: string) => { switchOutput += chunk })
+    const { promise: switchResult, resolve: switchDone, reject: switchFailed } = Promise.withResolvers<void>()
+    switcher.on('error', switchFailed)
+    switcher.on('close', (code) => code === 0
+      ? switchDone()
+      : switchFailed(new Error(`authority switcher exit ${code}: ${switchOutput}`)))
+    const sessionIds = Array.from({ length: 48 }, (_, index) => `race-${index}`)
+    for (const sessionId of sessionIds) liveSession(app, sessionId, app.root, 17)
+    try {
+      await Promise.race([
+        ready,
+        switchResult.then(() => { throw new Error('authority switcher exited before its first generation bump') }),
+      ])
+      const answers = await Promise.all(sessionIds.map((sessionId) => endpoint.selectWorkflow(sessionId, app.root, 'wf-a')))
+      await switchResult
+      const current = await readExecutionWorkflowSource({ harnessDir: app.harnessDir })
+      if (current.kind !== 'error' || current.epoch === undefined) throw new Error('replacement generation is unreadable')
+      expect(current.epoch).toBeGreaterThan(original.epoch)
+      const refusedIndex = answers.findIndex((answer) =>
+        answer.status === 'unavailable' &&
+        (answer.reason === 'selection-generation-changed' || answer.reason.includes('store.stale-epoch')),
+      )
+      if (refusedIndex < 0) throw new Error(`no picker request observed the replacement generation: ${answers.map((answer) => answer.status === 'unavailable' ? answer.reason : answer.status).join(',')}`)
+      const refusedSession = sessionIds[refusedIndex]
+      if (refusedSession === undefined) throw new Error('refused request has no session id')
+      expect(readWorkflowSessionBinding(app.harnessDir, refusedSession, app.root)).toEqual({ kind: 'ok' })
 
+      expect(await endpoint.selectWorkflow(refusedSession, app.root, 'wf-a')).toEqual({
+        status: 'selected',
+        sessionId: refusedSession,
+        workflowId: 'wf-a',
+      })
+      expect(readWorkflowSessionBinding(app.harnessDir, refusedSession, app.root)).toMatchObject({
+        kind: 'ok',
+        binding: { selectedWorkflowId: 'wf-a', excludedBeforeSeq: 17 },
+      })
+    } finally {
+      switcher.kill()
+    }
+  })
+
+})
