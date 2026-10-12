@@ -8,9 +8,9 @@ For project roadmap content, use the CLI `mstar roadmap` family (not a slash com
 
 ## Store CLI upgrade and recovery
 
-`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing legacy workflow state. It creates or opens the local store, imports recognizable records, activates execution authority, and reports unrecognized or unresolvable items without moving them from their original paths. Stop writers and align consumers before upgrading an existing store; this is not an online production cutover.
+`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing recognized v1/v2 workflow state directly into the local store. It creates or opens the store, activates execution authority, and reports unrecognized or unresolvable inputs while preserving original source bytes and paths. The standalone `mstar migrate` file-staging entry is retired; use `store upgrade` without a staging step. Stop older installed writers and align consumers before an authority upgrade; documentation changes do not perform that operational cutover.
 
-The six `store` verbs administer project harnesses, including the main worktree's canonical control root. `--harness <path>` selects that project explicitly; omitting it uses normal discovery from the working directory. CLI and MCP use the same domain operations and retain their maintenance locks, verified-backup checks and migration/activation guards.
+The six `store` verbs administer project harnesses, including the main worktree's canonical control root. `--harness <path>` selects that project explicitly; omitting it uses normal discovery from the working directory. CLI and MCP use the same domain operations. Native SQLite transactions/CAS, authorization, verified-backup checks and migration/activation guards remain; application file/directory mutexes do not.
 
 For an existing store, retain a verified recovery image before upgrading:
 
@@ -22,6 +22,8 @@ mstar store upgrade --harness {HARNESS_DIR} --operator <name>
 If a retired held claim requires the operator's full stop attestation, construct the document using `mstar schema --command store.upgrade` and retry the same upgrade with `--attestation <absolute-json>`. Do not hand-edit the store or replace the project target with a fixture to evade a refusal.
 
 The remaining `store` verbs are `init`, `migrate`, `backup`, `activate`, and `retire`. `migrate` / `activate` / `retire` remain the separate issue/catalog migration flow. The only remaining `store execution` verbs are `restore-preview`, `restore`, and `export`: restore previews and restores use a standalone `store backup` image; export reports the current execution state. Staged execution preview/apply/activate/retire/abort and the safe-upgrade verb are removed.
+
+Backup captures a consistent native database image, including committed WAL state; it does not freeze ordinary documents, logs or `notes.jsonl`. Restore replaces the issue/catalog/execution/host authority domains in one native transaction on the same live database file, commits a new epoch and retains authorization, loss acknowledgement, stale-preview checks and a verified safety image. It neither rolls back ordinary file bodies nor renames the live database or removes its WAL/SHM files. Exact restore inputs and recovery belong to the current command help.
 
 | Command | Purpose | Owning skill |
 |---------|---------|--------------|

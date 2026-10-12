@@ -83,7 +83,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Scaffold or promote audit plans; run static security checks | `mstar audit scaffold`, `mstar audit promote`, `mstar audit secret-scan`, `mstar audit supply-chain` | `mstar-audit` |
 | PR-review arithmetic, report path, saved-report validation, worktree setup | `mstar pr-review tally`, `mstar pr-review report-path`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup` | `mstar-audit` (pr variant) |
 | Bootstrap a harness directory | `mstar harness scaffold` | `mstar-conventions` |
-| Migrate a v1 status tree to v2 (one-shot, not a routine step) | `mstar migrate` | `mstar-artifacts` |
+| Recover a workspace holding recognized v1/v2 execution sources; standalone file-staging `migrate` is retired | `mstar store upgrade` | `mstar-artifacts`, `mstar-conventions`; original source bytes remain untouched |
 | Discover one command or payload contract | `mstar schema` | `mstar-use-cli`; bounded schema/help is the input-shape authority |
 | Draft an offline redacted issue report | `mstar report` | `mstar-use-cli`; no automatic external submission |
 
@@ -131,7 +131,7 @@ A CLI claim is proven when:
 | Open | When |
 |---|---|
 | `references/plan-and-workflow.md` | plan / workflow families: verb and role boundaries, refusal codes, JSON envelopes, the completion sequence, the CAS read-modify-write shape |
-| `references/status-and-registers.md` | ACTIVE store authority for the lifecycle close and the issue store, plus the migration staging files that carry historical status/snapshot state; protected-write authorization |
+| `references/status-and-registers.md` | ACTIVE store authority, lifecycle close, issue store and read-only historical status/snapshot inputs; authorization and native database recovery |
 | `references/checks-and-lints.md` | maintainer validators and lints that skill callouts cite: what each checks, its owning skill, its exit codes |
 | `references/preconditions.md` | harness-root resolution, control root vs feature worktree, neutral cwd, session identity, tokens, and how each missing precondition presents itself |
 

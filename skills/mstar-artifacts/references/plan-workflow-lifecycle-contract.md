@@ -150,3 +150,11 @@ The direction and reason columns record the reasoning behind each answer; the an
 > **Migration sources.** Root `status.json` and `workflows/<id>/snapshot.json` are migration sources / retained history, not authority. The kept migration tooling writes them as staging and reads them as byte-witness sources: `mstar migrate` (v1 tree → v2 files), then `mstar store upgrade` (v2 files → `store.db`). `mstar harness scaffold` does not write `status.json`. Delete the staging files after a successful import. `validateStatusV2` and `validateWorkflowSnapshot` remain migration-tooling validators. Where the engine still keeps migration-scoped `status` / `snapshot` readers or writers, they serve that tooling only.
 >
 > **Persist surface.** The user-facing persist family accepts `review` and `json` only. `status` and `snapshot` files are migration staging written engine-internally by the kept migration tooling. The engine `ArtifactKind` type retains `status` and `snapshot` as migration-scoped internal kinds; this amendment does not claim that type is two-member.
+
+> Amendment 2026-10-12 — Direct import and ordinary file bodies
+>
+> This append-only amendment supersedes only the staging/writer/deletion clauses in the 2026-10-10 amendment and the retired `migrate` producer references in §2. Earlier frozen text remains historical and byte-identical.
+>
+> **Direct import.** `mstar store upgrade` reads recognized v1/v2 execution sources directly into the native authority. Root status, workflow snapshots and legacy session files remain read-only import/history with original bytes preserved. Standalone `mstar migrate` refuses with supported `store upgrade` recovery; there is no staging step, internal status/snapshot file writer or live file-state fallback. Engine `ArtifactKind`, like public persist, is `review | json` only.
+>
+> **Ordinary bodies.** Notes and documents are not accepted-operation authority, transactionally frozen inputs or rollback targets. `notes.jsonl` is a plain framed append log: repeated IDs/submissions append again, failed writes never truncate peers, tolerant readers continue to later valid records, and an append receipt returns only the note ID. Native SQL transactions/CAS and operation receipts, caller authorization and genuine workflow integration exclusion retain their exact semantics.
