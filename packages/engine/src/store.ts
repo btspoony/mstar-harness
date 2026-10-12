@@ -87,7 +87,7 @@ function assertKindAdmitted(kind: string): void {
   if (kind === "status" || kind === "snapshot") {
     throw new CoordinationError(
       "coordination.direct-write-refused",
-      `ArtifactStore no longer admits the ${kind} kind \u2014 the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`,
+      "ArtifactStore no longer admits status or snapshot kinds \u2014 root status.json and workflow snapshot.json are read-only legacy sources. Run mstar schema --help for the supported native workflow and plan mutation contracts.",
       { kind },
     );
   }

@@ -47,7 +47,7 @@ import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relat
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync13, realpathSync as realpathSync6 } from "node:fs";
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync14, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep9 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -58,7 +58,7 @@ import { basename as basename12, dirname as dirname13, join as join19, relative 
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash15 } from "node:crypto";
-import { readFileSync as readFileSync22 } from "node:fs";
+import { readFileSync as readFileSync21 } from "node:fs";
 import { join as join28 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
@@ -17353,7 +17353,7 @@ class ProjectionError extends Error {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync22(spec.absolutePath, "utf8");
+    content3 = readFileSync21(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {

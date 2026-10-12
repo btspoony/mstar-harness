@@ -1948,11 +1948,11 @@ async function restoreInOneTransaction(
       if (
         before.storeId !== approved.liveStoreId ||
         before.epoch !== approved.liveEpoch ||
-        before.coverageDigest !== approved.liveCoverageDigest ||
-        image.sha256 !== approved.backupSha256 ||
+        before.coverageDigest !== approved.liveCoverageDigest || // hash-gate: authorized — Bind the live database activation coverage generation to the operator-approved restore loss preview.
+        image.sha256 !== approved.backupSha256 || // hash-gate: authorized — Restore only the staged backup image whose bytes the operator approved in the loss preview.
         image.storeId !== before.storeId ||
         image.epoch !== approved.backupEpoch ||
-        image.coverageDigest !== approved.backupCoverageDigest ||
+        image.coverageDigest !== approved.backupCoverageDigest || // hash-gate: authorized — Bind the restored database activation coverage generation to the approved backup loss preview.
         unapprovedRow !== undefined ||
         unapprovedOperation !== undefined
       ) {

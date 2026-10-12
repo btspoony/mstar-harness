@@ -77,6 +77,7 @@ interface CliEnvelope {
   status: string;
   code: string;
   exitCode: number;
+  message?: string;
   recovery?: string;
   details?: Record<string, unknown>;
   data?: Record<string, unknown>;
@@ -211,7 +212,7 @@ describe("mstar migrate — retired verb", () => {
           ]);
           expect(refusal.exitCode).toBe(1);
           const envelope = envelopeOf(refusal, "refused", "migrate.verb-retired");
-          recipe = recoveryRecipe(String(envelope.details?.recovery));
+          recipe = recoveryRecipe(envelope.message!);
         } else if (recoveryCase === "engine legacy-status") {
           const result = validateStatusV2(join(root, "status.json"));
           expect(result.ok).toBe(false);

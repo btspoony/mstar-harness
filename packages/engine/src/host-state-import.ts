@@ -123,7 +123,7 @@ function evaluate(context: StoreContext, now: string): Evaluation {
               if (typeof eventId === "string" && eventId.startsWith("wfe1:")) {
                 const digest = hash(line).slice(0, 32);
                 const prior = historyIdentities.get(eventId);
-                if (prior !== undefined && prior !== digest) throw new Error(`conflicting archived identity ${eventId}`);
+                if (prior !== undefined && prior !== digest) throw new Error(`conflicting archived identity ${eventId}`); // hash-gate: authorized — Reject conflicting archived bytes for the same stable native event identity during legacy import.
                 historyIdentities.set(eventId, digest);
               }
             } catch { historySafe = false; throw new Error("retained history holds an unparseable line"); }
@@ -158,7 +158,7 @@ function evaluate(context: StoreContext, now: string): Evaluation {
         }
         let uncovered: string | null = null;
         if (malformed === null) for (const [eventId, digest] of historyIdentities) {
-          if (seen.get(eventId) !== digest) { uncovered = eventId; break; }
+          if (seen.get(eventId) !== digest) { uncovered = eventId; break; } // hash-gate: authorized — Require the legacy accepted-identity registry to cover each retained native event with its original digest.
         }
         if (malformed !== null || uncovered !== null) {
           identityRefused = true;
@@ -203,14 +203,18 @@ function evaluate(context: StoreContext, now: string): Evaluation {
           if (!Number.isSafeInteger(lines) || (lines as number) < 1) throw new Error("invalid journal line count");
           if (before.bytes <= after.bytes) throw new Error("the journal recorded no tail removal");
           const observed = { bytes: present[FLOW]!.length, sha256: hash(present[FLOW]!) };
-          if (observed.bytes === before.bytes && observed.sha256 === before.sha256) journalDecision = "before";
-          else if (observed.bytes === after.bytes && observed.sha256 === after.sha256) {
+          if (observed.bytes === before.bytes && observed.sha256 === before.sha256) journalDecision = "before"; // hash-gate: authorized — Identify the recorded pre-compaction machine tail before importing legacy display evidence.
+          else if (
+            observed.bytes === after.bytes &&
+            // hash-gate: authorized — Identify the recorded post-compaction machine tail before requiring its archive completion proof.
+            observed.sha256 === after.sha256
+          ) {
             if (!historySafe) tailRefusal = "the journal's archive proof is unavailable because the retained history directory is not a safe source";
             else {
               const archived = readBytes(join(historyDir, archive.chunk as string));
               allFiles.push([`${source}/${HISTORY}/${archive.chunk}`, hash(archived)]);
               const range = archived.subarray(archive.offset as number, (archive.offset as number) + (archive.bytes as number));
-              if (archived.length === (archive.offset as number) + (archive.bytes as number) && hash(range) === archive.sha256) journalDecision = "landed";
+              if (archived.length === (archive.offset as number) + (archive.bytes as number) && hash(range) === archive.sha256) journalDecision = "landed"; // hash-gate: authorized — Verify the exact archived machine byte range completing a landed legacy compaction before importing its tail.
               else tailRefusal = "the compaction journal archive range does not complete the recorded bytes";
             }
           } else tailRefusal = "the compaction journal is decidable neither from the observed tail nor from its archive";

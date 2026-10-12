@@ -68,7 +68,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           code: "migrate.verb-retired",
           exitCode: 1,
           message: `migrate: removed — the v1-to-v2 file-staging route is retired. The supported route is \`${upgrade}\`, which imports recognizable v1/v2 execution sources into that control root's store.db and leaves every legacy file untouched. This verb writes nothing.`,
-          recovery: `Run ${upgrade} for the control root that holds the legacy files; it converts v1 sources in memory, preserves the originals, and is retryable.`,
+          recovery: "The quoted command in this diagnostic targets the selected control root. Supported form: mstar store upgrade --operator <name> --harness '<control-root>'; recognized legacy sources are imported without changing their original file bytes.",
         });
       },
     }),

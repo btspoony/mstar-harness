@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +17,17 @@ import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
+
+/** Bounded wait for a child-process handshake file to appear. */
+async function waitForFile(path: string): Promise<void> {
+  for (let waited = 0; waited < 10_000; waited += 5) {
+    if (existsSync(path)) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 5);
+    await promise;
+  }
+  throw new Error(`timed out waiting for ${path}`);
+}
 
 describe("ACTIVE catalog execution registration and legacy recovery", () => {
   let root: string | undefined;
@@ -166,41 +177,38 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
   });
 
-  test("purge-registration refuses changed snapshot bytes and reconcile abort preserves them", async () => {
-    const { harnessDir, context } = await fixture("purge-conflict");
-    const workflowId = "wf-purge-conflict";
+  test("purge-registration settles an edited snapshot in the native journal and preserves the edited bytes", async () => {
+    const { harnessDir, context } = await fixture("purge-edited");
+    const workflowId = "wf-purge-edited";
     const snapshotPath = join(harnessDir, "workflows", workflowId, "snapshot.json");
     mkdirSync(join(harnessDir, "workflows", workflowId), { recursive: true });
-    const snapshot = '{"schema_version":1,"id":"wf-purge-conflict"}\n';
-    writeFileSync(snapshotPath, `${snapshot}changed`);
-    const digest = createHash("sha256").update(snapshot).digest("hex");
+    const recorded = '{"schema_version":1,"id":"wf-purge-edited"}\n';
+    // The operator edited the document after the producer failed: those bytes
+    // are no longer the recorded digest, and settlement must neither re-certify
+    // nor block on them.
+    const edited = `${recorded}edited-after-failure\n`;
+    writeFileSync(snapshotPath, edited);
+    const digest = createHash("sha256").update(recorded).digest("hex");
     const journal = { workflow: { workflowId, harnessDir, snapshotPath }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 0 };
     const handle = await openStore(context, "write");
     try {
       handle.db.prepare(
         "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, ?, 'prepared', ?, '{}', ?, null, ?, ?)",
-      ).run("legacy-conflict", "legacy-hash", JSON.stringify(journal),
+      ).run("legacy-edited", "legacy-hash", JSON.stringify(journal),
         JSON.stringify({ failure: { workflow_id: workflowId, snapshot_path: snapshotPath, snapshot_content_sha256: digest, reviewed_identity: "legacy-identity" } }),
         "2026-10-09", "2026-10-09");
     } finally {
       handle.close();
     }
     const before = await readCatalogRevisions(context);
-    await expect(purgeCatalogRegistration(context, {
-      workflowId, operationId: "legacy-conflict", expectedCatalogRevision: 0, actor: "project-manager",
-    })).rejects.toMatchObject({ code: "catalog.purge-identity-mismatch" });
-    expect(readFileSync(snapshotPath, "utf8")).toBe(`${snapshot}changed`);
-    expect(await listPendingCatalogRegistrations(context)).toMatchObject([{ operationId: "legacy-conflict" }]);
-    expect(await readCatalogRevisions(context)).toEqual(before);
-    expect(await abortCatalogExecution(context, "legacy-conflict")).toEqual({
-      operationId: "legacy-conflict", workflowId, phase: "aborted", sourceBytesRetained: true,
-    });
-    expect(readFileSync(snapshotPath, "utf8")).toBe(`${snapshot}changed`);
+    const input = { workflowId, operationId: "legacy-edited", expectedCatalogRevision: 0, actor: "project-manager" };
+    const receipt = await purgeCatalogRegistration(context, input);
+    expect(receipt).toMatchObject({ workflowId, preservedDigest: digest, sourceBytesRetained: true, actor: "project-manager" });
+    expect(await purgeCatalogRegistration(context, input)).toEqual(receipt);
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: before.storeRevision + 1, catalogRevision: before.catalogRevision });
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-    expect(await readCatalogRevisions(context)).toEqual({
-      storeRevision: before.storeRevision + 1,
-      catalogRevision: before.catalogRevision,
-    });
+    expect(readFileSync(snapshotPath, "utf8")).toBe(edited);
+    expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
   });
 
   test("reconcile refuses registered active work but abort retains unregistered leases and permits disposition retry", async () => {
@@ -359,8 +367,7 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     const snapshotPath = join(harnessDir, "workflows", workflowId, "snapshot.json");
     mkdirSync(join(harnessDir, "workflows", workflowId), { recursive: true });
     const snapshot = `{"identity":"${workflowId}"}\n`;
-    const fifo = spawnSync("mkfifo", [snapshotPath], { encoding: "utf8" });
-    expect(fifo.status).toBe(0);
+    writeFileSync(snapshotPath, snapshot);
     const digest = createHash("sha256").update(snapshot).digest("hex");
     const journal = { workflow: { workflowId, harnessDir, snapshotPath }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 0 };
     const setup = await openStore(context, "write");
@@ -380,31 +387,63 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     const revisionsBefore = await readCatalogRevisions(context);
     const storeDbModule = new URL("./store-db.ts", import.meta.url).href;
     const writerSource =
-      `import { openSync, writeSync, closeSync } from "node:fs"; ` +
       `import { openStore } from ${JSON.stringify(storeDbModule)}; ` +
-      `const fd=openSync(process.env.CATALOG_FIFO,"w"); ` +
       `const h=await openStore({harnessDir:process.env.CATALOG_HARNESS},"write"); ` +
       `h.db.exec("begin immediate"); ` +
       `h.db.prepare("update store_meta set authority_epoch=authority_epoch+1, revision=revision+1 where id=1").run(); ` +
-      `h.db.exec("commit"); h.close(); ` +
-      `writeSync(fd, Buffer.from(process.env.CATALOG_SNAPSHOT)); closeSync(fd);`;
-    const writer = spawn(process.execPath, ["-e", writerSource], {
-      cwd: process.cwd(),
-      env: { ...process.env, CATALOG_FIFO: snapshotPath, CATALOG_HARNESS: harnessDir, CATALOG_SNAPSHOT: snapshot },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let writerOutput = "";
-    writer.stdout?.on("data", (chunk: Buffer) => { writerOutput += chunk.toString(); });
-    writer.stderr?.on("data", (chunk: Buffer) => { writerOutput += chunk.toString(); });
-    const writerExit = new Promise<number | null>((resolveExit) => writer.once("exit", resolveExit));
-    await expect(purgeCatalogRegistration(context, {
+      `h.db.exec("commit"); h.close();`;
+    // The purge is parked inside its own selection→settlement window (the
+    // test-runner-gated seam that replaced the retired snapshot read), so the
+    // independent writer below commits in the exact gap the generation guard
+    // exists to close.
+    const readyPath = join(harnessDir, "purge-generation-parked");
+    const releasePath = join(harnessDir, "purge-generation-release");
+    const previous = {
+      runner: process.env.MSTAR_STORE_TEST_RUNNER,
+      park: process.env.MSTAR_STORE_PARK_CATALOG_PURGE,
+      ready: process.env.MSTAR_STORE_PARK_READY,
+      release: process.env.MSTAR_STORE_PARK_RELEASE,
+    };
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_PARK_CATALOG_PURGE = operationId;
+    process.env.MSTAR_STORE_PARK_READY = readyPath;
+    process.env.MSTAR_STORE_PARK_RELEASE = releasePath;
+    const parked = purgeCatalogRegistration(context, {
       workflowId,
       operationId,
       expectedCatalogRevision: revisionsBefore.catalogRevision,
       actor: "project-manager",
-    })).rejects.toMatchObject({ code: "store.operation-conflict" });
-    expect(await writerExit).toBe(0);
-    expect(writerOutput).toBe("");
+    });
+    // Handle rejection before the readiness wait; finally joins the operation.
+    const refusal = parked.catch((error: { code?: unknown }) => error);
+    try {
+      await waitForFile(readyPath);
+      const writer = spawn(process.execPath, ["-e", writerSource], {
+        cwd: process.cwd(),
+        env: { ...process.env, CATALOG_HARNESS: harnessDir },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let writerOutput = "";
+      writer.stdout?.on("data", (chunk: Buffer) => { writerOutput += chunk.toString(); });
+      writer.stderr?.on("data", (chunk: Buffer) => { writerOutput += chunk.toString(); });
+      const { promise: writerExit, resolve: markWriterExit } = Promise.withResolvers<number | null>();
+      writer.once("exit", markWriterExit);
+      expect(await writerExit).toBe(0);
+      expect(writerOutput).toBe("");
+      writeFileSync(releasePath, "go");
+      expect(await refusal).toMatchObject({ code: "store.operation-conflict" });
+    } finally {
+      writeFileSync(releasePath, "go");
+      await refusal;
+      if (previous.runner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previous.runner;
+      if (previous.park === undefined) delete process.env.MSTAR_STORE_PARK_CATALOG_PURGE;
+      else process.env.MSTAR_STORE_PARK_CATALOG_PURGE = previous.park;
+      if (previous.ready === undefined) delete process.env.MSTAR_STORE_PARK_READY;
+      else process.env.MSTAR_STORE_PARK_READY = previous.ready;
+      if (previous.release === undefined) delete process.env.MSTAR_STORE_PARK_RELEASE;
+      else process.env.MSTAR_STORE_PARK_RELEASE = previous.release;
+    }
     expect(await listPendingCatalogRegistrations(context)).toContainEqual(
       expect.objectContaining({ operationId, phase: "prepared" }),
     );

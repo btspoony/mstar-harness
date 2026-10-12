@@ -55,52 +55,56 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       code,
       exitCode: 1,
       message,
-      recovery: id === "store.init" && message.includes("legacy execution state exists at ")
-        ? 'For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical file state, run mstar store upgrade.'
-        : code === "store.created-handle-failed"
-          ? "The store named in the diagnostic is already created, activated and retained. Retry this command once the named condition clears; do not run mstar store init again (create-only). For an interrupted upgrade, continue with mstar store upgrade --harness <same control root> --operator <name>."
-          : code === "store.publication-failed"
-            ? "No store was created at the named path. Resolve the filesystem condition in the diagnostic (permissions, space, hard-link support) and rerun this command, or select a harness on a hard-link-capable filesystem with --harness."
-            : id === "store.init"
-              ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
-              : code === "store.upgrade-dsh-source-refused"
-                ? "Rerun mstar store upgrade with --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; ordinary retry remains available."
-                : id === "store.upgrade"
-                  ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
-                  : id === "store.migrate"
-              ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
-              : id === "store.backup"
-                ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
-                : id === "store.activate"
-                  ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
-                  : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire.",
+      recovery: id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
+        ? "For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical files, run mstar store upgrade --operator <name> --harness <control-root>."
+        : code === "store.already-exists"
+          ? "Inspect the existing execution authority with mstar status validate; do not initialize or migrate an existing store."
+          : code === "store.created-handle-failed"
+            ? "The named store is created, active and retained. Once the named condition clears, inspect it with mstar status validate; initialization is create-only. For an interrupted upgrade, run mstar store upgrade --harness <same-control-root> --operator <name>."
+            : code === "store.publication-failed"
+              ? "No store was created at the named path. Resolve the named filesystem condition (permissions, space or hard-link support). For a fresh harness, run mstar store init --harness <control-root>; for existing legacy sources, run mstar store upgrade --operator <name> --harness <control-root>. Select a hard-link-capable filesystem before either attempt."
+              : id === "store.init"
+                ? "Choose an empty harness root and run mstar store init."
+                : code === "store.upgrade-dsh-source-refused"
+                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; ordinary retry remains available."
+                  : id === "store.upgrade"
+                    ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
+                    : id === "store.migrate"
+                      ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
+                      : id === "store.backup"
+                        ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
+                        : id === "store.activate"
+                          ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
+                          : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire.",
     });
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {
   const storePath = path.join(harnessDir, "store.db");
-  if (existsSync(storePath)) return `a store already exists at ${storePath} — migrate or activate instead of initializing`;
+  if (existsSync(storePath)) return `a store already exists at ${storePath} — inspect it with mstar status validate instead of initializing`;
   const projectsDir = path.join(harnessDir, "projects");
   if (existsSync(projectsDir)) {
     for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (entry.isDirectory() && !entry.isSymbolicLink() && existsSync(path.join(projectsDir, entry.name, "residuals.json"))) {
-        return "legacy project residual registers require the staged catalog migration; use the staged migration, not store init";
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        const residualsPath = path.join(projectsDir, entry.name, "residuals.json");
+        if (existsSync(residualsPath)) return `legacy catalog data exists at ${residualsPath} and prevents store initialization`;
       }
     }
   }
   const statusPath = path.join(harnessDir, "status.json");
-  if (existsSync(statusPath)) return `legacy execution state exists at ${statusPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade"`;
+  if (existsSync(statusPath)) return `legacy execution state exists at ${statusPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade --operator <name> --harness <control-root>"`;
   const workflowsDir = path.join(harnessDir, "workflows");
   if (existsSync(workflowsDir)) {
     for (const entry of readdirSync(workflowsDir, { withFileTypes: true })) {
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         const snapshotPath = path.join(workflowsDir, entry.name, "snapshot.json");
-        if (existsSync(snapshotPath)) return `legacy execution state exists at ${snapshotPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade"`;
+        if (existsSync(snapshotPath)) return `legacy execution state exists at ${snapshotPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade --operator <name> --harness <control-root>"`;
       }
     }
   }
-  if (existsSync(path.join(harnessDir, "iterations", "README.md"))) {
-    return "the maintained iterations catalog index requires the staged catalog migration; use the staged migration, not store init";
+  const iterationsIndex = path.join(harnessDir, "iterations", "README.md");
+  if (existsSync(iterationsIndex)) {
+    return `legacy catalog data exists at ${iterationsIndex} and prevents store initialization`;
   }
   return null;
 }

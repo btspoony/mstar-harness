@@ -459,14 +459,14 @@ import { isAbsolute as isAbsolute4, join as join13, normalize, sep as sep6 } fro
 import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
 import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep7 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync12, readFileSync as readFileSync13 } from "node:fs";
+import { existsSync as existsSync12, writeFileSync as writeFileSync4 } from "node:fs";
 import { basename as basename8, isAbsolute as isAbsolute6, resolve as resolve10, sep as sep8 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync13, realpathSync as realpathSync6 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join15, resolve as resolve11 } from "node:path";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync14, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep9 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { createHash as createHash9, randomUUID as randomUUID5 } from "node:crypto";
@@ -474,18 +474,18 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync as existsSync15, fstatSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
 import { basename as basename9, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
 import { createHash as createHash10 } from "node:crypto";
-import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
+import { lstatSync as lstatSync7, readFileSync as readFileSync14, realpathSync as realpathSync7 } from "node:fs";
 import { createHash as createHash11 } from "node:crypto";
 import { basename as basename10, dirname as dirname11 } from "node:path";
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync8, statSync as statSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync15, realpathSync as realpathSync8, statSync as statSync7, writeFileSync as writeFileSync5 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename as basename11, dirname as dirname12, isAbsolute as isAbsolute9, join as join18, relative as relative5, resolve as resolve14 } from "node:path";
 import { existsSync as existsSync16, statSync as statSync8 } from "node:fs";
 import { basename as basename12, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
-import { readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
+import { readFileSync as readFileSync16, readdirSync as readdirSync10 } from "node:fs";
 import { join as join20, relative as relative8 } from "node:path";
 import { existsSync as existsSync17, readdirSync as readdirSync11 } from "node:fs";
 import { basename as basename14, isAbsolute as isAbsolute10, join as join21, resolve as resolve17, sep as sep10 } from "node:path";
@@ -495,25 +495,25 @@ import { readdirSync as readdirSync12 } from "node:fs";
 import { isAbsolute as isAbsolute11, join as join23 } from "node:path";
 import { existsSync as existsSync19, readdirSync as readdirSync13, unlinkSync as unlinkSync4 } from "node:fs";
 import { basename as basename15, isAbsolute as isAbsolute12, join as join24, resolve as resolve18, sep as sep11 } from "node:path";
-import { existsSync as existsSync20, readFileSync as readFileSync19 } from "node:fs";
+import { existsSync as existsSync20, readFileSync as readFileSync18 } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join25, resolve as resolve19 } from "node:path";
-import { existsSync as existsSync21, lstatSync as lstatSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
+import { existsSync as existsSync21, lstatSync as lstatSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
 import { dirname as dirname16, isAbsolute as isAbsolute14, join as join27, relative as relative9 } from "node:path";
 import { createHash as createHash13 } from "node:crypto";
 import { createHash as createHash12 } from "node:crypto";
-import { lstatSync as lstatSync8, readFileSync as readFileSync20, readdirSync as readdirSync14 } from "node:fs";
+import { lstatSync as lstatSync8, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
 import { dirname as dirname15, join as join26 } from "node:path";
 import { dirname as dirname17, isAbsolute as isAbsolute15 } from "node:path";
 import { createHash as createHash14, randomUUID as randomUUID6 } from "node:crypto";
 import { createHash as createHash15 } from "node:crypto";
-import { readFileSync as readFileSync22 } from "node:fs";
+import { readFileSync as readFileSync21 } from "node:fs";
 import { join as join28 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
-import { existsSync as existsSync22, readFileSync as readFileSync23, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync22, readFileSync as readFileSync22, statSync as statSync9 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute16, join as join29 } from "node:path";
 import { createHash as createHash17 } from "node:crypto";
 import { createHash as createHash18 } from "node:crypto";
-import { existsSync as existsSync23, lstatSync as lstatSync10, readFileSync as readFileSync24, readdirSync as readdirSync16 } from "node:fs";
+import { existsSync as existsSync23, lstatSync as lstatSync10, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
 import { join as join30, resolve as resolve20 } from "node:path";
 import {
   closeSync as closeSync2,
@@ -523,7 +523,7 @@ import {
   lstatSync as lstatSync11,
   mkdirSync as mkdirSync8,
   openSync as openSync2,
-  writeFileSync as writeFileSync5,
+  writeFileSync as writeFileSync6,
   writeSync
 } from "node:fs";
 import { execFileSync as execFileSync6 } from "node:child_process";
@@ -536,11 +536,11 @@ import {
   existsSync as existsSync24,
   mkdtempSync,
   openSync as openSync3,
-  readFileSync as readFileSync25,
+  readFileSync as readFileSync24,
   readdirSync as readdirSync17,
   readSync as readSync2,
   rmSync as rmSync2,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname20, join as join32, relative as relative10, resolve as resolve21, sep as sep12 } from "node:path";
@@ -16166,7 +16166,7 @@ async function readCatalogRevisions(context) {
   return await withJournalWrite(context, (db) => readJournalVersions(db));
 }
 function refusePendingRegistration(workflowId, pending) {
-  throw new CatalogRegistrationError("catalog.registration-pending", `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed (operation ${JSON.stringify(pending.operationId)}); registration must refuse until the legacy journal is settled. Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its identity-verified failed snapshot. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`);
+  throw new CatalogRegistrationError("catalog.registration-pending", `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed (operation ${JSON.stringify(pending.operationId)}); registration must refuse until the legacy journal is settled. Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`);
 }
 function assertCatalogExecutionCommittedOn(db, workflowId) {
   const id = requireText(workflowId, "workflowId");
@@ -16220,6 +16220,24 @@ function parseJournalWorkflowId(row) {
     return;
   }
 }
+async function catalogPurgeParkHook(operationId) {
+  const wanted = process.env.MSTAR_STORE_PARK_CATALOG_PURGE;
+  if (wanted !== operationId && wanted !== "*")
+    return;
+  const ready = process.env.MSTAR_STORE_PARK_READY;
+  const release = process.env.MSTAR_STORE_PARK_RELEASE;
+  if (ready === undefined || release === undefined)
+    return;
+  writeFileSync4(ready, JSON.stringify({ operationId, stage: "selected" }));
+  for (let waited = 0;waited < 30000; waited += 5) {
+    if (existsSync12(release))
+      return;
+    const { promise, resolve: resolve112 } = Promise.withResolvers();
+    setTimeout(resolve112, 5);
+    await promise;
+  }
+  throw new Error(`catalog purge fixture pause timed out for ${operationId}`);
+}
 async function purgeCatalogRegistration(context, input) {
   const workflowId = requireText(input.workflowId, "workflowId");
   const operationId = requireText(input.operationId, "operationId");
@@ -16242,16 +16260,12 @@ async function purgeCatalogRegistration(context, input) {
     const snapshotPath = resolve10(failure.snapshot_path);
     const harnessDir = resolve10(context.harnessDir);
     if (!snapshotPath.startsWith(`${harnessDir}${sep8}`)) {
-      throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal without snapshot verification using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
+      throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal with \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
-    return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, phase: row.phase, generation };
+    return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, generation };
   });
-  if (initial.phase !== "aborted" && existsSync12(initial.snapshotPath)) {
-    const observedDigest = createHash7("sha256").update(readFileSync13(initial.snapshotPath)).digest("hex");
-    if (observedDigest !== initial.digest) {
-      throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `snapshot digest changed (observed ${observedDigest}, recorded ${initial.digest}); original bytes were retained; to abandon without changing them, run \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
-    }
-  }
+  if (process.env.MSTAR_STORE_TEST_RUNNER === "1")
+    await catalogPurgeParkHook(operationId);
   return await withJournalWrite(context, (db, generation) => {
     if (generation.storeId !== initial.generation.storeId || generation.epoch !== initial.generation.epoch) {
       throw new CatalogError("store.operation-conflict", "the selected store identity or authority epoch changed during purge-registration; re-read the pending registration and retry against the current authority");
@@ -17183,17 +17197,17 @@ function gitDirectoryIdentity(path2) {
   return [Number(stat.dev), Number(stat.ino)];
 }
 function currentGitHead(gitDir, commonDir) {
-  const head = readFileSync14(join16(gitDir, "HEAD"), "utf8").trim();
+  const head = readFileSync13(join16(gitDir, "HEAD"), "utf8").trim();
   if (!head.startsWith("ref: "))
     return { head, ref: null };
   const ref = head.slice(5);
   for (const root of [gitDir, commonDir]) {
     const path2 = join16(root, ref);
     if (existsSync14(path2))
-      return { head: readFileSync14(path2, "utf8").trim(), ref };
+      return { head: readFileSync13(path2, "utf8").trim(), ref };
   }
   const packed = join16(commonDir, "packed-refs");
-  const entry = existsSync14(packed) ? readFileSync14(packed, "utf8").split(`
+  const entry = existsSync14(packed) ? readFileSync13(packed, "utf8").split(`
 `).find((line) => line.split(" ")[1] === ref) : undefined;
   return { head: entry?.split(" ")[0] ?? "", ref };
 }
@@ -18262,7 +18276,7 @@ function canonicalSource(sourcePath2) {
 function sourceBytes(sourcePath2) {
   const resolved = canonicalSource(sourcePath2);
   try {
-    const bytes = readFileSync15(resolved);
+    const bytes = readFileSync14(resolved);
     const content3 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     return { content: content3, hash: sha2563(bytes), sourcePath: resolved };
   } catch (error) {
@@ -19512,7 +19526,7 @@ function sddWorkspace(planId, opts = {}) {
     harnessDir = resolve14(root, harnessOverride);
   } else {
     const rc = findMstarc(root, root);
-    const rcHarnessDir = rc !== null ? parseMstarc(readFileSync16(rc, "utf8")).harnessDir : undefined;
+    const rcHarnessDir = rc !== null ? parseMstarc(readFileSync15(rc, "utf8")).harnessDir : undefined;
     if (rcHarnessDir) {
       harnessDir = resolve14(rc !== null ? dirname12(rc) : root, rcHarnessDir);
     } else {
@@ -19532,7 +19546,7 @@ function sddWorkspace(planId, opts = {}) {
   }
   const sddDir = resolveSddDir(harnessDir, planId);
   mkdirSync6(sddDir, { recursive: true });
-  writeFileSync4(join18(sddDir, ".gitignore"), `*
+  writeFileSync5(join18(sddDir, ".gitignore"), `*
 `);
   return realpathSync8(sddDir);
 }
@@ -19552,7 +19566,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   }
   let content3;
   try {
-    content3 = readFileSync16(planFile, "utf8");
+    content3 = readFileSync15(planFile, "utf8");
   } catch {
     throw new SddScriptError(`no such plan file: ${planFile}`, 2);
   }
@@ -19598,7 +19612,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   if (mkdirAfterGate !== null || !bound && !outFile) {
     mkdirSync6(mkdirAfterGate ?? (opts.sddDir ?? process.env.SDD_DIR), { recursive: true });
   }
-  writeFileSync4(out, `${printed.join(`
+  writeFileSync5(out, `${printed.join(`
 `)}
 `);
   return bound ? resolve14(observedCwd, out) : out;
@@ -19665,7 +19679,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
 `),
     run(["diff", "-U10", `${base}..${head}`])
   ];
-  writeFileSync4(out, Buffer.concat(parts));
+  writeFileSync5(out, Buffer.concat(parts));
   return bound ? resolve14(observedCwd, out) : out;
 }
 function assertBaseSha(ref, opts = {}) {
@@ -19693,7 +19707,7 @@ function taskReportExists(sddDir, taskN) {
 function readProgressLedger(sddDir) {
   let content3;
   try {
-    content3 = readFileSync16(join18(sddDir, "progress.md"), "utf8");
+    content3 = readFileSync15(join18(sddDir, "progress.md"), "utf8");
   } catch {
     return [];
   }
@@ -19753,7 +19767,7 @@ function throwUsage(message) {
 }
 function recordedMainWorktreeBranch(planFile) {
   try {
-    const text4 = readFileSync16(planFile, "utf8");
+    const text4 = readFileSync15(planFile, "utf8");
     const match = text4.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
     return match ? match[1] : "";
   } catch {
@@ -20314,7 +20328,7 @@ function scanCompasses(harnessDir) {
     const compassPath = join20(iterationsDir, entry.name, "delivery-compass.md");
     let content3;
     try {
-      content3 = readFileSync17(compassPath, "utf8");
+      content3 = readFileSync16(compassPath, "utf8");
     } catch {
       continue;
     }
@@ -22625,7 +22639,7 @@ function assertKindAdmitted(kind) {
     throw new Error("ArtifactStore no longer persists project registers — the issue store (store.db) is the only findings authority; a residuals.json is migration history");
   }
   if (kind === "status" || kind === "snapshot") {
-    throw new CoordinationError("coordination.direct-write-refused", `ArtifactStore no longer admits the ${kind} kind — the legacy root status.json / workflow snapshot.json documents are read-only migration sources; use the ACTIVE store (store.db) verbs`, { kind });
+    throw new CoordinationError("coordination.direct-write-refused", "ArtifactStore no longer admits status or snapshot kinds — root status.json and workflow snapshot.json are read-only legacy sources. Run mstar schema --help for the supported native workflow and plan mutation contracts.", { kind });
   }
 }
 function resolveArtifactPath(harnessRoot, ref) {
@@ -22829,7 +22843,7 @@ function readSessionEnvelope(sessionPath) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync19(abs, "utf8"));
+    parsed = JSON.parse(readFileSync18(abs, "utf8"));
   } catch (error) {
     throw new CoordinationError("coordination.store", "Session envelope is not valid JSON. Inspect the harness authority with mstar status validate.", {
       path: abs,
@@ -23320,7 +23334,7 @@ function readBytes(path2) {
   const st = lstatSync8(path2);
   if (st.isSymbolicLink() || !st.isFile())
     throw new Error(`not a regular file: ${path2}`);
-  return readFileSync20(path2);
+  return readFileSync19(path2);
 }
 function readInside(parent, child) {
   const st = lstatSync8(parent);
@@ -23778,7 +23792,7 @@ function readSourceBytes(path2, label) {
   if (info.isSymbolicLink() || !info.isFile())
     conflict2(`${label} at ${path2} is not a regular file; replace it with an in-root file or remove its registration, then rerun store upgrade.`);
   try {
-    return readFileSync21(path2);
+    return readFileSync20(path2);
   } catch (error) {
     conflict2(`${label} at ${path2} is unreadable (${error instanceof Error ? error.message : String(error)}); restore read access or remove the registration, then rerun store upgrade.`);
   }
@@ -24349,7 +24363,7 @@ function queryMilestones(projectId, milestoneId) {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync22(spec.absolutePath, "utf8");
+    content3 = readFileSync21(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -26860,7 +26874,7 @@ async function readPhaseEvidence(context, workflowId, operation) {
       compass_path: canonical2
     });
   }
-  const text6 = readFileSync23(canonical2, "utf8");
+  const text6 = readFileSync22(canonical2, "utf8");
   const doc = parseCompassFrontmatterText(text6, canonical2);
   const validation = validateCompassFrontmatter(doc);
   if (!validation.ok) {
@@ -27919,7 +27933,7 @@ async function planStoreMigration(context) {
   const sources = [];
   const rows = [];
   for (const source of registerSources(context)) {
-    const bytes = readFileSync24(source.absolutePath);
+    const bytes = readFileSync23(source.absolutePath);
     const buckets = parseRegister(bytes.toString("utf8"), source, unresolved);
     let openCount = 0;
     let closedCount = 0;
@@ -28414,7 +28428,7 @@ function interleavingSeam(path2) {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
     return;
   if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path2) {
-    writeFileSync5(path2, `replaced between the open and the write
+    writeFileSync6(path2, `replaced between the open and the write
 `);
     return;
   }
@@ -28619,7 +28633,7 @@ async function sha256OfFile(path2) {
 }
 function readIfExists2(path2) {
   try {
-    return readFileSync25(path2);
+    return readFileSync24(path2);
   } catch {
     return;
   }
@@ -28824,7 +28838,7 @@ async function openWalWithoutJournalReadSnapshot(context) {
   try {
     const image = join32(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
-    writeFileSync6(`${image}-wal`, "");
+    writeFileSync7(`${image}-wal`, "");
     const handle = await openStore({ harnessDir: scratch }, "read");
     return {
       handle: {

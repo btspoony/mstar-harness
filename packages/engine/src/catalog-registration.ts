@@ -6,7 +6,7 @@
  * does not create or finish journaled file registrations.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, resolve, sep } from "node:path";
 import { promotedAuditSnapshot, type AuditWorkflowOptions } from "./audit.js";
 import {
@@ -583,8 +583,8 @@ export type CatalogExecutionBindingInput = {
 };
 
 // ---------------------------------------------------------------------------
-// Journal rows share the native SQLite transaction; source-byte verification
-// stays outside it (contract §2/§3).
+// Journal rows share the native SQLite transaction: authority identity, epoch,
+// CAS and the native phase guards are read on its handle (contract §2/§3).
 
 type JournalDelta = {
   version: number;
@@ -866,7 +866,7 @@ export function refusePendingRegistration(
     "catalog.registration-pending",
     `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed ` +
       `(operation ${JSON.stringify(pending.operationId)}); registration must refuse until the legacy journal is settled. ` +
-      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its identity-verified failed snapshot. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
+      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
   );
 }
 
@@ -973,13 +973,33 @@ function receiptOfRow(row: JournalRow): CatalogExecutionReceipt {
 
 export type PurgeCatalogRegistrationReceipt = {
   workflowId: string;
+  /** The historical producer failure digest recorded in the journal — never a
+   * re-certification of the live snapshot bytes at settlement time. */
   preservedDigest: string;
   sourceBytesRetained: true;
   actor: string;
   timestamp: string;
 };
 
-/** Abandon a failed registration while preserving its original snapshot bytes. */
+/** Opt-in fixture pause between selection and settlement, so an independent
+ * writer can deterministically exercise the native generation guard. */
+async function catalogPurgeParkHook(operationId: string): Promise<void> {
+  const wanted = process.env.MSTAR_STORE_PARK_CATALOG_PURGE;
+  if (wanted !== operationId && wanted !== "*") return;
+  const ready = process.env.MSTAR_STORE_PARK_READY;
+  const release = process.env.MSTAR_STORE_PARK_RELEASE;
+  if (ready === undefined || release === undefined) return;
+  writeFileSync(ready, JSON.stringify({ operationId, stage: "selected" }));
+  for (let waited = 0; waited < 30_000; waited += 5) {
+    if (existsSync(release)) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 5);
+    await promise;
+  }
+  throw new Error(`catalog purge fixture pause timed out for ${operationId}`);
+}
+
+/** Settle a failed registration without changing its source snapshots. */
 export async function purgeCatalogRegistration(
   context: StoreContext,
   input: {
@@ -1010,19 +1030,13 @@ export async function purgeCatalogRegistration(
     const snapshotPath = resolve(failure.snapshot_path);
     const harnessDir = resolve(context.harnessDir);
     if (!snapshotPath.startsWith(`${harnessDir}${sep}`)) {
-      throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal without snapshot verification using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
+      throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal with \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
-    return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, phase: row.phase, generation };
+    return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, generation };
   });
-  if (initial.phase !== "aborted" && existsSync(initial.snapshotPath)) {
-    const observedDigest = createHash("sha256").update(readFileSync(initial.snapshotPath)).digest("hex");
-    if (observedDigest !== initial.digest) {
-      throw new CatalogRegistrationError(
-        "catalog.purge-identity-mismatch",
-        `snapshot digest changed (observed ${observedDigest}, recorded ${initial.digest}); original bytes were retained; to abandon without changing them, run \`mstar catalog reconcile --abort --operation-id ${operationId}\``,
-      );
-    }
-  }
+  // Current source bytes, including later edits, remain untouched; only native
+  // journal identity and generation govern settlement.
+  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") await catalogPurgeParkHook(operationId);
   return await withJournalWrite(context, (db, generation) => {
     if (generation.storeId !== initial.generation.storeId || generation.epoch !== initial.generation.epoch) {
       throw new CatalogError("store.operation-conflict", "the selected store identity or authority epoch changed during purge-registration; re-read the pending registration and retry against the current authority");
@@ -1043,7 +1057,7 @@ export async function purgeCatalogRegistration(
     if (!isPlainObject(failure) ||
       failure.workflow_id !== workflowId ||
       failure.snapshot_path !== initial.snapshotPath ||
-      failure.snapshot_content_sha256 !== initial.digest ||
+      failure.snapshot_content_sha256 !== initial.digest || // hash-gate: authorized — Settle only the same producer failure record selected for this catalog operation; this does not gate source document edits.
       failure.reviewed_identity !== initial.identity) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} no longer matches its identity-failure record`);
     }
@@ -1059,7 +1073,7 @@ export async function purgeCatalogRegistration(
       try { receipt = JSON.parse(row.result_json ?? "null"); } catch { receipt = null; }
       if (isPlainObject(receipt) &&
         receipt.workflowId === workflowId &&
-        receipt.preservedDigest === initial.digest &&
+        receipt.preservedDigest === initial.digest && // hash-gate: authorized — Replay a settled catalog operation only when its recorded receipt names the same producer failure digest.
         receipt.sourceBytesRetained === true &&
         receipt.actor === actor &&
         typeof receipt.timestamp === "string") {

@@ -168,8 +168,6 @@ describe("store and execution command surface", () => {
       const result = await invoke(definition("store.init"), { harness }, root);
       expect(result.status).toBe("refused");
       expect(result.code).toBe("store.already-exists");
-      expect(result.message).toContain("staged catalog migration");
-      expect(result.message).toContain("not store init");
       expect(existsSync(join(harness, "store.db"))).toBe(false);
     }
   });
