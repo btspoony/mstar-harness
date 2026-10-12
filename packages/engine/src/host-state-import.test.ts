@@ -209,6 +209,77 @@ test("an identity digest conflict names the id while unconflicted identities and
       { event_id: "ev-other", digest: "x" },
     ]);
   } finally { store.close(); }
+  // After acknowledgement the native identity authority is unchanged: the same
+  // native digest replay is still deduplicated, a different digest is still a conflict.
+  expect(appendDshWorkflowEvent(context, {
+    workflowId: "wf-conflict", eventId: "dup", digest: "native-digest", lineJson: '{"n":"replay"}',
+    source: { sessionId: "s", streamId: "stream", seq: 2 },
+  })).toMatchObject({ kind: "replayed" });
+  expect(appendDshWorkflowEvent(context, {
+    workflowId: "wf-conflict", eventId: "dup", digest: "another-digest", lineJson: '{"n":"other"}',
+    source: { sessionId: "s", streamId: "stream", seq: 3 },
+  })).toMatchObject({ kind: "refused" });
+});
+
+test("an empty readable tail after native activity imports zero rows and leaves native rows intact", async () => {
+  const { context, workflow } = await fixture("empty-tail");
+  appendDshLedgerRow(context, "wf-empty-tail", '{"n":"native"}');
+  // A readable, genuinely empty tail (zero physical rows) is a legitimate no-op,
+  // not an ordering conflict and not an already-present verdict.
+  writeFileSync(join(workflow, "agent-flow.jsonl"), "");
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  const result = await importDshHostStateFiles({ context, operator: "fixture", operationId: "empty-tail" });
+  expect(result.imported.ledgerRows).toBe(0);
+  expect(result.imported.identities).toBe(1);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select event_json, legacy_source_digest from dsh_ledger_events where workflow_id = ?").all("wf-empty-tail")).toEqual([
+      { event_json: '{"n":"native"}', legacy_source_digest: null },
+    ]);
+  } finally { store.close(); }
+});
+
+test("an unreadable tail or a journal without a tail refuses by default and recovers with a scoped acknowledgement", async () => {
+  // Unreadable FLOW: a symlinked tail is not a readable regular file.
+  const a = await fixture("unreadable-tail");
+  writeFileSync(join(a.context.harnessDir, "elsewhere.jsonl"), "{}\n");
+  symlinkSync(join(a.context.harnessDir, "elsewhere.jsonl"), join(a.workflow, "agent-flow.jsonl"));
+  writeFileSync(join(a.workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  await expect(importDshHostStateFiles({ context: a.context, operator: "fixture", operationId: "unreadable-tail" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("tail") });
+  const recovered = await importDshHostStateFiles({
+    context: a.context, operator: "fixture", operationId: "unreadable-tail-ack", acknowledgedSkips: ["dsh-ledger:wf-unreadable-tail"],
+  });
+  expect(recovered.imported.ledgerRows).toBe(0);
+  expect(recovered.imported.identities).toBe(1);
+
+  // A journal present with no tail file at all: the tail fact is undecidable, not absent.
+  const b = await fixture("journal-without-tail");
+  writeFileSync(join(b.workflow, "agent-flow-compaction.json"), JSON.stringify({
+    version: 1, lines: 1,
+    tailBefore: { bytes: 64, sha256: sha("x") }, tailAfter: { bytes: 32, sha256: sha("y") },
+    archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: 4, sha256: sha("z") },
+  }));
+  await expect(importDshHostStateFiles({ context: b.context, operator: "fixture", operationId: "journal-without-tail" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("journal exists without a readable display tail") });
+});
+
+test("a present null bindings map refuses the whole status envelope and recovers by acknowledgement", async () => {
+  const { context } = await fixture("null-bindings");
+  const snapshotPath = join(context.harnessDir, "snapshots", "engine-status.json");
+  mkdirSync(join(context.harnessDir, "snapshots"), { recursive: true });
+  const bytes = JSON.stringify({
+    sv: 1,
+    entries: { "session-a": [{ rv: 1, cwd: "/repo", at: "2026-01-01T00:00:00.000Z", turn: 1, payload: { value: 1 } }] },
+    bindings: null,
+  });
+  writeFileSync(snapshotPath, bytes);
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "null-bindings" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-status") });
+  const acked = await importDshHostStateFiles({ context, operator: "fixture", operationId: "null-bindings-ack", acknowledgedSkips: ["dsh-status"] });
+  expect(acked.imported.bindings).toBe(0);
+  expect(acked.imported.emissions).toBe(0);
+  expect(readFileSync(snapshotPath, "utf8")).toBe(bytes);
 });
 
 test("native activity merges per fact: bounds advance forward only and exclusion floors raise by max", async () => {

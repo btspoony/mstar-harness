@@ -43,7 +43,7 @@ function lossStatement(refusal: Refusal): string {
     case "tail":
       return `Loss: ${refusal.discarded}. These held-back display rows never appear. Verified identities and scan bounds are independent facts and import per their own rules.`;
     case "identity":
-      return `Loss: ${refusal.discarded}. A later native replay of that event id would be accepted again (dedup limitation). Every other identity, the tail and the scan bounds are unaffected.`;
+      return `Loss: ${refusal.discarded}. This historical conflicting legacy digest is not registered; the existing native accepted identity and its replay behavior are unchanged — a same-digest native replay stays deduplicated and a different-digest replay stays a conflict. Every other identity, the tail and the scan bounds are unaffected.`;
   }
 }
 
@@ -195,13 +195,18 @@ function evaluate(context: StoreContext, now: string): Evaluation {
         } catch (e) { tailRefusal = `the compaction journal is not a recognized transaction (${String(e)})`; }
         if (tailRefusal === null && journalDecision !== "invalid") findings.push({ source, kind: "journal", decision: journalDecision });
       }
-      const tailLoss = `the ${knownTailLines} held-back display row(s) for ${entry.name} were not imported`;
-      if (present[FLOW] === undefined) {
-        // No display tail fact at all: nothing to withhold, no crash on a missing file.
-      } else if (tailRefusal !== null) {
-        refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: `tail rows (${knownTailLines})`, discarded: tailLoss, reason: tailRefusal, source });
+      // A genuine tail/journal safety refusal is published whenever the tail bytes
+      // are not simply absent: unreadable FLOW, a journal present without FLOW, and
+      // an unreadable journal all refuse. Only a truly absent FLOW with no journal
+      // and no read failure is a no-op; a readable empty FLOW is zero physical rows.
+      const tailFacts = knownTailLines === 0 ? "display tail (unavailable; row count unknown)" : `tail rows (${knownTailLines})`;
+      const tailLoss = `the display rows held back for ${entry.name} were not imported`;
+      if (tailRefusal !== null) {
+        refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: tailFacts, discarded: tailLoss, reason: tailRefusal, source });
+      } else if (present[FLOW] === undefined) {
+        // No display-tail fact at all (no bytes obtainable, no journal): nothing to withhold.
       } else if (identityRefused) {
-        refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: `tail rows (${knownTailLines})`, discarded: tailLoss, reason: "the tail identities cannot be verified because the identity registry was refused", source });
+        refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: tailFacts, discarded: tailLoss, reason: "the tail identities cannot be verified because the identity registry was refused", source });
       } else {
         const tailDigest = hash(present[FLOW]!);
         for (const [i, line] of present[FLOW]!.toString("utf8").split("\n").entries()) if (line.trim() !== "") {
@@ -255,9 +260,12 @@ function evaluate(context: StoreContext, now: string): Evaluation {
       const value: unknown = JSON.parse(b.toString("utf8"));
       if (!value || typeof value !== "object" || !("sv" in value) || (value as { sv?: unknown }).sv !== 1 || !("entries" in value) || !(value as { entries?: unknown }).entries || typeof (value as { entries?: unknown }).entries !== "object" || Array.isArray((value as { entries?: unknown }).entries)) throw new Error("unrecognized engine-status envelope schema");
       const buckets = (value as { entries: Record<string, unknown> }).entries;
-      const source = (value as { bindings?: unknown }).bindings ?? {};
-      if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("invalid engine-status bindings map");
-      for (const [sessionId, raw] of Object.entries(source as Record<string, unknown>)) {
+      // Absent bindings means no picks; a present null (or non-object) map is an
+      // invalid legacy authority envelope and refuses the whole status source.
+      const declaredBindings = (value as { bindings?: unknown }).bindings;
+      if (declaredBindings !== undefined && (declaredBindings === null || typeof declaredBindings !== "object" || Array.isArray(declaredBindings))) throw new Error("invalid engine-status bindings map");
+      const source = (declaredBindings ?? {}) as Record<string, unknown>;
+      for (const [sessionId, raw] of Object.entries(source)) {
         if (!sessionId || !raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid engine-status binding");
         const binding = raw as Record<string, unknown>;
         if (typeof binding.cwd !== "string" || !binding.cwd || !Number.isSafeInteger(binding.excludedBeforeSeq) || Number(binding.excludedBeforeSeq) < 0) throw new Error("invalid engine-status binding");

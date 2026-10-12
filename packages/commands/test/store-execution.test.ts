@@ -285,30 +285,48 @@ describe("store and execution command surface", () => {
     });
     expect(readFileSync(identityPath, "utf8")).toBe(source);
   });
-  test("a refused DSH phase leaves the earlier execution import committed and reports it truthfully", async () => {
+  test("a refused DSH phase leaves the earlier execution import committed with its real workflow rows and reports it truthfully", async () => {
     const root = fixture("store-upgrade-dsh-partial");
     const harness = join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    const initialized = await initializeStore({ harnessDir: harness });
-    initialized.close();
-    // A legacy execution workflow file the execution importer recognizes, so its
-    // earlier transaction commits real rows before the DSH phase refuses.
-    const workflowDir = join(harness, "workflows", "wf-partial");
-    mkdirSync(workflowDir, { recursive: true });
+    const workflowId = "wf-partial";
+    const planId = `${workflowId}-plan`;
+    const workflowDir = join(harness, "workflows", workflowId);
+    const sessionsDir = join(workflowDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    // A minimal recognizable legacy execution fixture (the store-upgrade-minimal
+    // pattern): a registered workflow with a snapshot and plan the execution
+    // importer commits in its own earlier transaction.
+    writeFileSync(join(harness, `${planId}.md`), `# ${planId}\n`);
+    writeFileSync(join(sessionsDir, "plan-pm.json"), JSON.stringify({
+      schema_version: 1, role: "plan-pm", session_id: "session-partial", workflow_id: workflowId, plan_id: planId, harness_root: harness,
+    }));
+    writeFileSync(join(harness, "status.json"), JSON.stringify({
+      version: 2, updated_at: "2026-10-04", workflows: [{ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }],
+    }));
+    writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify({
+      schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" },
+      plans: [{ id: planId, title: "Partial fixture plan", file: `${planId}.md`, status: "Todo",
+        coordination: { revision: 1, session: { session_id: "session-partial", session_file: join(sessionsDir, "plan-pm.json"), bound_at: "2026-10-04T00:00:00Z" } },
+        execution_lease: { holder: "session-partial", claimed_at: "2026-10-04T00:00:00Z", worktree_path: `${root}/worktree-partial`, working_branch: `feature/${workflowId}` } }],
+    }));
+    // The DSH source refuses: a malformed identity index line.
     writeFileSync(join(workflowDir, "agent-flow-ids.jsonl"), '{"id":"accepted","d":"digest"}\nmalformed\n');
     const command = definition("store.upgrade");
     const refused = await invoke(command, { harness, operator: "fixture" }, root);
     expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused", exitCode: 1 });
     expect(refused.message).toContain("Execution-state import committed");
     expect(refused.message).toContain("dsh-ledger:wf-partial");
-    const store = await openStore({ harnessDir: harness }, "read");
+    const initialized = await openStore({ harnessDir: harness }, "read");
     try {
-      // The DSH phase wrote nothing, but its receipt is absent and the earlier
-      // execution operation receipt stands as the truthful phase record.
-      expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
-      expect(store.db.prepare("select count(*) as n from store_operations where operation_id like '%#dsh-host-state'").get()).toEqual({ n: 0 });
-      expect(store.db.prepare("select count(*) as n from store_operations").get()).toEqual({ n: 1 });
-    } finally { store.close(); }
+      // The execution phase's real workflow/plan rows and its receipt survive; the
+      // DSH phase wrote nothing and left no DSH receipt.
+      expect(initialized.db.prepare("select count(*) as n from execution_workflows where workflow_id = ?").get(workflowId)).toEqual({ n: 1 });
+      expect(initialized.db.prepare("select count(*) as n from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId)).toEqual({ n: 1 });
+      expect(initialized.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+      expect(initialized.db.prepare("select count(*) as n from store_operations where operation_id not like '%#dsh-host-state'").get()).toEqual({ n: 1 });
+      expect(initialized.db.prepare("select count(*) as n from store_operations where operation_id like '%#dsh-host-state'").get()).toEqual({ n: 0 });
+    } finally { initialized.close(); }
   });
   test("an acknowledged DSH import replays its receipt without a second write", async () => {
     const root = fixture("store-upgrade-dsh-replay");
