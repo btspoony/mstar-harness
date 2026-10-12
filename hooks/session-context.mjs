@@ -13461,7 +13461,7 @@ async function adoptTerminalWorkflow(context, input) {
       ...settlement === undefined ? {} : { operationRecovery: settlement }
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now });
-    pruneWorkflowOperationReceipts(tx, input.workflowId);
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
       ...publicReceipt,
@@ -13806,8 +13806,8 @@ function writePlanOperationReceipt(tx, input) {
 function writeOperationReceipt(tx, input) {
   tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.receipt), input.now);
 }
-function pruneWorkflowOperationReceipts(tx, workflowId) {
-  tx.db.prepare("delete from execution_operations where workflow_id = ?").run(workflowId);
+function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
+  tx.db.prepare("delete from execution_operations where workflow_id = ? and operation_id != ?").run(workflowId, keepOperationId);
 }
 function resolvePlanRead(caller, session, planId) {
   if (!isPlainObject(session))
@@ -27145,7 +27145,7 @@ async function mutateExecutionWorkflow(context, request) {
       now: at
     });
     if (applied.membershipLost)
-      pruneWorkflowOperationReceipts(tx, witness.workflowId);
+      pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
     return {
       ...applied.receipt,
       operationId: resolved.call.operationId,
