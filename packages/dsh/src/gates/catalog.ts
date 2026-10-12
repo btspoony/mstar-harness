@@ -49,6 +49,7 @@ import {
   withStoreRead,
   listRoadmapAuthority,
 } from '@mstar-harness/engine'
+import type { DshSelectedGeneration } from '@mstar-harness/engine'
 import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -203,6 +204,9 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
   }
 }
 
+
+// Keep generation metadata off the model-facing, JSON-serialized catalog payload.
+const authorityGenerationByPayload = new WeakMap<MstarEngineStatusPayload, DshSelectedGeneration>()
 /** One TTL cache entry: the unified payload plus the build timestamp. */
 export interface CatalogCacheEntry {
   payload: MstarEngineStatusPayload
@@ -384,7 +388,14 @@ export async function buildCatalogPayloadWithStore(
   harnessDir: string | null,
   hint?: SessionHint,
 ): Promise<MstarEngineStatusPayload> {
-  return buildCatalogPayload(ctx, harnessDir, hint, await readBuildFacts(harnessDir, hint))
+  const facts = await readBuildFacts(harnessDir, hint)
+  const payload = buildCatalogPayload(ctx, harnessDir, hint, facts)
+  const authority = facts?.authority
+  if (authority !== undefined && authority.kind !== 'unavailable' &&
+    authority.storeId !== undefined && authority.epoch !== undefined) {
+    authorityGenerationByPayload.set(payload, { storeId: authority.storeId, epoch: authority.epoch })
+  }
+  return payload
 }
 
 async function catalogPayloadFor(
@@ -1147,7 +1158,7 @@ export async function preStepCatalogListener(
       // log. Keyed by `session.header.id`: a stub without a real id has
       // nothing to key on, so the write is skipped (a reader then answers the
       // explicit unavailable state rather than another session's row).
-      persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent)
+      persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent, authorityGenerationByPayload.get(catalogPayload))
     }
     digests.set(digestKey, { turn: payload.turn, text })
     return { kind: 'enter', messages }
@@ -1227,6 +1238,7 @@ function persistEngineStatusSnapshot(
   turn: number,
   catalogPayload: MstarEngineStatusPayload,
   agent: unknown,
+  selectedGeneration?: DshSelectedGeneration,
 ): void {
   const sessionId = sessionHeaderIdOf(agent)
   if (sessionId === undefined || cwd === undefined) return
@@ -1240,6 +1252,7 @@ function persistEngineStatusSnapshot(
     cwd,
     turn,
     payload: catalogPayload,
+    ...(selectedGeneration === undefined ? {} : { selectedGeneration }),
   })
   if (result.kind === 'degraded') {
     ctx.logger(CATALOG_LOGGER).warn(
