@@ -21,7 +21,11 @@
  *   beside the in-place epoch bump clears the superseded epoch's, and a restore
  *   preserves prior-epoch receipt rows as history under its frozen
  *   bytes-plus-one-epoch contract, outside the current epoch's replay scope, so
- *   restoring any of them is harmless and re-arms nothing.
+ *   restoring any of them is harmless and re-arms nothing. `result_json`
+ *   payloads are write-time versioned: graph rows written before the slimming
+ *   change keep their full form, later rows carry the slim envelope, so
+ *   inventory digests compare write-time bytes per row and mixed forms never
+ *   produce same-key content drift.
  * - `restoreExecutionBackup` is the destructive step. It re-derives the loss
  *   inventory under the maintenance lock and records it as the honest account
  *   of what the replacement costs; the operator and authorization reference are

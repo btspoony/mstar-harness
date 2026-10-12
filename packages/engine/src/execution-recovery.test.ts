@@ -44,12 +44,14 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, r
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { registerCatalogEntity } from "./catalog.js";
 import {
   exportExecutionState,
   previewExecutionRestore,
   restoreExecutionBackup,
   EXECUTION_RECOVERY_PROTOCOL_VERSION,
+  type ExecutionRecoveryPreview,
 } from "./execution-recovery.js";
 import {
   bindExecutionSession,
@@ -1121,6 +1123,179 @@ describe("execution-restore", () => {
       retained.map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
     );
     expect(preview.lossDigest).not.toBe(live.lossDigest);
+  });
+
+  /**
+   * The one sentence the mixed-form declaration is mirrored with on the engine
+   * header, the `store.execution.restore-preview` CLI description and
+   * `docs/commands.md`. Its leading `` `result_json` `` marker is left out so the
+   * same marker-free text can be asserted on all three surfaces.
+   */
+  const MIXED_FORM_DECLARATION =
+    "payloads are write-time versioned: graph rows written before the slimming change keep their full form, later rows carry " +
+    "the slim envelope, so inventory digests compare write-time bytes per row and mixed forms never produce same-key content " +
+    "drift";
+
+  /** The frozen preview shape: a mixed-form inventory may add no field to it. */
+  const PREVIEW_KEYS: readonly (keyof ExecutionRecoveryPreview)[] = [
+    "version", "backupPath", "backupSha256", "liveStoreId", "liveEpoch", "backupEpoch", "lostOperationIds",
+    "retainedDifferences", "retainedDigest", "retainedLiveDigest", "backupCoverageDigest", "liveCoverageDigest",
+    "lossDigest", "authorityDifferences",
+  ];
+
+  /**
+   * Constraint 2's restore face, mechanism-asserted: a store holding BOTH receipt
+   * forms — the slim envelope T1's writer persists for the graph class and the
+   * full receipt a pre-change build left behind — inventories without same-key
+   * content drift, and every receipt the terminal prune removes stays a DECLARED
+   * backup-only row, the hand-inserted fat row included.
+   */
+  test("execution-restore-preview-lists-mixed-fat-and-slim-receipt-forms-without-content-drift", async () => {
+    const world = await recoveryWorld("mixed-receipt-forms");
+    const tokenNow = async (): Promise<ExecutionToken> =>
+      (await readExecutionState(world.context)).data.workflows[0]!.workflowToken;
+    // T1's writer: the creation receipt and this transition receipt are slim.
+    const slim = await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-slim-pause",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "mixed-form fixture" },
+    });
+    // The pre-change form, hand-inserted: the FULL receipt envelope — exactly the
+    // `{data, token, storeId, epoch}` object a pre-slim build persisted and this
+    // build still RETURNS to callers.
+    const fatOperationId = "op-fat-prechange";
+    rawRun(
+      world.dbPath,
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, ?, ?)",
+      world.epoch, fatOperationId, "prechange-fixture", world.storeId, WF,
+      JSON.stringify({ data: slim.data, token: slim.token, storeId: slim.storeId, epoch: slim.epoch }), TS,
+    );
+    const payload = (dbPath: string, operationId: string): Record<string, unknown> =>
+      JSON.parse(
+        rawGet<{ result_json: string }>(
+          dbPath,
+          `select result_json from execution_operations where operation_id = '${operationId}'`,
+        )!.result_json,
+      ) as Record<string, unknown>;
+    // Mixed forms are really in the live store, in the declared shapes.
+    expect(Object.keys(payload(world.dbPath, "op-slim-pause")).sort()).toEqual(["epoch", "slim", "storeId", "token"]);
+    expect(payload(world.dbPath, fatOperationId).slim).toBeUndefined();
+    expect(payload(world.dbPath, fatOperationId).data).toBeDefined();
+
+    const point = await recoveryPoint(world, "mixed-forms-point");
+
+    // A row is compared by its WRITE-TIME bytes, so an unmodified point holding
+    // both forms is current: mixed forms alone are not a loss, and the same-key
+    // fat row is on both sides with identical content.
+    expect(payload(point.backupPath, fatOperationId)).toEqual(payload(world.dbPath, fatOperationId));
+    const clean = await previewExecutionRestore(world.context, point.backupPath);
+    expect(clean.authorityDifferences).toEqual([]);
+    expect(clean.lostOperationIds).toEqual([]);
+
+    // The terminal close prunes that workflow's earlier receipts — BOTH forms —
+    // and retains its own slim durable replay anchor.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-close-mixed-forms",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "mixed-form fixture close" },
+    });
+
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    // No preview-shape or protocol change travels with the mixed-form inventory.
+    expect(preview.version).toBe(EXECUTION_RECOVERY_PROTOCOL_VERSION);
+    expect(Object.keys(preview).sort()).toEqual([...PREVIEW_KEYS].sort());
+
+    // Every receipt row of either form, per side, as the two preview classes
+    // spell it: `operation:<epoch>/<id>` in the authority list and
+    // `execution:<epoch>:<id>` in the operation-id lists.
+    const workflowReceipts = (dbPath: string): Array<{ epoch: number; operation_id: string }> =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by epoch, operation_id`,
+      );
+    const prunedKeys = workflowReceipts(point.backupPath).map((row) => `operation:${row.epoch}/${row.operation_id}`);
+    const liveKeys = workflowReceipts(world.dbPath).map((row) => `operation:${row.epoch}/${row.operation_id}`);
+    expect(prunedKeys).toContain(`operation:${world.epoch}/${fatOperationId}`);
+    expect(liveKeys).toEqual([`operation:${world.epoch}/op-close-mixed-forms`]);
+
+    const listedReceipts = preview.authorityDifferences
+      .filter((difference) => difference.domain === "execution" && difference.key.startsWith("operation:"))
+      .map((difference) => difference.key);
+    const known = new Set([...prunedKeys, ...liveKeys]);
+    // No entry is unclassified: every listed receipt row is one of the two
+    // enumerated classes, and both classes are fully listed.
+    expect(listedReceipts.filter((key) => !known.has(key))).toEqual([]);
+    expect([...listedReceipts].sort()).toEqual([...known].sort());
+    for (const pruned of prunedKeys) {
+      const entry = preview.authorityDifferences.find((difference) => difference.key === pruned)!;
+      expect(entry.liveRevision).toBeNull();
+      // The presence marker of a row whose table carries no revision of its own.
+      expect(entry.backupRevision).toBe(1);
+    }
+    const terminal = preview.authorityDifferences.find(
+      (difference) => difference.key === `operation:${world.epoch}/op-close-mixed-forms`,
+    )!;
+    expect(terminal.liveRevision).toBe(1);
+    expect(terminal.backupRevision).toBeNull();
+    expect(preview.lostOperationIds).toEqual([`execution:${world.epoch}:op-close-mixed-forms`]);
+
+    // The point-only receipts `lostOperationIds` does not list are the
+    // resurrected set, which the frozen preview carries through `lossDigest`
+    // alone, so the same fact is read from the two store files.
+    const receiptIds = (dbPath: string): string[] =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        "select epoch, operation_id from execution_operations order by epoch, operation_id",
+      ).map((row) => `execution:${row.epoch}:${row.operation_id}`);
+    const liveIds = new Set(receiptIds(world.dbPath));
+    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id)).sort()).toEqual(
+      workflowReceipts(point.backupPath).map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
+    );
+    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id))).toContain(
+      `execution:${world.epoch}:${fatOperationId}`,
+    );
+
+    // The pruned-row declaration stands beside the mixed forms: the surviving
+    // anchor is slim, and the point's fat row KEPT its write-time form because
+    // no restore and no prune ever rewrites `result_json`.
+    expect(payload(world.dbPath, "op-close-mixed-forms").slim).toBe(true);
+    expect(payload(point.backupPath, fatOperationId).slim).toBeUndefined();
+    expect(preview.lossDigest).not.toBe(clean.lossDigest);
+  });
+
+  /**
+   * The declaration is what makes the mixed-form inventory non-silent, so it is
+   * asserted where an operator reads it: the engine module header, the
+   * `store.execution.restore-preview` CLI description and `docs/commands.md`. One
+   * sentence, mirrored rather than re-derived per surface.
+   */
+  test("mixed-form receipt declaration is mirrored on the engine, CLI and docs surfaces", () => {
+    const engineSrc = dirname(fileURLToPath(import.meta.url));
+    const surfaces: Record<string, string> = {
+      "engine module header": readFileSync(join(engineSrc, "execution-recovery.ts"), "utf8"),
+      "store.execution.restore-preview CLI description": readFileSync(
+        join(engineSrc, "..", "..", "commands", "src", "families", "execution.ts"),
+        "utf8",
+      ),
+      "docs/commands.md": readFileSync(join(engineSrc, "..", "..", "..", "docs", "commands.md"), "utf8"),
+    };
+    // Comment leaders, the CLI description's adjacent-literal concatenation and
+    // line wrapping are surface formatting: the declaration is compared as
+    // flowing text.
+    const flowing = (source: string): string =>
+      source
+        .replace(/^\s*\*\s?/gm, "")
+        .replace(/"\s*\+\s*"/g, "")
+        .replace(/\s+/g, " ");
+    const missing = Object.entries(surfaces)
+      .filter(([, text]) => !flowing(text).includes(MIXED_FORM_DECLARATION))
+      .map(([surface]) => surface);
+    expect(missing).toEqual([]);
   });
 
   test("terminal prune keeps only the current-epoch row when a restored old receipt reuses its operation id", async () => {
