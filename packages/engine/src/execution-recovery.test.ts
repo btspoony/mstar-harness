@@ -996,9 +996,10 @@ describe("execution-restore", () => {
     const leftover = join(backups, leftoverName);
     writeFileSync(leftover, Buffer.from("an earlier refusal's safety image"));
 
-    // A stale preview refuses inside the transaction — a PROVEN pre-commit
-    // outcome, since this run observed the failure itself — so the safety point
-    // this attempt took a moment ago is abandoned by nothing and reclaimed.
+    // A stale preview refuses inside the transaction. The store still holds this
+    // attempt's own store id and the point's own epoch, so its own replacement
+    // provably never committed and the safety point this attempt just took is
+    // reclaimed.
     await captureIssue(world.context, issueInput("Stale-preview refusal"), {
       operationId: "op-stale-refusal", actor: "project-manager",
     });
@@ -1021,6 +1022,89 @@ describe("execution-restore", () => {
       preview: current, operator: OPERATOR, authorization: AUTHORIZATION,
     });
     expect(existsSync(receipt.preRestoreBackup.backupPath)).toBe(true);
+  });
+
+  test("execution-restore-preserves-a-safety-point-when-the-live-generation-no-longer-proves-pre-commit", async () => {
+    const world = await recoveryWorld("restore-safety-changed-generation");
+    const point = await recoveryPoint(world, "changed-generation-point");
+    await mutateEveryDomain(world, "changed-generation");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const backups = join(world.harness, "archived", "store-migration", "backups");
+    mkdirSync(backups, { recursive: true });
+    const leftoverName = `pre-restore-e1-${randomUUID()}.db`;
+    writeFileSync(join(backups, leftoverName), Buffer.from("an earlier refusal's safety image"));
+
+    // The commit lands and the after-replacement seam then throws, so this attempt
+    // owns a safety point at the PRE-restore epoch while the live store has already
+    // advanced to the new epoch above it. The live store is therefore no longer at
+    // the generation from which this attempt's own absence would prove a pre-commit
+    // outcome — a rewritten ledger could have dropped a committed receipt — so
+    // absence proves nothing and the point is PRESERVED rather than reclaimed.
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
+    try {
+      const error = await errorOf(() =>
+        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
+      );
+      expect(error.message).toContain("after-replacement");
+    } finally {
+      delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+      delete process.env.MSTAR_STORE_TEST_RUNNER;
+    }
+
+    // The commit really landed: the epoch moved above the preview generation and
+    // the complete record is in the store's own ledger.
+    expect(footprint(world.dbPath).epoch).toBeGreaterThan(preview.liveEpoch);
+    expect(
+      rawGet(world.dbPath, "select operation_id from store_operations where operation_id like 'restore-attempt:%'"),
+    ).toBeTruthy();
+
+    // BOTH safety points survive: the attempt's own — whose outcome is committed and
+    // whose generation no longer proves otherwise — and the planted earlier one.
+    const after = readdirSync(backups).filter((name) => name.startsWith("pre-restore-"));
+    expect(after.length).toBe(2);
+    expect(after).toContain(leftoverName);
+    expect(readFileSync(join(backups, leftoverName), "utf8")).toBe("an earlier refusal's safety image");
+  });
+
+  test("execution-restore-reclaims-its-own-safety-point-when-the-pre-transaction-hash-read-fails", async () => {
+    const world = await recoveryWorld("restore-safety-hash-read");
+    const point = await recoveryPoint(world, "hash-read-point");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const backups = join(world.harness, "archived", "store-migration", "backups");
+    mkdirSync(backups, { recursive: true });
+    // An earlier refusal's safety point this attempt does not own.
+    const leftoverName = `pre-restore-e1-${randomUUID()}.db`;
+    const leftover = join(backups, leftoverName);
+    writeFileSync(leftover, Buffer.from("an earlier refusal's safety image"));
+
+    // The run is interrupted after the safety point is taken and before the live
+    // bytes are read, so NO restore transaction is ever invoked. The store has
+    // provably not committed this attempt (its own store id and the point's own
+    // epoch still stand), so only the point this attempt just took is reclaimed.
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-live-hash";
+    try {
+      const error = await errorOf(() =>
+        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
+      );
+      // The ORIGINAL injected failure is rethrown, not masked by the cleanup.
+      expect(error.message).toContain("before-live-hash");
+    } finally {
+      delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+      delete process.env.MSTAR_STORE_TEST_RUNNER;
+    }
+
+    // The planted earlier point is untouched and this attempt's own point is gone.
+    expect(readdirSync(backups).filter((name) => name.startsWith("pre-restore-"))).toEqual([leftoverName]);
+    expect(readFileSync(leftover, "utf8")).toBe("an earlier refusal's safety image");
+
+    // The same public retry then succeeds: a pre-transaction failure is an ordinary
+    // supported retry, not a consumed attempt.
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(footprint(world.dbPath).epoch).toBe(receipt.epoch);
   });
 
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {

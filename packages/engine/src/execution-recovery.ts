@@ -92,17 +92,20 @@
  *
  * ## Crash identification
  *
- * One durable receipt per attempt is written under
- * `<root>/archived/store-migration/recovery/` BEFORE the commit (`phase:
- * "replacing"`, naming the live store path and the staged image's hash) and
- * rewritten AFTER it (`phase: "replaced"`). A crash is therefore decidable from
- * the receipt alone: the commit is the single cutover, so a record still saying
- * `phase: "replacing"` describes a store SQLite either never committed or
- * committed as a whole — nothing in between is observable from the receipt, and
- * the live store's own `store_meta.authority_epoch` says which of the two
- * happened. A `phase: "replaced"` record says the replacement completed and
- * carries the verification verdict; the retry of an interrupted attempt is the
- * same public verb with the same preview, refused if the loss moved on.
+ * The record is committed, not written to a file: the complete recovery record
+ * (`phase: "replaced"`) is one `store_operations` row inserted inside the SAME
+ * native transaction as the authority it describes, so a committed replacement
+ * and its record become durable together and nothing sits between them. A crash
+ * is therefore decided from the store alone: the live `store_meta.authority_epoch`
+ * is the single cutover — an attempt that committed advanced it above both
+ * generations and left its record row, and one that never committed advanced
+ * nothing, because SQLite rolled the whole replacement back as a unit and no
+ * intermediate state is observable. A copy of the committed record is also placed
+ * beside the store under `<root>/archived/store-migration/recovery/`, AFTER the
+ * commit; it is an operator-facing convenience over that same committed row, so a
+ * run that could not write it reports the committed outcome with a null copy path
+ * rather than a refusal. The retry of an interrupted attempt is the same public
+ * verb with the same preview, refused if the loss moved on.
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -137,6 +140,7 @@ import {
   StoreActivationError,
   backupStore,
   canonicalPath,
+  currentAuthorityHandle,
   inspectBackupCopy,
   isPathWithin,
   type BackupExecutionMeta,
@@ -322,11 +326,12 @@ function corrupt(detail: string): ExecutionRecoveryError {
 
 /**
  * The test-runner-gated crash seam, the same gate every other failure injection
- * in the store uses: the stage names where the run was interrupted, so "crash
- * before the replacement" and "crash after it" are reproduced rather than
+ * in the store uses: the stage names where the run was interrupted, so a failure
+ * before the live-bytes hash read (owned safety point taken, no transaction
+ * invoked), before the replacement, and after it are reproduced rather than
  * described.
  */
-function recoveryFailureHook(stage: "before-replacement" | "after-replacement"): void {
+function recoveryFailureHook(stage: "before-live-hash" | "before-replacement" | "after-replacement"): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
   if (process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE === stage) {
     throw new Error(`induced execution-restore failure at ${stage}`);
@@ -2176,28 +2181,36 @@ async function runRestore(
     const safety = await backupStore(context, {
       out: join(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID()}.db`),
     });
-    // Read outside the transaction for the same reason the safety point is: the
-    // record's audit facts must not be derived from filesystem work inside the
-    // owning transaction.
-    const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
+    // Everything from here on is a fallible step that owns the point just taken:
+    // the awaited live-bytes read is OUTSIDE the mutation transaction for the same
+    // reason the point is (the record's audit facts must not be derived from
+    // filesystem work inside the owning transaction), so it needs the same
+    // boundary — a failure here is a positive pre-commit outcome too, and without
+    // this the point would leak with no transaction ever invoked.
     try {
+      recoveryFailureHook("before-live-hash");
+      const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
       return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
     } catch (error) {
       // A PROVEN pre-commit refusal abandons nothing: the safety point this
       // attempt just took is referenced by no `store_operations` row and by no
       // returned receipt, so leaving it would accumulate one full-store image per
-      // retry under the backups directory. The store is the only witness, and the
-      // witness is positive — `restoreReceiptOperationId` writes this attempt's
-      // complete record into `store_operations` in the SAME commit as the
-      // authority it describes, so a ledger that names this attempt proves the
-      // commit landed (the point is kept) and a ledger that reads and does NOT
-      // name it proves the transaction rolled back as a unit (the point is
-      // reclaimed). An unreadable ledger is neither, and preserves. Ambiguity —
-      // a process that dies before reaching this line — leaks its own point the
-      // same way it already leaks its staging image; both are reclaimed later by
-      // the same kind of positive evidence.
-      const committedAttempts = await readCommittedRestoreAttempts(context);
-      if (committedAttempts !== null && !committedAttempts.has(attemptId)) {
+      // retry under the backups directory. The proof is the store's own GENERATION,
+      // not the ABSENCE of this attempt in a ledger: `restoreReceiptOperationId`
+      // writes this attempt's record in the SAME commit that advances the store
+      // above the point's epoch, and the epoch is monotonic (the restore sets it
+      // above both generations; activation only increments), so a live store still
+      // at THIS attempt's own store id and the point's own epoch has provably not
+      // committed this replacement. A store that moved — a different store id, or
+      // an epoch at or above the point's — is a changed generation in which a
+      // rewritten ledger can drop an intervening committed receipt, so its absence
+      // proves nothing and the point is PRESERVED; an unreadable store preserves
+      // as well. The commit path never reaches this catch. A crash before this
+      // line leaks its own point, exactly as it already leaks its own staging image;
+      // this reclamation owns neither, and the scratch sweep that runs after a
+      // later committed restore reclaims committed scratch only.
+      const live = await currentAuthorityHandle(context).catch(() => null);
+      if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
         try {
           for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${safety.backupPath}${suffix}`, { force: true });
           rmSync(safety.backupPath, { force: true });
