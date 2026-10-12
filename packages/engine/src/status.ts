@@ -447,8 +447,8 @@ export function validateWorkflowEntry(entry: unknown): GateResult {
  * `status.invalid-json` violation, never a throw). v1 or unknown-version
  * inputs — including v1-shaped documents carrying a root `plans[]` — fail
  * closed with an explicit `status.migration-required` violation carrying the
- * `mstar migrate` hint; there is no v1 read path anymore (v1 `validateStatus`
- * was deleted in the same task).
+ * supported store-upgrade recovery; there is no v1 read path anymore (v1
+ * `validateStatus` was deleted in the same task).
  *
  * Required: `version: 2`, `updated_at` (YYYY-MM-DD, same convention as the
  * v1 root), `workflows[]` of active entries (each validated by
@@ -486,6 +486,8 @@ export function validateStatusV2(
   if (!isPlainObject(doc)) {
     return { ok: false, violations: [violation("high", "status.invalid-doc", "status document must be an object")] };
   }
+  const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
+
 
  // Hard cutover (): a root file with `version !== 2` is the
  // migration-detection input — fail closed, never a silent pass or a dual
@@ -498,8 +500,8 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          `status.json schema version 2 required \u2014 got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
-          "run `mstar migrate`",
+          `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``,
+          `run \`${upgrade}\``,
         ),
       ],
     };
@@ -511,8 +513,8 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          "v1-shaped status.json (root plans[]) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
-          "run `mstar migrate`",
+          `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``,
+          `run \`${upgrade}\``,
         ),
       ],
     };
@@ -529,8 +531,8 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          "v1-shaped status.json (root residual_findings) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
-          "run `mstar migrate`",
+          `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``,
+          `run \`${upgrade}\``,
         ),
       ],
     };
@@ -664,8 +666,7 @@ export function validateStatusV2(
  * Relocated v2 root validator ( — hard cutover, no dual path):
  * the v1 `validateStatus` implementation was deleted in the same task that
  * introduced the v2 surface; the public export name survives so external
- * consumers (CLI, host hooks — cut over in P2) keep compiling and now fail
- * closed on v1 input with the `mstar migrate` hint.
+ * consumers (CLI, host hooks) keep compiling and now reject v1 input.
  */
 export const validateStatus = validateStatusV2;
 

@@ -73,7 +73,7 @@ export class DshMstar extends Service {
   /**
    * Validate a status.json document or file path (the v2 root schema —
    * engine `validateStatus` = `validateStatusV2`; a v1 document fails with
-   * `status.migration-required` carrying the `mstar migrate` hint).
+   * `status.migration-required` carrying the `mstar store upgrade` recovery).
    * @param docOrPath - parsed v2 status document or path to a status.json file.
    */
   validateStatus(docOrPath: StatusV2Doc | string): GateResult {

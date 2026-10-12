@@ -36,7 +36,6 @@ import {
   registerShippedCatalogExecution,
   setArtifactStore,
 } from '@mstar-harness/engine'
-import type { ArtifactStore } from '@mstar-harness/engine'
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -163,21 +162,6 @@ function stepPayload(messages: unknown[]) {
   } as never
 }
 
-/** The artifact store a real registration writes through, with ONE kind's `put` injected to fail. */
-function failingStore(harnessDir: string, kind: 'snapshot' | 'status'): ArtifactStore {
-  const base = createFsStore(harnessDir)
-  let remaining = 1
-  return {
-    ...base,
-    put: async (doc) => {
-      if (remaining > 0 && doc.kind === kind) {
-        remaining -= 1
-        throw new Error(`injected ${kind} write failure`)
-      }
-      return base.put(doc)
-    },
-  }
-}
 
 /** The shipped plan-registration input (the real writer's own transport). */
 function planRegistration(harnessDir: string, operationId: string) {

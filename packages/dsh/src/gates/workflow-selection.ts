@@ -433,7 +433,7 @@ function fileActiveSet(harnessDir: string): { source: ActiveSetSource } | { erro
       error: {
         kind: 'error',
         code: 'status.migration-required',
-        message: `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
+        message: `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`mstar store upgrade --operator <name> --harness '${harnessDir.replace(/'/g, "'\\''")}'\``,
       },
     }
   }
@@ -770,7 +770,7 @@ export function resolveReadWorkflow(harnessDir: string, hint?: SessionHint): Wor
     return {
       kind: 'error',
       code: 'workflow.selection.no-snapshot',
-      message: `no workflow snapshots under ${workflowsDir} — run \`mstar migrate\` or start a lifecycle`,
+      message: `no workflow snapshots under ${workflowsDir} — import legacy state with \`mstar store upgrade --operator <name> --harness '${harnessDir.replace(/'/g, "'\\''")}'\`, or start a lifecycle`,
     }
   }
   let entries
@@ -816,7 +816,7 @@ export function resolveReadWorkflow(harnessDir: string, hint?: SessionHint): Wor
     return {
       kind: 'error',
       code: 'workflow.selection.no-snapshot',
-      message: `no terminal workflow snapshot under ${workflowsDir} — run \`mstar migrate\` or start a lifecycle`,
+      message: `no terminal workflow snapshot under ${workflowsDir} — import legacy state with \`mstar store upgrade --operator <name> --harness '${harnessDir.replace(/'/g, "'\\''")}'\`, or start a lifecycle`,
     }
   }
   return { kind: 'terminal', workflowId: best.workflowId, dir: best.dir }

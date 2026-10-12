@@ -7938,11 +7938,12 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (!isPlainObject(doc)) {
     return { ok: false, violations: [violation2("high", "status.invalid-doc", "status document must be an object")] };
   }
+  const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
   if (doc.version !== 2) {
     return {
       ok: false,
       violations: [
-        violation2("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
+        violation2("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -7950,7 +7951,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation2("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation2("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -7958,7 +7959,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation2("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation2("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }

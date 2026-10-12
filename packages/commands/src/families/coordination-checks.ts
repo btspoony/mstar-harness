@@ -52,17 +52,23 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
         { key: "dryRun", flags: "--dry-run", required: false, help: "retired file-route input: the v1-to-v2 staging preview is gone; the refusal names the supported store upgrade" },
         { key: "path", flags: "--path <root>", required: false, help: "retired file-route input: pass the control root to `mstar store upgrade --harness <path> --operator <name>` instead" },
         { key: "json", flags: "--json", required: false, help: "retired file-route input: `mstar store upgrade` reports the imported/retained facts as JSON" },
+        { key: "deliveryKind", flags: "--delivery-kind <kind>", required: false, help: "ignored retired input; the file-staging migration is gone" },
+        { key: "branchSource", flags: "--branch-source <branch>", required: false, help: "ignored retired input; the file-staging migration is gone" },
+        { key: "branchTarget", flags: "--branch-target <branch>", required: false, help: "ignored retired input; the file-staging migration is gone" },
+        { key: "completionPolicy", flags: "--completion-policy <policy>", required: false, help: "ignored retired input; the file-staging migration is gone" },
       ] },
-      input: z.object({ dryRun: z.boolean().optional(), path: z.string().optional(), json: z.boolean().optional() }),
+      input: z.object({ dryRun: z.boolean().optional(), path: z.string().optional(), json: z.boolean().optional(), deliveryKind: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional() }),
       output, effects: [], description: "Retired command; refuses without mutation.",
-      async execute() {
+      async execute(input) {
+        const controlRoot = input.path === undefined ? "<control-root>" : `'${input.path.replace(/'/g, "'\\''")}'`;
+        const upgrade = `mstar store upgrade --operator <name> --harness ${controlRoot}`;
         return refusalEnvelope({
           command: "migrate",
           status: "refused",
           code: "migrate.verb-retired",
           exitCode: 1,
-          message: "migrate: removed — the v1-to-v2 file-staging route is retired. The supported route is `mstar store upgrade --operator <name>`, which imports recognizable v1/v2 execution sources directly into the control root's store.db and leaves every legacy file untouched. This verb writes nothing.",
-          recovery: "Run mstar store upgrade --operator <name> for the control root that holds the legacy files; it converts v1 sources in memory, preserves the originals, and is retryable.",
+          message: `migrate: removed — the v1-to-v2 file-staging route is retired. The supported route is \`${upgrade}\`, which imports recognizable v1/v2 execution sources into that control root's store.db and leaves every legacy file untouched. This verb writes nothing.`,
+          recovery: `Run ${upgrade} for the control root that holds the legacy files; it converts v1 sources in memory, preserves the originals, and is retryable.`,
         });
       },
     }),

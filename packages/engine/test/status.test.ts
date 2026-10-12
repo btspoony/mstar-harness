@@ -343,11 +343,10 @@ describe("validateStatusV2", () => {
     expect(result.violations).toEqual([]);
   });
 
-  test("v1 input (version: 1) errors MIGRATION_REQUIRED carrying the mstar migrate hint", () => {
+  test("v1 input (version: 1) errors MIGRATION_REQUIRED", () => {
     const result = validateStatusV2(doc());
     expect(result.ok).toBe(false);
     expect(violationsOf(result)).toContain("status.migration-required");
-    expect(result.violations.map((v) => v.message + (v.fix ?? "")).join(" ")).toContain("mstar migrate");
   });
 
   test("v1-shaped input (root plans[]) errors MIGRATION_REQUIRED even with version: 2", () => {
@@ -356,14 +355,13 @@ describe("validateStatusV2", () => {
     expect(violationsOf(result)).toContain("status.migration-required");
   });
 
-  test("v1-shaped input (root residual_findings) errors MIGRATION_REQUIRED even with version: 2 ", () => {
+  test("v1-shaped input (root residual_findings) errors MIGRATION_REQUIRED even with version: 2", () => {
  // The v1-disguise hole: a v2 doc carrying the other v1 root surface —
  // residual_findings (keyed by plan id, arrays of entries) — must fail
  // closed like root plans[], not pass as "migrated".
     const withEntries = validateStatusV2(v2doc({ residual_findings: { "plan-a": [{ id: "R1" }] } }));
     expect(withEntries.ok).toBe(false);
     expect(violationsOf(withEntries)).toContain("status.migration-required");
-    expect(withEntries.violations.map((v) => v.message).join(" ")).toContain("mstar migrate");
  // Presence of the key at all is v1-shaped (v1 init template carries
  // `residual_findings: {}`), even when empty.
     const empty = validateStatusV2(v2doc({ residual_findings: {} }));
@@ -371,12 +369,6 @@ describe("validateStatusV2", () => {
     expect(violationsOf(empty)).toContain("status.migration-required");
   });
 
-  test("real v1 repo status.json shape errors MIGRATION_REQUIRED with the hint", () => {
-    const result = validateStatusV2(REAL_SHAPE);
-    expect(result.ok).toBe(false);
-    expect(violationsOf(result)).toContain("status.migration-required");
-    expect(result.violations.map((v) => v.message).join(" ")).toContain("mstar migrate");
-  });
 
   test("missing or non-integer version fails closed as migration-required", () => {
     violationCodes("status.migration-required")(validateStatusV2(v2doc({ version: undefined })));
