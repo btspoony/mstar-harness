@@ -1954,12 +1954,15 @@ export function withExecutionReadGuard<T>(
   body: (db: StoreDb, authority: { storeId: string; epoch: number }) => T,
 ): T {
   const probe = probeExecutionAuthority(storeDbPath(context));
+  if (probe.kind === "absent") {
+    throw new StoreError("store.not-initialized", "No execution store exists. Run \"mstar harness scaffold\" then \"mstar store init\"; for legacy state run \"mstar store upgrade\".");
+  }
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.kind !== "active") {
-    throw new StoreError(
-      "execution.consumer-not-ready",
-      "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.",
-    );
+    const recovery = probe.state === "staged"
+      ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+      : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
+    throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
   }
   const db = probeConnectionFor(probe.dbPath);
   if (db === null) {
@@ -1982,13 +1985,14 @@ export function withExecutionReadGuard<T>(
   return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
 }
 const dshTransactions = new Set<string>();
-export type DshWriteTransaction = { db: StoreDb; storeId: string; epoch: number };
+export type DshSelectedGeneration = { storeId: string; epoch: number };
+export type DshWriteTransaction = { db: StoreDb; storeId: string; epoch: number; markChanged(): void };
 
 /** Engine-private synchronous transaction used only by typed host-state verbs. */
 export function withDshWriteTransaction<T>(
   context: StoreContext,
   body: (tx: DshWriteTransaction) => T,
-  expectedEpoch?: number,
+  selectedGeneration?: DshSelectedGeneration,
 ): T {
   const dbPath = storeDbPath(context);
   if (dshTransactions.has(dbPath)) {
@@ -2041,14 +2045,17 @@ export function withDshWriteTransaction<T>(
       if (
         current.storeId !== initial.storeId ||
         current.epoch !== initial.epoch ||
-        (expectedEpoch !== undefined && current.epoch !== expectedEpoch)
+        (selectedGeneration !== undefined &&
+          (current.storeId !== selectedGeneration.storeId || current.epoch !== selectedGeneration.epoch))
       ) {
         throw new StoreError("store.stale-epoch", "The selected store identity or epoch changed; resolve the current authority and retry.");
       }
-      const result = body({ db, storeId: current.storeId, epoch: current.epoch });
+      let changed = false;
+      const result = body({ db, storeId: current.storeId, epoch: current.epoch, markChanged: () => { changed = true; } });
       if (typeof (result as { then?: unknown } | null)?.then === "function") {
         throw new StoreError("store.corrupt", "A host-state transaction body must be synchronous.");
       }
+      if (changed) db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
       db.exec("commit");
       return result;
     } catch (error) {

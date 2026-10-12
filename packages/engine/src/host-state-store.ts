@@ -1,4 +1,5 @@
-import { StoreError, withDshWriteTransaction, withExecutionReadGuard, type DshWriteTransaction, type StoreContext, type StoreDb } from "./store-db.js";
+import { StoreError, withDshWriteTransaction, withExecutionReadGuard, type DshSelectedGeneration, type DshWriteTransaction, type StoreContext, type StoreDb } from "./store-db.js";
+export type { DshSelectedGeneration } from "./store-db.js";
 
 export type DshSessionBinding = {
   sessionId: string;
@@ -22,7 +23,7 @@ export type DshWorkflowEventInput = {
   digest: string;
   lineJson: string;
   source: { sessionId: string; streamId: string; seq: number };
-  expectedEpoch?: number;
+  selectedGeneration?: DshSelectedGeneration;
 };
 
 
@@ -69,12 +70,9 @@ export function readDshSessionBinding(
       };
     });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
     return {
       kind: "unavailable",
-      reason: error instanceof StoreError && error.code === "execution.consumer-not-ready"
-        ? `${reason} For an empty workspace run "mstar harness scaffold" then "mstar store init"; for legacy state run "mstar store upgrade --harness ${JSON.stringify(context.harnessDir)} --operator <name>"; for a staged review run "mstar store activate --manifest <migration.json> --attestation <file.json>".`
-        : reason,
+      reason: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -84,6 +82,7 @@ export function writeDshSessionBinding(
   sessionId: string,
   cwd: string,
   update: DshSessionBindingUpdate,
+  selectedGeneration?: DshSelectedGeneration,
 ): DshWriteResult {
   try {
     withDshWriteTransaction(context, (tx) => {
@@ -112,7 +111,8 @@ export function writeDshSessionBinding(
         update.excludedBeforeSeq,
         now(),
       );
-    });
+      tx.markChanged();
+    }, selectedGeneration);
     return { kind: "written" };
   } catch (error) {
     return { kind: "degraded", reason: error instanceof Error ? error.message : String(error) };
@@ -125,6 +125,7 @@ export function recordDshStatusEmission(
   cwd: string,
   turn: number,
   payloadJson: string,
+  selectedGeneration?: DshSelectedGeneration,
 ): DshWriteResult {
   try {
     withDshWriteTransaction(context, (tx) => {
@@ -132,7 +133,8 @@ export function recordDshStatusEmission(
         "insert into dsh_status_emissions(session_id, cwd, turn, emitted_at, payload_json) values (?, ?, ?, ?, ?) " +
           "on conflict(session_id, cwd) do update set turn = excluded.turn, emitted_at = excluded.emitted_at, payload_json = excluded.payload_json",
       ).run(sessionId, cwd, turn, now(), payloadJson);
-    });
+      tx.markChanged();
+    }, selectedGeneration);
     return { kind: "written" };
   } catch (error) {
     return { kind: "degraded", reason: error instanceof Error ? error.message : String(error) };
@@ -144,12 +146,13 @@ export function appendDshLedgerRow(
   workflowId: string,
   lineJson: string,
   eventId?: string,
-  expectedEpoch?: number,
+  selectedGeneration?: DshSelectedGeneration,
 ): DshWriteResult {
   try {
     withDshWriteTransaction(context, (tx) => {
       insertion(tx, workflowId, lineJson, eventId);
-    }, expectedEpoch);
+      tx.markChanged();
+    }, selectedGeneration);
     return { kind: "written" };
   } catch (error) {
     return { kind: "degraded", reason: error instanceof Error ? error.message : String(error) };
@@ -167,9 +170,9 @@ export function appendDshWorkflowEvent(
       ).get(input.workflowId, input.eventId) as { digest?: string } | undefined;
       if (prior) {
         if (prior.digest !== input.digest) {
-          return { kind: "refused" as const, reason: "workflow event identity was already accepted with a different digest" };
+          return { kind: "refused" as const, reason: "workflow event identity was already accepted with a different digest; the accepted fact is preserved, and this core exposes no supported conflict-recovery operation." };
         }
-        advanceBound(tx.db, input.workflowId, input.source.sessionId, input.source.seq + 1, input.source.streamId);
+        if (advanceBound(tx.db, input.workflowId, input.source.sessionId, input.source.seq + 1, input.source.streamId)) tx.markChanged();
         return { kind: "replayed" as const };
       }
       tx.db.prepare(
@@ -177,12 +180,14 @@ export function appendDshWorkflowEvent(
       ).run(input.workflowId, input.eventId, input.digest, now());
       insertion(tx, input.workflowId, input.lineJson, input.eventId);
       advanceBound(tx.db, input.workflowId, input.source.sessionId, input.source.seq + 1, input.source.streamId);
+      tx.markChanged();
       return { kind: "accepted" as const };
-    }, input.expectedEpoch);
+    }, input.selectedGeneration);
   } catch (error) {
     return { kind: "refused", reason: error instanceof Error ? error.message : String(error) };
   }
 }
+
 
 export function readDshLedgerWindow(context: StoreContext, workflowId: string, limit: number): string[] | null {
   if (!Number.isFinite(limit)) return null;
@@ -214,7 +219,7 @@ export function readDshScanBound(
     return undefined;
   }
 }
-function advanceBound(db: StoreDb, workflowId: string, sessionId: string, next: number, stream: string | null): void {
+function advanceBound(db: StoreDb, workflowId: string, sessionId: string, next: number, stream: string | null): boolean {
   if (!Number.isSafeInteger(next) || next < 1) {
     throw new StoreError("store.corrupt", "The dsh scan bound must be a positive safe integer.");
   }
@@ -222,10 +227,12 @@ function advanceBound(db: StoreDb, workflowId: string, sessionId: string, next: 
     "select next, stream from dsh_scan_bounds where workflow_id = ? and session_id = ?",
   ).get(workflowId, sessionId) as { next?: number; stream?: string | null } | undefined;
   const value = prior && prior.stream === stream ? Math.max(prior.next!, next) : next;
+  if (prior && prior.next === value && prior.stream === stream) return false;
   db.prepare(
     "insert into dsh_scan_bounds(workflow_id, session_id, next, stream) values (?, ?, ?, ?) " +
       "on conflict(workflow_id, session_id) do update set next = excluded.next, stream = excluded.stream",
   ).run(workflowId, sessionId, value, stream);
+  return true;
 }
 
 export function advanceDshScanBound(
@@ -234,9 +241,12 @@ export function advanceDshScanBound(
   sessionId: string,
   next: number,
   stream: string | null,
+  selectedGeneration?: DshSelectedGeneration,
 ): boolean {
   try {
-    withDshWriteTransaction(context, (tx) => advanceBound(tx.db, workflowId, sessionId, next, stream));
+    withDshWriteTransaction(context, (tx) => {
+      if (advanceBound(tx.db, workflowId, sessionId, next, stream)) tx.markChanged();
+    }, selectedGeneration);
     return true;
   } catch {
     return false;

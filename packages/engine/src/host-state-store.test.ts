@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, readDshLedgerWindow, readDshScanBound, readDshSessionBinding, readDshStatusEmission, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
-import { initializeStore, openStore } from "./store-db.js";
+import { initializeStore, openStore, withDshWriteTransaction } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dsh-state-test-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -34,15 +34,41 @@ describe("host-state store domain", () => {
     });
     expect(existsSync(join(context.harnessDir, "store.db"))).toBe(false);
   });
+  test("reports staged authority separately from true absence", async () => {
+    const { context, handle } = await fresh("staged");
+    try {
+      handle.db.prepare("update execution_meta set authority_state='staged' where id=1").run();
+      expect(readDshSessionBinding(context, "s", "/cwd")).toMatchObject({
+        kind: "unavailable",
+        reason: expect.stringContaining("reviewed activation"),
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("refuses nested private DSH transactions without changing revision", async () => {
+    const { context, handle } = await fresh("nested");
+    const revision = (handle.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
+    try {
+      expect(() => withDshWriteTransaction(context, () =>
+        withDshWriteTransaction(context, () => "nested"),
+      )).toThrow("nested host-state transaction");
+      expect((handle.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision).toBe(revision);
+    } finally {
+      handle.close();
+    }
+  });
   test("preserves duplicate live rows while deduplicating verified workflow identities by digest", async () => {
     const { context, handle } = await fresh("dedup");
-    const identity = { workflowId: "wf-a", eventId: "wfe1:dispatch:stream-a:1", digest: "digest-a", lineJson: "{\"eventId\":\"live\"}", source: { sessionId: "session-a", streamId: "stream-a", seq: 1 }, expectedEpoch: handle.epoch };
+    const identity = { workflowId: "wf-a", eventId: "wfe1:dispatch:stream-a:1", digest: "digest-a", lineJson: "{\"eventId\":\"live\"}", source: { sessionId: "session-a", streamId: "stream-a", seq: 1 }, selectedGeneration: { storeId: handle.storeId, epoch: handle.epoch } };
     try {
       expect(appendDshLedgerRow(context, "wf-a", "{\"eventId\":\"same\"}", "live")).toEqual({ kind: "written" });
       expect(appendDshLedgerRow(context, "wf-a", "{\"eventId\":\"same\"}", "live")).toEqual({ kind: "written" });
       expect(appendDshWorkflowEvent(context, identity)).toEqual({ kind: "accepted" });
       handle.db.prepare("delete from dsh_scan_bounds where workflow_id = ? and session_id = ?").run("wf-a", "session-a");
       expect(appendDshWorkflowEvent(context, identity)).toEqual({ kind: "replayed" });
+      expect(readDshScanBound(context, "wf-a", "session-a")).toEqual({ next: 2, stream: "stream-a" });
       expect(appendDshWorkflowEvent(context, { ...identity, digest: "digest-b" })).toMatchObject({ kind: "refused" });
       expect(readDshLedgerWindow(context, "wf-a", 10)).toEqual([
         identity.lineJson, "{\"eventId\":\"same\"}", "{\"eventId\":\"same\"}",
@@ -55,19 +81,56 @@ describe("host-state store domain", () => {
       handle.close();
     }
   });
+  test("bumps shared revision once per accepted mutation, including replay cursor advances only", async () => {
+    const { context, handle } = await fresh("revision");
+    const revision = () => (handle.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
+    try {
+      const initial = revision();
+      const event = {
+        workflowId: "wf", eventId: "e1", digest: "d", lineJson: "{}",
+        source: { sessionId: "s", streamId: "a", seq: 1 },
+        selectedGeneration: { storeId: handle.storeId, epoch: handle.epoch },
+      };
+      expect(appendDshWorkflowEvent(context, event)).toEqual({ kind: "accepted" });
+      expect(revision()).toBe(initial + 1);
+      expect(appendDshWorkflowEvent(context, { ...event, digest: "conflict" })).toMatchObject({ kind: "refused" });
+      expect(revision()).toBe(initial + 1);
+      expect(appendDshWorkflowEvent(context, event)).toEqual({ kind: "replayed" });
+      expect(revision()).toBe(initial + 1);
+      expect(appendDshWorkflowEvent(context, { ...event, source: { ...event.source, seq: 2 } })).toEqual({ kind: "replayed" });
+      expect(revision()).toBe(initial + 2);
+      expect(writeDshSessionBinding(context, "s", "/cwd", { excludedBeforeSeq: 2 }, event.selectedGeneration)).toEqual({ kind: "written" });
+      expect(revision()).toBe(initial + 3);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("rejects a selected store identity replaced before the write preflight", async () => {
+    const { context, handle } = await fresh("replacement");
+    const selected = { storeId: handle.storeId, epoch: handle.epoch };
+    try {
+      handle.db.prepare("update store_meta set store_id = ?, authority_epoch = ? where id=1").run("replacement-store", selected.epoch);
+      expect(advanceDshScanBound(context, "wf", "s", 2, "stream", selected)).toBe(false);
+      expect(readDshScanBound(context, "wf", "s")).toBeUndefined();
+    } finally {
+      handle.close();
+    }
+  });
 
   test("commits accepted identity, display event and scan bound atomically on rollback", async () => {
     const { context, handle } = await fresh("rollback");
     try {
+      const revision = (handle.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
       handle.db.exec("create trigger fail_dsh_event before insert on dsh_ledger_events begin select raise(abort, 'forced event failure'); end");
       const result = appendDshWorkflowEvent(context, {
         workflowId: "wf", eventId: "wfe1:dispatch:s:4", digest: "d", lineJson: "{}",
-        source: { sessionId: "s", streamId: "stream", seq: 4 }, expectedEpoch: handle.epoch,
+        source: { sessionId: "s", streamId: "stream", seq: 4 }, selectedGeneration: { storeId: handle.storeId, epoch: handle.epoch },
       });
       expect(result).toMatchObject({ kind: "refused" });
       expect(count(handle.db, "select count(*) as n from dsh_accepted_identities")).toBe(0);
       expect(count(handle.db, "select count(*) as n from dsh_ledger_events")).toBe(0);
-      expect(count(handle.db, "select count(*) as n from dsh_scan_bounds")).toBe(0);
+      expect((handle.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision).toBe(revision);
     } finally {
       handle.close();
     }
@@ -79,7 +142,7 @@ describe("host-state store domain", () => {
       handle.db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id=1").run();
       expect(appendDshWorkflowEvent(context, {
         workflowId: "wf", eventId: "wfe1:dispatch:s:4", digest: "d", lineJson: "{}",
-        source: { sessionId: "s", streamId: "stream", seq: 4 }, expectedEpoch: handle.epoch,
+        source: { sessionId: "s", streamId: "stream", seq: 4 }, selectedGeneration: { storeId: handle.storeId, epoch: handle.epoch },
       })).toMatchObject({ kind: "refused", reason: expect.stringContaining("store.stale-epoch") });
       expect(count(handle.db, "select count(*) as n from dsh_ledger_events")).toBe(0);
       expect(advanceDshScanBound(context, "wf", "s", 0, "incarnation-a")).toBe(false);

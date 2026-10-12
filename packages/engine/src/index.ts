@@ -574,6 +574,7 @@ export type {
   DshStatusEmission,
   DshWorkflowEventInput,
   DshWriteResult,
+  DshSelectedGeneration,
 } from "./host-state-store.js";
 export {
   advanceDshScanBound,
