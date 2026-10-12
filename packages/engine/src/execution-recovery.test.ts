@@ -57,6 +57,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   readExecutionState,
+  serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionSessionRef,
@@ -1144,6 +1145,93 @@ describe("execution-restore", () => {
   ];
 
   /**
+   * The loss-payload generation this protocol ships, pinned as a literal: the
+   * guard must fail when the shipped generation moves, not move with it.
+   */
+  const FROZEN_PROTOCOL_VERSION = 2;
+
+  /**
+   * The §8 loss digest `buildLossInventory` composes, recomputed from the
+   * PRODUCTION preview plus the facts the engine reads directly from the two
+   * store files. `lossDigestOf` folds the point-only (resurrected) receipt ids
+   * into this serialization, so recomposing it here is what makes a dropped or
+   * different resurrection contribution FAIL instead of agreeing with a
+   * fixture-only expectation.
+   */
+  const productionLossDigest = (
+    preview: ExecutionRecoveryPreview,
+    pointPath: string,
+    livePath: string,
+    resurrectedOperationIds: readonly string[],
+  ): string => {
+    const meta = (dbPath: string): { state: string; epoch: number } => {
+      const row = rawGet<{ authority_state: string; authority_epoch: number }>(
+        dbPath,
+        "select authority_state, authority_epoch from store_meta where id = 1",
+      )!;
+      return { state: row.authority_state, epoch: row.authority_epoch };
+    };
+    const schemaVersion = (dbPath: string): number =>
+      rawGet<{ n: number }>(dbPath, "select max(version) as n from schema_version")!.n;
+    const execution = (dbPath: string): Record<string, unknown> | null => {
+      const row = rawGet<Record<string, unknown>>(
+        dbPath,
+        "select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1",
+      );
+      return row === undefined
+        ? null
+        : {
+            protocolVersion: row.protocol_version,
+            authorityState: row.authority_state,
+            revision: row.revision,
+            rootUpdatedAt: row.root_updated_at,
+            manifestId: (row.manifest_id as string | null | undefined) ?? null,
+            activatedAt: (row.activated_at as string | null | undefined) ?? null,
+          };
+    };
+    const hasTable = (dbPath: string, table: string): boolean =>
+      rawGet<{ n: number }>(dbPath, `select count(*) as n from sqlite_master where type = 'table' and name = '${table}'`)!.n > 0;
+    const count = (dbPath: string, table: string): number =>
+      rawGet<{ n: number }>(dbPath, `select count(*) as n from ${table}`)!.n;
+    const backupCounts: Record<string, number> = {
+      issues: count(pointPath, "issues"),
+      occurrences: count(pointPath, "occurrences"),
+      transitions: count(pointPath, "issue_transitions"),
+      migrationReceipts: count(pointPath, "migration_receipts"),
+      ...(hasTable(pointPath, "catalog_entities") ? { catalogEntities: count(pointPath, "catalog_entities") } : {}),
+      ...(hasTable(pointPath, "catalog_links") ? { catalogLinks: count(pointPath, "catalog_links") } : {}),
+    };
+    return sha256OfBytes(
+      Buffer.from(
+        serializeExecutionValue({
+          format: "execution-restore-loss-v1",
+          version: FROZEN_PROTOCOL_VERSION,
+          backupPath: preview.backupPath,
+          backupSha256: sha256OfFile(pointPath),
+          backupEpoch: meta(pointPath).epoch,
+          backupAuthorityState: meta(pointPath).state,
+          backupSchemaVersion: schemaVersion(pointPath),
+          backupExecution: execution(pointPath),
+          backupCounts,
+          liveStoreId: preview.liveStoreId,
+          liveEpoch: meta(livePath).epoch,
+          liveAuthorityState: meta(livePath).state,
+          liveSchemaVersion: schemaVersion(livePath),
+          liveExecution: execution(livePath),
+          authorityDifferences: preview.authorityDifferences,
+          lostOperationIds: preview.lostOperationIds,
+          resurrectedOperationIds,
+          retainedDigest: preview.retainedDigest,
+          retainedLiveDigest: preview.retainedLiveDigest,
+          retainedDifferences: preview.retainedDifferences,
+          backupCoverageDigest: preview.backupCoverageDigest,
+          liveCoverageDigest: preview.liveCoverageDigest,
+        }),
+      ),
+    );
+  };
+
+  /**
    * Constraint 2's restore face, mechanism-asserted: a store holding BOTH receipt
    * forms — the slim envelope T1's writer persists for the graph class and the
    * full receipt a pre-change build left behind — inventories without same-key
@@ -1194,6 +1282,9 @@ describe("execution-restore", () => {
     const clean = await previewExecutionRestore(world.context, point.backupPath);
     expect(clean.authorityDifferences).toEqual([]);
     expect(clean.lostOperationIds).toEqual([]);
+    // On the UNMOVED store the clean preview recomposes from the same §8
+    // serialization with an EMPTY resurrection set.
+    expect(productionLossDigest(clean, point.backupPath, world.dbPath, [])).toBe(clean.lossDigest);
 
     // The terminal close prunes that workflow's earlier receipts — BOTH forms —
     // and retains its own slim durable replay anchor.
@@ -1207,7 +1298,7 @@ describe("execution-restore", () => {
 
     const preview = await previewExecutionRestore(world.context, point.backupPath);
     // No preview-shape or protocol change travels with the mixed-form inventory.
-    expect(preview.version).toBe(EXECUTION_RECOVERY_PROTOCOL_VERSION);
+    expect(preview.version).toBe(FROZEN_PROTOCOL_VERSION);
     expect(Object.keys(preview).sort()).toEqual([...PREVIEW_KEYS].sort());
 
     // Every receipt row of either form, per side, as the two preview classes
@@ -1246,19 +1337,31 @@ describe("execution-restore", () => {
 
     // The point-only receipts `lostOperationIds` does not list are the
     // resurrected set, which the frozen preview carries through `lossDigest`
-    // alone, so the same fact is read from the two store files.
+    // alone. The digest is the §8 canonical serialization, so recomposing it
+    // from the production preview plus the store files' own facts proves the
+    // engine's resurrection contribution is really folded in — the point-only
+    // receipts, the hand-inserted fat row included — instead of agreeing with an
+    // expectation this fixture wrote down twice.
     const receiptIds = (dbPath: string): string[] =>
       rawAll<{ epoch: number; operation_id: string }>(
         dbPath,
         "select epoch, operation_id from execution_operations order by epoch, operation_id",
       ).map((row) => `execution:${row.epoch}:${row.operation_id}`);
-    const liveIds = new Set(receiptIds(world.dbPath));
-    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id)).sort()).toEqual(
+    const prunedReceiptIds = (() => {
+      const live = new Set(receiptIds(world.dbPath));
+      return receiptIds(point.backupPath).filter((id) => !live.has(id)).sort();
+    })();
+    expect(prunedReceiptIds).toEqual(
       workflowReceipts(point.backupPath).map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
     );
-    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id))).toContain(
-      `execution:${world.epoch}:${fatOperationId}`,
+    expect(prunedReceiptIds).toContain(`execution:${world.epoch}:${fatOperationId}`);
+    expect(productionLossDigest(preview, point.backupPath, world.dbPath, prunedReceiptIds)).toBe(preview.lossDigest);
+    // A different resurrection contribution is a different digest, so the
+    // comparison above cannot pass by ignoring the component.
+    expect(productionLossDigest(preview, point.backupPath, world.dbPath, [...prunedReceiptIds, "execution:0:not-committed"])).not.toBe(
+      preview.lossDigest,
     );
+    expect(prunedReceiptIds.length).toBeGreaterThan(0);
 
     // The pruned-row declaration stands beside the mixed forms: the surviving
     // anchor is slim, and the point's fat row KEPT its write-time form because
