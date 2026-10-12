@@ -65,8 +65,8 @@ const descriptions: Record<(typeof verbs)[number], string> = {
   list: "List catalog rows with incident relations.",
   show: "Show one catalog row and its incident relations.",
   export: "Export the versioned catalog transport payload.",
-  reconcile: "Inspect pending catalog execution registrations (--list, read-only) or abandon unwritten work (--abort); the finish/adopt branch is retired.",
-  "purge-registration": "Remove a producer-written registration snapshot after verifying its recorded identity digest.",
+  reconcile: "Inspect pending catalog execution registrations (--list, read-only) or abandon an unregistered journal (--abort); original source bytes are retained.",
+  "purge-registration": "Settle an identity-verified failed registration; the source snapshot is retained.",
 };
 const cliFlags: Record<keyof Input, string> = {
   kind: "--kind <kind>", id: "--id <id>", title: "--title <title>", description: "--description <text>", rootKind: "--root-kind <rootKind>",
@@ -108,8 +108,8 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
                     : id === "catalog.export"
                       ? "Choose a writable catalog export destination. Run mstar catalog export --out <path>."
                       : id === "catalog.reconcile"
-                        ? "Inspect the pending registration executions with mstar catalog reconcile --list, abandon unwritten work with mstar catalog reconcile --abort --operation-id <id>, or remove a produced snapshot with mstar catalog purge-registration."
-                        : "Verify the registration snapshot identity and canonical location. Run mstar catalog purge-registration --workflow <workflow-id> --operation <operation-id> --expect <revision> --actor <actor>."});
+                        ? "Inspect pending registrations with mstar catalog reconcile --list, abandon an unregistered journal with mstar catalog reconcile --abort --operation-id <id>, or settle an identity-verified failed snapshot with mstar catalog purge-registration --workflow <workflow-id> --operation <id> --expect <catalog-revision> --actor <role>; read the revision with mstar catalog export. Source bytes remain."
+                        : "Verify the recorded workflow, failed-registration operation, current catalog revision (from mstar catalog export), actor and snapshot identity. Run mstar catalog purge-registration --workflow <workflow-id> --operation <operation-id> --expect <revision> --actor <actor>."});
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
@@ -327,8 +327,8 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       if (!input.abort) {
         return refusalEnvelope({
           command: id, status: "refused", code: "catalog.verb-retired", exitCode: 1,
-          message: "catalog reconcile: removed — the ACTIVE route has no orphan-file recovery and no pending adoption; abandon unwritten work with `mstar catalog reconcile --abort`, or remove a produced snapshot with `mstar catalog purge-registration`. This verb writes nothing.",
-          recovery: "Abandon unwritten work with mstar catalog reconcile --abort --operation-id <id>, or remove a produced registration snapshot with mstar catalog purge-registration --workflow <workflow-id> --operation <operation-id> --expect <revision> --actor <actor>.",
+          message: "catalog reconcile's finish/adopt route is retired; there is no orphan-file recovery. Abandon a pending journal with --abort, or settle an identity-verified failed snapshot with purge-registration. Both retain the original source bytes.",
+          recovery: "Run mstar catalog reconcile --list; use --abort --operation-id <id> for an unregistered journal, or read the current revision with mstar catalog export and run mstar catalog purge-registration --workflow <workflow-id> --operation <id> --expect <catalog-revision> --actor <role> for a failed snapshot.",
         });
       }
       requireAll(input, ["operationId"]);
