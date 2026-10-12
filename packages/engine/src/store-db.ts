@@ -77,7 +77,9 @@ export type StoreErrorCode =
   // not a `coordination.*` scoped-writer refusal and not a payload error.
   | "execution.direct-write-refused"
   | "execution.consumer-not-ready"
-  | "execution.workflow-identity-mismatch";
+  | "execution.workflow-identity-mismatch"
+  | "store.stale-epoch"
+  | "store.not-active";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -1378,6 +1380,49 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
     update.run(JSON.stringify(tombstone), workflowId);
   }
 }
+/** Five host-state tables for DSH-owned ledger facts. */
+export const MIGRATION_10_SQL = `
+create table dsh_ledger_events(
+  seq_rowid integer primary key autoincrement,
+  workflow_id text not null,
+  event_id text,
+  event_json text not null,
+  recorded_at text not null
+);
+create index dsh_ledger_events_workflow on dsh_ledger_events(workflow_id, seq_rowid);
+create table dsh_accepted_identities(
+  workflow_id text not null,
+  event_id text not null,
+  digest text not null,
+  accepted_at text not null,
+  primary key(workflow_id, event_id)
+);
+create table dsh_scan_bounds(
+  workflow_id text not null,
+  session_id text not null,
+  next integer not null,
+  stream text,
+  primary key(workflow_id, session_id)
+);
+create table dsh_session_bindings(
+  session_id text not null,
+  cwd text not null,
+  selected_workflow_id text,
+  execution_binding text,
+  excluded_before_seq integer not null default 0,
+  updated_at text not null,
+  primary key(session_id, cwd)
+);
+create table dsh_status_emissions(
+  session_id text not null,
+  cwd text not null,
+  turn integer not null,
+  emitted_at text not null,
+  payload_json text not null,
+  primary key(session_id, cwd)
+);
+`;
+
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
@@ -1390,7 +1435,9 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
   { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
   { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
+  { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
 ];
+const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
 /**
  * Execution tables the migrated schema must carry — the executable form of
@@ -1933,6 +1980,92 @@ export function withExecutionReadGuard<T>(
     throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
   }
   return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
+}
+const dshTransactions = new Set<string>();
+export type DshWriteTransaction = { db: StoreDb; storeId: string; epoch: number };
+
+/** Engine-private synchronous transaction used only by typed host-state verbs. */
+export function withDshWriteTransaction<T>(
+  context: StoreContext,
+  body: (tx: DshWriteTransaction) => T,
+  expectedEpoch?: number,
+): T {
+  const dbPath = storeDbPath(context);
+  if (dshTransactions.has(dbPath)) {
+    throw new StoreError("store.corrupt", "A nested host-state transaction is not permitted.");
+  }
+  assertStoreRuntimeSupported();
+  assertAbsentOrRegularStoreFile(dbPath);
+  if (!existsSync(dbPath)) {
+    throw new StoreError(
+      "store.not-initialized",
+      `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or ` +
+        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" ` +
+        "when legacy state must be imported; nothing was written.",
+    );
+  }
+  dshTransactions.add(dbPath);
+  let db: StoreDb | undefined;
+  try {
+    db = openConnection(dbPath, "write", loadSqliteDriverSync().DatabaseSync);
+    let schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+    const requiredVersion = DSH_HOST_STATE_MIGRATION?.version;
+    if (requiredVersion === undefined || schemaVersion < requiredVersion) {
+      throw new StoreError(
+        "store.schema-drift",
+        `The execution store predates dsh-host-ledgers. Run "mstar store upgrade" before host-state persistence; nothing was written.`,
+      );
+    }
+    const initial = readStoreMeta(db);
+    const execution = readExecutionMeta(db, schemaVersion);
+    if (!execution || execution.authorityState !== "active") {
+      const recovery = execution?.authorityState === "staged"
+        ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+        : `Run "mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+      throw new StoreError("store.not-active", `The execution authority is ${execution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
+    }
+    db.exec("begin immediate");
+    try {
+      schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+      if (schemaVersion < requiredVersion) {
+        throw new StoreError("store.schema-drift", "The execution store predates dsh-host-ledgers; run mstar store upgrade.");
+      }
+      const current = readStoreMeta(db);
+      const currentExecution = readExecutionMeta(db, schemaVersion);
+      if (!currentExecution || currentExecution.authorityState !== "active") {
+        const recovery = currentExecution?.authorityState === "staged"
+          ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+          : `Run "mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+        throw new StoreError("store.not-active", `The execution authority is ${currentExecution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
+      }
+      if (
+        current.storeId !== initial.storeId ||
+        current.epoch !== initial.epoch ||
+        (expectedEpoch !== undefined && current.epoch !== expectedEpoch)
+      ) {
+        throw new StoreError("store.stale-epoch", "The selected store identity or epoch changed; resolve the current authority and retry.");
+      }
+      const result = body({ db, storeId: current.storeId, epoch: current.epoch });
+      if (typeof (result as { then?: unknown } | null)?.then === "function") {
+        throw new StoreError("store.corrupt", "A host-state transaction body must be synchronous.");
+      }
+      db.exec("commit");
+      return result;
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // Transaction may already have been closed by the driver.
+      }
+      throw error;
+    }
+  } finally {
+    try {
+      db?.close();
+    } finally {
+      dshTransactions.delete(dbPath);
+    }
+  }
 }
 
 export type StoreHandle = {

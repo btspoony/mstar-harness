@@ -568,6 +568,24 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+export type {
+  DshSessionBinding,
+  DshSessionBindingUpdate,
+  DshStatusEmission,
+  DshWorkflowEventInput,
+  DshWriteResult,
+} from "./host-state-store.js";
+export {
+  advanceDshScanBound,
+  appendDshLedgerRow,
+  appendDshWorkflowEvent,
+  readDshLedgerWindow,
+  readDshScanBound,
+  readDshStatusEmission,
+  readDshSessionBinding,
+  recordDshStatusEmission,
+  writeDshSessionBinding,
+} from "./host-state-store.js";
 export { rowValidationRoute } from "./workflow.js";
 export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
 // Coordinator-only execution authority: version tokens, registration,
