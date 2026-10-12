@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root,engine
+packages: root,engine,commands
 ---
 
 - **Execution receipt retention**: terminal close and adoption now prune the closed workflow's `execution_operations` receipts inside the same transaction, and an epoch-bump purge statement pins the invariant that an in-place epoch advance never leaves replay-dead receipt rows behind. RUNNING workflows keep every receipt (replay and recovery evidence stay intact); per-workflow accumulation is documented as the deliberate tradeoff tracked by #466.
