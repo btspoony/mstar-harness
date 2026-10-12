@@ -1750,27 +1750,38 @@ function recoveryReceiptPathOf(root: string, attemptId: string): string {
 }
 
 /**
- * §8: reclaim the staged scratch a CRASHED restore attempt left behind.
+ * §8: reclaim the staged scratch of an attempt whose outcome the STORE has
+ * already recorded as committed.
  *
- * The attempt stages a verified private image at
+ * An attempt stages a verified private image at
  * `<root>/.store-restore-<attemptId>.db` and removes it on every exit path, so a
- * process that dies inside an attempt (SIGKILL, a machine that goes down) leaves
- * a store-sized image at the control root. Every attempt draws a fresh
- * `attemptId`, so nothing ever addressed the orphan again, and crash-and-retry is
- * the designed flow: the leak would grow with every crash.
+ * process that dies between its commit and that removal leaves a store-sized
+ * image at the control root. Every attempt draws a fresh `attemptId`, so nothing
+ * ever addressed the orphan again, and crash-and-retry is the designed flow.
  *
- * Only an artifact whose own attempt provably never committed is reclaimed, and
- * the store itself is the witness: a committed attempt recorded its complete
- * recovery record as a `store_operations` row in the SAME commit as the
- * authority it describes (`restoreReceiptOperationId`), so an attempt absent
- * from that ledger either never reached its commit or lost a rolled-back
- * attempt's scratch — and a rolled-back attempt installed nothing. The attempt
- * running right now is skipped; a committed attempt's image is left alone
- * because its record still refers to it. Best-effort throughout: a control root
- * or store this run cannot read, or an image it cannot remove, never fails the
- * restore that is about to run.
+ * The reclamation condition is POSITIVE evidence, and the store is the only
+ * witness: `restoreReceiptOperationId` writes the complete recovery record into
+ * `store_operations` in the SAME commit as the authority it describes, so an
+ * attempt present in that ledger has provably already landed its outcome and its
+ * staging file is inert scratch. An attempt ABSENT from the ledger is ambiguous
+ * — it is either a live peer suspended somewhere between staging and its owning
+ * transaction (which the removed maintenance exclusion no longer serializes, so
+ * such a peer really can be concurrent) or a crash that never committed — and
+ * ambiguity preserves: nothing is deleted on it, so this sweep can never remove a
+ * live attempt's own input.
+ *
+ * `committed` is `null` when the ledger could not be read at all, and that skips
+ * the sweep entirely: inability to read evidence is not evidence of abandonment.
+ * The attempt running right now is skipped as well, and a store this run cannot
+ * write is left to the next run. Best-effort throughout: an image this run cannot
+ * remove never fails the restore that is about to run.
  */
-function reclaimAbandonedRestoreScratch(root: string, currentAttemptId: string, committed: ReadonlySet<string>): void {
+function reclaimAbandonedRestoreScratch(
+  root: string,
+  currentAttemptId: string,
+  committed: ReadonlySet<string> | null,
+): void {
+  if (committed === null) return;
   let names: string[];
   try {
     names = readdirSync(root);
@@ -1780,7 +1791,9 @@ function reclaimAbandonedRestoreScratch(root: string, currentAttemptId: string, 
   const attempts = new Set(names.map((name) => RESTORE_SCRATCH_NAME.exec(name)?.[1]).filter((attemptId) => attemptId !== undefined));
   if (attempts.size === 0) return;
   for (const attemptId of attempts) {
-    if (attemptId === currentAttemptId || committed.has(attemptId)) continue;
+    // Only a committed attempt's own scratch, and never this attempt's: an
+    // attempt the ledger does not name is preserved.
+    if (attemptId === currentAttemptId || !committed.has(attemptId)) continue;
     try {
       const imagePath = join(root, `.store-restore-${attemptId}.db`);
       for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${imagePath}${suffix}`, { force: true });
@@ -1960,7 +1973,11 @@ async function restoreInOneTransaction(
         storeId: before.storeId,
         operator: input.operator,
         authorization: input.authorization,
-        backupPath: image.path,
+        // The SELECTED recovery point the operator authorized, which is the only
+        // one that still exists afterwards. The staged image the rows were read
+        // from is this attempt's own scratch and is named by `restoredCopyPath`
+        // alone, so the record keeps a pathname a reader can actually follow.
+        backupPath: approved.backupPath,
         backupSha256: approved.backupSha256,
         liveStorePath: livePath,
         liveEpoch: before.epoch,
@@ -2024,9 +2041,18 @@ function restoreReceiptOperationId(attemptId: string): string {
   return `restore-attempt:${attemptId}`;
 }
 
-/** The restore attempts whose recovery record the store has committed. */
-async function readCommittedRestoreAttempts(context: StoreContext): Promise<ReadonlySet<string>> {
-  const handle = await openStore(context, "read");
+/**
+ * The attempts whose recovery record the store has committed, or `null` when the
+ * store could not be read at all.
+ *
+ * `null` is the fail-closed answer: the caller uses this set to decide which
+ * scratch is provably inert, so an unreadable ledger must skip the sweep rather
+ * than present an empty set — an empty set would read as "no attempt ever
+ * committed", which would make every peer's staging image look reclaimable.
+ */
+async function readCommittedRestoreAttempts(context: StoreContext): Promise<ReadonlySet<string> | null> {
+  const handle = await openStore(context, "read").catch(() => null);
+  if (handle === null) return null;
   try {
     const rows = handle.db
       .prepare("select operation_id from store_operations where operation_id like 'restore-attempt:%'")
@@ -2037,9 +2063,7 @@ async function readCommittedRestoreAttempts(context: StoreContext): Promise<Read
         .filter((attemptId): attemptId is string => attemptId !== null),
     );
   } catch {
-    // A store this run cannot read proves no commit, and the sweep is
-    // best-effort either way: it never fails the restore that is about to run.
-    return new Set();
+    return null;
   } finally {
     handle.close();
   }

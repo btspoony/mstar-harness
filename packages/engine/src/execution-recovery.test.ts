@@ -857,15 +857,15 @@ describe("execution-restore", () => {
     expect(statSync(world.dbPath).ino).toBe(liveInode);
   });
 
-  test("execution-restore-reclaims-a-crashed-attempts-scratch-and-keeps-a-committed-records", async () => {
+  test("execution-restore-reclaims-only-a-committed-attempts-scratch-and-preserves-a-live-peer", async () => {
     const world = await recoveryWorld("restore-sweep");
     const point = await recoveryPoint(world, "sweep-point");
     await mutateEveryDomain(world, "sweep");
 
-    // The crash-time states of a staged image under the control root. A
-    // crashed attempt's staging file is scratch whichever way it died; a
-    // COMMITTED attempt's own recovery record is the store witness that its
-    // image must not be swept.
+    // The staged images under the control root. Reclamation requires POSITIVE
+    // evidence from the store; anything the ledger does not name is preserved,
+    // because an attempt with no committed record is indistinguishable from a
+    // live peer that has staged its image and not yet reached its transaction.
     const receiptDir = join(world.harness, "archived", "store-migration", "recovery");
     mkdirSync(receiptDir, { recursive: true });
     const plant = (attemptId: string, bytes: Buffer, committed: boolean): { image: string; receiptPath: string } => {
@@ -877,8 +877,8 @@ describe("execution-restore", () => {
       writeFileSync(`${image}-shm`, Buffer.from("stranded shm"));
       writeFileSync(receiptPath, JSON.stringify({ phase: "replaced", restoredCopySha256: "0".repeat(64) }));
       if (committed) {
-        // The ONLY durable witness that an attempt committed: the recovery
-        // record it wrote into `store_operations` in the same transaction as the
+        // The ONLY durable witness that an attempt committed: the recovery record
+        // it wrote into `store_operations` in the same transaction as the
         // authority it describes.
         rawRun(
           world.dbPath,
@@ -892,26 +892,31 @@ describe("execution-restore", () => {
       return { image, receiptPath };
     };
 
-    // (1) A crashed attempt that never committed: its staging image and the
-    // sidecars its crash stranded are reclaimed.
-    const crashedBytes = Buffer.from("a staged store image that never committed");
-    const crashed = plant(randomUUID(), crashedBytes, false);
-
-    // (2) A COMMITTED attempt: the store holds its recovery record, so its
-    // scratch is left alone — the record still refers to it.
+    // (1) A COMMITTED attempt whose crash left its image behind: the store names
+    // its commit, so its staging bytes are provably inert scratch.
     const committedBytes = Buffer.from("a staged image whose commit landed");
     const committed = plant(randomUUID(), committedBytes, true);
 
-    // (3) An attempt with no receipt at all is reclaimable for the same reason:
-    // no commit recorded it, and a rolled-back attempt installed nothing.
+    // (2) A LIVE PEER: an image staged by an attempt that has not committed yet
+    // — exactly the state a real concurrent restore occupies between staging and
+    // its owning transaction now that no maintenance lock serializes it. The
+    // store does not name it, so the sweep must preserve it byte for byte.
+    const peerImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
+    const peerBytes = Buffer.from("a live peer's staged image, not yet committed");
+    writeFileSync(peerImage, peerBytes);
+    writeFileSync(`${peerImage}-journal`, Buffer.from("the peer's own staging journal"));
+    writeFileSync(`${peerImage}-wal`, Buffer.from("the peer's own staged wal"));
+
+    // A crashed attempt that never committed anything is preserved for the same
+    // reason as the peer: with no positive evidence, the sweep cannot tell them
+    // apart, so it deletes neither.
     const unreceiptedImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
-    writeFileSync(unreceiptedImage, Buffer.from("an image copied before the attempt recorded anything"));
+    writeFileSync(unreceiptedImage, Buffer.from("an image staged before any commit"));
     writeFileSync(`${unreceiptedImage}-journal`, Buffer.from("stranded by a crash mid-transaction"));
 
     // The approval is taken AFTER the fixtures are planted, so the committed
-    // attempt's own witness row is inside the loss the operator authorizes —
-    // which is also what a real operator would see: the row is part of the
-    // generation being replaced.
+    // attempt's witness row is inside the loss the operator authorizes — which is
+    // what a real operator sees: the row is part of the generation being replaced.
     const preview = await previewExecutionRestore(world.context, point.backupPath);
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
@@ -920,18 +925,22 @@ describe("execution-restore", () => {
     });
     expect(receipt.storeId).toBe(world.storeId);
 
-    // The uncommitted attempt's image AND the `-journal`/`-wal`/`-shm` its crash
-    // stranded are reclaimed.
-    expect(existsSync(crashed.image)).toBe(false);
-    expect(existsSync(`${crashed.image}-journal`)).toBe(false);
-    expect(existsSync(`${crashed.image}-wal`)).toBe(false);
-    expect(existsSync(`${crashed.image}-shm`)).toBe(false);
-    expect(existsSync(unreceiptedImage)).toBe(false);
-    expect(existsSync(`${unreceiptedImage}-journal`)).toBe(false);
-    // A committed attempt's own staging artifact and operator receipt remain.
-    expect(existsSync(committed.image)).toBe(true);
+    // The committed attempt's image and the sidecars its crash stranded are
+    // reclaimed, and its durable receipt stays as evidence.
+    expect(existsSync(committed.image)).toBe(false);
+    expect(existsSync(`${committed.image}-journal`)).toBe(false);
+    expect(existsSync(`${committed.image}-wal`)).toBe(false);
+    expect(existsSync(`${committed.image}-shm`)).toBe(false);
     expect(existsSync(committed.receiptPath)).toBe(true);
-    expect(existsSync(crashed.receiptPath)).toBe(true);
+
+    // The live peer's staged image and its own sidecars survive BYTE FOR BYTE,
+    // so a peer suspended in staging/verification still has its input, and no
+    // uncommitted image is ever removed on a guess.
+    expect(readFileSync(peerImage)).toEqual(peerBytes);
+    expect(existsSync(`${peerImage}-journal`)).toBe(true);
+    expect(existsSync(`${peerImage}-wal`)).toBe(true);
+    expect(readFileSync(unreceiptedImage, "utf8")).toBe("an image staged before any commit");
+    expect(existsSync(`${unreceiptedImage}-journal`)).toBe(true);
   });
 
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {

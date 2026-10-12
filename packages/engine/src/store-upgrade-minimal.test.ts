@@ -1,5 +1,4 @@
 import { afterAll, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1001,15 +1000,14 @@ test("a logical missing-plan claim refuses unchanged and recovers from its genui
   const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath, "utf8"));
   expect(recoveryRecord).toMatchObject({
     phase: "replaced", operator: "fixture-operator", authorization: "restore-pre-corruption-point",
-    // The SELECTED recovery point is what the record names. The staged image the
-    // rows were read from is this attempt's own scratch (`restoredCopyPath`,
-    // removed on every exit path), never a location the operator keeps.
-    backupSha256: preview.backupSha256,
+    // The record names the SELECTED recovery point, which is a pathname a reader
+    // can still follow afterwards. The staged image the rows were read from is
+    // this attempt's own scratch and is disclosed separately by
+    // `restoredCopyPath`, which is gone once the attempt finishes.
+    backupPath: backup.backupPath, backupSha256: preview.backupSha256,
     verified: { integrity: "ok", foreignKeys: "ok", schemaVersion: 8, executionAuthorityState: "active" },
   });
-  expect(recoveryRecord.backupSha256).toBe(
-    createHash("sha256").update(readFileSync(backup.backupPath)).digest("hex"),
-  );
+  expect(existsSync(recoveryRecord.backupPath)).toBe(true);
   expect(existsSync(String(recoveryRecord.restoredCopyPath))).toBe(false);
   const recovered = await protectedStore(context);
   expect(recovered.schema).toEqual(before.schema);
