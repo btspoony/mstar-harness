@@ -1028,6 +1028,50 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
 
   test("the terminal close removes routing and keeps history in ONE commit", async () => {
     const fixture = await workflowFixture("close-ok");
+    const siblingId = "wf-registered-sibling";
+    const siblingPlanId = `${PLAN_ID}-sibling`;
+    const siblingCaller: ExecutionCaller = { workflowId: siblingId, sessionId: "sibling-coordinator", role: "coordinator" };
+    const stateBeforeSibling = await readExecutionState(fixture.context);
+    const siblingCreated = await createExecutionWorkflow(domainContext(fixture.context, siblingCaller), {
+      expected: stateBeforeSibling.token,
+      operationId: "op-register-sibling",
+      entry: { id: siblingId, type: "plan", started_at: TS, dir: `workflows/${siblingId}` } as WorkflowEntry,
+      snapshot: {
+        ...stateBeforeSibling.data.workflows[0]!.state,
+        id: siblingId,
+        branch: { base: "main", source: "feature/sibling", target: "main" },
+        plans: [{ id: siblingPlanId, title: "sibling plan", file: `plans/${siblingPlanId}.md`, status: "Todo",
+          metadata: { working_branch: "feature/sibling" } }],
+      } as WorkflowSnapshot,
+    });
+    await bindExecutionSession(domainContext(fixture.context, siblingCaller), {
+      workflowId: siblingId,
+      operationId: "op-bind-sibling",
+      expected: siblingCreated.data.workflows.find((workflow) => workflow.state.id === siblingId)!.workflowToken,
+    });
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?")
+        .run(siblingId, siblingCaller.sessionId);
+    });
+    const siblingRecoveryCaller: ExecutionCaller = { workflowId: siblingId, sessionId: "sibling-recovery", role: "coordinator" };
+    const siblingBeforeRecovery = await readExecutionState(fixture.context);
+    const siblingRecoveryRequest = {
+      expected: siblingBeforeRecovery.data.workflows.find((workflow) => workflow.state.id === siblingId)!.workflowToken,
+      operationId: "op-recover-sibling",
+      priorSessionId: siblingCaller.sessionId,
+      reason: "sibling coordinator stopped",
+      attestation: attestation([siblingCaller.sessionId]),
+    };
+    const siblingRecovery = await recoverExecutionCoordinator(domainContext(fixture.context, siblingRecoveryCaller), siblingRecoveryRequest);
+    const siblingPlanRead = await readExecutionPlan(domainContext(fixture.context, siblingRecoveryCaller), siblingRecovery.data, siblingPlanId);
+    const siblingPlanReceipt = await mutateExecutionPlan(domainContext(fixture.context, siblingRecoveryCaller), {
+      operationId: "op-plan-sibling",
+      planId: siblingPlanId,
+      session: siblingRecovery.data,
+      expected: siblingPlanRead.token,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "sibling remains active", evidence_paths: [] } },
+    });
+    expect(siblingPlanReceipt.data.plan.status).toBe("InProgress");
     setRowStatus(fixture.context, PLAN_ID, "Done");
     await workflowMutation(fixture, "op-close-ok-evidence", { kind: "delivery", delivery: DELIVERY_TAIL });
     const before = revisions(fixture.context);
@@ -1053,6 +1097,23 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(String(stored!.ended_at)).not.toBe("");
     expect(stored!.plans).toBe(1);
     expect(rows(fixture.context, `select count(*) as n from execution_operations where workflow_id = '${WORKFLOW_ID}'`)[0]!.n).toBe(0);
+    expect(rows(fixture.context,
+      `select workflow_id, count(*) as receipts from execution_operations where workflow_id in ('${WORKFLOW_ID}', '${siblingId}') group by workflow_id order by workflow_id`,
+    )).toEqual([{ workflow_id: siblingId, receipts: 4 }]);
+    expect(rows(fixture.context,
+      `select operation_id from execution_operations where workflow_id = '${siblingId}' order by operation_id`,
+    )).toEqual([
+      { operation_id: "op-bind-sibling" },
+      { operation_id: "op-plan-sibling" },
+      { operation_id: "op-recover-sibling" },
+      { operation_id: "op-register-sibling" },
+    ]);
+    const recoveryContinuation = await recoverExecutionCoordinator(
+      domainContext(fixture.context, siblingRecoveryCaller),
+      siblingRecoveryRequest,
+    );
+    expect(recoveryContinuation.replayed).toBe(true);
+    expect(recoveryContinuation.data).toEqual(siblingRecovery.data);
     // One operation: the workflow and the store each advance once, and the
     // registry loss advances the root once.
     expect(revisions(fixture.context)).toEqual({
