@@ -13270,7 +13270,7 @@ function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
   if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
     throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
   }
-  if (!isPlainObject(receipt.data))
+  if (receipt.slim !== true && !isPlainObject(receipt.data))
     throw corrupt(`${what}.result_json carries no execution state`);
   const recovery = receipt.operationRecovery;
   if (recovery !== undefined) {
@@ -13279,6 +13279,10 @@ function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
     }
   }
   const storedRecovery = recovery;
+  if (receipt.slim === true) {
+    const live = readExecutionStateGraph(tx);
+    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery } };
+  }
   return {
     data: receipt.data,
     token: recordedToken,
@@ -13460,7 +13464,7 @@ async function adoptTerminalWorkflow(context, input) {
       epoch: tx.epoch,
       ...settlement === undefined ? {} : { operationRecovery: settlement }
     };
-    writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now });
+    writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now, slim: true });
     pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
@@ -13507,7 +13511,7 @@ async function createExecutionWorkflow(context, input) {
       storeId: store.storeId,
       epoch: store.epoch
     };
-    tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) values (?, ?, ?, ?, ?, null, ?, ?)").run(tx.epoch, operationId, requestHash2, tx.storeId, creation.workflowId, JSON.stringify(receipt), now);
+    writeOperationReceipt(tx, { operationId, requestHash: requestHash2, workflowId: creation.workflowId, planId: null, receipt, now, slim: true });
     return { ...receipt, operationId, replayed: false };
   });
 }
@@ -13804,7 +13808,13 @@ function writePlanOperationReceipt(tx, input) {
   writeOperationReceipt(tx, input);
 }
 function writeOperationReceipt(tx, input) {
-  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.receipt), input.now);
+  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? {
+    slim: true,
+    token: input.receipt.token,
+    storeId: tx.storeId,
+    epoch: tx.epoch,
+    ...input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }
+  } : input.receipt), input.now);
 }
 function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
   tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
@@ -27142,7 +27152,8 @@ async function mutateExecutionWorkflow(context, request) {
       workflowId: witness.workflowId,
       planId: null,
       receipt: applied.receipt,
-      now: at
+      now: at,
+      slim: true
     });
     if (applied.membershipLost)
       pruneWorkflowOperationReceipts(tx, witness.workflowId, resolved.call.operationId);
