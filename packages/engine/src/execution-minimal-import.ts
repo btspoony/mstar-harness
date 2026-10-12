@@ -389,6 +389,13 @@ export async function upgradeStoreMinimal(input: {
   const dbPath = storeDbPath(context);
   let schemaVersion: number;
   mkdirSync(dirname(dbPath), { recursive: true });
+  // Initialization publishes the canonical path in ONE atomic create-only step
+  // (`initializeStore` builds the complete store beside it and hard-links it
+  // into place), so this existence check can no longer route a peer onto the
+  // upgrade path against an in-flight first creation: the path is either
+  // absent — and this process's own create-only claim loses the publish race
+  // with a truthful `store.already-exists`, retried through this same public
+  // operation — or a complete, committed store to upgrade.
   if (!existsSync(dbPath)) {
     const initialized = await initializeStore(context, { attestation });
     schemaVersion = initialized.schemaVersion;

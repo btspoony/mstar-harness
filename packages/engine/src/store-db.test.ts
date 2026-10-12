@@ -11,8 +11,8 @@
  * databases are removed after the run.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -617,5 +617,342 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     const after = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
     expect(after.prepare("select version from schema_version order by version").all()).toEqual(versionsBefore);
     after.close();
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Publish-atomic creation (T5a C1). The old claim-close-then-migrate sequence
+ * left a schema-less `store.db` visible at the canonical path for the whole
+ * migration window, so a concurrent upgrade read it and reported a false
+ * `store.corrupt`. Creation now builds the complete store beside the path and
+ * publishes it with one create-only hard link: the canonical name is either
+ * absent or a complete committed store, and the publish is the only
+ * serialization point — no lock, no mutex, no polling.
+ * ------------------------------------------------------------------------ */
+
+describe("store-db creation publishes atomically", () => {
+  const refusalCode = (error: unknown): string => {
+    if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") {
+      return error.code;
+    }
+    return String(error);
+  };
+
+  const parseChildOutcome = (
+    output: string,
+  ): { epoch?: number; schemaVersion?: number; refused?: string; observed?: boolean; verdict?: string } => {
+    const value: unknown = JSON.parse(output);
+    if (value === null || typeof value !== "object") throw new Error(`unexpected child output: ${output}`);
+    const outcome: { epoch?: number; schemaVersion?: number; refused?: string; observed?: boolean; verdict?: string } = {};
+    if ("refused" in value && typeof value.refused === "string") outcome.refused = value.refused;
+    if ("epoch" in value && typeof value.epoch === "number") outcome.epoch = value.epoch;
+    if ("schemaVersion" in value && typeof value.schemaVersion === "number") outcome.schemaVersion = value.schemaVersion;
+    if ("observed" in value && typeof value.observed === "boolean") outcome.observed = value.observed;
+    if ("verdict" in value && typeof value.verdict === "string") outcome.verdict = value.verdict;
+    return outcome;
+  };
+
+  test("an upgrade peer during a concurrent first creation never reads a partial store", async () => {
+    const dir = mkdtempSync(join(ROOT, "publish-atomic-"));
+    const storePath = join(dir, "store.db");
+    // The peer runs in its OWN process, so it can look between the creator's
+    // synchronous steps — the same interleaving that produced the reported
+    // false corruption. It spins on the canonical path's first appearance and
+    // immediately runs the real public upgrade against those bytes.
+    const observer = join(ROOT, "upgrade-observer.mjs");
+    writeFileSync(observer, `
+import { existsSync } from "node:fs";
+import { upgradeStore } from ${JSON.stringify(join(import.meta.dir, "store-db.ts"))};
+const harnessDir = process.argv[2];
+const storePath = harnessDir + "/store.db";
+// Announce readiness and spin immediately: the peer must already be watching
+// the canonical path when the creator starts, so it cannot miss the window
+// between a claimed path and its committed schema.
+process.stdout.write("ready\\n");
+for (let turn = 0; turn < 2000000 && !existsSync(storePath); turn++) {
+  const turnDone = Promise.withResolvers();
+  setImmediate(turnDone.resolve);
+  await turnDone.promise;
+}
+if (!existsSync(storePath)) {
+  process.stdout.write(JSON.stringify({ observed: false }));
+} else {
+  try {
+    await upgradeStore({ harnessDir });
+    process.stdout.write(JSON.stringify({ observed: true, verdict: "upgraded" }));
+  } catch (error) {
+    process.stdout.write(JSON.stringify({ observed: true, verdict: String(error?.code ?? error?.message ?? error) }));
+  }
+}
+`);
+    const child = spawn(process.execPath, [observer, dir], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    const ready = Promise.withResolvers<void>();
+    child.stdout.once("data", () => ready.resolve());
+    const closed = Promise.withResolvers<number | null>();
+    child.on("close", (code) => closed.resolve(code));
+
+    // The creator starts only once the peer is spinning, so the peer really
+    // observes the canonical path's first appearance.
+    await ready.promise;
+    const creator = initializeStore({ harnessDir: dir }).then((handle) => {
+      handle.close();
+      return "created";
+    });
+    expect(await creator).toBe("created");
+    expect(existsSync(storePath)).toBe(true);
+
+    const payload = parseChildOutcome((await closed.promise.then(() => stdout)).slice("ready\n".length));
+    // The peer must have observed the path: it was spinning from the release
+    // line, well before the creator finished.
+    expect(payload.observed).toBe(true);
+    const peerVerdict = payload.verdict;
+    // `upgraded` proves the peer read a COMPLETE store; `store.busy` is the
+    // worker's emitted bounded-wait code and the honest allowed disposition.
+    // What must never appear is the old false `store.corrupt` verdict for an
+    // in-flight creation.
+    expect(peerVerdict === "upgraded" || peerVerdict === "store.busy").toBe(true);
+    // The published store is complete.
+    const reader = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(reader.epoch).toBe(1);
+      expect(reader.schemaVersion).toBe(MIGRATIONS.length);
+    } finally {
+      reader.close();
+    }
+    expect(readdirSync(dir).filter((name) => name.startsWith(".store.db.init-"))).toEqual([]);
+  });
+
+  test("barrier-released first initializers publish exactly one complete store", async () => {
+    const dir = mkdtempSync(join(ROOT, "concurrent-create-"));
+    const worker = join(ROOT, "initialize-worker.mjs");
+    writeFileSync(worker, `
+import { initializeStore } from ${JSON.stringify(join(import.meta.dir, "store-db.ts"))};
+const [harnessDir] = process.argv.slice(2);
+// Announce readiness, then block on the parent's release line, so every child
+// begins its creation only once all of them are waiting: they truly overlap.
+process.stdout.write("ready\\n");
+const reader = Bun.stdin.stream().getReader();
+await reader.read();
+reader.releaseLock();
+try {
+  const store = await initializeStore({ harnessDir });
+  const published = { epoch: store.epoch, schemaVersion: store.schemaVersion, storeId: store.storeId };
+  store.close();
+  process.stdout.write(JSON.stringify(published));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ refused: String(error?.code ?? error?.message ?? error) }));
+}
+`);
+    const children = Array.from({ length: 4 }, () => {
+      const child = spawn(process.execPath, [worker, dir], { stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+      });
+      const ready = Promise.withResolvers<void>();
+      child.stdout.once("data", () => ready.resolve());
+      const closed = Promise.withResolvers<number | null>();
+      child.on("close", (code) => closed.resolve(code));
+      return {
+        ready: ready.promise,
+        release: () => child.stdin.end("go\n"),
+        done: closed.promise.then(() => stdout),
+      };
+    });
+    await Promise.all(children.map((child) => child.ready));
+    for (const child of children) child.release();
+    const outcomes = (await Promise.all(children.map((child) => child.done)))
+      .map((output) => parseChildOutcome(output.slice("ready\n".length)));
+
+    const published = outcomes.filter((outcome) => outcome.refused === undefined);
+    const refused = outcomes.filter((outcome) => outcome.refused !== undefined);
+    // The create-only publish has exactly one winner; every loser refuses with
+    // the truthful create-only code — never a corruption or lock verdict — and
+    // the refusal is retried through the same public operation below.
+    expect(published).toHaveLength(1);
+    expect(refused).toHaveLength(3);
+    for (const outcome of refused) expect(outcome.refused).toBe("store.already-exists");
+
+    const winner = published[0]!;
+    expect(winner.epoch).toBe(1);
+    expect(winner.schemaVersion).toBe(MIGRATIONS.length);
+
+    // The published store is complete and holds real domain state: a real row
+    // written through a write-open survives into a fresh read-only open.
+    const writer = await openStore({ harnessDir: dir }, "write");
+    writer.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000001', 'p', 'race issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'race-issue')",
+      )
+      .run();
+    writer.close();
+    const reader = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(reader.db.prepare("select title from issues where id = 'I-000001'").get()).toEqual({ title: "race issue" });
+      expect(reader.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
+      expect(reader.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    } finally {
+      reader.close();
+    }
+    // The loser's supported retry is the ordinary public upgrade: idempotent.
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    // No staging scratch and no lock artifacts anywhere in the workspace.
+    expect(readdirSync(dir).filter((name) => name.startsWith(".store.db.init-"))).toEqual([]);
+    expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(false);
+    expect(existsSync(join(dir, ".execution-maintenance"))).toBe(false);
+  }, 60_000);
+
+  test("an interrupted first create publishes nothing and the path stays initializable", async () => {
+    const dir = mkdtempSync(join(ROOT, "interrupted-create-"));
+    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
+    const previousFailure = process.env.MSTAR_STORE_FAIL_INIT;
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_FAIL_INIT = "1";
+    try {
+      await expect(initializeStore({ harnessDir: dir })).rejects.toThrow(/induced init failure/);
+    } finally {
+      if (previousFailure === undefined) delete process.env.MSTAR_STORE_FAIL_INIT;
+      else process.env.MSTAR_STORE_FAIL_INIT = previousFailure;
+      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
+    }
+    // The interrupted create left NO canonical store and none of its own
+    // staging scratch behind.
+    expect(existsSync(join(dir, "store.db"))).toBe(false);
+    expect(readdirSync(dir)).toEqual([]);
+    // A hard-killed creator cannot clean its staging scratch up; that leftover
+    // is inert: the next attempt never reads, adopts or sweeps it.
+    const staleScratch = join(dir, ".store.db.init-999999-crash.tmp");
+    writeFileSync(staleScratch, "stale staging bytes from a killed creator");
+    const store = await initializeStore({ harnessDir: dir });
+    expect(store.epoch).toBe(1);
+    store.close();
+    expect(existsSync(join(dir, "store.db"))).toBe(true);
+    expect(readFileSync(staleScratch, "utf8")).toBe("stale staging bytes from a killed creator");
+  });
+
+  test("a pre-existing invalid store file is preserved, never adopted or repaired", async () => {
+    const dir = mkdtempSync(join(ROOT, "invalid-bytes-"));
+    const storePath = join(dir, "store.db");
+    const retained = Buffer.from("SQLite format 3\u0000truncated retained bytes, not a real store");
+    writeFileSync(storePath, retained);
+    await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
+    expect([...readFileSync(storePath)]).toEqual([...retained]);
+    // An upgrade peer classifies it as the corruption it is — it never
+    // misreads it as a creation in progress to wait out, and no staging
+    // scratch appears beside it.
+    await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.corrupt" });
+    expect([...readFileSync(storePath)]).toEqual([...retained]);
+    expect(readdirSync(dir).filter((name) => name.startsWith(".store.db.init-"))).toEqual([]);
+  });
+
+  test("a publication failure names the real phase and cause, and the same entry recovers", async () => {
+    const dir = mkdtempSync(join(ROOT, "publication-refusal-"));
+    // A real operating-system failure at the creation phase: the control root
+    // cannot hold the staged file, so no store can be created at all.
+    chmodSync(dir, 0o500);
+    let refusal: unknown;
+    try {
+      refusal = await initializeStore({ harnessDir: dir }).then(
+        () => null,
+        (error) => error,
+      );
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    expect(refusal).toMatchObject({ code: "store.publication-failed" });
+    const message = refusal instanceof Error ? refusal.message : "";
+    // The absent store is never diagnosed as corruption, and the OS cause and
+    // the no-publication fact travel with the refusal.
+    expect(message).toContain("NO store was published at");
+    expect(message).toMatch(/EACCES|permission denied|Read-only/i);
+    expect(message).toContain("--harness");
+    expect(existsSync(join(dir, "store.db"))).toBe(false);
+    // The advertised recovery is the same public entry once the condition is
+    // resolved: it succeeds and produces a complete ACTIVE store.
+    const store = await initializeStore({ harnessDir: dir });
+    expect(store.epoch).toBe(1);
+    store.close();
+    expect(existsSync(join(dir, "store.db"))).toBe(true);
+  });
+
+  test("a post-publication handle failure discloses the created store and its recovery works", async () => {
+    const dir = mkdtempSync(join(ROOT, "partial-publication-"));
+    const storePath = join(dir, "store.db");
+    // A REAL competing writer, not an injected fault: as soon as the canonical
+    // name appears, this task takes the store's write lock through the real
+    // driver and holds it, so the creator's own final reopen runs the genuine
+    // busy path of the native driver. The interleave point is the creator's
+    // own awaits (it turns are taken between them), so no clock is involved.
+    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
+    const previousBusy = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
+    const competitorDone = Promise.withResolvers<void>();
+    const competitor = (async () => {
+      for (let turn = 0; turn < 200000 && !existsSync(storePath); turn++) {
+        await Promise.resolve();
+      }
+      if (!existsSync(storePath)) return;
+      const rival = new DatabaseSync(storePath);
+      try {
+        rival.exec("begin immediate");
+        await competitorDone.promise;
+        rival.exec("rollback");
+      } finally {
+        rival.close();
+      }
+    })();
+    let refusal: unknown;
+    try {
+      refusal = await initializeStore({ harnessDir: dir }).then(
+        () => null,
+        (error) => error,
+      );
+    } finally {
+      if (previousBusy === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousBusy;
+      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
+    }
+    competitorDone.resolve();
+    await competitor;
+    // The partial outcome is disclosed as one: created, activated, published —
+    // and this attempt's handle acquisition failed on the real busy path —
+    // with the actual cause and the supported continuation.
+    expect(refusal).toMatchObject({ code: "store.created-handle-failed" });
+    const message = refusal instanceof Error ? refusal.message : "";
+    expect(message).toContain("created, activated and published");
+    expect(message).toContain("NOT modified, rolled back or removed");
+    expect(message).toMatch(/store\.busy|bounded wait/);
+    expect(message).toContain("store upgrade --harness");
+    // The published image survives intact: a complete ACTIVE store that real
+    // domain writes survive into.
+    const writer = await openStore({ harnessDir: dir }, "write");
+    writer.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000001', 'p', 'partial outcome', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'partial-outcome')",
+      )
+      .run();
+    writer.close();
+    const reader = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(reader.epoch).toBe(1);
+      expect(reader.schemaVersion).toBe(MIGRATIONS.length);
+      expect(reader.db.prepare("select title from issues where id = 'I-000001'").get()).toEqual({ title: "partial outcome" });
+      expect(reader.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    } finally {
+      reader.close();
+    }
+    // Exactly as the refusal says: a rerun of the create-only entry refuses,
+    // and the idempotent public upgrade succeeds against the published store.
+    await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
   });
 });
