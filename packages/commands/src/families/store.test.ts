@@ -86,6 +86,24 @@ test("store.upgrade discovers the canonical project harness and imports its lega
   }
 });
 
+test("store.upgrade exposes the delivery option and its JSON payload in its discoverable syntax", () => {
+  // Transport-surface assertions only: this package's tests consume the engine's
+  // built `dist`, so the declaration BEHAVIOR is covered by the engine suite
+  // (`store-upgrade-minimal.test.ts`); the command shape is what lives here.
+  const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+  if (definition === undefined) throw new Error("missing store.upgrade definition");
+  const option = definition.cli.options.find(({ key }) => key === "delivery");
+  expect(option).toMatchObject({ flags: "--delivery <json...>", variadic: true });
+  expect(option?.help).toContain("delivery kind");
+  expect(option?.help).toContain("verification/report-only");
+  expect(Object.keys(definition.payloads ?? {})).toContain("delivery");
+  // The declaration is upgrade-only: no other verb accepts it.
+  for (const { id, cli } of getStoreCommandDefinitions()) {
+    if (id === "store.upgrade") continue;
+    expect(cli.options.some(({ key }) => key === "delivery")).toBe(false);
+  }
+});
+
 test("store.upgrade names the required operator input before writing", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-missing-operator-"));
   try {

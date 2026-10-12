@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
-import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
@@ -1525,6 +1525,15 @@ test("minimal activation retains a manually constructed legacy registration reco
  * Direct v1 root conversion
  * ------------------------------------------------------------------------ */
 
+/**
+ * The declaration `v1-standalone` (the fixture's one ACTIVE standalone lift)
+ * needs: a plan workflow fixes its delivery kind at registration, so the
+ * ordinary upgrade must declare it.
+ */
+const V1_STANDALONE_DECLARATION = [
+  { workflow: "v1-standalone", deliveryKind: "development", branchSource: "feature/v1-standalone", branchTarget: "main" },
+];
+
 /** Write a recognizable v1 root tree (version 1 + one standalone Done plan). */
 function legacyV1Workspace(name: string): { context: StoreContext; statusBytes: Buffer } {
   const harnessDir = join(ROOT, name, ".mstar");
@@ -1575,11 +1584,13 @@ test("a v1 public upgrade refuses a symlinked workflows tree instead of silently
   writeFileSync(join(realTree, "wf-linked", "snapshot.json"), "{}\n");
   symlinkSync(realTree, join(context.harnessDir, "workflows"));
 
-  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-unsafe-workflows" }))
-    .rejects.toMatchObject({
-      code: "execution.migration-conflict",
-      message: expect.stringContaining("is not a real directory"),
-    });
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-unsafe-workflows",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  })).rejects.toMatchObject({
+    code: "execution.migration-conflict",
+    message: expect.stringContaining("is not a real directory"),
+  });
 
   // Nothing committed: the store holds no execution rows from this run.
   const store = await openStore(context, "read");
@@ -1588,6 +1599,107 @@ test("a v1 public upgrade refuses a symlinked workflows tree instead of silently
   } finally {
     store.close();
   }
+});
+
+test("an acknowledged DSH-only symlinked workflows root drops that source through --ack-skip-dsh without following it", async () => {
+  const { context } = legacyWorkspace("symlinked-dsh-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const registeredDir = join(workflowsDir, "wf-symlinked-dsh-root");
+  // The whole `workflows/` tree is a symlink holding only legacy DSH host-state
+  // data; the registered workflow lives elsewhere so the root is NOT an
+  // execution source for it. The documented `dsh-workflows` acknowledgement
+  // must be able to drop exactly that source instead of the preflight aborting.
+  const outside = join(context.harnessDir, "outside-dsh-tree");
+  mkdirSync(join(outside, "wf-linked"), { recursive: true });
+  const linkedIds = '{"id":"wfe1:root-linked","d":"root-linked-digest"}\n';
+  writeFileSync(join(outside, "wf-linked", "agent-flow-ids.jsonl"), linkedIds);
+  // Relocate the registered workflow OUT of `workflows/` before linking the root
+  // over it, so the root is a DSH-only source rather than an execution source.
+  const snapshotBytes = readFileSync(join(registeredDir, WORKFLOW_SNAPSHOT_FILE));
+  const relocated = join(context.harnessDir, "relocated", "wf-symlinked-dsh-root");
+  mkdirSync(relocated, { recursive: true });
+  writeFileSync(join(relocated, WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(outside, workflowsDir);
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows[0]!.dir = "relocated/wf-symlinked-dsh-root";
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  // Refusal without the acknowledgement, and nothing committed: the recovery
+  // is discoverable from the refusal itself.
+  const refused = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-symlinked-dsh-root" })
+    .then(() => { throw new Error("an unacknowledged symlinked workflows root unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain("--ack-skip-dsh dsh-workflows");
+  const beforeStore = await openStore(context, "read");
+  try { expect(beforeStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { beforeStore.close(); }
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-symlinked-dsh-root-ack",
+    acknowledgedSkips: ["dsh-workflows"],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.dsh).toMatchObject({ verdict: "partially-imported" });
+  expect(recovered.dsh.findings).toContainEqual(
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-workflows", category: "workflows" }),
+  );
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: "wf-symlinked-dsh-root" }]);
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // Nothing was followed through the root link: it is still a symlink and its
+  // target bytes are untouched.
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(outside, "wf-linked", "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+});
+
+test("a symlinked workflows root that registers an execution workflow is never discarded by an acknowledgement", async () => {
+  const { context } = legacyWorkspace("symlinked-registered-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const target = join(context.harnessDir, "outside-registered-tree");
+  mkdirSync(join(target, "wf-symlinked-registered-root"), { recursive: true });
+  const snapshotBytes = readFileSync(join(workflowsDir, "wf-symlinked-registered-root", WORKFLOW_SNAPSHOT_FILE));
+  writeFileSync(join(target, "wf-symlinked-registered-root", WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(target, workflowsDir);
+
+  // The register names a workflow directory under the linked root: that is an
+  // execution source, so no acknowledgement may drop or skip it.
+  const refusal = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-registered-symlinked-root",
+    acknowledgedSkips: ["dsh-workflows"],
+  }).then(() => { throw new Error("a registered execution source was discarded by an acknowledgement"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("registered execution source is never discarded");
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+});
+
+test("an acknowledged DSH-only symlinked workflows root recovers a v1 tree too", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-symlinked-dsh-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const outside = join(context.harnessDir, "outside-v1-dsh-tree");
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, workflowsDir);
+
+  // A v1 root's conversion never enumerates `workflows/`; before the deferral
+  // the preflight aborted here and the only way forward was editing filesystem
+  // state by hand.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-symlinked-root-ack",
+    acknowledgedSkips: ["dsh-workflows"],
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(recovered.dsh.findings).toContainEqual(expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-workflows" }));
+  expect([...readFileSync(join(context.harnessDir, "status.json"))]).toEqual([...statusBytes]);
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
 });
 
 test("an acknowledged DSH-only symlinked child recovers through --ack-skip-dsh without following the link", async () => {
@@ -1675,7 +1787,10 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   const compassBytes = readFileSync(join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md"));
   const docBytes = readFileSync(join(context.harnessDir, "plain-doc.md"));
 
-  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-direct" });
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-direct",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
   expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
 
@@ -1694,9 +1809,18 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
     expect(result.dispositions).toContain(
       "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
     );
-    // The standalone Todo row imports paused and continuable.
+    // The standalone Todo row imports paused, declared, and continuable: the
+    // declared kind and its anchors are registered, so a later close can
+    // consult them instead of dead-ending on an unregistered kind.
     const standalone = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
-    expect(JSON.parse(standalone.state_json)).toMatchObject({ type: "plan", status: "paused" });
+    expect(JSON.parse(standalone.state_json)).toMatchObject({
+      type: "plan",
+      status: "paused",
+      delivery_kind: "development",
+      branch: { source: "feature/v1-standalone", target: "main" },
+    });
+    const standaloneRow = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("v1-standalone", "v1-standalone") as { state_json: string };
+    expect(JSON.parse(standaloneRow.state_json)).toMatchObject({ id: "v1-standalone", status: "Todo" });
     const row = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("iter-v1", "wf-v1-direct") as { state_json: string };
     expect(JSON.parse(row.state_json)).toMatchObject({ id: "wf-v1-direct", status: "Done" });
     // Registry membership is ACTIVE-lifecycle membership: the running
@@ -1715,9 +1839,154 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
   expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
 
-  // Ordinary retry is the same public operation and imports nothing new.
-  const replay = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-direct-2" });
+  // Ordinary retry is the same public operation, keeps the same declarations,
+  // and imports nothing new.
+  const replay = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-direct-2",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
   expect(replay.imported).toBe(0);
+});
+
+test("an active standalone v1 plan without a declared delivery kind refuses before any row registers, then a declared retry continues it", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-undeclared-refusal");
+  const statusPath = join(context.harnessDir, "status.json");
+
+  // No declaration: the ACTIVE standalone lift would register a plan workflow
+  // with no kind, which could never close. Nothing commits, and the refusal
+  // names the ids and the exact same-entry retry.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-undeclared" })
+    .then(() => { throw new Error("an undeclared active v1 lift unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.delivery-declaration-required");
+  expect(refusal.message).toContain("v1-standalone");
+  expect(refusal.message).toContain("--delivery");
+  expect(refusal.message).toContain("legacy source bytes are unchanged");
+  const refusedStore = await openStore(context, "read");
+  try {
+    expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(refusedStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 0 });
+  } finally { refusedStore.close(); }
+  expect([...readFileSync(statusPath)]).toEqual([...statusBytes]);
+
+  // The declared retry is the SAME public operation on the SAME source: it
+  // preserves ids, the verbatim row status and the source bytes, and the
+  // workflow's delivery consultation now names no unregistered kind, so the
+  // ordinary lifecycle continues/closes it instead of dead-ending.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-undeclared-retry",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(retried.imported).toBe(2);
+  expect([...readFileSync(statusPath)]).toEqual([...statusBytes]);
+  const retriedStore = await openStore(context, "read");
+  try {
+    const header = JSON.parse((retriedStore.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string }).state_json) as Record<string, unknown>;
+    const row = JSON.parse((retriedStore.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("v1-standalone", "v1-standalone") as { state_json: string }).state_json) as Record<string, unknown>;
+    expect(header).toMatchObject({ delivery_kind: "development", branch: { source: "feature/v1-standalone", target: "main" } });
+    expect(row).toMatchObject({ id: "v1-standalone", status: "Todo" });
+    expect(consultDeliveryEvidence({ ...header, plans: [{ id: "p" }] } as never).map((entry) => entry.code))
+      .not.toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
+  } finally { retriedStore.close(); }
+});
+
+test("each active standalone v1 lift declares its own delivery kind and anchors", async () => {
+  const { context } = legacyV1Workspace("v1-multi-intent");
+  const statusPath = join(context.harnessDir, "status.json");
+  const doc = JSON.parse(readFileSync(statusPath, "utf8")) as { plans: Array<Record<string, unknown>> };
+  // One row per ACTIVE v1 status, as an operator would supply a tree that
+  // stopped mid-flight with several plans in different states.
+  doc.plans.push(
+    { id: "v1-inprogress", title: "In progress", file: "v1-inprogress.md", status: "InProgress" },
+    { id: "v1-blocked", title: "Blocked", file: "v1-blocked.md", status: "Blocked" },
+    { id: "v1-inreview", title: "In review", file: "v1-inreview.md", status: "InReview" },
+  );
+  writeFileSync(statusPath, `${JSON.stringify(doc, null, 2)}\n`);
+
+  // Two different kinds/anchors in one upgrade — not a batch-of-one limit.
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-multi-intent",
+    deliveryDeclarations: [
+      ...V1_STANDALONE_DECLARATION,
+      { workflow: "v1-inprogress", deliveryKind: "development", branchSource: "feature/v1-inprogress", branchTarget: "main" },
+      { workflow: "v1-blocked", deliveryKind: "verification/report-only", completionPolicy: "report at reports/v1-blocked.md" },
+      { workflow: "v1-inreview", deliveryKind: "verification/report-only", completionPolicy: "acceptance at qa/v1-inreview.md" },
+    ],
+  });
+  expect(result.imported).toBe(5);
+
+  const store = await openStore(context, "read");
+  try {
+    const header = (id: string): Record<string, unknown> => {
+      const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(id) as { state_json: string };
+      return JSON.parse(row.state_json) as Record<string, unknown>;
+    };
+    expect(header("v1-inprogress")).toMatchObject({
+      status: "running", delivery_kind: "development", branch: { source: "feature/v1-inprogress", target: "main" },
+    });
+    expect(header("v1-blocked")).toMatchObject({
+      status: "paused", delivery_kind: "verification/report-only", completion_policy: "report at reports/v1-blocked.md",
+    });
+    expect(header("v1-inreview")).toMatchObject({
+      status: "running", delivery_kind: "verification/report-only", completion_policy: "acceptance at qa/v1-inreview.md",
+    });
+    // Every declared lift consults a registered kind; none dead-ends on
+    // PHASE6_DELIVERY_KIND_UNREGISTERED. The completed v1 row (grouped into the
+    // fixture's iteration) stays undeclared, exactly as before this contract.
+    for (const id of ["v1-standalone", "v1-inprogress", "v1-blocked", "v1-inreview"]) {
+      expect(consultDeliveryEvidence({ ...header(id), plans: [{ id: "p" }] } as never).map((entry) => entry.code))
+        .not.toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
+    }
+    const completedRow = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("iter-v1", "wf-v1-multi-intent") as { state_json: string };
+    expect(JSON.parse(completedRow.state_json)).toMatchObject({ id: "wf-v1-multi-intent", status: "Done" });
+  } finally { store.close(); }
+});
+
+test("a delivery declaration that addresses no active standalone lift, or repeats one, is refused instead of ignored", async () => {
+  const { context } = legacyV1Workspace("v1-unmatched-declaration");
+  const unmatched = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-unmatched",
+    deliveryDeclarations: [{ workflow: "not-a-lift", deliveryKind: "development", branchSource: "a", branchTarget: "b" }],
+  }).then(() => { throw new Error("an unmatched declaration unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(unmatched.code).toBe("execution.delivery-declaration-required");
+  expect(unmatched.message).toContain("not-a-lift");
+  expect(unmatched.message).toContain("v1-standalone");
+  // The completed v1 row is not a lift that needs a declaration either.
+  const completedIsNotALift = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-completed-declared",
+    deliveryDeclarations: [
+      ...V1_STANDALONE_DECLARATION,
+      { workflow: "wf-v1-unmatched-declaration", deliveryKind: "development", branchSource: "a", branchTarget: "b" },
+    ],
+  }).then(() => { throw new Error("a declaration on a completed row unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(completedIsNotALift.message).toContain("wf-v1-unmatched-declaration");
+  const duplicated = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-duplicated",
+    deliveryDeclarations: [...V1_STANDALONE_DECLARATION, ...V1_STANDALONE_DECLARATION],
+  }).then(() => { throw new Error("a duplicated declaration unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(duplicated.message).toContain("twice");
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+});
+
+test("an incoherent delivery declaration is refused by the shared registration rule before any row registers", async () => {
+  const { context } = legacyV1Workspace("v1-incoherent-declaration");
+  const missingAnchors = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-missing-anchors",
+    deliveryDeclarations: [{ workflow: "v1-standalone", deliveryKind: "development" }],
+  }).then(() => { throw new Error("a development declaration without anchors unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(missingAnchors.code).toBe("execution.delivery-declaration-required");
+  expect(missingAnchors.message).toContain("requires its delivery source and target branches");
+  const missingPolicy = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-missing-policy",
+    deliveryDeclarations: [{ workflow: "v1-standalone", deliveryKind: "verification/report-only" }],
+  }).then(() => { throw new Error("a report-only declaration without a policy unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(missingPolicy.message).toContain("requires the completion policy");
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
 });
 test("malformed v1 lease metadata is retired with an explicit operator disposition", async () => {
   const { context } = legacyV1Workspace("v1-malformed-historical-lease");
@@ -1727,7 +1996,7 @@ test("malformed v1 lease metadata is retired with an explicit operator dispositi
   const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
   writeFileSync(statusPath, sourceBytes);
 
-  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-malformed-lease" });
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-malformed-lease", deliveryDeclarations: V1_STANDALONE_DECLARATION });
   expect(result.imported).toBe(2);
   expect(result.dispositions).toContain(
     "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
@@ -1754,7 +2023,7 @@ test("no-active-iteration metadata is recoverably disclosed while malformed leas
   writeFileSync(statusPath, sourceBytes);
   rmSync(join(context.harnessDir, "iterations", "iter-v1"), { recursive: true, force: true });
 
-  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active" });
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active", deliveryDeclarations: V1_STANDALONE_DECLARATION });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
   expect(result.dispositions).toContain(
     "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
@@ -1805,7 +2074,7 @@ test("a v1 root whose lift is unacceptable reports the committed schema and auth
   doc.plans.push({ id: "../escape", title: "unsafe", file: "x.md", status: "Todo" });
   writeFileSync(statusPath, JSON.stringify(doc));
   const before = readFileSync(statusPath);
-  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-refusal" })
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-refusal", deliveryDeclarations: V1_STANDALONE_DECLARATION })
     .then(() => { throw new Error("unsafe v1 plan unexpectedly imported"); }, (error: Error & { code?: string }) => error);
   expect(refusal.message).toContain("Schema version");
   expect(refusal.message).toContain("issue/catalog authority active, execution authority active");
@@ -1830,7 +2099,7 @@ test("concurrent importer processes serialize through SQLite, not a status direc
   const worker = join(ROOT, "upgrade-worker.mjs");
   writeFileSync(worker, `
 import { upgradeStoreMinimal } from ${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))};
-const [harnessDir, operationId] = process.argv.slice(2);
+const [harnessDir, operationId, declaration] = process.argv.slice(2);
 // Announce readiness, then block on the parent's release line: every child
 // begins its upgrade only once all of them are waiting, so they truly overlap.
 process.stdout.write("ready\\n");
@@ -1838,14 +2107,14 @@ const reader = Bun.stdin.stream().getReader();
 await reader.read();
 reader.releaseLock();
 try {
-  const result = await upgradeStoreMinimal({ context: { harnessDir }, operator: "child", operationId });
+  const result = await upgradeStoreMinimal({ context: { harnessDir }, operator: "child", operationId, deliveryDeclarations: JSON.parse(declaration) });
   process.stdout.write(JSON.stringify({ imported: result.imported }));
 } catch (error) {
   process.stdout.write(JSON.stringify({ refused: String(error?.code ?? error?.message ?? error) }));
 }
 `);
   const children = Array.from({ length: 3 }, (_, index) => {
-    const child = spawn("bun", [worker, context.harnessDir, `op-concurrent-${index}`], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("bun", [worker, context.harnessDir, `op-concurrent-${index}`, JSON.stringify(V1_STANDALONE_DECLARATION)], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let announced: () => void = () => {};
     const ready = new Promise<void>((resolve) => { announced = resolve; });
@@ -1879,7 +2148,7 @@ try {
     store.close();
   }
   // The supported retry is the same public operation and imports nothing new.
-  const retry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry" });
+  const retry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry", deliveryDeclarations: V1_STANDALONE_DECLARATION });
   expect(retry.imported).toBe(0);
   // No filesystem mutex directory was created anywhere in the workspace.
   expect(existsSync(join(context.harnessDir, ".status-write.lockdir"))).toBe(false);

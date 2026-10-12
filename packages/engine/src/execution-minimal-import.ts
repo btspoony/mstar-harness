@@ -5,7 +5,7 @@ import { readSessionEnvelope, type CoordinationSession } from "./coordination-en
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
-import { convertLegacyV1Tree, MIGRATE_STATUS_FILE, type LegacyV1Conversion } from "./migrate.js";
+import { convertLegacyV1Tree, DeliveryDeclarationError, MIGRATE_STATUS_FILE, type DeliveryLiftDeclarations, type LegacyV1Conversion } from "./migrate.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
@@ -37,35 +37,57 @@ function rootOf(context: StoreContext): string {
 }
 
 /**
- * The legacy `workflows/` tree is never followed through a symlink. A
- * symlinked root or workflow directory refuses before EITHER conversion route
- * evaluates or commits an import — the v1 root converts purely in memory and
- * never enumerates `workflows/`, so without this precondition its route would
- * silently skip a source the v2 route refuses. `lstatSync` (not `existsSync`)
- * so a dangling symlink is refused rather than read as absent.
+ * The legacy `workflows/` tree is never followed through a symlink. Returns
+ * whether it can be enumerated as a real in-root directory.
  *
- * A symlinked child is the DSH importer's own source, so an operator who has
+ * A symlinked ROOT is deferred to the DSH importer's own source handling when
+ * it registers no execution workflow: the operator's documented
+ * `--ack-skip-dsh dsh-workflows` recovery can then drop exactly that source
+ * (and its loss report), instead of the preflight aborting before that
+ * acknowledgement can run. A root that REGISTERS execution workflows is never
+ * discarded by any acknowledgement, so it still refuses. Nothing is followed
+ * either way: linked bytes are reached only under the real path, which the DSH
+ * evaluation lstat-refuses.
+ *
+ * A symlinked CHILD is the DSH importer's own source, so an operator who has
  * already acknowledged dropping it (`--ack-skip-dsh dsh-ledger:<id>`) leaves it
  * to that phase instead of failing here before its documented recovery runs.
- * Nothing is followed either way: linked bytes are reached only under the real
- * path, which the DSH evaluation lstat-refuses.
  */
-function assertWorkflowTreeIsReal(root: string, acknowledgedSkips: readonly string[]): void {
+function assertWorkflowTreeIsReal(root: string, acknowledgedSkips: readonly string[], registeredExecutionDirs: readonly string[]): boolean {
   const workflowsDir = join(root, "workflows");
   let info;
   try { info = lstatSync(workflowsDir); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-  if (info.isSymbolicLink() || !info.isDirectory()) conflict(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
-  for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
-    if (!dirent.isSymbolicLink()) continue;
-    // An acknowledged DSH-only child is re-refused and dropped by
-    // `importDshHostStateFiles`; a registered workflow is an execution source
-    // and still conflicts, so no acknowledged selector can discard one.
-    if (acknowledgedSkips.includes(`dsh-ledger:${dirent.name}`)) continue;
-    conflict(`workflow directory ${join(workflowsDir, dirent.name)} is a symlink; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-ledger:${dirent.name}\` to drop exactly that source, otherwise replace it with an in-root directory or remove it, then rerun store upgrade.`);
+  if (!info.isSymbolicLink() && info.isDirectory()) {
+    for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
+      if (!dirent.isSymbolicLink()) continue;
+      // An acknowledged DSH-only child is re-refused and dropped by
+      // `importDshHostStateFiles`; a registered workflow is an execution source
+      // and still conflicts, so no acknowledged selector can discard one.
+      if (acknowledgedSkips.includes(`dsh-ledger:${dirent.name}`)) continue;
+      conflict(`workflow directory ${join(workflowsDir, dirent.name)} is a symlink; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-ledger:${dirent.name}\` to drop exactly that source, otherwise replace it with an in-root directory or remove it, then rerun store upgrade.`);
+    }
+    return true;
   }
+  // Only a registration that actually addresses a directory UNDER the symlinked
+  // root makes that root an execution source; a workflow living elsewhere in the
+  // control root is unaffected by how `workflows/` is linked.
+  const registeredUnderRoot = registeredExecutionDirs.filter((dir) => isPathWithin(workflowsDir, dir) && canonicalPath(dir) !== canonicalPath(workflowsDir));
+  // A symlinked root with no registered execution workflow under it is exactly
+  // what the DSH acknowledgement exists for: defer it so the documented
+  // `--ack-skip-dsh dsh-workflows` recovery runs and reports the real loss.
+  if (info.isSymbolicLink() && registeredUnderRoot.length === 0) {
+    if (!acknowledgedSkips.includes("dsh-workflows")) {
+      conflict(`workflow root ${workflowsDir} is not a real directory; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-workflows\` to drop exactly that source, otherwise replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
+    }
+    return false;
+  }
+  if (info.isSymbolicLink()) {
+    conflict(`workflow root ${workflowsDir} is a symlink and its registration names execution workflow(s) under it (${registeredUnderRoot.map((dir) => relative(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a registered execution source is never discarded by an acknowledgement \u2014 replace the symlink with a real in-root directory holding those workflows, then rerun store upgrade.`);
+  }
+  conflict(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
 }
 
 function binding(value: unknown): Binding | null {
@@ -166,9 +188,8 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string):
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
 }
 
-function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[]): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string; dispositions: string[] } {
+function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], declarations: DeliveryLiftDeclarations): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; sourceDigest: string; dispositions: string[] } {
   const root = rootOf(context);
-  assertWorkflowTreeIsReal(root, acknowledgedSkips);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
   const sourceFiles = new Set<string>();
@@ -184,14 +205,22 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
       skipped.push({ path: "status.json", reason: "unparseable root register; left in place" });
     }
   }
+  const entries = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : null;
+  // Which workflows the root register names, so the `workflows/` preflight can
+  // tell a DSH-only source tree from execution snapshots it must never discard.
+  const registeredDirs = (entries ?? [])
+    .flatMap((entry) => isPlainObject(entry) && typeof entry.dir === "string" && typeof entry.id === "string" ? [entry.dir] : [])
+    .map((dir) => join(root, dir));
+  const isRealWorkflowTree = assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredDirs);
   // A recognizable v1 root converts in memory and imports through the same
   // native rows; the legacy bytes stay on disk untouched.
   if (isPlainObject(parsed) && parsed.version === 1) {
-    const legacy = convertLegacyV1Tree(root);
+    const legacy = convertLegacyV1Tree(root, declarations);
     const converted = discoverV1(root, legacy, operator);
     return { root, ...converted, skipped, dispositions: legacy.dispositions };
   }
-  const entries = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : null;
+  // A v2 tree declares its kinds in its own snapshots; `deliveryDeclarations`
+  // only describes the ACTIVE standalone lifts a v1 conversion produces.
   const safeEntries: unknown[] = [];
   for (const entry of entries ?? []) {
     if (isPlainObject(entry) && typeof entry.id === "string" && typeof entry.dir === "string") {
@@ -203,10 +232,10 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   }
   const registeredIds = new Set(safeEntries.flatMap((entry) => isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
   const workflowsDir = join(root, "workflows");
-  // The workflows-root/directory symlink refusal already ran as a precondition
-  // for both routes (`assertWorkflowTreeIsReal`); this scan only discovers
-  // unregistered snapshots.
-  if (existsSync(workflowsDir)) {
+  // `assertWorkflowTreeIsReal` already ran as the precondition for both routes;
+  // it also reports whether `workflows/` may be enumerated at all, so an
+  // unacknowledged symlinked root is NEVER followed here to discover snapshots.
+  if (isRealWorkflowTree) {
     for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
       const dir = join(workflowsDir, dirent.name);
       if (!dirent.isDirectory() || registeredIds.has(dirent.name)) continue;
@@ -344,16 +373,17 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
 }
 
 
-export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[] }): Promise<MinimalImportResult> {
+export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[]; deliveryDeclarations?: DeliveryLiftDeclarations }): Promise<MinimalImportResult> {
   const { context, operator, operationId } = input;
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
-  const source = discover(context, operator, input.acknowledgedSkips ?? []);
+  const source = discover(context, operator, input.acknowledgedSkips ?? [], input.deliveryDeclarations ?? []);
   const requestHash = createHash("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,
     operator,
     operationId,
+    deliveryDeclarations: input.deliveryDeclarations ?? [],
   })).digest("hex");
   return withExecutionTransaction(context, (tx) => {
     const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as { request_hash?: unknown; result_json?: unknown } | undefined;
@@ -415,6 +445,13 @@ export async function upgradeStoreMinimal(input: {
    */
   attestation?: unknown;
   acknowledgedSkips?: readonly string[];
+  /**
+   * Per-lift delivery declarations for the ACTIVE standalone v1 plans this
+   * import lifts (the former `migrate` declaration contract): a lifted plan
+   * workflow fixes its delivery kind at registration, so an undeclared or
+   * malformed entry refuses the whole import before any native row commits.
+   */
+  deliveryDeclarations?: DeliveryLiftDeclarations;
 }): Promise<MinimalStoreUpgradeResult> {
   const { context } = input;
   const attestation: MigrationContext["attestation"] =
@@ -438,6 +475,17 @@ export async function upgradeStoreMinimal(input: {
   try {
     result = await importExecutionMinimal(input);
   } catch (error) {
+    // A refused delivery declaration is a caller-input condition of THIS
+    // attempt (missing/duplicate/unmatched/incoherent entry), not a damaged
+    // legacy source: it is reported as its own code so the command surface can
+    // return the actionable usage refusal naming the exact retry. It is raised
+    // before any execution row is registered.
+    if (error instanceof DeliveryDeclarationError) {
+      throw new ExecutionError(
+        "execution.delivery-declaration-required",
+        `${error.message}. No execution workflow was registered from this tree; the legacy source bytes are unchanged, so rerun the same \`store upgrade\` with the declarations above.`,
+      );
+    }
     let authority = "authority state could not be read";
     try {
       const store = await openStore(context, "read");

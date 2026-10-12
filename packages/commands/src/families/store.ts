@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   SddScriptError,
   StoreError,
+  WORKFLOW_DELIVERY_KINDS,
   activateStore,
   activationReceiptFor,
   appliedReceiptFor,
@@ -24,6 +25,21 @@ import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationConte
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 
+/**
+ * One per-lift delivery declaration for `store upgrade --delivery <json>...`
+ * (the former `migrate` declaration contract). Transport shape only — the
+ * per-kind coherence rule stays with the engine's shared registration rule, so
+ * the CLI never maintains a second copy. The kind is the declared enum so an
+ * off-enum value is a nested usage diagnostic naming the accepted values.
+ */
+const deliveryDeclarationSchema = z.object({
+  workflow: z.string().min(1),
+  deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS),
+  branchSource: z.string().min(1).optional(),
+  branchTarget: z.string().min(1).optional(),
+  completionPolicy: z.string().min(1).optional(),
+}).strict();
+
 const inputSchema = z.object({
   harness: z.string().optional(),
   apply: z.boolean().optional(),
@@ -32,6 +48,7 @@ const inputSchema = z.object({
   out: z.string().optional(),
   operator: z.string().optional(),
   ackSkipDsh: z.array(z.string()).optional(),
+  delivery: z.array(deliveryDeclarationSchema).optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
@@ -44,7 +61,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.internal-error`;
-  if (id === "store.upgrade" && code === "store.upgrade-dsh-ack-unmatched") {
+  if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required")) {
     return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
   }
   return error instanceof SddScriptError
@@ -184,6 +201,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           operationId: randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
+          ...(input.delivery === undefined ? {} : { deliveryDeclarations: input.delivery }),
         }));
       }
       case "store.backup": {
@@ -249,10 +267,11 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
     operator: "--operator <name>",
     ackSkipDsh: "--ack-skip-dsh <selector...>",
+    delivery: "--delivery <json...>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator", "attestation", "ackSkipDsh"],
+    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "delivery"],
     backup: ["harness", "out"],
     migrate: ["harness", "apply", "manifest", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
@@ -264,20 +283,23 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
     ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, dsh-status, or dsh-workflows (a symlinked workflows tree). The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
+    delivery: `Declare the delivery kind of one active standalone v1 plan this upgrade lifts; repeat once per such lift (an active standalone v1 plan fixes its delivery kind at registration and cannot be closed without one, so the upgrade refuses before registering any of them until each is declared). Each value is one JSON object {"workflow": <lifted id>, "deliveryKind": "${WORKFLOW_DELIVERY_KINDS.join('" | "')}", plus "branchSource"/"branchTarget" for development or "completionPolicy" for verification/report-only}. Completed v1 rows, already-declared v2 snapshots and iterations need none; an entry addressing no active standalone lift is refused, never ignored.`,
   };
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
   const options = optionKeys.map((key) => ({
     key,
     flags: optionFlags[key],
     required: false,
-    variadic: key === "ackSkipDsh",
+    variadic: key === "ackSkipDsh" || key === "delivery",
     ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
   }));
   return {
     id,
     cli: { path: ["store", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    ...(verb === "upgrade" ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema } } } : {}),
+    ...(verb === "upgrade"
+      ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema }, delivery: { schema: z.array(deliveryDeclarationSchema), help: optionHelp.delivery } } }
+      : {}),
     output: commandEnvelopeSchema,
     effects: ({
       init: ["read", "write"],

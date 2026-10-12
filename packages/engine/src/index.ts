@@ -325,10 +325,13 @@ export {
   landedPathOf,
 } from "./host-gate-paths.js";
 export type {
+  DeliveryLiftDeclaration,
+  DeliveryLiftDeclarations,
   LegacyV1Conversion,
   MigrateSnapshot,
 } from "./migrate.js";
 export {
+  DeliveryDeclarationError,
   MIGRATE_STATUS_FILE,
   NOTES_LEDGER_FILE,
   convertLegacyV1Tree,

@@ -67,7 +67,10 @@ import { readArtifactBytes } from "./coordination-write.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { assertSafePathComponent } from "./path.js";
 import {
+  WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
+  assertDeliveryRegistrationCoherence,
+  type WorkflowDeliveryKind,
   type WorkflowLifecycleStatus,
   type WorkflowLifecycleType,
   type WorkflowSnapshot,
@@ -85,6 +88,27 @@ export const NOTES_LEDGER_FILE = "notes.jsonl";
  * synthesized root date.
  */
 const SYNTHESIZED_DATE = "1970-01-01";
+
+/**
+ * One per-lift delivery declaration (the former `migrate` declaration contract,
+ * carried onto the replacement `store upgrade` producer): a v1 `plans[]` row
+ * becomes a live `type: plan` lifecycle whose delivery kind is declared at
+ * registration, never inferred — so each ACTIVE standalone lift names its own
+ * kind and per-kind evidence (§1/§4a). `workflow` addresses exactly one lifted
+ * lifecycle id.
+ */
+export type DeliveryLiftDeclaration = {
+  /** Lifted lifecycle id this declaration describes. */
+  workflow: string;
+  /** Delivery kind declared for that lift; never inferred or defaulted. */
+  deliveryKind: WorkflowDeliveryKind;
+  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
+  branchSource?: string;
+  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
+  branchTarget?: string;
+  /** Completion policy for a `verification/report-only` lift. Required for that kind. */
+  completionPolicy?: string;
+};
 
 /** One converted workflow identity (id = plan id or iteration id). */
 export type MigrateSnapshot = {
@@ -115,6 +139,9 @@ export type LegacyV1Conversion = {
    */
   dispositions: string[];
 };
+
+/** The converted declaration facts one caller supplies for its ACTIVE lifts. */
+export type DeliveryLiftDeclarations = readonly DeliveryLiftDeclaration[];
 
 type CompassInfo = {
   id: string;
@@ -283,6 +310,93 @@ function buildIterationSnapshot(
 }
 
 /**
+ * Write one caller declaration onto the snapshot it addresses, using the SAME
+ * shape the former `migrate` producer wrote and the catalog registration
+ * producers write (§1/§4a): the declared kind plus its per-kind evidence. The
+ * coherence rule is the shared one, so a `development` without anchors or a
+ * `verification/report-only` without its completion policy refuses before any
+ * native registration commits.
+ */
+function applyDeliveryLiftDeclaration(snapshot: WorkflowSnapshot, declaration: DeliveryLiftDeclaration): void {
+  snapshot.delivery_kind = declaration.deliveryKind;
+  if (declaration.branchSource !== undefined || declaration.branchTarget !== undefined) {
+    snapshot.branch = {
+      ...(declaration.branchSource !== undefined ? { source: declaration.branchSource } : {}),
+      ...(declaration.branchTarget !== undefined ? { target: declaration.branchTarget } : {}),
+    };
+  }
+  if (declaration.completionPolicy !== undefined) snapshot.completion_policy = declaration.completionPolicy;
+}
+
+/**
+ * A refused delivery declaration for one ACTIVE standalone v1 lift: missing,
+ * duplicated, addressing no such lift, off-enum, or incoherent for its kind.
+ * Carried as a distinct type so the import producer can raise it as the
+ * discoverable same-entry usage refusal instead of a generic migration failure.
+ */
+export class DeliveryDeclarationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeliveryDeclarationError";
+  }
+}
+
+/**
+ * Apply the caller's per-lift declarations to the ACTIVE standalone plan lifts
+ * they address. A declaration describes ONE lifecycle (§1: the kind and its
+ * anchors are per-workflow registration evidence), so each must address exactly
+ * one lift that needs one: a duplicate, an id naming an iteration, a
+ * compass-registered row or a completed lift is refused rather than silently
+ * ignored. Every ACTIVE lift must be declared — one without a kind could never
+ * be closed, and no later seam can supply it — and the refusal names the ids
+ * plus the exact retry.
+ */
+function applyDeliveryDeclarations(
+  snapshots: MigrateSnapshot[],
+  declarations: DeliveryLiftDeclarations,
+): void {
+  const lifts = new Map(
+    snapshots
+      .filter((snapshot) => snapshot.type === "plan" && snapshot.status !== "completed")
+      .map((snapshot) => [snapshot.id, snapshot]),
+  );
+  const retry = (ids: readonly string[]): string =>
+    `rerun the same \`store upgrade\` with one --delivery <json> per active standalone plan lift` +
+    `${ids.length === 0 ? "" : ` (declared so far: ${ids.join(", ")})`}` +
+    ` \u2014 each entry is {"workflow": <lifted id>, "deliveryKind": "development" | "verification/report-only",` +
+    ` plus "branchSource"/"branchTarget" for development or "completionPolicy" for verification/report-only`;
+  const declared = new Set<string>();
+  for (const declaration of declarations) {
+    const snapshot = lifts.get(declaration.workflow);
+    if (snapshot === undefined || declared.has(declaration.workflow)) {
+      throw new DeliveryDeclarationError(
+        `delivery declaration ${JSON.stringify(declaration.workflow)} addresses ${declared.has(declaration.workflow) ? "the same active standalone plan lift twice" : "no active standalone plan lift in this tree"}; ` +
+          `this tree's active standalone plan lifts are ${[...lifts.keys()].sort(compareIds).join(", ") || "none"} \u2014 ${retry([...declared].sort(compareIds))}`,
+      );
+    }
+    if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(declaration.deliveryKind)) {
+      throw new DeliveryDeclarationError(
+        `deliveryKind for ${JSON.stringify(declaration.workflow)} must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(declaration.deliveryKind)}; ${retry([...declared].sort(compareIds))}`,
+      );
+    }
+    try {
+      assertDeliveryRegistrationCoherence(declaration.deliveryKind, declaration, `delivery declaration for ${declaration.workflow}`);
+    } catch (error) {
+      throw new DeliveryDeclarationError(`${(error as Error).message}; ${retry([...declared].sort(compareIds))}`);
+    }
+    applyDeliveryLiftDeclaration(snapshot.data, declaration);
+    declared.add(declaration.workflow);
+  }
+  const undeclared = [...lifts.keys()].filter((id) => !declared.has(id)).sort(compareIds);
+  if (undeclared.length > 0) {
+    throw new DeliveryDeclarationError(
+      `${undeclared.length} active standalone v1 plan lift(s) carry no declared delivery kind (${undeclared.join(", ")}); ` +
+        `a plan workflow fixes its delivery kind at registration and cannot be closed without one, so the import commits nothing until each is declared \u2014 ${retry([...declared].sort(compareIds))}`,
+    );
+  }
+}
+
+/**
  * Build one standalone plan snapshot (row status mapping; an unrecognized v1
  * status defaults the SNAPSHOT to `paused` and is stated as a disposition —
  * the row keeps its verbatim value).
@@ -388,10 +502,17 @@ function applyRootMetadataLift(
  * for facts it could not carry verbatim. ZERO writes; every refusal names the
  * source fact that blocked the conversion.
  *
+ * `declarations` carries the caller's per-lift delivery declarations (the
+ * former `migrate` declaration contract): every ACTIVE standalone plan lift
+ * needs one, and an addressed id that is not such a lift is refused rather than
+ * silently ignored. `deliveryDeclarationsRequired` reports the ACTIVE lifts
+ * still undeclared, so the import refuses before any native registration
+ * commits. Terminal (completed) lifts never require one.
+ *
  * A v2 root is not this function's input: the store-upgrade importer reads a
  * `version: 2` tree natively (`isLegacyV1Root` gates the two routes).
  */
-export function convertLegacyV1Tree(root: string): LegacyV1Conversion {
+export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDeclarations = []): LegacyV1Conversion {
   const statusPath = join(root, MIGRATE_STATUS_FILE);
   const source = readArtifactBytes(statusPath);
   if (source === undefined) {
@@ -480,6 +601,13 @@ export function convertLegacyV1Tree(root: string): LegacyV1Conversion {
     );
   }
   snapshots.sort((a, b) => compareIds(a.id, b.id));
+
+  // 2c. Carry the caller's per-lift delivery declarations onto the ACTIVE
+  // standalone lifts they address (the former `migrate` declaration contract):
+  // those lifts become live `type: plan` lifecycles whose close consultation
+  // requires a registered kind, and no later seam can supply one. An undeclared
+  // lift refuses the whole conversion; terminal lifts are exempt.
+  applyDeliveryDeclarations(snapshots, declarations);
 
   // 3. Root-metadata lift -> the active iteration snapshot (v3.0.0 today).
   // Lift-target rule (documented): sorted-first by snapshot id — deterministic,
