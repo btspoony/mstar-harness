@@ -1107,7 +1107,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(receipt.token).toBe(after.token);
     expect(receipt.data.root.updated_at).toBe(after.data.root.updated_at);
 
-    // Terminal history is retained in the header; retries get supported read-back guidance.
+    // Terminal close prunes this receipt; retries read the retained header and are refused.
     const retry = await refusalOf(() => workflowMutation(
       fixture,
       "op-close-token",

@@ -33,6 +33,17 @@ async function strandedTerminal(): Promise<StrandedFixture> {
       updated_at: "2026-10-01T01:00:00.000Z", stop_reason: "fixture terminal stop",
     }), "2026-10-01T00:00:00.000Z", "2026-10-01T01:00:00.000Z");
   } finally { handle.close(); }
+  const receiptDb = await openStore(context, "write");
+  try {
+    const storeRow = receiptDb.db.prepare("select store_id from store_meta where id = 1").get();
+    if (storeRow === undefined || typeof storeRow.store_id !== "string") throw new Error("fixture: missing store id");
+    const insertReceipt = receiptDb.db.prepare(
+      "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
+        "values (?, ?, ?, ?, ?, null, '{}', ?)",
+    );
+    insertReceipt.run(authority.epoch, "prior-addressed-receipt", "fixture-hash", storeRow.store_id, "wf-stranded", "2026-10-01T00:30:00.000Z");
+    insertReceipt.run(authority.epoch, "prior-sibling-receipt", "fixture-hash", storeRow.store_id, "wf-sibling", "2026-10-01T00:30:00.000Z");
+  } finally { receiptDb.close(); }
   return { context, caller: { sessionId: "adopter-session", role: "coordinator", workflowId: "wf-stranded" }, epoch: authority.epoch };
 }
 
@@ -72,6 +83,13 @@ describe("terminal workflow adoption", () => {
     const { context, caller } = await strandedTerminal();
     const execution = { harnessDir: context.harnessDir, caller };
     const request = { workflowId: "wf-stranded", reason: "close the imported terminal record", operationId: "adopt-op-1" };
+    const prior = await openStore(context, "read");
+    try {
+      expect(prior.db.prepare("select workflow_id, operation_id from execution_operations order by operation_id").all()).toEqual([
+        { workflow_id: "wf-stranded", operation_id: "prior-addressed-receipt" },
+        { workflow_id: "wf-sibling", operation_id: "prior-sibling-receipt" },
+      ]);
+    } finally { prior.close(); }
     const applied = await adoptTerminalWorkflow(execution, request);
     expect(applied.replayed).toBe(false);
     expect(applied.data.terminalUnregistered).toBeUndefined();
@@ -86,11 +104,19 @@ describe("terminal workflow adoption", () => {
       expect(db.db.prepare("select revision, json_extract(state_json, '$.status') as status, json_extract(state_json, '$.stop_reason') as stop_reason from execution_workflows where workflow_id = ?").get("wf-stranded")).toEqual({
         revision: 2, status: "stopped", stop_reason: "fixture terminal stop",
       });
-      expect((db.db.prepare("select count(*) as n from execution_operations where workflow_id = ?").get(request.workflowId) as { n: number }).n).toBe(0);
+      expect(db.db.prepare("select workflow_id, operation_id from execution_operations order by operation_id").all()).toEqual([
+        { workflow_id: "wf-sibling", operation_id: "prior-sibling-receipt" },
+      ]);
     } finally { db.close(); }
+    // Without an explicit CAS, the absent receipt reaches terminal-header read-back.
     const retry = await refusalOf(() => adoptTerminalWorkflow(execution, request));
     expect(retry.code).toBe("execution.adoption-refused");
     expect(retry.message).toContain("read status validate and use the recorded result");
+    // An explicitly supplied pre-adoption revision remains a strict CAS, checked
+    // before terminal-header read-back even though the receipt was pruned.
+    const staleRetry = await refusalOf(() => adoptTerminalWorkflow(execution, { ...request, expectedRevision: 1 }));
+    expect(staleRetry.code).toBe("execution.header-revision-conflict");
+    expect(staleRetry.message).toContain("re-read status validate and retry with its listed revision");
     expect((await readExecutionState(context)).data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
     const dashboard = await withStoreRead(context, queryDashboard("workflows"));
     expect(dashboard.data.terminalUnregistered).toBeUndefined();

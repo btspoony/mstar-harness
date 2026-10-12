@@ -1038,11 +1038,9 @@ export async function mutateExecutionWorkflow(
           },
         ];
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
-    // after the CURRENT authority is revalidated (a revoked or epoch-invalidated
-    // coordinator never replays a receipt it may no longer own). The receipt
-    // addresses the whole graph, so its token is the ROOT token. Looking the
-    // receipt up before the registry witness is what lets a terminal close's own
-    // retry answer, instead of "workflow not found".
+    // while the receipt is retained and after CURRENT authority is revalidated.
+    // Terminal close prunes its workflow's receipts, so later retries fall
+    // through to the registry witness and receive actionable read-back guidance.
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
