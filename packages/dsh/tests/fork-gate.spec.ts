@@ -43,7 +43,7 @@ import type { AgentFlowView } from '../src/index.ts'
 import type { SubagentStartRequest, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedActiveWorkflow, startViaNativeChannel, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedActiveWorkflow, selectedGenerationFor, startViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -297,6 +297,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
         violations: [],
         hard: false,
         resolvedWorkflowDir: workflowDir,
+        selectedGeneration: selectedGenerationFor(harnessDir),
         pairing,
       })
       expect(pairing.dispatchByCallId.get('sess-1\u0000fork-c1')).toBeDefined()

@@ -733,7 +733,7 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
   const targetDir = ledgerTargetDir(workflowRoot, source.workflowId)
   return targetDir === null
     ? null
-    : { workflowId: source.workflowId, workflowDir: targetDir, sessionId, source: 'execution', epoch: source.epoch }
+    : { workflowId: source.workflowId, workflowDir: targetDir, sessionId, storeId: source.storeId, epoch: source.epoch }
 }
 
 /** The plan rows of one materialized snapshot ([] when the doc has no plans
@@ -751,8 +751,8 @@ export function activeRowsOf(snapshot: Record<string, unknown>): Record<string, 
  * v3.0.0 § Catalog selection rule): the SAME binding order as the write
  * path, else the latest terminal snapshot by mtime (history view — only
  * when the active registry is EMPTY), else a clear error. Never reads the
- * root v1 `plans[]` / root `agent-flow.jsonl` as primary or as a quiet
- * fallback, and never substitutes history for an unbound active set.
+ * root v1 `plans[]` as primary or a fallback, and never consults retired
+ * machine event files to infer an active set or writer.
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param hint - forwarded verbatim to the active-set resolver.
  */

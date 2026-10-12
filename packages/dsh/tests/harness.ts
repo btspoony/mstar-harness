@@ -891,7 +891,13 @@ export function v2ResidualEntry(id: string, overrides: Record<string, unknown> =
  * @param plans - optional plan rows in the workflow's ACTIVE projection.
  */
 const activeExecutionTokens = new Map<string, ExecutionToken>()
+const activeExecutionGenerations = new Map<string, { storeId: string; epoch: number }>()
 
+export function selectedGenerationFor(harnessDir: string): { storeId: string; epoch: number } {
+  const generation = activeExecutionGenerations.get(harnessDir)
+  if (generation === undefined) throw new Error(`No selected execution generation for ${harnessDir}`)
+  return generation
+}
 export async function seedActiveWorkflow(
   harnessDir: string,
   workflowId = 'wf-1',
@@ -908,7 +914,9 @@ export async function seedActiveWorkflow(
       const store = await initializeStore({ harnessDir })
       store.close()
     }
-    expected = (await readExecutionState({ harnessDir })).token
+    const read = await readExecutionState({ harnessDir })
+    expected = read.token
+    activeExecutionGenerations.set(harnessDir, { storeId: read.storeId, epoch: read.epoch })
   }
   if (activeExecutionTokens.has(`${harnessDir}:${workflowId}`)) {
     throw new Error(`ACTIVE fixture workflow already exists: ${workflowId}`)
