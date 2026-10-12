@@ -29,7 +29,7 @@
  *   lease — the testable subset now; P3 wires the reservation).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { storeDbPath, type HostAdapter } from '@mstar-harness/engine'
@@ -579,8 +579,13 @@ describe('dispatchGate — D4 session hint derivation', () => {
     expect(logged.some((m) => m.startsWith('warn:') && m.includes('store.corrupt'))).toBe(true)
 
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-x', app.root)))
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events).toEqual([])
+    // The corrupt canonical store stays unavailable; no legacy ledger file is
+    // created as a fallback, and the DB-backed reader does not invent an empty view.
+    for (const workflowId of ['wf-a', 'wf-b']) {
+      const workflowDir = join(app.harnessDir, 'workflows', workflowId)
+      expect(existsSync(join(workflowDir, 'agent-flow.jsonl'))).toBe(false)
+      expect(readAgentFlow(workflowDir)).toBeNull()
+    }
   })
 
   it('an exec-less dispatch in a UNIQUE active harness still records (the omitted hint is not a regression)', async () => {
