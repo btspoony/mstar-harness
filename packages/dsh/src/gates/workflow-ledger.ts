@@ -32,7 +32,7 @@
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
-import { readDshScanBound } from '@mstar-harness/engine'
+import { advanceDshScanBound, readDshScanBound } from '@mstar-harness/engine'
 import {
   recordWorkflowEvent,
   truncateLedgerField,
@@ -642,11 +642,58 @@ export function registerWorkflowLedger(
     recordRow(session, sid, harnessDir, row, target.workflowId, target.workflowDir, selectedGeneration)
   }
 
+  const advanceSkippedAgentEnd = async (
+    session: unknown,
+    sid: string,
+    harnessDir: string,
+    workspace: string,
+    seq: number,
+  ): Promise<void> => {
+    const streamId = sessionStreamIdOf(session, sid)
+    if (streamId === undefined) {
+      noteUnverifiedIdentity(sid)
+      return
+    }
+    let target: WorkflowLedgerTarget | null
+    try {
+      target = await resolveTarget(sid, workspace)
+    } catch (error) {
+      log('warn', `workflow-ledger scan-bound target resolution failed for session ${sid} (contained — the row stays eligible): ${errorMessage(error)}`)
+      return
+    }
+    if (target === null) {
+      observeExclusionFloor(harnessDir, sid, workspace, seq + 1)
+      return
+    }
+    const refusal = targetRefusal(target, sid)
+    if (refusal !== undefined) {
+      log('warn', `workflow-ledger scan-bound target refused for session ${sid} — ${refusal}`)
+      return
+    }
+    const bound = readDshScanBound({ harnessDir }, target.workflowId, sid)
+    if (bound?.stream === streamId && seq < bound.next) return
+    const selectedGeneration = { storeId: target.storeId, epoch: target.epoch }
+    if (!advanceDshScanBound({ harnessDir }, target.workflowId, sid, seq + 1, streamId, selectedGeneration)) {
+      log('warn', `workflow-ledger native scan bound not advanced for skipped agent-end event at ${seq}; it remains eligible for replay`)
+    }
+  }
+
   const consume = (session: unknown, envelope: unknown): void | Promise<void> => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
     const row = rowOf(session, envelope)
-    if (row === undefined) return
+    const record = asRecord(envelope)
+    const data = record === undefined ? undefined : asRecord(record.data)
+    const skippedAgentEnd = row === undefined &&
+      record?.type === TOOL_WORKFLOW_AGENT_END &&
+      typeof record.seq === 'number' && Number.isInteger(record.seq) && record.seq >= 0 && record.seq < WORKFLOW_LEDGER_MAX_SEQ &&
+      typeof record.time === 'number' && Number.isFinite(record.time) &&
+      data !== undefined &&
+      typeof data.runId === 'string' && data.runId !== '' && data.runId.length <= WORKFLOW_LEDGER_MAX_ID_LENGTH &&
+      typeof data.seq === 'number' && Number.isInteger(data.seq) && data.seq >= 1 && data.seq < WORKFLOW_LEDGER_MAX_SEQ &&
+      (data.outcome === 'completed' || data.outcome === 'failed' || data.outcome === 'cancelled')
+    if (row === undefined && !skippedAgentEnd) return
+    const sourceSeq = row?.seq ?? (typeof record?.seq === 'number' ? record.seq : -1)
     const workspace = sessionCwdOf(session)
     if (workspace === undefined) return
     const harnessDir = resolver.forWorkspace(workspace)
@@ -658,7 +705,8 @@ export function registerWorkflowLedger(
     }
     const floor = binding.binding?.excludedBeforeSeq ?? 0
     // The exclusion floor omits events observed while the session was unbound.
-    if (row.seq < floor) return
+    if (sourceSeq < floor) return
+    if (row === undefined) return advanceSkippedAgentEnd(session, sid, harnessDir, workspace, sourceSeq)
     return consumeWithTarget(session, sid, harnessDir, workspace, row)
   }
 

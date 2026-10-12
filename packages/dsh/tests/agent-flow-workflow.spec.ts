@@ -29,21 +29,30 @@ describe('workflow event native acceptance and scan bound', () => {
     const { root, harnessDir, workflowDir } = await activeFixture()
     const session = {
       header: { id: 'session-1', cwd: root, createdAt: 1_700_000_000_000 },
-      seq: 1,
+      seq: 2,
       inheritedEventCount: 0,
-      eventAt: (seq: number) => seq === 0 ? {
-        type: 'tool-workflow/run-start',
-        seq: 0,
-        time: 1_700_000_000_001,
-        data: { runId: 'run-1', name: 'audit' },
-      } : undefined,
+      eventAt: (seq: number) => {
+        if (seq === 0) return {
+          type: 'tool-workflow/agent-end',
+          seq: 0,
+          time: 1_700_000_000_000,
+          data: { runId: 'run-1', seq: 1, outcome: 'completed' },
+        }
+        if (seq === 1) return {
+          type: 'tool-workflow/run-start',
+          seq: 1,
+          time: 1_700_000_000_001,
+          data: { runId: 'run-1', name: 'audit' },
+        }
+        return undefined
+      },
     }
     const ctx = new Context()
     ctx.provide('sessions', { list: () => [session], get: (id: string) => id === 'session-1' ? session : undefined } as never)
     registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), undefined, resolveExecutionLedgerTarget)
     await awaitWorkflowLedgerIdle()
     expect(readAgentFlow(workflowDir)?.events).toMatchObject([{ kind: 'workflow-run', runId: 'run-1', name: 'audit' }])
-    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 1 })
+    expect(readDshScanBound({ harnessDir }, 'wf-1', 'session-1')).toMatchObject({ next: 2 })
   })
   it('accepts, replays, and refuses conflicting source identity atomically', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
