@@ -1048,6 +1048,74 @@ describe("execution-restore", () => {
     expect(liveState()).toEqual(before);
   });
 
+  test("execution-restore-preview-declares-receipt-retention-as-backup-only-operation-rows", async () => {
+    const world = await recoveryWorld("pruned-receipts");
+    const tokenNow = async (): Promise<ExecutionToken> =>
+      (await readExecutionState(world.context)).data.workflows[0]!.workflowToken;
+    // A committed receipt of a still-live lifecycle, so the point below holds a
+    // receipt set larger than the create/bind pair.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-pause-retained",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "paused", reason: "retention fixture" },
+    });
+    const point = await recoveryPoint(world, "pruned-receipts-point");
+    const retained = rawAll<{ epoch: number; operation_id: string }>(
+      point.backupPath,
+      `select epoch, operation_id from execution_operations where workflow_id = '${WF}' order by operation_id`,
+    );
+    expect(retained.map((row) => row.operation_id)).toEqual(["op-pause-retained", "pruned-receipts-bind", "pruned-receipts-create"]);
+
+    // While the lifecycle is live the point is current: those receipt rows are
+    // on BOTH sides, so nothing about them is listed.
+    const live = await previewExecutionRestore(world.context, point.backupPath);
+    expect(live.authorityDifferences).toEqual([]);
+    expect(live.lostOperationIds).toEqual([]);
+
+    // The terminal close prunes every receipt of this workflow, its own
+    // included — the durable record is the header, not the receipt.
+    await mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+      operationId: "op-close-pruned",
+      session: world.sessionRef,
+      expected: await tokenNow(),
+      workflowId: WF,
+      operation: { kind: "lifecycle", status: "stopped", reason: "retention fixture close" },
+    });
+    expect(rawAll<{ operation_id: string }>(world.dbPath, `select operation_id from execution_operations where workflow_id = '${WF}'`)).toEqual([]);
+
+    // The pruned rows are DECLARED, not silent: each one is now a backup-only
+    // execution-domain row, listed with `liveRevision: null`.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    for (const row of retained) {
+      const key = `operation:${row.epoch}/${row.operation_id}`;
+      const entry = preview.authorityDifferences.find((difference) => difference.domain === "execution" && difference.key === key);
+      expect(entry).toBeDefined();
+      expect(entry!.liveRevision).toBeNull();
+      // The presence marker of a row whose table carries no revision of its own.
+      expect(entry!.backupRevision).toBe(1);
+      // Resurrected, never lost: retention removes replay/recovery state, not work.
+      expect(preview.lostOperationIds).not.toContain(`execution:${row.epoch}:${row.operation_id}`);
+    }
+    expect(preview.lostOperationIds).toEqual([]);
+    // `previewExecutionRestore` carries the resurrected-receipt fact only
+    // through `lossDigest` (the preview shape and its protocol version are
+    // frozen), so the same fact is read from the two store files: the point's
+    // committed receipt ids the live store no longer holds are exactly the
+    // pruned set.
+    const receiptIds = (dbPath: string): string[] =>
+      rawAll<{ epoch: number; operation_id: string }>(
+        dbPath,
+        "select epoch, operation_id from execution_operations order by epoch, operation_id",
+      ).map((row) => `execution:${row.epoch}:${row.operation_id}`);
+    const liveIds = new Set(receiptIds(world.dbPath));
+    expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id)).sort()).toEqual(
+      retained.map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
+    );
+    expect(preview.lossDigest).not.toBe(live.lossDigest);
+  });
+
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
     const world = await recoveryWorld("restore-malformed-row");
     const point = await recoveryPoint(world, "malformed-row-point");

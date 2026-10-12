@@ -14,7 +14,15 @@
  *   then inventories the WHOLE store — issue, catalog and execution — against
  *   the live authority, and returns the canonical `lossDigest` of that
  *   inventory. It writes no authority row, no receipt and no artifact of its
- *   own, so it is safe to run at any time.
+ *   own, so it is safe to run at any time. Receipt retention is an expected
+ *   source of backup-only `execution` operation rows: a terminal close or
+ *   adoption prunes that workflow's operation receipts and an authority epoch
+ *   advance purges the superseded epoch's, so a preview of a point older than
+ *   either anchor lists them in `authorityDifferences` with `liveRevision: null`
+ *   and among the point's resurrected operation ids, and restoring them is
+ *   harmless because a resurrected receipt only re-arms idempotent replay whose
+ *   effect the restored bytes already carry or whose retry refuses on terminal
+ *   header state.
  * - `restoreExecutionBackup` is the destructive step. It re-derives the loss
  *   inventory under the maintenance lock and records it as the honest account
  *   of what the replacement costs; the operator and authorization reference are

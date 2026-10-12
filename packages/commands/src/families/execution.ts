@@ -138,7 +138,13 @@ function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
     effects: writeVerbs[verb] === true ? ["read", "write"] : ["read"],
     description: verb === "export"
       ? "Export the current execution state as a canonical reporting artifact."
-      : `Store execution ${verb} from a standalone store backup.`,
+      : verb === "restore-preview"
+        ? "Store execution restore-preview from a standalone store backup. Receipt retention is an expected source of backup-only `execution` " +
+          "operation rows: a terminal close or adoption prunes that workflow's operation receipts and an authority epoch advance purges the " +
+          "superseded epoch's, so a preview of a point older than either anchor lists them in `authorityDifferences` with `liveRevision: null` " +
+          "and among the point's resurrected operation ids, and restoring them is harmless because a resurrected receipt only re-arms " +
+          "idempotent replay whose effect the restored bytes already carry or whose retry refuses on terminal header state."
+        : `Store execution ${verb} from a standalone store backup.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }
