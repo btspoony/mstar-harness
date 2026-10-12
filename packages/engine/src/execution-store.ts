@@ -1947,13 +1947,14 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
  * whose `stoppedSessions` name EVERY addressed ACTIVE session as
  * stopped/reloaded, revoking exactly those rows, never the identity making the
  * call. The attested stop is the trust boundary (the engine cannot observe a
- * dead process), so an unattested holder is never silently revoked, an
- * explicitly supplied malformed proof refuses before any store access, and a
- * changed proof under a committed operation id is an operation conflict rather
- * than a silent replay. An omitted expectedRevision is resolved from the
- * addressed row inside this transaction; an explicit expectedRevision remains
- * a strict CAS. The committed receipt records the settled targets and the
- * approving operator/attestation provenance.
+ * dead process), so an unattested holder is never silently revoked, and an
+ * explicitly supplied malformed proof refuses before any store access. A changed
+ * proof under a committed operation id conflicts only while its receipt remains
+ * (`execution.operation-conflict`). Adoption prunes all workflow receipts on
+ * commit, so later retries reach the terminal header: stale explicit revisions
+ * refuse `execution.header-revision-conflict`; omitted or current revisions
+ * refuse `execution.adoption-refused` with read-back guidance.
+ * The committed receipt records settled targets and approving provenance.
  */
 export async function adoptTerminalWorkflow(
   context: ExecutionContext,
@@ -2000,9 +2001,9 @@ export async function adoptTerminalWorkflow(
     intent: {
       expectedRevision: input.expectedRevision ?? "current",
       reason: input.reason,
-      // The proof document is part of the request's semantic selection: a retry
-      // carrying a DIFFERENT attestation is a different intent — an operation
-      // conflict, never a silent replay of the first settlement.
+      // The attestation contributes to the fingerprint, so changed proof conflicts
+      // with a retained receipt. Once adoption prunes that receipt, retries are
+      // refused by stale explicit CAS or terminal-adoption read-back instead.
       ...(attestation === undefined ? {} : { attestation }),
     },
   });
