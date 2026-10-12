@@ -1024,47 +1024,79 @@ describe("execution-restore", () => {
     expect(existsSync(receipt.preRestoreBackup.backupPath)).toBe(true);
   });
 
-  test("execution-restore-preserves-a-safety-point-when-the-live-generation-no-longer-proves-pre-commit", async () => {
-    const world = await recoveryWorld("restore-safety-changed-generation");
-    const point = await recoveryPoint(world, "changed-generation-point");
-    await mutateEveryDomain(world, "changed-generation");
+  test("execution-restore-preserves-a-committed-safety-point-when-a-peer-rewrites-the-ledger", async () => {
+    const world = await recoveryWorld("restore-safety-rewritten-ledger");
+    const point = await recoveryPoint(world, "rewritten-ledger-point");
+    await mutateEveryDomain(world, "rewritten-ledger");
     const preview = await previewExecutionRestore(world.context, point.backupPath);
     const backups = join(world.harness, "archived", "store-migration", "backups");
     mkdirSync(backups, { recursive: true });
-    const leftoverName = `pre-restore-e1-${randomUUID()}.db`;
-    writeFileSync(join(backups, leftoverName), Buffer.from("an earlier refusal's safety image"));
+    const plantedName = `pre-restore-e1-${randomUUID()}.db`;
+    writeFileSync(join(backups, plantedName), Buffer.from("an unrelated earlier point"));
 
-    // The commit lands and the after-replacement seam then throws, so this attempt
-    // owns a safety point at the PRE-restore epoch while the live store has already
-    // advanced to the new epoch above it. The live store is therefore no longer at
-    // the generation from which this attempt's own absence would prove a pre-commit
-    // outcome — a rewritten ledger could have dropped a committed receipt — so
-    // absence proves nothing and the point is PRESERVED rather than reclaimed.
+    const ready = join(world.root, "cleanup-ready.json");
+    const release = join(world.root, "cleanup-release");
     process.env.MSTAR_STORE_TEST_RUNNER = "1";
     process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
+    process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP = "*";
+    process.env.MSTAR_STORE_PARK_READY = ready;
+    process.env.MSTAR_STORE_PARK_RELEASE = release;
     try {
-      const error = await errorOf(() =>
+      // Attempt A commits the replacement and the after-replacement seam then
+      // throws, so A enters its owned-safety cleanup and parks there — its receipt
+      // already committed, its cleanup witness not yet run.
+      const parked = errorOf(() =>
         restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
       );
-      expect(error.message).toContain("after-replacement");
-    } finally {
+      for (let spin = 0; spin < 4000 && !existsSync(ready); spin++) await nextTurn();
+      expect(existsSync(ready)).toBe(true);
+      const readyPayload: unknown = JSON.parse(readFileSync(ready, "utf8"));
+      if (typeof readyPayload !== "object" || readyPayload === null || !("attemptId" in readyPayload)) {
+        throw new Error("the cleanup park did not report an attempt id");
+      }
+      const attemptId = readyPayload.attemptId;
+      if (typeof attemptId !== "string") throw new Error("the cleanup park reported a non-string attempt id");
+
+      // A's own point is the safety file A just took; the planted point is the only
+      // other. Capture its exact name before the peer runs.
+      const ownPoint = readdirSync(backups).filter((name) => name.startsWith("pre-restore-")).find((name) => name !== plantedName);
+      expect(ownPoint).toBeTruthy();
+      expect(existsSync(join(backups, plantedName))).toBe(true);
+
+      // A real peer restore now runs. A has already passed its after-replacement
+      // seam, so the seam is cleared and the peer commits cleanly; the cleanup park
+      // is cleared too so the peer can never itself block in that hook. It selects
+      // the SAME older point, so its commit rewrites store_operations WHOLESALE and
+      // drops A's exact committed receipt, and advances the epoch again. A's own
+      // generation therefore moves on without naming A.
       delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
+      delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
+      const peerPreview = await previewExecutionRestore(world.context, point.backupPath);
+      await restoreExecutionBackup(world.context, { preview: peerPreview, operator: OPERATOR, authorization: AUTHORIZATION });
+
+      // The interleaving is real: A's exact receipt is gone and the generation has moved.
+      const ledger = rawAll<{ operation_id: string }>(
+        world.dbPath,
+        "select operation_id from store_operations where operation_id like 'restore-attempt:%'",
+      );
+      expect(ledger.some((row) => row.operation_id === `restore-attempt:${attemptId}`)).toBe(false);
+
+      // Release A. Its cleanup witness must PRESERVE its committed point because the
+      // live generation no longer proves it never committed — not reclaim it on the
+      // absent receipt, which is exactly what the unsafe negative-membership witness
+      // would have done.
+      writeFileSync(release, "");
+      const error = await parked;
+      expect(error.message).toContain("after-replacement");
+      expect(existsSync(join(backups, ownPoint!))).toBe(true);
+      expect(readFileSync(join(backups, plantedName), "utf8")).toBe("an unrelated earlier point");
+    } finally {
+      delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
+      delete process.env.MSTAR_STORE_PARK_READY;
+      delete process.env.MSTAR_STORE_PARK_RELEASE;
       delete process.env.MSTAR_STORE_TEST_RUNNER;
+      delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
     }
-
-    // The commit really landed: the epoch moved above the preview generation and
-    // the complete record is in the store's own ledger.
-    expect(footprint(world.dbPath).epoch).toBeGreaterThan(preview.liveEpoch);
-    expect(
-      rawGet(world.dbPath, "select operation_id from store_operations where operation_id like 'restore-attempt:%'"),
-    ).toBeTruthy();
-
-    // BOTH safety points survive: the attempt's own — whose outcome is committed and
-    // whose generation no longer proves otherwise — and the planted earlier one.
-    const after = readdirSync(backups).filter((name) => name.startsWith("pre-restore-"));
-    expect(after.length).toBe(2);
-    expect(after).toContain(leftoverName);
-    expect(readFileSync(join(backups, leftoverName), "utf8")).toBe("an earlier refusal's safety image");
   });
 
   test("execution-restore-reclaims-its-own-safety-point-when-the-pre-transaction-hash-read-fails", async () => {

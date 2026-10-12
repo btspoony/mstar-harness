@@ -369,6 +369,34 @@ async function recoveryParkHook(attemptId: string, imagePath: string): Promise<v
   }
 }
 
+/**
+ * The test-runner-gated PARK seam for the owned-safety CLEANUP WITNESS, the same
+ * gate and shape as `recoveryParkHook`: it stops THIS attempt once it has already
+ * committed and entered its owned-safety cleanup, immediately before it reads the
+ * live generation that decides reclamation. It exists so the one interleaving the
+ * generation proof is written for — a peer replacement that rewrites the store's
+ * `store_operations` ledger, dropping this attempt's committed receipt, before this
+ * attempt's own witness runs — is reproducible with a real peer rather than
+ * described. `MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP` names the attempt to
+ * park, or `*`; it reports into `MSTAR_STORE_PARK_READY` and blocks on
+ * `MSTAR_STORE_PARK_RELEASE`. Inert without `MSTAR_STORE_TEST_RUNNER=1`.
+ */
+async function recoveryCleanupParkHook(attemptId: string): Promise<void> {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
+  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
+  if (wanted !== attemptId && wanted !== "*") return;
+  const ready = process.env.MSTAR_STORE_PARK_READY;
+  const release = process.env.MSTAR_STORE_PARK_RELEASE;
+  if (ready === undefined || release === undefined) return;
+  writeJson(ready, { attemptId, stage: "cleanup" });
+  for (let waited = 0; waited < 30_000; waited += 5) {
+    if (existsSync(release)) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 5);
+    await promise;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Reading the three authority domains
 // ---------------------------------------------------------------------------
@@ -2209,6 +2237,11 @@ async function runRestore(
       // line leaks its own point, exactly as it already leaks its own staging image;
       // this reclamation owns neither, and the scratch sweep that runs after a
       // later committed restore reclaims committed scratch only.
+      // The owned-safety cleanup witness. The test-runner-gated park reproduces the
+      // one interleaving this proof is written for: a peer replacement that rewrites
+      // the store's ledger, dropping THIS attempt's committed receipt, before this
+      // attempt reads the generation.
+      await recoveryCleanupParkHook(attemptId);
       const live = await currentAuthorityHandle(context).catch(() => null);
       if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
         try {
