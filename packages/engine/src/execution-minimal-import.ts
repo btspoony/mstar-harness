@@ -219,8 +219,19 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     const converted = discoverV1(root, legacy, operator);
     return { root, ...converted, skipped, dispositions: legacy.dispositions };
   }
-  // A v2 tree declares its kinds in its own snapshots; `deliveryDeclarations`
-  // only describes the ACTIVE standalone lifts a v1 conversion produces.
+  // Declarations describe the ACTIVE standalone lifts a v1 conversion produces.
+  // A v2 tree declares its kinds in its own snapshots and an empty root has no
+  // lift to declare, so a nonempty declaration here addresses nothing: refuse it
+  // rather than silently registering without the declaration the caller asked
+  // for. A later seam cannot spend it either, so an ignored entry is a silent
+  // no-op — the same actionable refusal the v1 route raises, before any row.
+  if (declarations.length > 0) {
+    throw new DeliveryDeclarationError(
+      `${declarations.length} --delivery declaration(s) (${declarations.map((entry) => JSON.stringify(entry.workflow)).join(", ")}) address no active standalone plan lift; ` +
+        `this control root is ${isPlainObject(parsed) && parsed.version === 2 ? "already a v2 tree, whose snapshots declare their own delivery kinds" : "an empty root with no active standalone v1 lift to declare"} \u2014 ` +
+        `pass --delivery only when upgrading a v1 root that holds an active standalone plan, or omit it entirely`,
+    );
+  }
   const safeEntries: unknown[] = [];
   for (const entry of entries ?? []) {
     if (isPlainObject(entry) && typeof entry.id === "string" && typeof entry.dir === "string") {

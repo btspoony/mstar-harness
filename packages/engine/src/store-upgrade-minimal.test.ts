@@ -1988,6 +1988,30 @@ test("an incoherent delivery declaration is refused by the shared registration r
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
   } finally { store.close(); }
 });
+
+test.each([
+  ["an already-v2 root", "non-v1-declared-v2", legacyWorkspace("non-v1-declared-v2").context],
+  ["an empty root", "non-v1-declared-empty", (() => { const harnessDir = join(ROOT, "non-v1-declared-empty", ".mstar"); mkdirSync(harnessDir, { recursive: true }); return { harnessDir }; })()],
+])("a delivery declaration on %s is refused before any row registers, and the same source upgrades without it", async (_label, name, context) => {
+  const declarations = [{ workflow: "not-a-lift", deliveryKind: "development" as const, branchSource: "a", branchTarget: "b" }];
+
+  const refused = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: `op-${name}-declared`, deliveryDeclarations: declarations,
+  }).then(() => { throw new Error("a declaration on a non-v1 root unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.delivery-declaration-required");
+  expect(refused.message).toContain("not-a-lift");
+  const refusedStore = await openStore(context, "read");
+  try {
+    expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(refusedStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 0 });
+  } finally { refusedStore.close(); }
+
+  // Dropping the declaration is the same source's supported retry: the ordinary
+  // route runs and imports what that root actually holds.
+  const retried = await upgradeStoreMinimal({ context, operator: "operator", operationId: `op-${name}-undeclared` });
+  expect(retried.verdict).toBe("upgraded");
+});
+
 test("malformed v1 lease metadata is retired with an explicit operator disposition", async () => {
   const { context } = legacyV1Workspace("v1-malformed-historical-lease");
   const statusPath = join(context.harnessDir, "status.json");
