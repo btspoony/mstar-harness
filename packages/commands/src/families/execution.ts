@@ -143,7 +143,9 @@ function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
           "operation rows: a terminal close or adoption prunes that workflow's operation receipts (each listed in a preview of an older point with " +
           "`liveRevision: null`), the init-time purge beside the in-place epoch bump clears the superseded epoch's, and a restore preserves " +
           "prior-epoch receipt rows as history under its frozen bytes-plus-one-epoch contract, outside the current epoch's replay scope, so " +
-          "restoring any of them is harmless and re-arms nothing."
+          "restoring any of them is harmless and re-arms nothing. `result_json` payloads are write-time versioned: graph rows written " +
+          "before the slimming change keep their full form, later rows carry the slim envelope, so inventory digests compare write-time " +
+          "bytes per row and mixed forms never produce same-key content drift."
         : `Store execution ${verb} from a standalone store backup.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };

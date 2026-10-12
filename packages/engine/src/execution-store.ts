@@ -1751,7 +1751,7 @@ function readCommittedReceipt<T>(
   if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
     throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
   }
-  if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
+  if (receipt.slim !== true && !isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
   const recovery = receipt.operationRecovery;
   if (recovery !== undefined) {
     // Historical DB receipts stay READABLE: the envelope's own recovery fields
@@ -1775,6 +1775,10 @@ function readCommittedReceipt<T>(
   // Stored diagnostic payload; its envelope was checked above and a retired
   // `details` provenance is passed through unchanged for the reader.
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
+  if (receipt.slim === true) {
+    const live = readExecutionStateGraph(tx);
+    return { ...live, ...(storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }) } as ExecutionRead<T>;
+  }
   return {
     data: receipt.data as T,
     token: recordedToken as ExecutionToken,
@@ -2143,7 +2147,7 @@ export async function adoptTerminalWorkflow(
       epoch: tx.epoch,
       ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
-    writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
+    writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now, slim: true });
     pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
     const { operationRecovery, ...publicReceipt } = receipt;
     return {
@@ -2226,12 +2230,7 @@ export async function createExecutionWorkflow(
       storeId: store.storeId,
       epoch: store.epoch,
     };
-    tx.db
-      .prepare(
-        "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
-          "values (?, ?, ?, ?, ?, null, ?, ?)",
-      )
-      .run(tx.epoch, operationId, requestHash, tx.storeId, creation.workflowId, JSON.stringify(receipt), now);
+    writeOperationReceipt(tx, { operationId, requestHash, workflowId: creation.workflowId, planId: null, receipt, now, slim: true });
     return { ...receipt, operationId, replayed: false };
   });
 }
@@ -2968,6 +2967,7 @@ export function writeOperationReceipt(
     planId: string | null;
     receipt: ExecutionRead<unknown>;
     now: string;
+    slim?: true;
   },
 ): void {
   tx.db
@@ -2982,7 +2982,17 @@ export function writeOperationReceipt(
       tx.storeId,
       input.workflowId,
       input.planId,
-      JSON.stringify(input.receipt),
+      JSON.stringify(
+        input.slim === true
+          ? {
+              slim: true,
+              token: input.receipt.token,
+              storeId: tx.storeId,
+              epoch: tx.epoch,
+              ...(input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }),
+            }
+          : input.receipt,
+      ),
       input.now,
     );
 }
