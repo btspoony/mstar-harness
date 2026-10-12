@@ -15,7 +15,9 @@
  * only correct outcome).
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { readDshStatusEmission } from '@mstar-harness/engine'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { initializeStore, readDshStatusEmission } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
@@ -104,6 +106,30 @@ describe('engine-status emission — written at the real digest-gated emission',
       defaultEnter(inbox),
     )
     expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)?.turn).toBe(8)
+  })
+
+  it('does not write a cached emission into a replacement authority generation', async () => {
+    const app = (booted = await bootApp())
+    await seedStore(app.harnessDir)
+    const inbox = [inboxMessage()]
+    await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_generation', app.root, inbox, 1),
+      defaultEnter(inbox),
+    )
+    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)).toBeDefined()
+
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
+    const replacement = await initializeStore({ harnessDir: app.harnessDir })
+    replacement.close()
+
+    const decision = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_generation', app.root, inbox, 2),
+      defaultEnter(inbox),
+    )
+    expect(decision.kind).toBe('enter')
+    expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)).toBeUndefined()
   })
 
   it('keys independent sessions separately', async () => {
