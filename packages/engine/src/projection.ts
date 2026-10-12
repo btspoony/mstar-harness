@@ -39,13 +39,14 @@ import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
-import { validateIntegrationMergeLease, type IntegrationMergeLease } from "./lease.js";
 import { readExecutionState, type ExecutionState } from "./execution-store.js";
 import { rowPlanId, validatePlanRow, validateWorkflowEntry, type PlanRow } from "./status.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
   LEGACY_WORKTREE_PATH_CODE,
+  validateIntegrationMergeLease,
   validateWorkflowSnapshot,
+  type IntegrationMergeLease,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
   type WorkflowSnapshot,

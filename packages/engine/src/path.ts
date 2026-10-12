@@ -349,8 +349,8 @@ function resolveHarnessSubdir(
  * Resolve `{WORKFLOW_DIR}` — default `{HARNESS_DIR}/workflows/`
  * (v3 workflow lifecycle layout: snapshot.json + notes per workflow id).
  * A `.mstarc` `[config] workflow_dir` declaration wins (resolved against
- * the config file's directory). The dir need not exist — writers
- * (`writeWorkflowSnapshot` / register paths) create it on demand.
+ * the config file's directory). The dir need not exist — migration/register
+ * paths create it on demand.
  *
  * Deferred-by-design : the startDir-first signature is asymmetric
  * with the harnessDir-first sibling resolvers — brief-mandated for the CLI

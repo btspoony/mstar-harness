@@ -51,10 +51,6 @@ import {
   type RowCoordination,
 } from "./coordination-write.js";
 import { storedCoordinationViolations } from "./coordination-transitions.js";
-import {
-  validateIntegrationMergeLease,
-  type IntegrationMergeLease,
-} from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
 import {
   unresolvedRecovery,
@@ -86,8 +82,10 @@ import {
 import {
   isTerminalSnapshot,
   rowValidationRoute,
+  validateIntegrationMergeLease,
   validateWorkflowSnapshot,
   WORKFLOW_SNAPSHOT_FILE,
+  type IntegrationMergeLease,
   type WorkflowSnapshot,
 } from "./workflow.js";
 
@@ -1084,8 +1082,8 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
  * Transaction owners per canonical DB path and async context: a nested domain
  * operation on the same store refuses `execution.reentrant` instead of opening
  * a second transaction, while independent concurrent callers (separate async
- * chains) are not treated as nested. Same primitive and same reasoning as
- * `withStatusWriteLock`'s reentrancy detection (lease.ts).
+ * chains) are not treated as nested. This async-local ownership set is the
+ * store's only reentrancy primitive — there is no filesystem lock.
  */
 const ownedTransactions = new AsyncLocalStorage<ReadonlySet<string>>();
 

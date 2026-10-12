@@ -22,10 +22,10 @@
  * - Terminal invariants: terminal set = `completed|failed|stopped` ⇒
  *   `ended_at` is present and `integration_merge_lease` is absent.
  * - Integration-mutex shape delegation: `validateIntegrationMergeLease`
- *   (`packages/engine/src/lease.ts`).
- * - Writer: whole-rewrite under `withStatusWriteLock(snapshotPath)` — the
- *   `.status-write.lockdir` lands inside `workflows/<id>/` (dirname of the
- *   snapshot), no harness-root pollution; `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
+ *   (`packages/engine/src/workflow.ts`).
+ * - Writer: migration-only whole-rewrite of `dir/snapshot.json` through the
+ *   active `ArtifactStore` (atomic temp+rename), no file lock;
+ *   `WORKFLOW_SNAPSHOT_FILE = "snapshot.json"`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";

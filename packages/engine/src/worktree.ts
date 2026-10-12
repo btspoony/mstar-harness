@@ -44,8 +44,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
-import type { WorkflowLifecycleType } from "./workflow.js";
-import { validateIntegrationMergeLease } from "./lease.js";
+import { validateIntegrationMergeLease, type WorkflowLifecycleType } from "./workflow.js";
 
 /**
  * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
