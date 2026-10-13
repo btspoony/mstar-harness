@@ -117,6 +117,7 @@ export type ExecutionErrorCode =
   | "execution.header-revision-conflict"
   | "execution.adoption-invalid"
   | "execution.delivery-declaration-required"
+  | "execution.workflow-skip-unmatched"
   | "store.not-active"
   | "store.stale-epoch";
 

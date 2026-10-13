@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { readSessionEnvelope, type CoordinationSession } from "./coordination-envelope.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
@@ -59,6 +59,12 @@ function rootOf(context: StoreContext): string {
  * execution ids whose linked source this run refuses — the caller rejects an
  * acknowledgement that addresses no such source.
  *
+ * The ROOT is `lstat`-ed FIRST and every decision about which registrations it
+ * makes an execution source is purely lexical, so no path is resolved (and
+ * therefore no link is followed) while the root's own linkage is unknown. Only
+ * after the root is known to be a real directory may a registration directory
+ * be probed.
+ *
  * A symlinked ROOT is deferred to the DSH importer's own source handling when
  * it registers no execution workflow: the operator's documented
  * `--ack-skip-dsh dsh-workflows` recovery can then drop exactly that source
@@ -70,11 +76,11 @@ function rootOf(context: StoreContext): string {
  * Nothing is followed either way: linked bytes are reached only under the real
  * path, which the DSH evaluation lstat-refuses.
  *
- * A symlinked CHILD is the DSH importer's own source, so an operator who has
- * already acknowledged dropping it (`--ack-skip-dsh dsh-ledger:<id>`) leaves it
- * to that phase instead of failing here before its documented recovery runs. A
- * registered child is not a DSH source: its own guard names the execution
- * acknowledgement.
+ * A symlinked CHILD of a real tree is the DSH importer's own source, so an
+ * operator who has already acknowledged dropping it (`--ack-skip-dsh
+ * dsh-ledger:<id>`) leaves it to that phase instead of failing here before its
+ * documented recovery runs. A registered child is not a DSH source: its own
+ * guard names the execution acknowledgement.
  */
 function assertWorkflowTreeIsReal(
   root: string,
@@ -83,21 +89,25 @@ function assertWorkflowTreeIsReal(
   acknowledgedWorkflowSkips: ReadonlySet<string>,
 ): { enumerable: boolean; refusedRegisteredIds: Set<string> } {
   const workflowsDir = join(root, "workflows");
-  // A registered workflow whose own directory is a symlink is refused by the
-  // per-registration guard, including one registered outside `workflows/`.
-  // Classified for every registration so an execution acknowledgement can be
-  // matched against exactly the linked sources this run refuses.
-  const refusedRegisteredIds = new Set<string>();
-  for (const entry of registeredExecution) {
-    try { if (lstatSync(entry.dir).isSymbolicLink()) refusedRegisteredIds.add(entry.id); }
-    catch { /* a missing or non-directory path is the per-registration guard's own skip or refusal */ }
-  }
+  // Purely lexical, before any `lstat`: whether a registration addresses a
+  // directory UNDER `workflows/` decides if a symlinked root is an execution
+  // source, and resolving the path to answer that would itself follow the link.
+  const workflowsPrefix = workflowsDir.endsWith(sep) ? workflowsDir : `${workflowsDir}${sep}`;
+  const registeredUnderRoot = registeredExecution.filter(({ dir }) => dir !== workflowsDir && dir.startsWith(workflowsPrefix));
   let info;
   try { info = lstatSync(workflowsDir); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { enumerable: false, refusedRegisteredIds };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { enumerable: false, refusedRegisteredIds: new Set() };
     throw error;
   }
   if (!info.isSymbolicLink() && info.isDirectory()) {
+    // The root is a real directory, so a registration's own directory may now be
+    // probed: a linked child is refused by the per-registration guard and is
+    // matched here so an acknowledged id can be skipped before any read.
+    const refusedRegisteredIds = new Set<string>();
+    for (const entry of registeredExecution) {
+      try { if (lstatSync(entry.dir).isSymbolicLink()) refusedRegisteredIds.add(entry.id); }
+      catch { /* a missing or non-directory path is the per-registration guard's own skip or refusal */ }
+    }
     for (const dirent of readdirSync(workflowsDir, { withFileTypes: true })) {
       if (!dirent.isSymbolicLink()) continue;
       const path = join(workflowsDir, dirent.name);
@@ -112,10 +122,6 @@ function assertWorkflowTreeIsReal(
     }
     return { enumerable: true, refusedRegisteredIds };
   }
-  // Only a registration that actually addresses a directory UNDER the symlinked
-  // root makes that root an execution source; a workflow living elsewhere in the
-  // control root is unaffected by how `workflows/` is linked.
-  const registeredUnderRoot = registeredExecution.filter(({ dir }) => isPathWithin(workflowsDir, dir) && canonicalPath(dir) !== canonicalPath(workflowsDir));
   // A symlinked root with no registered execution workflow under it is exactly
   // what the DSH acknowledgement exists for: defer it so the documented
   // `--ack-skip-dsh dsh-workflows` recovery runs and reports the real loss.
@@ -123,11 +129,11 @@ function assertWorkflowTreeIsReal(
     if (!acknowledgedSkips.includes("dsh-workflows")) {
       conflict(`workflow root ${workflowsDir} is not a real directory; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-workflows\` to drop exactly that source, otherwise replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
     }
-    return { enumerable: false, refusedRegisteredIds };
+    return { enumerable: false, refusedRegisteredIds: new Set() };
   }
   if (info.isSymbolicLink()) {
-    for (const entry of registeredUnderRoot) refusedRegisteredIds.add(entry.id);
-    const unacknowledged = registeredUnderRoot.filter((entry) => !acknowledgedWorkflowSkips.has(entry.id));
+    const refusedRegisteredIds = new Set(registeredUnderRoot.map(({ id }) => id));
+    const unacknowledged = registeredUnderRoot.filter(({ id }) => !acknowledgedWorkflowSkips.has(id));
     if (unacknowledged.length > 0) {
       conflict(`workflow root ${workflowsDir} is a symlink and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a linked directory is never followed, so a registered execution source is never discarded by a DSH acknowledgement \u2014 rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to skip importing exactly those registered workflows (their legacy sources remain in place and no execution row is imported for them), or replace the symlink with a real in-root directory holding those workflows, then rerun store upgrade.`);
     }
@@ -298,8 +304,14 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   const safeEntries: unknown[] = [];
   for (const entry of entries ?? []) {
     if (isPlainObject(entry) && typeof entry.id === "string" && typeof entry.dir === "string") {
+      // Lexical containment only: a relative `../..` climb, an absolute dir, or
+      // the root itself is caller input and is refused by NAME. Resolving the
+      // path here (`isPathWithin` → `realpathSync`) would follow a linked
+      // `workflows/` root into its target and turn a registered source the
+      // operator may acknowledge into a containment refusal they cannot fix.
       const dir = join(root, entry.dir);
-      if (!isPathWithin(root, dir) || dir === root) conflict(`workflow ${entry.id} records dir ${JSON.stringify(entry.dir)} outside control root ${root}; correct or remove that status.json entry, then rerun store upgrade.`);
+      const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+      if (!dir.startsWith(prefix) || dir === root) conflict(`workflow ${entry.id} records dir ${JSON.stringify(entry.dir)} outside control root ${root}; correct or remove that status.json entry, then rerun store upgrade.`);
     }
     if (validateWorkflowEntry(entry).ok) safeEntries.push(entry);
     else if (isPlainObject(entry) && typeof entry.id === "string") skipped.push({ path: `status.json#${entry.id}`, reason: "unrecognizable workflow entry; left in place" });
@@ -349,7 +361,6 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     if (seen.has(entry.id)) conflict(`status.json lists workflow ${entry.id} more than once; remove the duplicate registration and rerun store upgrade.`);
     seen.add(entry.id);
     const dir = join(root, entry.dir);
-    const info = (() => { try { return lstatSync(dir); } catch { return null; } })();
     // `refusedRegisteredIds` is the preflight's own classification, computed by
     // lstat before any link is traversed. It is the authority here because under
     // a symlinked ROOT an `lstat(dir)` resolves THROUGH the link and would look
@@ -360,6 +371,8 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     // this registered workflow: its raw directory/snapshot/link bytes are never
     // read or followed, no linked target is visited, and no native row is
     // imported or fabricated for it. The receipt states the skip and its loss.
+    // This decision is deliberately taken BEFORE `lstatSync(dir)` so an
+    // acknowledged linked source is never even probed for its own metadata.
     if (refusedRegistered && acknowledgedWorkflowSkips.has(entry.id)) {
       const path = relative(root, dir).split(/[\\/]+/).join("/");
       skipped.push({
@@ -369,6 +382,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
       skippedWorkflowAcknowledgements.push({ id: entry.id, path });
       continue;
     }
+    const info = (() => { try { return lstatSync(dir); } catch { return null; } })();
     if (refusedRegistered || info?.isSymbolicLink() || (info !== null && !info.isDirectory())) {
       const linked = refusedRegistered || info?.isSymbolicLink() === true;
       conflict(
@@ -479,8 +493,10 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
   // A repeated id is an ordinary caller slip with one meaning: normalize it so
-  // both the request identity and the run treat `[a, a]` exactly like `[a]`.
-  const workflowSkips = new Set((input.acknowledgedWorkflowSkips ?? []).filter((id) => id.trim() !== ""));
+  // both the request identity and the run treat `[a, a]` exactly like `[a]`. The
+  // raw values are kept, so a blank or unknown id stays a caller fact that the
+  // unmatched guard below reports rather than a silently discarded input.
+  const workflowSkips = new Set(input.acknowledgedWorkflowSkips ?? []);
   const source = discover(context, operator, input.acknowledgedSkips ?? [], workflowSkips, input.deliveryDeclarations ?? []);
   const requestHash = createHash("sha256").update(JSON.stringify({
     operation: "store.upgrade",

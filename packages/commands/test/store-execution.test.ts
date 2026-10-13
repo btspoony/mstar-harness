@@ -434,7 +434,10 @@ describe("store and execution command surface", () => {
     const store = await openStore({ harnessDir: harness }, "read");
     try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
     finally { store.close(); }
-    // No linked byte was read or rewritten.
+    // The link and its target bytes are untouched — this proves no REWRITE. The
+    // no-read / no-probe ordering for an acknowledged linked source is defended
+    // by the engine regressions (the acknowledgement is honoured before any
+    // child lstat or snapshot read).
     expect(lstatSync(workflowDir).isSymbolicLink()).toBe(true);
     expect([...readFileSync(join(target, "snapshot.json"))]).toEqual([...linkedSnapshot]);
   });
