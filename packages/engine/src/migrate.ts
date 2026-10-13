@@ -63,7 +63,7 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { readArtifactBytes } from "./coordination-write.js";
+import { artifactVersion, readArtifactBytes } from "./coordination-write.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { assertSafePathComponent } from "./path.js";
 import {
@@ -511,10 +511,19 @@ function applyRootMetadataLift(
  *
  * A v2 root is not this function's input: the store-upgrade importer reads a
  * `version: 2` tree natively (`isLegacyV1Root` gates the two routes).
+ *
+ * `verifiedStatusBytes` is the caller's already-verified read of the same
+ * status file: the direct importer reads it through one no-follow descriptor
+ * for classification, and passing those bytes keeps the conversion from
+ * re-acquiring the path (a leaf replaced between the two reads would otherwise
+ * decide the classification from one inode and the rows from another). Callers
+ * without a prior read (the standalone conversion entry) keep the path read.
  */
-export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDeclarations = []): LegacyV1Conversion {
+export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDeclarations = [], verifiedStatusBytes?: Buffer): LegacyV1Conversion {
   const statusPath = join(root, MIGRATE_STATUS_FILE);
-  const source = readArtifactBytes(statusPath);
+  const source = verifiedStatusBytes === undefined
+    ? readArtifactBytes(statusPath)
+    : { payload: JSON.parse(verifiedStatusBytes.toString("utf8")) as unknown, version: artifactVersion(verifiedStatusBytes) };
   if (source === undefined) {
     throw new Error(
       `refusing to convert: no legacy ${MIGRATE_STATUS_FILE} at ${statusPath}; a workspace without a legacy root has nothing to import`,

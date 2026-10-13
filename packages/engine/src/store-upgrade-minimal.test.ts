@@ -288,7 +288,11 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
   const changedSnapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
   changedSnapshot.updated_at = "2026-10-05";
   writeFileSync(snapshotPath, JSON.stringify(changedSnapshot));
-  expect(await upgradeStoreMinimal(input)).toEqual(result);
+  // The imported input is part of the request identity: the SAME operation over
+  // EDITED legacy bytes conflicts instead of answering with a receipt that
+  // describes bytes this run never imported. Only the unchanged replay above is
+  // answered by the retained receipt.
+  await expect(upgradeStoreMinimal(input)).rejects.toMatchObject({ code: "execution.operation-conflict" });
   const replayStore = await openStore(context, "read");
   try {
     expect(replayStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
@@ -1556,6 +1560,14 @@ test("same operation replays and a reused operation id with a different operator
   const first = await upgradeStoreMinimal(input);
   expect(await upgradeStoreMinimal(input)).toEqual(first);
   await expect(upgradeStoreMinimal({ ...input, operator: "another" })).rejects.toMatchObject({ code: "execution.operation-conflict" });
+  // The imported input is part of the request identity: the SAME operator and
+  // operation id over changed legacy bytes is a conflict, never a receipt that
+  // describes bytes this run never imported.
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-replay-conflict", WORKFLOW_SNAPSHOT_FILE);
+  const edited = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  edited.updated_at = "2026-10-13";
+  writeFileSync(snapshotPath, JSON.stringify(edited));
+  await expect(upgradeStoreMinimal(input)).rejects.toMatchObject({ code: "execution.operation-conflict" });
 });
 
 test("minimal activation retains a manually constructed legacy registration recovery journal", async () => {
@@ -2099,7 +2111,9 @@ test("a later new-operation import of the same legacy source requires explicit a
   expect(await readHeader()).toEqual(nativeHeader);
 
   // The native source body is later EDITED: native progress, not the retained
-  // legacy body, is authoritative, so this changes nothing about the receipt.
+  // legacy body, is authoritative, so the native row is unchanged — and because
+  // the imported input is part of the request identity, a same-operation replay
+  // over the edited bytes is a conflict rather than a stale receipt.
   const edited = JSON.parse(legacyBytes.toString("utf8")) as Record<string, unknown>;
   edited.updated_at = "2026-10-09";
   (edited.branch as Record<string, unknown>).source = `feature/edited-${workflowId}`;
@@ -3104,6 +3118,9 @@ for (const shape of ["symlink", "directory"] as const) {
     expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
     expect(result.skipped).toContainEqual(expect.objectContaining({ path: `workflows/${workflowId}` }));
     expect(result.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
+    // The containing directory IS a real in-root directory here, so the shared
+    // disposition must not blame it; only the per-item reason names the cause.
+    expect(result.dispositions.join("\n")).not.toContain("is not a real in-root directory");
     expect(accessed.filter((path) => path === target || path.startsWith(`${snapshot}/`))).toEqual([]);
     const after = await protectedStore(context);
     for (const [name, rows] of Object.entries(before.tables)) {
@@ -3157,3 +3174,60 @@ for (const leaf of ["status", "snapshot", "session"] as const) {
     expect(readFileSync(target)).toEqual(bytes);
   });
 }
+
+test("a legacy root register that is a FIFO at open refuses instead of blocking", async () => {
+  const name = "fifo-root-register";
+  const { context } = legacyWorkspace(name);
+  const statusPath = join(context.harnessDir, "status.json");
+  // The harness fixture lives on disk, and a blocking open cannot be interrupted
+  // in-process, so the probe runs in a child with a real timeout: a regression
+  // fails this case instead of wedging the suite.
+  rmSync(statusPath);
+  execFileSync("mkfifo", [statusPath]);
+  const probe = (harnessDir: string, operationId: string): { status: string; code?: string } =>
+    JSON.parse(execFileSync(process.execPath, ["-e", `
+      const mod = await import(${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))});
+      try {
+        const result = await mod.upgradeStoreMinimal({ context: { harnessDir: ${JSON.stringify(harnessDir)} }, operator: "operator", operationId: ${JSON.stringify(operationId)} });
+        console.log(JSON.stringify({ status: "ok", verdict: result.verdict }));
+      } catch (error) {
+        console.log(JSON.stringify({ status: "threw", code: error && error.code }));
+      }
+    `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
+  const refused = probe(context.harnessDir, "op-fifo-root");
+  expect(refused).toMatchObject({ status: "threw", code: "execution.migration-conflict" });
+  expect(lstatSync(statusPath).isFIFO()).toBe(true);
+  // The refusal is per source and the read was bounded: a decidable root in the
+  // same run shape still imports.
+  const { context: healthy, unknownBytes } = legacyWorkspace("fifo-root-register-control");
+  expect(probe(healthy.harnessDir, "op-fifo-control")).toMatchObject({ status: "ok", verdict: "upgraded" });
+  expect(readFileSync(join(healthy.harnessDir, "status.json")).length).toBeGreaterThan(0);
+  expect(unknownBytes.length).toBeGreaterThan(0);
+}, 30_000);
+
+test("a v1 root converts from the verified register bytes without a second path read", async () => {
+  const { context } = legacyV1Workspace("v1-single-read");
+  const statusPath = join(context.harnessDir, "status.json");
+  const realRead = nodeFs.readFileSync;
+  const pathReads: string[] = [];
+  const probe = spyOn(nodeFs, "readFileSync").mockImplementation(((path: string | number, ...rest: unknown[]) => {
+    if (typeof path === "string" && path === statusPath) pathReads.push(path);
+    return (realRead as (...args: unknown[]) => unknown)(path, ...rest);
+  }) as never);
+  let result;
+  try {
+    result = await upgradeStoreMinimal({
+      context, operator: "operator", operationId: "op-v1-single-read", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    });
+  }
+  finally { probe.mockRestore(); }
+  expect(result.verdict).toBe("upgraded");
+  // The classification read and the converted rows come from one descriptor
+  // read: the path was never re-acquired (readFileSync receives only numbers
+  // for that file, which the spy would have recorded as no path read at all).
+  expect(pathReads).toEqual([]);
+  const store = await openStore(context, "read");
+  try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toMatchObject({ n: expect.any(Number) }); }
+  finally { store.close(); }
+});
+

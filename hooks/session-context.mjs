@@ -20526,9 +20526,9 @@ function applyRootMetadataLift(snapshot, metadata, dispositions, activeIteration
     dispositions.push(`${activeIterations} active iterations present — the root metadata lifts are carried by ${JSON.stringify(snapshot.id)} only`);
   }
 }
-function convertLegacyV1Tree(root, declarations = []) {
+function convertLegacyV1Tree(root, declarations = [], verifiedStatusBytes) {
   const statusPath = join20(root, MIGRATE_STATUS_FILE);
-  const source = readArtifactBytes(statusPath);
+  const source = verifiedStatusBytes === undefined ? readArtifactBytes(statusPath) : { payload: JSON.parse(verifiedStatusBytes.toString("utf8")), version: artifactVersion(verifiedStatusBytes) };
   if (source === undefined) {
     throw new Error(`refusing to convert: no legacy ${MIGRATE_STATUS_FILE} at ${statusPath}; a workspace without a legacy root has nothing to import`);
   }
@@ -23382,7 +23382,7 @@ function lossStatement(refusal) {
   }
 }
 function readBytes(path2) {
-  const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
+  const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   try {
     if (!fstatSync2(fd).isFile())
       throw new Error(`not a regular file: ${path2}`);
@@ -23931,10 +23931,10 @@ function readSourceBytes(path2, label) {
     throw new UnsafeSourceError(`${label} at ${path2} is not a regular file.`);
   let fd;
   try {
-    fd = openSync3(path2, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0));
+    fd = openSync3(path2, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
     const opened = fstatSync3(fd);
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
-      throw new UnsafeSourceError(`${label} at ${path2} was replaced or is not a regular file.`);
+      throw new UnsafeSourceError(`${label} at ${path2} was replaced, is not a regular file, or is no longer the verified bytes.`);
     }
     return readFileSync20(fd);
   } catch (error) {
@@ -24028,12 +24028,14 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const skipped = [];
   const sourceFiles = new Set;
   let parsed;
+  let statusBytes;
   if (!existsSync20(statusPath)) {
     parsed = { version: 2, updated_at: SYNTHESIZED_DATE2, workflows: [] };
   } else {
     sourceFiles.add(statusPath);
+    statusBytes = readSourceBytes(statusPath, "status.json");
     try {
-      parsed = JSON.parse(readSourceBytes(statusPath, "status.json").toString("utf8"));
+      parsed = JSON.parse(statusBytes.toString("utf8"));
     } catch (error) {
       if (!(error instanceof SyntaxError))
         throw error;
@@ -24049,7 +24051,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const refusedSourceIds = tree.refusedRegisteredIds;
   let refusal = tree.refusal;
   if (isPlainObject(parsed) && parsed.version === 1) {
-    const legacy = convertLegacyV1Tree(root, declarations);
+    const legacy = convertLegacyV1Tree(root, declarations, statusBytes);
     const converted = discoverV1(root, legacy, operator);
     return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions, refusedSourceIds };
   }
@@ -24272,7 +24274,8 @@ async function importExecutionMinimal(input) {
     operator,
     operationId,
     deliveryDeclarations: input.deliveryDeclarations ?? [],
-    acknowledgedWorkflowSkips: [...workflowSkips].sort()
+    acknowledgedWorkflowSkips: [...workflowSkips].sort(),
+    sourceDigest: source.sourceDigest
   })).digest("hex");
   return withExecutionTransaction(context, (tx) => {
     const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId);
@@ -24322,7 +24325,7 @@ async function importExecutionMinimal(input) {
     }
     skipped.sort((a, b) => a.path.localeCompare(b.path));
     for (const entry of source.skippedWorkflowAcknowledgements) {
-      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The source at ${entry.path} is not a real in-root directory (a linked source is never followed) and its bytes remain in place — this is import disposal, not deletion, and no resumption is fabricated.`);
+      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The refused source path was not read or followed (the per-item skip above names it and its exact cause) and its bytes remain in place — this is import disposal, not deletion, and no resumption is fabricated.`);
     }
     const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get();
     if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {

@@ -187,10 +187,10 @@ function readSourceBytes(path: string, label: string): Buffer {
   if (info.isSymbolicLink() || !info.isFile()) throw new UnsafeSourceError(`${label} at ${path} is not a regular file.`);
   let fd: number | undefined;
   try {
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     const opened = fstatSync(fd);
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
-      throw new UnsafeSourceError(`${label} at ${path} was replaced or is not a regular file.`);
+      throw new UnsafeSourceError(`${label} at ${path} was replaced, is not a regular file, or is no longer the verified bytes.`);
     }
     return readFileSync(fd);
   } catch (error) {
@@ -292,11 +292,16 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   const skipped: MinimalImportResult["skipped"] = [];
   const sourceFiles = new Set<string>();
   let parsed: unknown;
+  // The one verified read of the root register on this route: the v1 conversion
+  // below consumes these bytes instead of re-acquiring the path, so the
+  // classification inode and the converted rows are the same bytes.
+  let statusBytes: Buffer | undefined;
   if (!existsSync(statusPath)) {
     parsed = { version: 2, updated_at: SYNTHESIZED_DATE, workflows: [] };
   } else {
     sourceFiles.add(statusPath);
-    try { parsed = JSON.parse(readSourceBytes(statusPath, "status.json").toString("utf8")); }
+    statusBytes = readSourceBytes(statusPath, "status.json");
+    try { parsed = JSON.parse(statusBytes.toString("utf8")); }
     catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
       parsed = { version: 2, updated_at: SYNTHESIZED_DATE, workflows: [] };
@@ -327,7 +332,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   // A recognizable v1 root converts in memory and imports through the same
   // native rows; the legacy bytes stay on disk untouched.
   if (isPlainObject(parsed) && parsed.version === 1) {
-    const legacy = convertLegacyV1Tree(root, declarations);
+    const legacy = convertLegacyV1Tree(root, declarations, statusBytes);
     const converted = discoverV1(root, legacy, operator);
     // The v1 route reads nothing from `workflows/`, so it reports no linked
     // skip of its own; its converted ids take the same collision/acknowledgement
@@ -580,6 +585,10 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     operationId,
     deliveryDeclarations: input.deliveryDeclarations ?? [],
     acknowledgedWorkflowSkips: [...workflowSkips].sort(),
+    // The imported input is part of the request identity: a retained receipt
+    // must never vouch for bytes that were never imported, so reusing one
+    // operationId across changed legacy bytes conflicts instead of replaying.
+    sourceDigest: source.sourceDigest,
   })).digest("hex");
   return withExecutionTransaction(context, (tx) => {
     const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as { request_hash?: unknown; result_json?: unknown } | undefined;
@@ -648,7 +657,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     }
     skipped.sort((a, b) => a.path.localeCompare(b.path));
     for (const entry of source.skippedWorkflowAcknowledgements) {
-      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The source at ${entry.path} is not a real in-root directory (a linked source is never followed) and its bytes remain in place \u2014 this is import disposal, not deletion, and no resumption is fabricated.`);
+      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The refused source path was not read or followed (the per-item skip above names it and its exact cause) and its bytes remain in place \u2014 this is import disposal, not deletion, and no resumption is fabricated.`);
     }
     const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
     if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {

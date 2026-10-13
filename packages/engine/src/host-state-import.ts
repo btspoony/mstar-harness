@@ -51,14 +51,15 @@ function lossStatement(refusal: Refusal): string {
 
 /**
  * Read one regular file through ONE descriptor: the leaf is opened without
- * following a final symlink and the same descriptor is verified with `fstat`,
- * read and closed, so a path swapped for a link after any earlier ancestor
- * check can never contribute another file's bytes. Where a platform does not
- * provide `O_NOFOLLOW`, the same-descriptor `fstat` verification remains the
- * boundary.
+ * following a final symlink and WITHOUT blocking, the same descriptor is
+ * verified with `fstat`, read and closed, so a path swapped for a link after
+ * any earlier ancestor check can never contribute another file's bytes and a
+ * leaf that is not a regular file refuses by type instead of hanging the
+ * command. Where a platform does not provide `O_NOFOLLOW`, the same-descriptor
+ * `fstat` verification remains the boundary.
  */
 function readBytes(path: string): Buffer {
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     if (!fstatSync(fd).isFile()) throw new Error(`not a regular file: ${path}`);
     return readFileSync(fd);

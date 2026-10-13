@@ -6,6 +6,8 @@ Two boundaries hold across the page. All seven are **user entry points** — a c
 
 For project roadmap content, use the CLI `mstar roadmap` family (not a slash command): show, reviewed import, revision-guarded replace and transport export. The authoring/read/write rules live only in `mstar-project-governance`; `mstar-use-cli` indexes the family and the built command's `--help` owns its options.
 
+A registered legacy leaf that is not a regular file (a FIFO, socket or device) refuses by type and names its recovery instead of blocking the command. The imported source also participates in the operation identity: repeating one `--operation-id` over changed legacy bytes refuses as a conflict rather than replaying a receipt that describes bytes this run never read, while an unchanged repeat still returns its retained receipt. The v1 route converts from the same descriptor-verified register bytes it classified.
+
 ## Store CLI upgrade and recovery
 
 `mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing recognized v1/v2 workflow state directly into the local store. It creates or opens the store, activates execution authority, and reports unrecognized or unresolvable inputs while preserving original source bytes and paths. The standalone `mstar migrate` file-staging entry is retired; use `store upgrade` without a staging step. Stop older installed writers and align consumers before an authority upgrade; documentation changes do not perform that operational cutover.

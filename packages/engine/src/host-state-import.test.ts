@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
@@ -622,6 +623,43 @@ test("a legacy source leaf swapped for a symlink at the open boundary is never f
   // Byte equality alone would prove nothing: the outside bytes were never consumed at all.
   expect(readFileSync(outside, "utf8")).toBe(outsideBytes);
 });
+
+test("a non-regular legacy DSH leaf refuses by type instead of blocking the upgrade", async () => {
+  const { context, workflow } = await fixture("fifo-leaf");
+  const idsPath = join(workflow, "agent-flow-ids.jsonl");
+  writeFileSync(join(workflow, "agent-flow.jsonl"), '{"eventId":"wfe1:dispatch:stream:1","n":1}\n');
+  writeFileSync(idsPath, '{"id":"wfe1:dispatch:stream:1","d":"digest"}\n');
+  // A writer-less FIFO: the descriptor read must not wait for one.
+  rmSync(idsPath);
+  execFileSync("mkfifo", [idsPath]);
+  // Bounded by construction: a blocking read cannot be interrupted in-process
+  // (the event loop is stuck), so each call runs in a child with a real
+  // timeout — a regression fails the case instead of wedging the suite.
+  const probe = (operationId: string, acknowledgedSkips: string[]): { status: string; code?: string; message?: string; identities?: number } =>
+    JSON.parse(execFileSync(process.execPath, ["-e", `
+      const mod = await import(${JSON.stringify(join(import.meta.dir, "host-state-import.ts"))});
+      try {
+        const result = await mod.importDshHostStateFiles({
+          context: { harnessDir: ${JSON.stringify(context.harnessDir)} },
+          operator: "fixture", operationId: ${JSON.stringify(operationId)},
+          acknowledgedSkips: ${JSON.stringify(acknowledgedSkips)},
+        });
+        console.log(JSON.stringify({ status: "ok", identities: result.imported.identities }));
+      } catch (error) {
+        console.log(JSON.stringify({ status: "threw", code: error && error.code, message: String(error && error.message).slice(0, 2000) }));
+      }
+    `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
+  const refused = probe("fifo-leaf", []);
+  expect(refused.status).toBe("threw");
+  expect(refused.code).toBe("store.upgrade-dsh-source-refused");
+  expect(refused.message).toContain("dsh-ledger:wf-fifo-leaf");
+  expect(refused.message).toContain("--ack-skip-dsh");
+  // The documented recovery terminates for the acknowledged selector and the
+  // refused source's bytes are untouched.
+  const acked = probe("fifo-leaf-ack", ["dsh-ledger:wf-fifo-leaf"]);
+  expect(acked).toMatchObject({ status: "ok", identities: 0 });
+  expect(nodeFs.lstatSync(idsPath).isFIFO()).toBe(true);
+}, 30_000);
 
 test("a tail-only crash-window row registers its recovered identity and dedups the native replay", async () => {
   const { context, workflow } = await fixture("crash-window");
