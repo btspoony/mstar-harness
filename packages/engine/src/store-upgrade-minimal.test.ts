@@ -2785,6 +2785,64 @@ test("a v1 root whose lift is unacceptable reports the committed schema and auth
  */
 const NON_DIRECTORY_BYTES = "NOT-A-WORKFLOW-SOURCE-BYTES\n";
 
+/**
+ * One REAL unrelated native workflow with a meaningful plan, frozen input row
+ * and committed domain receipt, created through the public producers. The
+ * non-directory recovery must leave every one of these rows byte-identical.
+ * Returns the exact native content a post-recovery comparison needs.
+ */
+async function seedUnrelatedNative(context: StoreContext, nativeId: string): Promise<{
+  workflow: { workflow_id: string; revision: number; state_json: string };
+  plan: { plan_id: string; revision: number; state_json: string };
+  input: { input_json: string; input_hash: string };
+  receipts: Array<Record<string, unknown>>;
+}> {
+  const root = await readExecutionState(context);
+  await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId: nativeId, role: "coordinator" })), {
+    entry: { id: nativeId, type: "plan", started_at: "2026-10-04", dir: `workflows/${nativeId}` },
+    snapshot: {
+      schema_version: 1,
+      id: nativeId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-10-04",
+      updated_at: "2026-10-04",
+      delivery_kind: "development",
+      branch: { source: `feature/native-${nativeId}`, target: "main" },
+      plans: [{ id: `${nativeId}-plan`, title: "Native kept plan", file: `${nativeId}-plan.md`, status: "Todo" }],
+    } satisfies WorkflowSnapshot,
+    expected: root.token,
+    operationId: `create-${nativeId}`,
+  });
+  const store = await openStore(context, "read");
+  try {
+    return {
+      workflow: store.db.prepare("select workflow_id, revision, state_json from execution_workflows where workflow_id = ?").get(nativeId) as { workflow_id: string; revision: number; state_json: string },
+      plan: store.db.prepare("select plan_id, revision, state_json from execution_plans where workflow_id = ?").get(nativeId) as { plan_id: string; revision: number; state_json: string },
+      input: store.db.prepare("select input_json, input_hash from execution_inputs where workflow_id = ?").get(nativeId) as { input_json: string; input_hash: string },
+      receipts: store.db.prepare("select operation_id, workflow_id, result_json from execution_operations where workflow_id = ? order by operation_id").all(nativeId) as Array<Record<string, unknown>>,
+    };
+  } finally { store.close(); }
+}
+
+/** Re-read the same unrelated native rows after a run, for a content comparison. */
+async function readUnrelatedNative(context: StoreContext, nativeId: string): Promise<{
+  workflow: { workflow_id: string; revision: number; state_json: string };
+  plan: { plan_id: string; revision: number; state_json: string };
+  input: { input_json: string; input_hash: string };
+  receipts: Array<Record<string, unknown>>;
+}> {
+  const store = await openStore(context, "read");
+  try {
+    return {
+      workflow: store.db.prepare("select workflow_id, revision, state_json from execution_workflows where workflow_id = ?").get(nativeId) as { workflow_id: string; revision: number; state_json: string },
+      plan: store.db.prepare("select plan_id, revision, state_json from execution_plans where workflow_id = ?").get(nativeId) as { plan_id: string; revision: number; state_json: string },
+      input: store.db.prepare("select input_json, input_hash from execution_inputs where workflow_id = ?").get(nativeId) as { input_json: string; input_hash: string },
+      receipts: store.db.prepare("select operation_id, workflow_id, result_json from execution_operations where workflow_id = ? order by operation_id").all(nativeId) as Array<Record<string, unknown>>,
+    };
+  } finally { store.close(); }
+}
+
 test("a registered per-workflow path that is a regular file refuses by default, then an explicit acknowledgement imports only the healthy sibling with the loss named", async () => {
   const { context } = legacyWorkspace("nondir-child");
   const blockingId = "wf-nondir-child";
@@ -2794,13 +2852,16 @@ test("a registered per-workflow path that is a regular file refuses by default, 
   rmSync(blockingPath, { recursive: true, force: true });
   writeFileSync(blockingPath, NON_DIRECTORY_BYTES);
 
-  // A healthy in-root sibling so a partial import is observable.
+  // A healthy in-root sibling with a real plan, so the recovery's imported
+  // content — not only its ID — is observable.
   const healthyId = "wf-nondir-child-healthy";
+  const healthyPlanId = `${healthyId}-plan`;
   const healthyDir = join(context.harnessDir, "workflows", healthyId);
   mkdirSync(join(healthyDir, "sessions"), { recursive: true });
   writeFileSync(join(healthyDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
     schema_version: 1, id: healthyId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
-    delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" }, plans: [],
+    delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" },
+    plans: [{ id: healthyPlanId, title: "Healthy sibling plan", file: `${healthyPlanId}.md`, status: "Todo" }],
   }));
   const statusPath = join(context.harnessDir, "status.json");
   const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
@@ -2810,6 +2871,10 @@ test("a registered per-workflow path that is a regular file refuses by default, 
   // state; the refusal below must leave every byte of it identical.
   const initialized = await initializeStore(context);
   initialized.close();
+  // A real unrelated native workflow, plan, frozen input and committed receipt:
+  // the recovery must not disturb any of them.
+  const nativeId = "wf-nondir-child-native";
+  const nativeBefore = await seedUnrelatedNative(context, nativeId);
   const before = await protectedStore(context);
 
   // Default: the non-directory registered source is refused and nothing commits
@@ -2838,10 +2903,26 @@ test("a registered per-workflow path that is a regular file refuses by default, 
     expect.stringContaining(`workflow ${blockingId}: skipped by --ack-skip-workflow`),
   );
   expect(recovered.dispositions).toContainEqual(expect.stringContaining("no resumption is fabricated"));
+  // The unrelated native workflow/plan/input/receipt content is byte-identical,
+  // compared row by row and never by count.
+  expect(await readUnrelatedNative(context, nativeId)).toEqual(nativeBefore);
   const store = await openStore(context, "read");
   try {
+    // Exactly the unrelated native row and the healthy sibling imported; the
+    // refused non-directory source fabricated nothing.
     expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
-      .toEqual([{ workflow_id: healthyId }]);
+      .toEqual([{ workflow_id: healthyId }, { workflow_id: nativeId }]);
+    // The healthy sibling's REAL imported header and plan content, not just its ID.
+    const healthyHeader = JSON.parse((store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(healthyId) as { state_json: string }).state_json) as Record<string, unknown>;
+    expect(healthyHeader).toMatchObject({
+      schema_version: 1, id: healthyId, type: "plan", status: "running",
+      delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" },
+    });
+    expect(healthyHeader).not.toHaveProperty("plans");
+    const healthyPlan = JSON.parse((store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(healthyId, healthyPlanId) as { state_json: string }).state_json) as Record<string, unknown>;
+    expect(healthyPlan).toMatchObject({ id: healthyPlanId, title: "Healthy sibling plan", file: `${healthyPlanId}.md`, status: "Todo" });
+    // The refused source contributed no plan row at all.
+    expect(store.db.prepare("select workflow_id, plan_id from execution_plans where workflow_id = ?").all(blockingId)).toEqual([]);
   } finally { store.close(); }
   expect(readFileSync(blockingPath, "utf8")).toBe(NON_DIRECTORY_BYTES);
   // The refused source keeps its registered identity in the source register.
@@ -2850,9 +2931,17 @@ test("a registered per-workflow path that is a regular file refuses by default, 
   });
 });
 
-test("a whole workflows root that is a regular file refuses naming its original registered ids, then the same acknowledgement skips only those IMPORTs", async () => {
+test("a whole workflows root that is a regular file refuses naming its original registered ids, then the same acknowledgement skips only those IMPORTs and leaves the native authority intact", async () => {
   const { context } = legacyWorkspace("nondir-root");
   const workflowId = "wf-nondir-root";
+  // A real unrelated native workflow/plan/input/receipt, created BEFORE the root
+  // becomes a regular file: the whole-root recovery must not disturb it.
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const nativeId = "wf-nondir-root-native";
+  const nativeBefore = await seedUnrelatedNative(context, nativeId);
+  const protectedBefore = await protectedStore(context);
+
   const workflowsDir = join(context.harnessDir, "workflows");
   rmSync(workflowsDir, { recursive: true, force: true });
   writeFileSync(workflowsDir, NON_DIRECTORY_BYTES);
@@ -2862,9 +2951,10 @@ test("a whole workflows root that is a regular file refuses naming its original 
   expect(refusal.code).toBe("execution.migration-conflict");
   expect(refusal.message).toContain("is not a real directory");
   expect(refusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
-  const refusedStore = await openStore(context, "read");
-  try { expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
-  finally { refusedStore.close(); }
+  // The refusal left the whole protected state — including the native rows —
+  // and the root's bytes exactly as they were.
+  expect(await readUnrelatedNative(context, nativeId)).toEqual(nativeBefore);
+  expect(await protectedStore(context)).toEqual(protectedBefore);
   expect(readFileSync(workflowsDir, "utf8")).toBe(NON_DIRECTORY_BYTES);
 
   const recovered = await upgradeStoreMinimal({
@@ -2879,23 +2969,30 @@ test("a whole workflows root that is a regular file refuses naming its original 
   expect(recovered.dispositions).toContainEqual(
     expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`),
   );
+  // The native workflow/plan/input/receipt content survives the acknowledged
+  // whole-root recovery byte-for-byte.
+  expect(await readUnrelatedNative(context, nativeId)).toEqual(nativeBefore);
   const store = await openStore(context, "read");
-  try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
-  finally { store.close(); }
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: nativeId }]);
+  } finally { store.close(); }
   // The root keeps its bytes: the skip disposed an IMPORT, never the source.
   expect(readFileSync(workflowsDir, "utf8")).toBe(NON_DIRECTORY_BYTES);
 });
 
-test("a missing registered source stays an ordinary reported skip and is not an ackable refusal", async () => {
+test("a registered workflow with a MISSING snapshot stays an ordinary reported skip and is not an ackable refusal", async () => {
   const { context } = legacyWorkspace("nondir-missing");
   const workflowId = "wf-nondir-missing";
-  // The registered directory stays real; only its snapshot is missing, which is
-  // the existing reported skip shape (a wholly missing path is the separate
-  // containment refusal).
+  // This is specifically the missing-SNAPSHOT shape: the registered directory
+  // stays a real in-root directory, only its snapshot file is gone. A wholly
+  // missing registered DIRECTORY is the separate physical-containment refusal
+  // (`resolves outside control root`), which already has its own regression and
+  // is deliberately not redefined here.
   rmSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
 
-  // Missing is the existing reported skip: no refusal, and no acknowledgement of
-  // it is accepted, because the run never refused that source.
+  // Missing snapshot is the existing reported skip: no refusal, and no
+  // acknowledgement of it is accepted, because the run never refused that source.
   const skipped = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-missing" });
   expect(skipped.imported).toBe(0);
   expect(skipped.skipped).toContainEqual({
@@ -2905,7 +3002,7 @@ test("a missing registered source stays an ordinary reported skip and is not an 
   const unmatched = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-nondir-missing-ack",
     acknowledgedWorkflowSkips: [workflowId],
-  }).then(() => { throw new Error("a missing source was accepted as an ackable refusal"); }, (error: Error & { code?: string }) => error);
+  }).then(() => { throw new Error("a missing snapshot was accepted as an ackable refusal"); }, (error: Error & { code?: string }) => error);
   expect(unmatched.code).toBe("execution.workflow-skip-unmatched");
 });
 

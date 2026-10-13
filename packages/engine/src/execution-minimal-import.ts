@@ -39,7 +39,8 @@ function conflict(message: string): never {
 /**
  * A refused `--ack-skip-workflow` acknowledgement: it named no workflow source
  * this run actually refuses — neither a registered source the preflight
- * classified as symlinked nor a recognized legacy source whose id already
+ * classified as not a real in-root directory (a symlink that is never followed,
+ * or a non-directory path) nor a recognized legacy source whose id already
  * exists in the native execution authority. Carried as a distinct type so the
  * import producer raises it as the discoverable same-entry usage refusal
  * instead of a generic migration failure, mirroring `DeliveryDeclarationError`.
@@ -56,10 +57,13 @@ function rootOf(context: StoreContext): string {
 }
 
 /**
- * The legacy `workflows/` tree is never followed through a symlink. Returns
- * whether it can be enumerated as a real in-root directory, plus the registered
- * execution ids whose linked source this run refuses — the caller rejects an
- * acknowledgement that addresses no such source.
+ * The legacy `workflows/` tree is never followed through a symlink and never
+ * read through a path that is not a real directory. Returns whether it can be
+ * enumerated as a real in-root directory, plus the registered execution ids
+ * whose source this run refuses — a registered source that is not itself a real
+ * in-root directory (a symlink, or a non-directory path). The caller rejects an
+ * acknowledgement that addresses no such source. A MISSING registered path is
+ * not classified here: it stays the per-registration guard's own reported skip.
  *
  * The ROOT is `lstat`-ed FIRST and every decision about which registrations it
  * makes an execution source is purely lexical, so no path is resolved (and
@@ -262,7 +266,7 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string):
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
 }
 
-function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; skippedWorkflowAcknowledgements: MinimalWorkflowSkip[]; sourceDigest: string; dispositions: string[]; refusedLinkedIds: ReadonlySet<string> } {
+function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; skippedWorkflowAcknowledgements: MinimalWorkflowSkip[]; sourceDigest: string; dispositions: string[]; refusedSourceIds: ReadonlySet<string> } {
   const root = rootOf(context);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
@@ -285,9 +289,11 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   const registeredExecution: RegisteredExecution[] = (entries ?? [])
     .flatMap((entry) => isPlainObject(entry) && typeof entry.dir === "string" && typeof entry.id === "string" ? [{ id: entry.id, dir: join(root, entry.dir) }] : []);
   // A recognizable v1 root converts its lifecycles in memory from status.json;
-  // nothing is ever read from `workflows/` there, so a registration under it is
-  // no skippable linked source and an execution acknowledgement naming one is
-  // refused as unmatched rather than accepted and silently ignored.
+  // nothing is ever read from `workflows/` there, so for the v1 route a
+  // registration under it is NOT a skippable linked source and an execution
+  // acknowledgement naming one is refused as unmatched rather than accepted and
+  // silently ignored. The v2 route still classifies a registration the same way;
+  // only the v1 conversion has no `workflows/` source to skip.
   const skippableRegistered = isPlainObject(parsed) && parsed.version === 1 ? [] : registeredExecution;
   const tree = assertWorkflowTreeIsReal(root, acknowledgedSkips, skippableRegistered, acknowledgedWorkflowSkips);
   const isRealWorkflowTree = tree.enumerable;
@@ -296,7 +302,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   // other half (recognized legacy sources whose id the native authority already
   // holds) is only knowable inside the import transaction, so the whole-input
   // check runs at that seam instead of speculating about native state here.
-  const refusedLinkedIds = tree.refusedRegisteredIds;
+  const refusedSourceIds = tree.refusedRegisteredIds;
   // A recognizable v1 root converts in memory and imports through the same
   // native rows; the legacy bytes stay on disk untouched.
   if (isPlainObject(parsed) && parsed.version === 1) {
@@ -305,7 +311,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     // The v1 route reads nothing from `workflows/`, so it reports no linked
     // skip of its own; its converted ids take the same collision/acknowledgement
     // contract in the import transaction below.
-    return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions, refusedLinkedIds };
+    return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions, refusedSourceIds };
   }
   // Declarations describe the ACTIVE standalone lifts a v1 conversion produces.
   // A v2 tree declares its kinds in its own snapshots and an empty root has no
@@ -516,7 +522,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     relative(root, path).split(/[\\/]+/).join("/"),
     createHash("sha256").update(readSourceBytes(path, `workspace source ${relative(root, path)}`)).digest("hex"),
   ]))).digest("hex");
-  return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [], refusedLinkedIds };
+  return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [], refusedSourceIds };
 }
 
 
@@ -565,7 +571,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     // would silently drop a source this run would otherwise import, so it is
     // caller input (usage), not a skip.
     const unmatchedWorkflowSkips = [...workflowSkips]
-      .filter((id) => !source.refusedLinkedIds.has(id) && !collidingIds.has(id));
+      .filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
     if (unmatchedWorkflowSkips.length > 0) {
       throw new WorkflowSkipError(
         `--ack-skip-workflow ${unmatchedWorkflowSkips.join(" ")} matched no workflow source this run refuses \u2014 neither a registered source that is not a real in-root directory (a linked source or a non-directory path) nor a recognized legacy source whose id the native execution authority already holds. ` +
@@ -646,13 +652,14 @@ export async function upgradeStoreMinimal(input: {
   /**
    * The operator's execution-specific acknowledgements: the exact ORIGINAL
    * workflow ids this run skips IMPORTING. Two sources are refusable and can be
-   * acknowledged: a registered legacy source that is symlinked (whole
-   * `workflows/` root or per-workflow directory), and a recognized legacy source
-   * whose id the native execution authority already holds (a collision). Each
-   * skip keeps the native authority and the source bytes in place and reports its
-   * lost import. An id naming neither refusal is caller input (usage), never a
-   * silent skip. Distinct from `acknowledgedSkips`, which only disposes DSH host
-   * state and can never discard a registered execution source.
+   * acknowledged: a registered legacy source whose `workflows/` root or own path
+   * is not a real in-root directory (a symlink that is never followed, or a
+   * non-directory path), and a recognized legacy source whose id the native
+   * execution authority already holds (a collision). Each skip keeps the native
+   * authority and the source bytes in place and reports its lost import. An id
+   * naming neither refusal is caller input (usage), never a silent skip. Distinct
+   * from `acknowledgedSkips`, which only disposes DSH host state and can never
+   * discard a registered execution source.
    */
   acknowledgedWorkflowSkips?: readonly string[];
   /**
