@@ -80,7 +80,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
             // An upgrade that loses the create-only publication race did not
             // finish its import: the supported continuation is the same command,
             // not the "do not migrate" instruction meant for init.
-            ? "Another process already published this control root's store, so this run created nothing and its legacy import may be unfinished. Rerun mstar store upgrade --harness <same-control-root> --operator <name> to continue it, then inspect the result with mstar status validate; initialization is create-only."
+            ? "Another process already published this control root's store, so nothing was created here and its legacy import may be unfinished. Rerun mstar store upgrade --harness <same-control-root> --operator <name> to continue it, then inspect the result with mstar status validate; initialization is create-only."
             : "Inspect the existing execution authority with mstar status validate; do not initialize or migrate an existing store."
           : code === "store.created-handle-failed"
             ? "The named store is created, active and retained. Once the named condition clears, inspect it with mstar status validate; initialization is create-only. For an interrupted upgrade, run mstar store upgrade --harness <same-control-root> --operator <name>."
