@@ -20337,18 +20337,22 @@ function scanCompasses(harnessDir) {
       continue;
     }
     if (info.isSymbolicLink() || !info.isFile()) {
-      throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`);
+      throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`);
     }
     let fd;
     try {
       fd = openSync2(compassPath, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
       if (!fstatSync2(fd).isFile()) {
-        throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`);
+        throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`);
       }
       bytes = readFileSync16(fd);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("refusing to convert"))
         throw error;
+      const code2 = error.code;
+      if (code2 === "ENOENT" || code2 === "ELOOP") {
+        throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} changed between the probe and its read (${code2}); rerun store upgrade once the legacy tree is stable`);
+      }
       continue;
     } finally {
       if (fd !== undefined)
@@ -20559,6 +20563,14 @@ function convertLegacyV1Tree(root, declarations = [], verifiedStatusBytes) {
     throw new Error(`refusing to convert: ${statusPath} has unrecognized schema version ${JSON.stringify(legacy.version ?? null)} (expected 1); a v2 root is imported directly by \`mstar store upgrade --operator <name>\``);
   }
   const dispositions = [];
+  const residual = isPlainObject8(legacy.residual_findings) ? legacy.residual_findings : undefined;
+  if (residual !== undefined) {
+    const buckets = Object.entries(residual).filter(([, value]) => Array.isArray(value) && value.length > 0);
+    if (buckets.length > 0) {
+      const count = buckets.reduce((total, [, value]) => total + value.length, 0);
+      dispositions.push(`root status.json residual_findings (${count} entr${count === 1 ? "y" : "ies"} across ${buckets.length} plan bucket(s)) are NOT imported by store upgrade: native findings come from the issue store, which reads a project register document (projects/<id>/residuals.json) or the mstar issue verbs. Move those entries into that register, or capture them with the issue verbs, before retiring the legacy file; this conversion leaves the legacy field untouched.`);
+    }
+  }
   const rows = Array.isArray(legacy.plans) ? legacy.plans.filter(isPlainObject8) : [];
   if (Array.isArray(legacy.plans)) {
     const unLiftable = [];
@@ -24003,52 +24015,69 @@ function verifyBinding(value, source, read = readSourceBytes) {
   }
   return envelope;
 }
-function discoverV1(root, legacy, operator, verifiedStatusBytes) {
+function discoverV1(root, legacy, operator, verifiedStatusBytes, acknowledgedWorkflowSkips) {
   const rows = [];
   const entries = [];
+  const skipped = [];
+  const skippedWorkflowAcknowledgements = [];
+  const refusedSourceIds = new Set;
+  let refusal;
   for (const converted of legacy.snapshots) {
-    const raw = converted.data;
-    const rawInventory = legacySnapshotInventory(raw);
-    const snapshot = projectLegacySnapshot(raw);
-    const historicalMetadata = snapshot.legacy_metadata;
-    const historicalLease = historicalMetadata?.integration_merge_lease;
-    if (historicalMetadata && historicalLease !== undefined) {
-      const holder = isPlainObject(historicalLease) && isNonEmptyString(historicalLease.holder) ? historicalLease.holder : "unidentified holder";
-      delete historicalMetadata.integration_merge_lease;
-      if (Object.keys(historicalMetadata).length === 0)
-        delete snapshot.legacy_metadata;
-      legacy.dispositions.push(`workflow ${converted.id}: historical v1 integration merge lease for ${holder} was not imported as a live lease; operator ${JSON.stringify(operator)} requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`);
+    try {
+      const raw = converted.data;
+      const rawInventory = legacySnapshotInventory(raw);
+      const snapshot = projectLegacySnapshot(raw);
+      const historicalMetadata = snapshot.legacy_metadata;
+      const historicalLease = historicalMetadata?.integration_merge_lease;
+      if (historicalMetadata && historicalLease !== undefined) {
+        const holder = isPlainObject(historicalLease) && isNonEmptyString(historicalLease.holder) ? historicalLease.holder : "unidentified holder";
+        delete historicalMetadata.integration_merge_lease;
+        if (Object.keys(historicalMetadata).length === 0)
+          delete snapshot.legacy_metadata;
+        legacy.dispositions.push(`workflow ${converted.id}: historical v1 integration merge lease for ${holder} was not imported as a live lease; operator ${JSON.stringify(operator)} requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`);
+      }
+      const plans = [];
+      for (const rawPlan of snapshot.plans ?? []) {
+        const id = rowPlanId(rawPlan);
+        if (id === undefined || id === "")
+          throw new UnsafeSourceError(`workflow ${converted.id} produced an unnamed plan row; the conversion must identify every row.`);
+        const rowGate = validatePlanRow(rawPlan);
+        if (!rowGate.ok)
+          throw new UnsafeSourceError(`plan ${id} of workflow ${converted.id} is not convertible (${rowGate.violations.map((v) => v.code).join(", ")}); repair or remove that row, or acknowledge dropping this workflow's import.`);
+        const planRow = { ...rawPlan, id };
+        delete planRow.plan_id;
+        const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
+        plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, converted.id, id), ...rawFlags });
+      }
+      const entry = {
+        id: converted.id,
+        type: converted.type,
+        started_at: snapshot.started_at,
+        dir: join27("workflows", converted.id)
+      };
+      const registered = converted.status === "running" || converted.status === "paused";
+      if (registered)
+        entries.push(entry);
+      rows.push({ entry: registered ? entry : null, id: converted.id, dir: join27(root, "workflows", converted.id), snapshot, coordinator: null, plans });
+    } catch (error) {
+      if (!(error instanceof UnsafeSourceError))
+        throw error;
+      refusedSourceIds.add(converted.id);
+      const path2 = join27("workflows", converted.id).split(/[\\/]+/).join("/");
+      if (acknowledgedWorkflowSkips.has(converted.id)) {
+        skipped.push({ path: path2, reason: `workflow ${converted.id} skipped by --ack-skip-workflow; its converted legacy row could not be imported and no execution row was registered for it` });
+        skippedWorkflowAcknowledgements.push({ id: converted.id, path: path2 });
+      } else {
+        refusal ??= `${error.message} Rerun store upgrade with \`--ack-skip-workflow ${converted.id}\` to keep the source in place and skip ONLY this legacy IMPORT; its loss is reported in the receipt.`;
+      }
     }
-    const plans = [];
-    for (const rawPlan of snapshot.plans ?? []) {
-      const id = rowPlanId(rawPlan);
-      if (id === undefined || id === "")
-        conflict2(`workflow ${converted.id} produced an unnamed plan row; the conversion must identify every row`);
-      const rowGate = validatePlanRow(rawPlan);
-      if (!rowGate.ok)
-        conflict2(`plan ${id} of workflow ${converted.id} is invalid (${rowGate.violations.map((v) => v.code).join(", ")}).`);
-      const planRow = { ...rawPlan, id };
-      delete planRow.plan_id;
-      const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
-      plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, converted.id, id), ...rawFlags });
-    }
-    const entry = {
-      id: converted.id,
-      type: converted.type,
-      started_at: snapshot.started_at,
-      dir: join27("workflows", converted.id)
-    };
-    const registered = converted.status === "running" || converted.status === "paused";
-    if (registered)
-      entries.push(entry);
-    rows.push({ entry: registered ? entry : null, id: converted.id, dir: join27(root, "workflows", converted.id), snapshot, coordinator: null, plans });
   }
   rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const sourceDigest = createHash14("sha256").update(JSON.stringify([
     [MIGRATE_STATUS_FILE, createHash14("sha256").update(verifiedStatusBytes).digest("hex")],
     ...legacy.sourceHashes
   ].sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
-  return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
+  return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...refusal === undefined ? {} : { refusal } };
 }
 function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkips, declarations) {
   const root = rootOf(context);
@@ -24085,8 +24114,18 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   let refusal = tree.refusal;
   if (isPlainObject(parsed) && parsed.version === 1) {
     const legacy = convertLegacyV1Tree(root, declarations, statusBytes);
-    const converted = discoverV1(root, legacy, operator, statusBytes);
-    return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions, refusedSourceIds };
+    const converted = discoverV1(root, legacy, operator, statusBytes, acknowledgedWorkflowSkips);
+    return {
+      root,
+      rootDoc: converted.rootDoc,
+      rows: converted.rows,
+      skipped: converted.skipped,
+      skippedWorkflowAcknowledgements: converted.skippedWorkflowAcknowledgements,
+      sourceDigest: converted.sourceDigest,
+      dispositions: legacy.dispositions,
+      refusedSourceIds: converted.refusedSourceIds,
+      ...converted.refusal === undefined ? {} : { refusal: converted.refusal }
+    };
   }
   if (declarations.length > 0) {
     throw new DeliveryDeclarationError(`${declarations.length} --delivery declaration(s) (${declarations.map((entry) => JSON.stringify(entry.workflow)).join(", ")}) address no active standalone plan lift; this control root is ${isPlainObject(parsed) && parsed.version === 2 ? "already a v2 tree, whose snapshots declare their own delivery kinds" : "an empty root with no active standalone v1 lift to declare"} — ` + `pass --delivery only when upgrading a v1 root that holds an active standalone plan, or omit it entirely`);

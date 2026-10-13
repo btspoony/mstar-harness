@@ -224,7 +224,7 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     try { info = lstatSync(compassPath); } catch { continue; } // missing: not an iteration
     if (info.isSymbolicLink() || !info.isFile()) {
       throw new Error(
-        `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`,
+        `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`,
       );
     }
     let fd: number | undefined;
@@ -232,13 +232,22 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
       fd = openSync(compassPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
       if (!fstatSync(fd).isFile()) {
         throw new Error(
-          `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`,
+          `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`,
         );
       }
       bytes = readFileSync(fd);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("refusing to convert")) throw error;
-      continue; // unreadable compass is still not an iteration
+      // The probe above OBSERVED this compass, so a vanished or newly linked leaf
+      // is a changed source rather than an absent one: refusing keeps the
+      // conversion from silently regrouping this iteration's rows.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ELOOP") {
+        throw new Error(
+          `refusing to convert: compass ${JSON.stringify(compassPath)} changed between the probe and its read (${code}); rerun store upgrade once the legacy tree is stable`,
+        );
+      }
+      continue; // an unreadable compass is still not an iteration
     } finally { if (fd !== undefined) closeSync(fd); }
     const content = bytes.toString("utf8");
     const doc = parseCompassFrontmatterText(content, compassPath);
@@ -567,6 +576,20 @@ export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDecl
   }
 
   const dispositions: string[] = [];
+  // Root `residual_findings` is a v1 FILE field. The native issue store reads its
+  // findings from a project register document or the issue verbs, so this
+  // conversion cannot carry them: report the exact loss and the supported route
+  // instead of dropping them silently.
+  const residual = isPlainObject(legacy.residual_findings) ? legacy.residual_findings : undefined;
+  if (residual !== undefined) {
+    const buckets = Object.entries(residual).filter(([, value]) => Array.isArray(value) && value.length > 0);
+    if (buckets.length > 0) {
+      const count = buckets.reduce((total, [, value]) => total + (value as unknown[]).length, 0);
+      dispositions.push(
+        `root status.json residual_findings (${count} entr${count === 1 ? "y" : "ies"} across ${buckets.length} plan bucket(s)) are NOT imported by store upgrade: native findings come from the issue store, which reads a project register document (projects/<id>/residuals.json) or the mstar issue verbs. Move those entries into that register, or capture them with the issue verbs, before retiring the legacy file; this conversion leaves the legacy field untouched.`,
+      );
+    }
+  }
   const rows = Array.isArray(legacy.plans) ? legacy.plans.filter(isPlainObject) : [];
   if (Array.isArray(legacy.plans)) {
     // Fail-loud lift guards: every row must land in exactly one snapshot — a

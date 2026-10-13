@@ -313,7 +313,11 @@ describe("store and execution command surface", () => {
     expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused", exitCode: 1 });
     expect(refused.message).toContain("dsh-ledger:wf-recovery");
     expect(refused.message).toContain("Recovery:");
-    expect(refused.details).toMatchObject({ recovery: expect.stringContaining("--ack-skip-dsh") });
+    // The structured recovery must describe the COMPLETE retry: an execution
+    // phase that already committed ids makes them collisions for the retry.
+    const recovery = String(refused.details?.recovery ?? "");
+    expect(recovery).toContain("--ack-skip-dsh");
+    expect(recovery).toContain("--ack-skip-workflow");
     const unmatched = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-status"] }, root);
     expect(unmatched).toMatchObject({ status: "usage", code: "store.upgrade-dsh-ack-unmatched", exitCode: 2 });
     const recovered = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-ledger:wf-recovery"] }, root);
@@ -560,6 +564,15 @@ describe("store and execution command surface", () => {
     const init = await invoke(definition("store.init"), { harness }, root);
     expect(init).toMatchObject({ status: "refused", code: "store.already-exists" });
     expect(init.status === "refused" ? String(init.details?.recovery ?? "") : "").toContain("do not initialize or migrate");
+  });
+
+  test("the upgrade description lists every workflow-skip source the importer accepts", () => {
+    const description = String(definition("store.upgrade").description ?? "");
+    // An agent reading help must be able to discover the supported recovery
+    // classes without first failing an upgrade.
+    for (const phrase of ["not a real in-root directory", "linked entry", "non-regular snapshot", "duplicated or unconvertible", "converted v1 lifecycle", "native authority already holds"]) {
+      expect({ phrase, present: description.includes(phrase) }).toEqual({ phrase, present: true });
+    }
   });
 
 });

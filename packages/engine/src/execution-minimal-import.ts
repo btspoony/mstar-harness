@@ -237,47 +237,81 @@ function verifyBinding(value: Binding, source: { root: string; dir: string; work
  * unregistered terminal history exactly like an unregistered terminal v2
  * snapshot.
  */
-function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string, verifiedStatusBytes: Buffer): { rootDoc: StatusV2Doc; rows: Source[]; sourceDigest: string } {
+function discoverV1(
+  root: string,
+  legacy: LegacyV1Conversion,
+  operator: string,
+  verifiedStatusBytes: Buffer,
+  acknowledgedWorkflowSkips: ReadonlySet<string>,
+): {
+  rootDoc: StatusV2Doc;
+  rows: Source[];
+  sourceDigest: string;
+  skipped: MinimalImportResult["skipped"];
+  skippedWorkflowAcknowledgements: MinimalWorkflowSkip[];
+  refusedSourceIds: ReadonlySet<string>;
+  refusal?: string;
+} {
   const rows: Source[] = [];
   const entries: WorkflowEntry[] = [];
+  const skipped: MinimalImportResult["skipped"] = [];
+  const skippedWorkflowAcknowledgements: MinimalWorkflowSkip[] = [];
+  // A converted v1 lifecycle whose rows cannot be imported is refused as that
+  // lifecycle's OWN source, exactly like a malformed v2 snapshot: one
+  // agent-authored row must not block every other valid workflow, and the
+  // operator's `--ack-skip-workflow <original id>` must be able to skip it.
+  const refusedSourceIds = new Set<string>();
+  let refusal: string | undefined;
   for (const converted of legacy.snapshots) {
-    const raw = converted.data as unknown as Record<string, unknown>;
-    const rawInventory = legacySnapshotInventory(raw);
-    const snapshot = projectLegacySnapshot(raw);
-    const historicalMetadata = snapshot.legacy_metadata;
-    const historicalLease = historicalMetadata?.integration_merge_lease;
-    if (historicalMetadata && historicalLease !== undefined) {
-      const holder = isPlainObject(historicalLease) && isNonEmptyString(historicalLease.holder)
-        ? historicalLease.holder
-        : "unidentified holder";
-      delete historicalMetadata.integration_merge_lease;
-      if (Object.keys(historicalMetadata).length === 0) delete snapshot.legacy_metadata;
-      legacy.dispositions.push(
-        `workflow ${converted.id}: historical v1 integration merge lease for ${holder} was not imported as a live lease; operator ${JSON.stringify(operator)} requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`,
-      );
+    try {
+      const raw = converted.data as unknown as Record<string, unknown>;
+      const rawInventory = legacySnapshotInventory(raw);
+      const snapshot = projectLegacySnapshot(raw);
+      const historicalMetadata = snapshot.legacy_metadata;
+      const historicalLease = historicalMetadata?.integration_merge_lease;
+      if (historicalMetadata && historicalLease !== undefined) {
+        const holder = isPlainObject(historicalLease) && isNonEmptyString(historicalLease.holder)
+          ? historicalLease.holder
+          : "unidentified holder";
+        delete historicalMetadata.integration_merge_lease;
+        if (Object.keys(historicalMetadata).length === 0) delete snapshot.legacy_metadata;
+        legacy.dispositions.push(
+          `workflow ${converted.id}: historical v1 integration merge lease for ${holder} was not imported as a live lease; operator ${JSON.stringify(operator)} requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation`,
+        );
+      }
+      const plans: Plan[] = [];
+      for (const rawPlan of snapshot.plans ?? []) {
+        const id = rowPlanId(rawPlan);
+        if (id === undefined || id === "") throw new UnsafeSourceError(`workflow ${converted.id} produced an unnamed plan row; the conversion must identify every row.`);
+        const rowGate = validatePlanRow(rawPlan);
+        if (!rowGate.ok) throw new UnsafeSourceError(`plan ${id} of workflow ${converted.id} is not convertible (${rowGate.violations.map((v) => v.code).join(", ")}); repair or remove that row, or acknowledge dropping this workflow's import.`);
+        const planRow: Record<string, unknown> = { ...(rawPlan as unknown as Record<string, unknown>), id };
+        delete planRow.plan_id;
+        const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
+        plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, converted.id, id), ...rawFlags });
+      }
+      // `workflows/<id>` is the canonical harness-relative registration dir —
+      // an imported v1 lifecycle has no on-disk workflow directory to point at.
+      const entry: WorkflowEntry = {
+        id: converted.id,
+        type: converted.type,
+        started_at: snapshot.started_at,
+        dir: join("workflows", converted.id),
+      };
+      const registered = converted.status === "running" || converted.status === "paused";
+      if (registered) entries.push(entry);
+      rows.push({ entry: registered ? entry : null, id: converted.id, dir: join(root, "workflows", converted.id), snapshot, coordinator: null, plans });
+    } catch (error) {
+      if (!(error instanceof UnsafeSourceError)) throw error;
+      refusedSourceIds.add(converted.id);
+      const path = join("workflows", converted.id).split(/[\\/]+/).join("/");
+      if (acknowledgedWorkflowSkips.has(converted.id)) {
+        skipped.push({ path, reason: `workflow ${converted.id} skipped by --ack-skip-workflow; its converted legacy row could not be imported and no execution row was registered for it` });
+        skippedWorkflowAcknowledgements.push({ id: converted.id, path });
+      } else {
+        refusal ??= `${error.message} Rerun store upgrade with \`--ack-skip-workflow ${converted.id}\` to keep the source in place and skip ONLY this legacy IMPORT; its loss is reported in the receipt.`;
+      }
     }
-    const plans: Plan[] = [];
-    for (const rawPlan of snapshot.plans ?? []) {
-      const id = rowPlanId(rawPlan);
-      if (id === undefined || id === "") conflict(`workflow ${converted.id} produced an unnamed plan row; the conversion must identify every row`);
-      const rowGate = validatePlanRow(rawPlan);
-      if (!rowGate.ok) conflict(`plan ${id} of workflow ${converted.id} is invalid (${rowGate.violations.map((v) => v.code).join(", ")}).`);
-      const planRow: Record<string, unknown> = { ...(rawPlan as unknown as Record<string, unknown>), id };
-      delete planRow.plan_id;
-      const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
-      plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, converted.id, id), ...rawFlags });
-    }
-    // `workflows/<id>` is the canonical harness-relative registration dir —
-    // an imported v1 lifecycle has no on-disk workflow directory to point at.
-    const entry: WorkflowEntry = {
-      id: converted.id,
-      type: converted.type,
-      started_at: snapshot.started_at,
-      dir: join("workflows", converted.id),
-    };
-    const registered = converted.status === "running" || converted.status === "paused";
-    if (registered) entries.push(entry);
-    rows.push({ entry: registered ? entry : null, id: converted.id, dir: join(root, "workflows", converted.id), snapshot, coordinator: null, plans });
   }
   rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // `legacy.sourceHashes` were computed where those files were read; the root
@@ -287,7 +321,7 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string, 
     [MIGRATE_STATUS_FILE, createHash("sha256").update(verifiedStatusBytes).digest("hex")] as [string, string],
     ...legacy.sourceHashes,
   ].sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
-  return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
+  return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...(refusal === undefined ? {} : { refusal }) };
 }
 
 function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; skippedWorkflowAcknowledgements: MinimalWorkflowSkip[]; sourceDigest: string; dispositions: string[]; refusedSourceIds: ReadonlySet<string>; refusal?: string } {
@@ -345,11 +379,22 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   // native rows; the legacy bytes stay on disk untouched.
   if (isPlainObject(parsed) && parsed.version === 1) {
     const legacy = convertLegacyV1Tree(root, declarations, statusBytes);
-    const converted = discoverV1(root, legacy, operator, statusBytes!);
+    const converted = discoverV1(root, legacy, operator, statusBytes!, acknowledgedWorkflowSkips);
     // The v1 route reads nothing from `workflows/`, so it reports no linked
     // skip of its own; its converted ids take the same collision/acknowledgement
-    // contract in the import transaction below.
-    return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions, refusedSourceIds };
+    // contract in the import transaction below, and a lifecycle whose converted
+    // rows cannot be imported is refused as that lifecycle's own source.
+    return {
+      root,
+      rootDoc: converted.rootDoc,
+      rows: converted.rows,
+      skipped: converted.skipped,
+      skippedWorkflowAcknowledgements: converted.skippedWorkflowAcknowledgements,
+      sourceDigest: converted.sourceDigest,
+      dispositions: legacy.dispositions,
+      refusedSourceIds: converted.refusedSourceIds,
+      ...(converted.refusal === undefined ? {} : { refusal: converted.refusal }),
+    };
   }
   // Declarations describe the ACTIVE standalone lifts a v1 conversion produces.
   // A v2 tree declares its kinds in its own snapshots and an empty root has no

@@ -91,7 +91,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
               : id === "store.init"
                 ? "Choose an empty harness root and run mstar store init."
                 : code === "store.upgrade-dsh-source-refused"
-                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; ordinary retry remains available."
+                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; when the message also reports execution workflows that this invocation already committed, pass --ack-skip-workflow <id> for each of them in the same retry, because the next invocation sees those ids as native collisions. Ordinary retry remains available."
                   : id === "store.upgrade"
                     ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
                     : id === "store.migrate"
@@ -321,7 +321,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
       retire: ["read", "write"],
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
     description: `${verb === "upgrade"
-      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses (a source that is not a real in-root directory, or a recognized legacy id the native authority already holds); every skip is reported with its loss."
+      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses: a registered source that is not a real in-root directory (a linked or non-directory path), a registered source whose nested bytes cannot be read as a workflow (a linked entry, a non-regular snapshot, a session path that is not a real directory, a plan row that is missing, duplicated or unconvertible), a converted v1 lifecycle whose rows cannot be imported, or a recognized legacy id the native authority already holds. Every skip is reported with its loss."
       : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };

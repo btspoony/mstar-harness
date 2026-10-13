@@ -3233,6 +3233,53 @@ test("a v1 compass that is not a regular file refuses instead of blocking the up
   expect(probe(healthy.harnessDir, "op-v1-compass-control")).toMatchObject({ status: "ok", imported: 2 });
 }, 30_000);
 
+test("a malformed v1 plan row is skippable instead of blocking every other lifecycle", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-malformed-row");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(statusBytes.toString("utf8")) as { plans: Array<Record<string, unknown>> };
+  // An id-bearing row that cannot be converted: the lifecycle keeps its identity,
+  // so the acknowledgement can name it.
+  status.plans.find((plan) => plan.id === "v1-standalone")!.metadata = "not-an-object";
+  writeFileSync(statusPath, JSON.stringify(status));
+  const input = { context, operator: "operator", operationId: "op-v1-malformed", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  await expect(upgradeStoreMinimal(input))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow v1-standalone") });
+  const acked = await upgradeStoreMinimal({ ...input, operationId: "op-v1-malformed-ack", acknowledgedWorkflowSkips: ["v1-standalone"] });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["iter-v1"] });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow"));
+});
+
+test("a v1 compass that vanishes between the probe and its read refuses instead of looking absent", async () => {
+  const { context } = legacyV1Workspace("v1-compass-vanished");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const realOpen = nodeFs.openSync;
+  let removed = false;
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, ...rest: unknown[]) => {
+    if (typeof path === "string" && path === compass && !removed) { removed = true; rmSync(compass); }
+    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
+  }) as never);
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-compass-vanished", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("a vanished compass was treated as absent"); }, (failure: Error & { code?: string }) => failure)
+    .finally(() => { spy.mockRestore(); });
+  expect(error).toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("changed between the probe and its read") });
+  expect(removed).toBe(true);
+});
+
+test("a v1 root's residual_findings are reported as not imported with their supported route", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-residual-findings");
+  const status = JSON.parse(statusBytes.toString("utf8")) as Record<string, unknown>;
+  status.residual_findings = { "wf-v1-residual-findings": [{ id: "R-1", title: "Legacy residual", severity: "high" }] };
+  writeFileSync(join(context.harnessDir, "status.json"), JSON.stringify(status));
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-residual", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(result).toMatchObject({ verdict: "upgraded" });
+  const reported = result.dispositions.join("\n");
+  expect(reported).toContain("residual_findings");
+  expect(reported).toContain("projects/<id>/residuals.json");
+});
+
 test("a malformed legacy plan row is skippable instead of blocking every other workflow", async () => {
   const root = join(ROOT, "malformed-row", ".mstar");
   const healthy = join(root, "workflows", "wf-healthy");
