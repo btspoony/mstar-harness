@@ -212,18 +212,21 @@ function readRegularJson(path: string, label: string, read: (path: string, label
 function verifyBinding(value: Binding, source: { root: string; dir: string; workflowId: string }, read: (path: string, label: string) => Buffer = readSourceBytes): CoordinationSession {
   const sessionsDir = join(source.dir, "sessions");
   const path = resolve(value.session_file);
+  // Every coordinator-envelope failure belongs to THIS workflow's own source, so
+  // the workflow-scoped refusal (and its `--ack-skip-workflow <id>` disposal) owns
+  // it instead of aborting every other import in the run.
   if (!isPathWithin(canonicalPath(sessionsDir), path) || path === canonicalPath(sessionsDir)) {
-    conflict(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding, then rerun store upgrade.`);
+    throw new UnsafeSourceError(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding.`);
   }
   let envelope: CoordinationSession;
   try { envelope = parseSessionEnvelope(JSON.parse(read(path, "coordinator session envelope").toString("utf8")), path); }
   catch (error) {
     if (error instanceof UnsafeSourceError) throw error;
-    conflict(`coordinator session envelope ${path} is malformed; repair the envelope or remove its coordinator binding, then rerun store upgrade.`);
+    throw new UnsafeSourceError(`coordinator session envelope ${path} is malformed; repair the envelope or remove its coordinator binding.`);
   }
   if (envelope.workflow_id !== source.workflowId || envelope.session_id !== value.session_id || envelope.role !== "coordinator" ||
       canonicalPath(envelope.harness_root) !== canonicalPath(source.root)) {
-    conflict(`coordinator binding ${value.session_id} disagrees with envelope ${path}; repair the envelope/binding identity or remove the binding, then rerun store upgrade.`);
+    throw new UnsafeSourceError(`coordinator binding ${value.session_id} disagrees with envelope ${path}; repair the envelope/binding identity or remove the binding.`);
   }
   return envelope;
 }
@@ -516,7 +519,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     // must not escape the control root on the default path. It is deliberately
     // placed AFTER the acknowledgement `continue` above, so an acknowledged
     // linked source is never canonicalized (which would resolve its link).
-    if (!isPathWithin(root, dir) || dir === root) conflict(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration, then rerun store upgrade.`);
+    if (!isPathWithin(root, dir) || dir === root) throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
     try {
       const sessionsDir = join(dir, "sessions");
       const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);

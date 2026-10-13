@@ -24005,7 +24005,7 @@ function verifyBinding(value, source, read = readSourceBytes) {
   const sessionsDir = join27(source.dir, "sessions");
   const path2 = resolve20(value.session_file);
   if (!isPathWithin(canonicalPath(sessionsDir), path2) || path2 === canonicalPath(sessionsDir)) {
-    conflict2(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding, then rerun store upgrade.`);
+    throw new UnsafeSourceError(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding.`);
   }
   let envelope;
   try {
@@ -24013,10 +24013,10 @@ function verifyBinding(value, source, read = readSourceBytes) {
   } catch (error) {
     if (error instanceof UnsafeSourceError)
       throw error;
-    conflict2(`coordinator session envelope ${path2} is malformed; repair the envelope or remove its coordinator binding, then rerun store upgrade.`);
+    throw new UnsafeSourceError(`coordinator session envelope ${path2} is malformed; repair the envelope or remove its coordinator binding.`);
   }
   if (envelope.workflow_id !== source.workflowId || envelope.session_id !== value.session_id || envelope.role !== "coordinator" || canonicalPath(envelope.harness_root) !== canonicalPath(source.root)) {
-    conflict2(`coordinator binding ${value.session_id} disagrees with envelope ${path2}; repair the envelope/binding identity or remove the binding, then rerun store upgrade.`);
+    throw new UnsafeSourceError(`coordinator binding ${value.session_id} disagrees with envelope ${path2}; repair the envelope/binding identity or remove the binding.`);
   }
   return envelope;
 }
@@ -24216,7 +24216,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       continue;
     }
     if (!isPathWithin(root, dir) || dir === root)
-      conflict2(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration, then rerun store upgrade.`);
+      throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
     try {
       const sessionsDir = join27(dir, "sessions");
       const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);

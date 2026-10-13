@@ -3299,6 +3299,40 @@ test("a v1 root's residual_findings are reported as not imported with their supp
   expect(reported).toContain("projects/<id>/residuals.json");
 });
 
+test("a coordinator envelope outside the workflow sessions directory is skippable", async () => {
+  const root = join(ROOT, "binding-outside", ".mstar");
+  const healthy = join(root, "workflows", "wf-healthy-coordinator");
+  const broken = join(root, "workflows", "wf-broken-coordinator");
+  mkdirSync(join(healthy, "sessions"), { recursive: true });
+  mkdirSync(join(broken, "sessions"), { recursive: true });
+  const outside = join(ROOT, "binding-outside-envelope.json");
+  writeFileSync(outside, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "outside", workflow_id: "wf-broken-coordinator", harness_root: root }));
+  const snapshot = (id: string, coordinator?: Record<string, unknown>): string => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" },
+    ...(coordinator === undefined ? {} : { coordination: { coordinator } }),
+    plans: [{ id: `${id}-plan`, title: "row", status: "Todo", file: `${id}-plan.md` }],
+  });
+  writeFileSync(join(healthy, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-healthy-coordinator"));
+  // A shape-valid binding whose envelope lives outside this workflow's sessions dir.
+  writeFileSync(join(broken, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-broken-coordinator", {
+    session_id: "outside", session_file: outside, bound_at: "2026-10-04T00:00:00Z",
+  }));
+  writeFileSync(join(root, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04", workflows: [
+      { id: "wf-healthy-coordinator", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-healthy-coordinator" },
+      { id: "wf-broken-coordinator", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-broken-coordinator" },
+    ],
+  }));
+  const context = { harnessDir: root };
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-coordinator-outside" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-broken-coordinator") });
+  const acked = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-coordinator-outside-ack", acknowledgedWorkflowSkips: ["wf-broken-coordinator"],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-healthy-coordinator"] });
+});
+
 test("a workflow whose own identity disagrees is skippable, and a malformed binding is already a reported skip", async () => {
   const root = join(ROOT, "malformed-binding", ".mstar");
   const healthy = join(root, "workflows", "wf-healthy-binding");
