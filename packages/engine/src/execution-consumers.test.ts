@@ -761,7 +761,7 @@ async function retainedPlanRead(fixture: RetainedCompletionFixture) {
 async function retainedCompletionFixture(label: string): Promise<RetainedCompletionFixture> {
   const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
   git(repoRoot, ["init", "-q", "-b", "main"]);
-  git(repoRoot, ["-c", "user.email=mstar@example.com", "-c", "user.name=mstar", "commit", "-q", "--allow-empty", "-m", "init"]);
+  git(repoRoot, ["-c", "user.email=fixture@example.test", "-c", "user.name=harness-fixture", "commit", "-q", "--allow-empty", "-m", "init"]);
   const harnessRoot = join(repoRoot, ".mstar");
   const planPath = join(harnessRoot, "plans", `${RETAINED_PLAN}.md`);
   mkdirSync(dirname(planPath), { recursive: true });
@@ -786,7 +786,7 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
   git(repoRoot, ["worktree", "add", "-q", "-b", `feature/${RETAINED_PLAN}`, worktreePath]);
   writeFileSync(join(worktreePath, "slice.txt"), "reviewed slice\n", "utf8");
   git(worktreePath, ["add", "-A"]);
-  git(worktreePath, ["-c", "user.email=mstar@example.com", "-c", "user.name=mstar", "commit", "-q", "-m", "feat: slice"]);
+  git(worktreePath, ["-c", "user.email=fixture@example.test", "-c", "user.name=harness-fixture", "commit", "-q", "-m", "feat: slice"]);
   const sourceSha = git(worktreePath, ["rev-parse", "HEAD"]);
   const baseSha = git(repoRoot, ["rev-parse", "HEAD"]);
 
