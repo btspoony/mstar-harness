@@ -1961,8 +1961,13 @@ test("changed execution acknowledgements under one operation id conflict with th
   // the acknowledgement its discovery admits.
   const first = await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId] });
   expect(first).toMatchObject({ verdict: "upgraded", imported: 0 });
-  // A repeated id is one request, so this repeats and replays exactly.
+  // Full protected state AFTER the first success: schema, every table row and
+  // the retained operation receipt, not just row counts.
+  const afterFirst = await protectedStore(context);
+  // A repeated id is one request, so this repeats and replays exactly and the
+  // whole protected state (including the retained receipt) stays identical.
   expect(await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, firstId] })).toEqual(first);
+  expect(await protectedStore(context)).toEqual(afterFirst);
 
   // Round 2: a SECOND registration under the linked root makes the valid
   // acknowledgement set genuinely change while `--ack-skip-dsh` stays identical,
@@ -1976,11 +1981,17 @@ test("changed execution acknowledgements under one operation id conflict with th
   await expect(upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, secondId] }))
     .rejects.toMatchObject({ code: "execution.operation-conflict" });
 
-  // The retained receipt and native state are unchanged: round 1's single
-  // operation receipt stands and no execution row was imported by any call.
+  // The retained receipt and native execution state are unchanged by the
+  // conflicting call: the whole protected snapshot (schema + every table row,
+  // including `store_operations`) equals the post-success snapshot, and the
+  // retained receipt's own content still names the round-1 result.
+  expect(await protectedStore(context)).toEqual(afterFirst);
   const store = await openStore(context, "read");
   try {
-    expect(store.db.prepare("select count(*) as n from store_operations where operation_id = ?").get(operationId)).toEqual({ n: 1 });
+    const receipt = store.db.prepare("select result_json from store_operations where operation_id = ?").get(operationId) as { result_json: string };
+    expect(JSON.parse(receipt.result_json)).toMatchObject({
+      verdict: "upgraded", imported: 0, skipped: first.skipped, dispositions: first.dispositions, sourceDigest: first.sourceDigest,
+    });
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
   } finally { store.close(); }
   // The linked root and its target bytes were never rewritten.
