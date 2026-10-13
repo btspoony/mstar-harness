@@ -18,7 +18,7 @@
 import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync, fstatSync, linkSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
@@ -81,6 +81,7 @@ export type StoreErrorCode =
   | "store.stale-epoch"
   | "store.not-active"
   | "store.publication-failed"
+  | "store.publication-barrier-failed"
   | "store.created-handle-failed"
   | "store.upgrade-dsh-source-refused"
   | "store.upgrade-dsh-ack-unmatched"
@@ -2232,6 +2233,64 @@ function publicationRefusal(step: string, error: unknown, dbPath: string): Store
 }
 
 /**
+ * Make the canonical store's own DIRECTORY ENTRY durable. SQLite fsyncs the
+ * bytes it writes, but the create-only hard link that PUBLISHES those bytes is
+ * an application-created directory entry that no transaction makes durable:
+ * until the containing directory is synchronized, a power loss can leave the
+ * control root with no `store.db` at all — and, once the only other name for
+ * that inode is gone, with no fallback name either. Atomicity is not
+ * durability. The same primitive the repo's other durable writers use
+ * (`execution-ledgers.ts` `fsyncDirectory`); nothing here is a new protocol.
+ *
+ * Where the platform refuses to open or synchronize a directory (Windows does,
+ * for one), the operating system's own error is preserved and disclosed as the
+ * failed barrier — never swallowed into a durable success claim.
+ */
+function syncDirectoryEntry(dir: string): void {
+  const fd = openSync(dir, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * The PARTIAL outcome of a creation or upgrade whose canonical store IS
+ * published and retained, but whose directory entry could not be made durable
+ * — or confirmed durable. It never reports a clean success, never calls the
+ * store corrupt and never removes it: the real barrier cause is preserved, only
+ * the facts this boundary actually established are stated, and the ordinary
+ * public `store upgrade` on that same published path is the supported retry for
+ * the barrier — `store init` stays create-only.
+ */
+function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creation" | "upgrade"): StoreError {
+  const cause = publicationCause(error);
+  // Creation reaches this boundary only after its own transaction committed the
+  // ACTIVE flip, so THAT phase may state it. An existing-store upgrade stops at
+  // its schema/verification boundary: the caller's import and activation have
+  // NOT run, so this diagnostic reports only what actually happened here and
+  // never claims an authority state or completed work it did not establish.
+  const state =
+    phase === "creation"
+      ? `The store at ${dbPath} is complete and ACTIVE and was neither rolled back nor removed; this attempt's own ` +
+        `staging name is retained beside it as a fallback reference to those same bytes. `
+      : `The canonical store at ${dbPath} is retained and readable with the schema state this call committed or ` +
+        `verified, and it was neither rolled back nor removed. This call performed no import or activation, so the ` +
+        `store's recorded authority state is unchanged. `;
+  return new StoreError(
+    "store.publication-barrier-failed",
+    state +
+      `The synchronization of its containing directory entry failed (${cause}), so that name is not CONFIRMED ` +
+      `durable: a power loss before the next successful barrier could lose it. Directory synchronization ` +
+      `(open + fsync) is a platform/filesystem capability, and this one refused with the cause above. Retry the ` +
+      `ordinary public upgrade on the same published path to re-attempt the barrier once the condition clears: ` +
+      `"mstar store upgrade --harness <control root> --operator <name>".`,
+    { path: dbPath, published: true, barrier: phase, cause },
+  );
+}
+
+/**
  * Create-only initialization for a genuinely empty workspace (contract §2).
  *
  * The complete store — every migration, the shared metadata and the ACTIVE
@@ -2251,10 +2310,15 @@ function publicationRefusal(step: string, error: unknown, dbPath: string): Store
  * Failure outcomes are named at their actual phase. Before publication,
  * `store.publication-failed` preserves the operating system's own cause and
  * states that NO store exists at the canonical path — which is never called
- * corrupt, because none was created. After publication, a failed handle
- * acquisition reports `store.created-handle-failed`: the PARTIAL outcome that
- * it is — the store is created, activated and retained — with the real cause
- * and the supported same-entry continuation.
+ * corrupt, because none was created. After the link, a failed DIRECTORY
+ * SYNCHRONIZATION reports `store.publication-barrier-failed`: the store is
+ * published and complete but its name is not confirmed durable, so the
+ * attempt's staging name is RETAINED as the fallback reference to those bytes
+ * and the ordinary public upgrade on that same path re-attempts the barrier.
+ * After a successful barrier, a failed handle acquisition reports
+ * `store.created-handle-failed`: the PARTIAL outcome that it is — the store is
+ * created, activated and retained — with the real cause and the supported
+ * same-entry continuation.
  */
 export async function initializeStore(
   context: StoreContext,
@@ -2359,12 +2423,22 @@ export async function initializeStore(
     }
     throw publicationRefusal("linked into place at its canonical path", error, dbPath);
   }
+  // Publish the canonical DIRECTORY ENTRY before removing the only other name
+  // for this inode: if the barrier fails, the staging name is the fallback
+  // reference to the same bytes and stays, and the outcome is disclosed as the
+  // partial one it is — the store exists and is complete, so it is never removed
+  // and never called corrupt.
+  try {
+    syncDirectoryEntry(dirname(dbPath));
+  } catch (error) {
+    throw publicationBarrierRefusal(error, dbPath, "creation");
+  }
   removeStagingFiles(stagingPath);
-  // The store is now committed, complete and ACTIVE at the canonical path. If
-  // this attempt cannot acquire its returned handle, that is a PARTIAL outcome
-  // and must be disclosed as one: the published image is kept — never unlinked,
-  // never reported as if nothing was created — and the caller is pointed at the
-  // supported continuation for its entry.
+  // The store is now committed, complete, ACTIVE and durable at the canonical
+  // path. If this attempt cannot acquire its returned handle, that is a PARTIAL
+  // outcome and must be disclosed as one: the published image is kept — never
+  // unlinked, never reported as if nothing was created — and the caller is
+  // pointed at the supported continuation for its entry.
   try {
     return await openStore(context, "write");
   } catch (error) {
@@ -2418,16 +2492,28 @@ export async function upgradeStore(
   } catch (error) {
     refuseOpenFailure(error, dbPath);
   }
+  let schemaVersion: number;
   try {
-    const schemaVersion = applyPendingMigrations(db, { attestation });
+    schemaVersion = applyPendingMigrations(db, { attestation });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.
     readExecutionMeta(db, schemaVersion);
-    return { schemaVersion };
   } catch (error) {
     refuseOpenFailure(error, dbPath);
   } finally {
     db.close();
   }
+  // The same public entry is also the supported retry for the directory barrier
+  // a creation or an earlier upgrade could not complete: the published store
+  // already exists at this path, so this attempt re-synchronizes its containing
+  // directory entry. It runs on the CLOSED handle and strictly AFTER the content
+  // checks above, so an unverifiable store syncs nothing and the barrier's own
+  // failure is its own refusal — never `store.corrupt`, never a lost commit.
+  try {
+    syncDirectoryEntry(dirname(dbPath));
+  } catch (error) {
+    throw publicationBarrierRefusal(error, dbPath, "upgrade");
+  }
+  return { schemaVersion };
 }

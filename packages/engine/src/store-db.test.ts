@@ -10,12 +10,15 @@
  * database exists anywhere in this proof. The bundle and all temporary
  * databases are removed after the run.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeFs from "node:fs";
+import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
+import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import {
   MIN_BUN_VERSION,
   MIGRATIONS,
@@ -995,4 +998,246 @@ try {
     await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
     expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * The published pathname's OWN durability. SQLite fsyncs the bytes it writes;
+ * the create-only hard link that PUBLISHES them is an application-created
+ * directory entry, so the containing directory must be synchronized before the
+ * only other name for that inode is unlinked and before success is reported.
+ * The simulated failure below is the REAL barrier (a directory-descriptor fsync
+ * in this process's own `node:fs`), not a forwarding stub: SQLite's own syncs
+ * travel through the native driver, so the store's committed bytes are
+ * untouched and only the durability boundary under test fails.
+ * ------------------------------------------------------------------------ */
+
+describe("store-db publication makes the canonical directory entry durable", () => {
+  const realFsyncSync = nodeFs.fsyncSync;
+
+  /** Whether this descriptor currently names a directory — the barrier's target. */
+  const namesDirectory = (fd: number): boolean => {
+    try {
+      return fstatSync(fd).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  /** Fail every real directory barrier this process attempts, with an errno. */
+  const failDirectoryBarriers = (): { restore: () => void } => {
+    const spy = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
+      if (namesDirectory(fd)) throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
+      return realFsyncSync(fd);
+    }) as never);
+    return { restore: () => spy.mockRestore() };
+  };
+
+  const storeIsCompleteAndActive = async (dir: string, schemaVersion: number): Promise<void> => {
+    const reader = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(reader.epoch).toBe(1);
+      expect(reader.schemaVersion).toBe(schemaVersion);
+      expect(reader.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({
+        authority_state: "active",
+      });
+    } finally {
+      reader.close();
+    }
+  };
+
+  test("a failed creation barrier never reports success, retains both names, and the same upgrade retries it", async () => {
+    const dir = mkdtempSync(join(ROOT, "barrier-create-"));
+    const storePath = join(dir, "store.db");
+    const instrument = failDirectoryBarriers();
+    let refusal: unknown;
+    try {
+      refusal = await initializeStore({ harnessDir: dir }).then(
+        () => null,
+        (error) => error,
+      );
+    } finally {
+      instrument.restore();
+    }
+
+    // Disclosed as the PARTIAL outcome it is: the store exists and is complete,
+    // only the barrier failed — never a clean success, never corruption, and
+    // never a claim that nothing was created.
+    expect(refusal).toMatchObject({
+      code: "store.publication-barrier-failed",
+      details: { path: storePath, published: true, barrier: "creation" },
+    });
+    const message = refusal instanceof Error ? refusal.message : "";
+    // The real operating-system cause travels with the refusal; the recovery
+    // sentence is checked by its actionable flag, not by pinned wording.
+    expect(message).toMatch(/EIO|simulated directory fsync failure/);
+    expect(message).toContain("--harness");
+
+    // The cleanup ORDER is tied to the durability outcome: because the barrier
+    // did not make the canonical entry durable, the staging name (the only
+    // other reference to the same inode) was NOT unlinked, and both names carry
+    // exactly the committed bytes.
+    const stagers = readdirSync(dir).filter((name) => name.startsWith(".store.db.init-") && name.endsWith(".tmp"));
+    expect(stagers.length).toBe(1);
+    expect(statSync(join(dir, stagers[0]!)).ino).toBe(statSync(storePath).ino);
+    await storeIsCompleteAndActive(dir, MIGRATIONS.length);
+    // A rerun of the create-only entry refuses; the published store is not
+    // adopted, repaired or removed.
+    await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
+
+    // The advertised retry is the ordinary public upgrade on the SAME published
+    // path: it really re-attempts the directory barrier, and the store keeps its
+    // committed native data.
+    let barrierSynced = false;
+    const observer = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
+      if (namesDirectory(fd)) barrierSynced = true;
+      return realFsyncSync(fd);
+    }) as never);
+    try {
+      expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    } finally {
+      observer.mockRestore();
+    }
+    expect(barrierSynced).toBe(true);
+    const writer = await openStore({ harnessDir: dir }, "write");
+    writer.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000001', 'p', 'barrier survivor', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'barrier-survivor')",
+      )
+      .run();
+    writer.close();
+    const reader = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(reader.db.prepare("select title from issues where id = 'I-000001'").get()).toEqual({ title: "barrier survivor" });
+    } finally {
+      reader.close();
+    }
+  }, 60_000);
+
+  test("a failed upgrade barrier names the phase, keeps every committed row, and the same upgrade recovers", async () => {
+    const dir = mkdtempSync(join(ROOT, "barrier-upgrade-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    handle.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000002', 'p', 'pre-barrier row', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'pre-barrier-row')",
+      )
+      .run();
+    handle.close();
+
+    const instrument = failDirectoryBarriers();
+    let refusal: unknown;
+    try {
+      refusal = await upgradeStore({ harnessDir: dir }).then(
+        () => null,
+        (error) => error,
+      );
+    } finally {
+      instrument.restore();
+    }
+    expect(refusal).toMatchObject({
+      code: "store.publication-barrier-failed",
+      details: { path: join(dir, "store.db"), published: true, barrier: "upgrade" },
+    });
+    const message = refusal instanceof Error ? refusal.message : "";
+    expect(message).toMatch(/EIO|simulated directory fsync failure/);
+
+    // The committed store is intact — the row written before the barrier is
+    // still there, the schema is current, and the idempotent public upgrade
+    // succeeds once the condition clears.
+    const reader = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(reader.db.prepare("select title from issues where id = 'I-000002'").get()).toEqual({ title: "pre-barrier row" });
+    } finally {
+      reader.close();
+    }
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+  }, 60_000);
+
+  test("a public upgrade of a STAGED store stops before import, reports no activation, and completes once the barrier clears", async () => {
+    // A REAL non-active store with work still pending: the migration apply
+    // stages the legacy register rows, so issue/catalog authority is `staged`
+    // and the public upgrade still has to import and activate. The barrier runs
+    // in `upgradeStore`, BEFORE the wrapper's import, so this is exactly the
+    // window the diagnostic must not overstate.
+    const dir = mkdtempSync(join(ROOT, "barrier-staged-legacy-"));
+    const harnessDir = join(dir, ".mstar");
+    const projectsDir = join(harnessDir, "projects", "_default");
+    mkdirSync(projectsDir, { recursive: true });
+    writeFileSync(
+      join(projectsDir, "residuals.json"),
+      JSON.stringify({
+        entries: {
+          "plan-legacy": [
+            {
+              id: "R1",
+              title: "Staged legacy residual",
+              severity: "high",
+              source: "qc1.md",
+              scope: "plan-scope",
+              decision: "defer",
+              owner: "pm",
+              target: "next-iteration",
+              tracking: "issue",
+              source_plan: "plan-legacy",
+              registered_at: "2026-09-01",
+            },
+          ],
+        },
+      }),
+    );
+    const context = { harnessDir };
+    await applyStoreMigration(context, await planStoreMigration(context));
+    const authorityState = async (): Promise<string> => {
+      const opened = await openStore(context, "read");
+      try {
+        const row = opened.db.prepare("select authority_state from store_meta where id = 1").get();
+        return row !== null && typeof row === "object" && "authority_state" in row ? String(row.authority_state) : "";
+      } finally {
+        opened.close();
+      }
+    };
+    expect(await authorityState()).toBe("staged");
+
+    const instrument = failDirectoryBarriers();
+    let refusal: unknown;
+    try {
+      refusal = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-barrier-fail" }).then(
+        () => null,
+        (error) => error,
+      );
+    } finally {
+      instrument.restore();
+    }
+    expect(refusal).toMatchObject({
+      code: "store.publication-barrier-failed",
+      details: { path: join(harnessDir, "store.db"), published: true, barrier: "upgrade" },
+    });
+    const message = refusal instanceof Error ? refusal.message : "";
+    expect(message).toMatch(/EIO|simulated directory fsync failure/);
+    expect(message).toContain("--harness");
+    // F1's product evidence, not prose: this boundary performed no activation,
+    // so the real authority stays staged and the staged rows are untouched.
+    expect(await authorityState()).toBe("staged");
+    const staged = await openStore(context, "read");
+    try {
+      expect(staged.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+    } finally {
+      staged.close();
+    }
+    // The staged legacy source bytes are preserved.
+    expect(existsSync(join(projectsDir, "residuals.json"))).toBe(true);
+
+    // Once the barrier condition clears, the SAME public entry really finishes:
+    // the authority activates and the staged rows stay exactly as they were.
+    const result = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-barrier-retry" });
+    expect(result.authorityState).toBe("active");
+    expect(await authorityState()).toBe("active");
+    const activated = await openStore(context, "read");
+    try {
+      expect(activated.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+    } finally {
+      activated.close();
+    }
+  }, 60_000);
 });
