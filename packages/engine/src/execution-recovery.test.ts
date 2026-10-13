@@ -14,9 +14,10 @@
  * receipt/safety-image cleanup and hostile filesystem state; and diagnostic
  * export redaction and stability.
  */
-import { afterAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import * as nodeFs from "node:fs";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -53,6 +54,7 @@ import {
   type ActivationAttestation,
 } from "./store-activation.js";
 import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
+import * as storeDb from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-recovery-"));
@@ -932,6 +934,102 @@ describe("execution-restore", () => {
     expect(recoveryRecords(world)).toHaveLength(1);
     expect(readFileSync(marker, "utf8")).toBe("keep-marker");
     expect(readFileSync(source, "utf8")).toBe("keep-source");
+  });
+
+  test("execution-restore-preserves-owned-safety-image-after-peer-rewrites-receipt-ledger", async () => {
+    const world = await recoveryWorld("restore-peer-cleanup-witness");
+    const point = await recoveryPoint(world, "peer-cleanup-point");
+    await mutateEveryDomain(world, "peer-cleanup");
+    const childSource = new URL("./execution-recovery.ts", import.meta.url).href;
+    const peerSource =
+      `import { previewExecutionRestore, restoreExecutionBackup } from ${JSON.stringify(childSource)}; ` +
+      `const context={harnessDir:process.env.RESTORE_HARNESS}; ` +
+      `const preview=await previewExecutionRestore(context,process.env.RESTORE_POINT); ` +
+      `const receipt=await restoreExecutionBackup(context,{preview,operator:${JSON.stringify(OPERATOR)},authorization:${JSON.stringify(AUTHORIZATION)}}); ` +
+      `console.log(JSON.stringify(receipt));`;
+    const realOpenStore = storeDb.openStore;
+    let peerRan = false;
+    let ownedSafetyPath: string | null = null;
+    const openSpy = spyOn(storeDb, "openStore").mockImplementation(async (context, mode) => {
+      const handle = await realOpenStore(context, mode);
+      const close = handle.close.bind(handle);
+      handle.close = () => {
+        close();
+        if (peerRan || mode !== "write" || context.harnessDir !== world.harness) return;
+        const row = rawGet<{ result_json: string }>(
+          world.dbPath,
+          "select result_json from store_operations where operation_id like 'restore-attempt:%' order by committed_at desc limit 1",
+        );
+        if (row === undefined) return;
+        const record = JSON.parse(row.result_json) as { preRestoreBackup: { backupPath: string } };
+        if (!existsSync(record.preRestoreBackup.backupPath)) return;
+        peerRan = true;
+        ownedSafetyPath = record.preRestoreBackup.backupPath;
+        const peer = spawnSync(process.execPath, ["-e", peerSource], {
+          cwd: world.root,
+          env: { ...process.env, RESTORE_HARNESS: world.harness, RESTORE_POINT: point.backupPath },
+          encoding: "utf8",
+        });
+        if (peer.status !== 0) throw new Error(`peer restore failed: ${peer.stderr}`);
+        throw new Error("test-owned failure after native commit and handle close");
+      };
+      return handle;
+    });
+    try {
+      const failed = await errorOf(async () => {
+        const preview = await previewExecutionRestore(world.context, point.backupPath);
+        return restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION });
+      });
+      expect(failed.message).toContain("test-owned failure after native commit");
+      expect(peerRan).toBe(true);
+      expect(ownedSafetyPath).not.toBeNull();
+      expect(existsSync(ownedSafetyPath!)).toBe(true);
+      expect(footprint(world.dbPath).epoch).toBeGreaterThan(point.epoch + 1);
+      expect(rawAll<{ operation_id: string }>(
+        world.dbPath,
+        "select operation_id from store_operations where operation_id like 'restore-attempt:%'",
+      )).toHaveLength(1);
+      expect(recoveryRecords(world)).toHaveLength(1);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("execution-restore-cleans-only-its-safety-image-after-real-live-hash-stream-failure", async () => {
+    const world = await recoveryWorld("restore-hash-stream-failure");
+    const point = await recoveryPoint(world, "hash-stream-point");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const before = footprint(world.dbPath);
+    const backups = join(world.harness, "archived", "store-migration", "backups");
+    mkdirSync(backups, { recursive: true });
+    const oldName = `pre-restore-e1-${randomUUID()}.db`;
+    const oldPath = join(backups, oldName);
+    writeFileSync(oldPath, "unrelated safety image");
+    const realCreateReadStream = nodeFs.createReadStream;
+    let injected = false;
+    const streamSpy = spyOn(nodeFs, "createReadStream").mockImplementation(((path: unknown, options?: unknown) => {
+      const stream = realCreateReadStream(path as string, options as Parameters<typeof realCreateReadStream>[1]);
+      const hasOwnedSafetyImage =
+        existsSync(backups) && readdirSync(backups).some((name) => name.startsWith("pre-restore-") && name.endsWith(".db"));
+      if (!injected && hasOwnedSafetyImage && path === world.dbPath) {
+        injected = true;
+        process.nextTick(() => stream.destroy(new Error("test-owned live hash stream failure")));
+      }
+      return stream;
+    }) as typeof nodeFs.createReadStream);
+    try {
+      const failure = await errorOf(() =>
+        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
+      );
+      expect(failure.message).toContain("test-owned live hash stream failure");
+      expect(injected).toBe(true);
+      expect(footprint(world.dbPath)).toEqual(before);
+      expect(recoveryRecords(world)).toHaveLength(0);
+      expect(readdirSync(backups).filter((name) => name.startsWith("pre-restore-"))).toEqual([oldName]);
+      expect(readFileSync(oldPath, "utf8")).toBe("unrelated safety image");
+    } finally {
+      streamSpy.mockRestore();
+    }
   });
 
   test("execution-restore-reclaims-its-own-safety-point-only-on-a-proven-pre-commit-refusal", async () => {
