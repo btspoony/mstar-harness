@@ -24,6 +24,7 @@
  * - a rebuild leaves issue/catalog revisions and rows untouched;
  * - a format-version bump discards the old generation and rebuilds.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,9 +52,6 @@ afterAll(() => {
 });
 afterEach(() => {
   delete process.env.MSTAR_PROJECTION_CHURN_PATH;
-  delete process.env.MSTAR_PROJECTION_DB_CHURN;
-  delete process.env.MSTAR_STORE_TEST_RUNNER;
-  delete process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR;
 });
 
 type Fixture = {
@@ -388,6 +386,64 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
   return f;
 }
 
+  test("hostile invocation-cwd .env cannot churn the ACTIVE projection", async () => {
+    const workflowId = "wf-hostile-env";
+    const planId = "plan-hostile-env";
+    const f = await activeWorkflowFixture("active-hostile-env-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const before = await projections(f);
+    const beforeHandle = await openStore(f.context, "read");
+    let beforeRevision: number;
+    try { beforeRevision = (beforeHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision; }
+    finally { beforeHandle.close(); }
+    const childDir = mkdtempSync(join(ROOT, "hostile-env-cwd-"));
+    const projectionModule = new URL("./projection.js", import.meta.url).href;
+    const storeModule = new URL("./store-db.js", import.meta.url).href;
+    const driver = join(childDir, "refresh.mjs");
+    writeFileSync(join(childDir, ".env"), [
+      "MSTAR_STORE_TEST_RUNNER=1",
+      `MSTAR_PROJECTION_DB_CHURN='${JSON.stringify({ kind: "update-row", workflowId, planId })}'`,
+      "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR=induced",
+      "",
+    ].join("\n"));
+    writeFileSync(driver, `
+import { refreshProjections } from ${JSON.stringify(projectionModule)};
+import { openStore } from ${JSON.stringify(storeModule)};
+const context = ${JSON.stringify(f.context)};
+console.log(JSON.stringify({ kind: "environment", churn: process.env.MSTAR_PROJECTION_DB_CHURN, runner: process.env.MSTAR_STORE_TEST_RUNNER, err: process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR }));
+const report = await refreshProjections(context);
+const handle = await openStore(context, "read");
+try {
+  const revision = handle.db.prepare("select revision from store_meta where id = 1").get().revision;
+  const rows = handle.db.prepare("select plan_id from projection_plans order by plan_id").all();
+  console.log(JSON.stringify({ kind: "result", freshness: report.freshness, generation: report.generation, revision, planIds: rows.map((row) => row.plan_id) }));
+} finally { handle.close(); }
+`);
+    const child = spawnSync(process.execPath, [driver], {
+      cwd: childDir,
+      env: {},
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(child.status).toBe(0);
+    expect(child.error).toBeUndefined();
+    const output = child.stdout.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(output[0]).toMatchObject({
+      kind: "environment",
+      churn: JSON.stringify({ kind: "update-row", workflowId, planId }),
+      runner: "1",
+      err: "induced",
+    });
+    expect(output[1]).toMatchObject({
+      kind: "result",
+      freshness: "current",
+      generation: initial.generation,
+      revision: beforeRevision,
+      planIds: [planId],
+    });
+    expect(await projections(f)).toEqual(before);
+  });
+
   test("ACTIVE execution rows publish through the dashboard projection", async () => {
     const f = await fixture("active-smoke-");
     const initialized = await readExecutionState(f.context);
@@ -437,18 +493,22 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const f = await activeWorkflowFixture("active-authority-unreadable-", workflowId, planId);
     const initial = await refreshProjections(f.context);
     const lastGood = await projectedRows(f);
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "Unexpected token 'password=hunter2' at position 22; source excerpt: Array[REDACTED]";
+    const handle = await openStore(f.context, "write");
+    try {
+      const row = handle.db.prepare("select entry_json from execution_registry where workflow_id = ?").get(workflowId) as { entry_json: string };
+      const entry = JSON.parse(row.entry_json) as Record<string, unknown>;
+      entry.type = "not-a-workflow-type";
+      handle.db.prepare("update execution_registry set entry_json = ? where workflow_id = ?").run(JSON.stringify(entry), workflowId);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
 
     const capture = await captureProjectionSources(f.context);
     expect(capture).toMatchObject({ blocked: true, sources: [] });
     expect(capture.diagnostics).toEqual([{
       sourceKey: "root:harness:execution/registry",
       reason: "invalid",
-      message: "execution authority unreadable (SyntaxError)",
+      message: "execution authority unreadable (StoreError)",
     }]);
-    expect(capture.diagnostics[0]?.message).not.toContain("password=hunter2");
-    expect(capture.diagnostics[0]?.message).not.toContain("source excerpt");
     const stale = await refreshProjections(f.context);
     expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation, sources: [], changedKeys: [] });
     expect(stale.diagnostics).toEqual(capture.diagnostics);
@@ -537,14 +597,18 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const f = await activeWorkflowFixture("active-double-movement-", workflowId, planId);
     const initial = await refreshProjections(f.context);
     const lastGood = await projectedRows(f);
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify([
-      { kind: "update-row", workflowId, planId },
-      { kind: "update-row", workflowId, planId },
-    ]);
-
-    const stale = await refreshProjections(f.context);
-
+    const stale = await refreshProjections(f.context, {
+      beforePublish: async () => {
+        const handle = await openStore(f.context, "write");
+        try {
+          const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
+          const state = JSON.parse(current.state_json) as Record<string, unknown>;
+          state.updated_at = `${String(state.updated_at)}-churn`;
+          handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+          handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+        } finally { handle.close(); }
+      },
+    });
     expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
     expect(stale.diagnostics).toContainEqual(expect.objectContaining({
       sourceKey: "root:harness:execution/store-revision",
@@ -699,9 +763,15 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const refreshed = await withStoreRead(f.context, queryDashboard("workflows"));
     expect(refreshed.projection).toMatchObject({ freshness: "current", generation: initial.generation! + 1 });
     expect((await projections(f)).plans).toEqual(expect.arrayContaining([expect.objectContaining({ plan_id: "plan-inserted" }), expect.objectContaining({ plan_id: planId })]));
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify({ kind: "insert-plan", workflowId, planId: "plan-retry-inserted" });
-    const retried = await refreshProjections(f.context);
+    const retried = await refreshProjections(f.context, { beforePublish: async (attempt) => {
+      if (attempt !== 1) return;
+      const writer = await openStore(f.context, "write");
+      try {
+        writer.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')")
+          .run(workflowId, "plan-retry-inserted", workflowId, JSON.stringify({ id: "plan-retry-inserted", title: "Retry plan", file: "plans/retry.md", status: "Todo" }));
+        writer.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+      } finally { writer.close(); }
+    } });
     expect(retried).toMatchObject({ freshness: "current", published: true, generation: initial.generation! + 2 });
     expect((await projections(f)).plans).toEqual(expect.arrayContaining([
       expect.objectContaining({ plan_id: "plan-inserted" }),
@@ -737,9 +807,16 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const refreshed = await withStoreRead(f.context, queryDashboard("workflows"));
     expect(refreshed.projection).toMatchObject({ freshness: "current", generation: initial.generation! + 1 });
     expect(await projections(f)).toMatchObject({ workflows: [expect.objectContaining({ id: workflowId, status: "completed" })] });
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify({ kind: "update-row", workflowId, planId });
-    const retried = await refreshProjections(f.context);
+    const retried = await refreshProjections(f.context, { beforePublish: async (attempt) => {
+      if (attempt !== 1) return;
+      const writer = await openStore(f.context, "write");
+      try {
+        const state = JSON.parse(String((writer.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json)) as Record<string, unknown>;
+        state.updated_at = `${String(state.updated_at)}-churn`;
+        writer.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+        writer.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+      } finally { writer.close(); }
+    } });
     expect(retried).toMatchObject({ freshness: "current", published: true, generation: initial.generation! + 2 });
     expect((await projections(f)).workflows[0]).toMatchObject({ id: workflowId, status: "completed", updated_at: `${STARTED_AT}-churn` });
     })();

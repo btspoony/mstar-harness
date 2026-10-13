@@ -1,0 +1,2 @@
+- Remove environment-controlled projection churn and authority-read failures, and replace activation/retirement test seams with explicit test-owned hooks.
+- 移除由环境变量控制的投影变更与权威读取故障，并将激活/退役测试接缝替换为显式的测试自有钩子。
