@@ -116,6 +116,7 @@ export type ExecutionErrorCode =
   | "execution.adoption-refused"
   | "execution.header-revision-conflict"
   | "execution.adoption-invalid"
+  | "execution.delivery-declaration-required"
   | "store.not-active"
   | "store.stale-epoch";
 

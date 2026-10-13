@@ -17,6 +17,7 @@ import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { registerCatalogEntity } from "./catalog.js";
 import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.js";
+import type { DeliveryLiftDeclaration } from "./migrate.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
 afterAll(() => {
@@ -1530,7 +1531,7 @@ test("minimal activation retains a manually constructed legacy registration reco
  * needs: a plan workflow fixes its delivery kind at registration, so the
  * ordinary upgrade must declare it.
  */
-const V1_STANDALONE_DECLARATION = [
+const V1_STANDALONE_DECLARATION: DeliveryLiftDeclaration[] = [
   { workflow: "v1-standalone", deliveryKind: "development", branchSource: "feature/v1-standalone", branchTarget: "main" },
 ];
 
