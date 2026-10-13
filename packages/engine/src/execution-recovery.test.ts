@@ -697,7 +697,7 @@ describe("execution-restore", () => {
       expect(failure.message).toContain("native restore receipt rejection");
       expect(footprint(world.dbPath)).toEqual(before);
       expect(statSync(world.dbPath).ino).toBe(liveInode);
-      expect(recoveryRecords(world)).toHaveLength(0);
+      expect(rawAll(world.dbPath, "select operation_id from store_operations where operation_id like 'restore-attempt:%'")).toEqual([]);
     } finally {
       rawRun(world.dbPath, "drop trigger if exists reject_restore_receipt");
     }
@@ -1061,7 +1061,7 @@ describe("execution-restore", () => {
       expect(failure.message).toContain("test-owned live hash stream failure");
       expect(injected).toBe(true);
       expect(footprint(world.dbPath)).toEqual(before);
-      expect(recoveryRecords(world)).toHaveLength(0);
+      expect(rawAll(world.dbPath, "select operation_id from store_operations where operation_id like 'restore-attempt:%'")).toEqual([]);
       expect(readdirSync(backups).filter((name) => name.startsWith("pre-restore-"))).toEqual([oldName]);
       expect(readFileSync(oldPath, "utf8")).toBe("unrelated safety image");
     } finally {
@@ -1743,7 +1743,7 @@ type RecoveryRecord = {
   requiredRebind: string;
 };
 
-/** Every durable recovery receipt this store has written, newest name last. */
+/** Optional filesystem receipt copies, created only after a committed restore. */
 function recoveryRecords(world: Fixture): RecoveryRecord[] {
   const dir = join(world.harness, "archived", "store-migration", "recovery");
   return readdirSync(dir)
