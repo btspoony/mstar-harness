@@ -54,11 +54,7 @@ afterAll(() => {
 
 /** Spawn one scenario under a real runtime binary in a fresh temp dir. */
 function runScenarioOn(bin: string, scenario: string, dir: string): { status: number; output: string } {
-  const run = spawnSync(bin, [BUNDLE, scenario, dir], {
-    encoding: "utf8",
-    env: { ...process.env, MSTAR_STORE_TEST_RUNNER: "1" },
-    timeout: 60_000,
-  });
+  const run = spawnSync(bin, [BUNDLE, scenario, dir], { encoding: "utf8", timeout: 60_000 });
   return { status: run.status ?? -1, output: `${run.stdout}${run.stderr}`.trim() };
 }
 
@@ -192,51 +188,40 @@ describe("store-db L2 fix round", () => {
 
   test("failed init leaves no partial store", async () => {
     const dir = mkdtempSync(join(ROOT, "fail-init-"));
-    const previous = process.env.MSTAR_STORE_FAIL_INIT;
-    const runner = process.env.MSTAR_STORE_TEST_RUNNER;
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_FAIL_INIT = "1";
-    try {
-      await expect(initializeStore({ harnessDir: dir })).rejects.toThrow(/induced init failure/);
-      expect(existsSync(join(dir, "store.db"))).toBe(false);
-    } finally {
-      if (previous === undefined) delete process.env.MSTAR_STORE_FAIL_INIT;
-      else process.env.MSTAR_STORE_FAIL_INIT = previous;
-      if (runner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = runner;
-    }
+    // Test-owned injection at the staging claim: the hook throws inside the
+    // initializer's own try, so the real post-claim cleanup path runs.
+    await expect(
+      initializeStore(
+        { harnessDir: dir },
+        {
+          afterStagingClaim: () => {
+            throw new Error("induced init failure");
+          },
+        },
+      ),
+    ).rejects.toThrow(/induced init failure/);
+    expect(existsSync(join(dir, "store.db"))).toBe(false);
   });
 
   test("a competing initializer's store is refused, never opened or removed", async () => {
     const dir = mkdtempSync(join(ROOT, "claim-window-"));
     const path = join(dir, "store.db");
-    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
-    const previousBusy = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "1";
-    try {
-      // The initializer's lazy driver import is the window a competing
-      // initializer fills; this synchronous store (holding the write lock the
-      // loser would meet as `store.busy`) appears inside it.
-      const loser = initializeStore({ harnessDir: dir });
-      const winner = new DatabaseSync(path);
-      winner.exec("create table winner_keep(note text)");
-      winner.exec("insert into winner_keep(note) values ('keep-me')");
-      winner.exec("begin immediate");
-      await expect(loser).rejects.toMatchObject({ code: "store.already-exists" });
-      winner.exec("rollback");
-      winner.close();
-      expect(existsSync(path)).toBe(true);
-      const check = new DatabaseSync(path, { readOnly: true });
-      const row = check.prepare("select note from winner_keep").get() as { note?: string };
-      expect(row.note).toBe("keep-me");
-      check.close();
-    } finally {
-      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
-      if (previousBusy === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousBusy;
-    }
+    // The initializer's lazy driver import is the window a competing
+    // initializer fills; this synchronous store (holding the write lock the
+    // loser would meet as `store.busy`) appears inside it.
+    const loser = initializeStore({ harnessDir: dir });
+    const winner = new DatabaseSync(path);
+    winner.exec("create table winner_keep(note text)");
+    winner.exec("insert into winner_keep(note) values ('keep-me')");
+    winner.exec("begin immediate");
+    await expect(loser).rejects.toMatchObject({ code: "store.already-exists" });
+    winner.exec("rollback");
+    winner.close();
+    expect(existsSync(path)).toBe(true);
+    const check = new DatabaseSync(path, { readOnly: true });
+    const row = check.prepare("select note from winner_keep").get() as { note?: string };
+    expect(row.note).toBe("keep-me");
+    check.close();
   });
 
   test("concurrent initializers do not depend on a racy pre-check", async () => {
@@ -300,24 +285,13 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 
-  test("busy-timeout override is inert without the test-runner marker", async () => {
+  test("the published bounded wait is the default when no option is passed", async () => {
     const dir = mkdtempSync(join(ROOT, "busy-"));
-    const previousBusy = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
-    delete process.env.MSTAR_STORE_TEST_RUNNER;
-    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "1";
-    try {
-      const handle = await initializeStore({ harnessDir: dir });
-      const row = handle.db.prepare("pragma busy_timeout").get() as { timeout?: number; busy_timeout?: number };
-      const timeout = row.timeout ?? row.busy_timeout;
-      expect(timeout).toBe(5000);
-      handle.close();
-    } finally {
-      if (previousBusy === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousBusy;
-      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
-    }
+    const handle = await initializeStore({ harnessDir: dir });
+    const row = handle.db.prepare("pragma busy_timeout").get() as { timeout?: number; busy_timeout?: number };
+    const timeout = row.timeout ?? row.busy_timeout;
+    expect(timeout).toBe(5000);
+    handle.close();
   });
 
   test("migration-1 forbids self-edges, sorts related endpoints, and constrains imported 0/1", async () => {
@@ -528,7 +502,6 @@ describe("migration 7 - project_milestones", () => {
         const competitor = spawnSync(NODE_BIN, [BUNDLE, "upgrade-pending", dir], {
           encoding: "utf8",
           timeout: 60_000,
-          env: { ...process.env, MSTAR_STORE_TEST_RUNNER: "1" },
         });
         expect(competitor.status).toBe(0);
         expect(competitor.stdout).toContain(`OK upgrade-pending: public upgrade returned schemaVersion=${MIGRATIONS.length}`);
@@ -852,18 +825,16 @@ try {
 
   test("an interrupted first create publishes nothing and the path stays initializable", async () => {
     const dir = mkdtempSync(join(ROOT, "interrupted-create-"));
-    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
-    const previousFailure = process.env.MSTAR_STORE_FAIL_INIT;
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_FAIL_INIT = "1";
-    try {
-      await expect(initializeStore({ harnessDir: dir })).rejects.toThrow(/induced init failure/);
-    } finally {
-      if (previousFailure === undefined) delete process.env.MSTAR_STORE_FAIL_INIT;
-      else process.env.MSTAR_STORE_FAIL_INIT = previousFailure;
-      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
-    }
+    await expect(
+      initializeStore(
+        { harnessDir: dir },
+        {
+          afterStagingClaim: () => {
+            throw new Error("induced init failure");
+          },
+        },
+      ),
+    ).rejects.toThrow(/induced init failure/);
     // The interrupted create left NO canonical store and none of its own
     // staging scratch behind.
     expect(existsSync(join(dir, "store.db"))).toBe(false);
@@ -932,10 +903,6 @@ try {
     // driver and holds it, so the creator's own final reopen runs the genuine
     // busy path of the native driver. The interleave point is the creator's
     // own awaits (it turns are taken between them), so no clock is involved.
-    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
-    const previousBusy = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
     const competitorDone = Promise.withResolvers<void>();
     const competitor = (async () => {
       for (let turn = 0; turn < 200000 && !existsSync(storePath); turn++) {
@@ -951,18 +918,10 @@ try {
         rival.close();
       }
     })();
-    let refusal: unknown;
-    try {
-      refusal = await initializeStore({ harnessDir: dir }).then(
-        () => null,
-        (error) => error,
-      );
-    } finally {
-      if (previousBusy === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousBusy;
-      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
-    }
+    const refusal: unknown = await initializeStore({ harnessDir: dir }, { busyTimeoutMs: 50 }).then(
+      () => null,
+      (error) => error,
+    );
     competitorDone.resolve();
     await competitor;
     // The partial outcome is disclosed as one: created, activated, published —
