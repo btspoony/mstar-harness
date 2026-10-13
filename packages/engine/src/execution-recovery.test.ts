@@ -898,6 +898,42 @@ describe("execution-restore", () => {
     expect(receipt.preRestoreBackup.storeId).toBe(world.storeId);
   });
 
+  test("execution-restore-ignores-hostile-restore-environment-in-a-real-bun-child", async () => {
+    const world = await recoveryWorld("restore-hostile-environment");
+    const point = await recoveryPoint(world, "hostile-point");
+    await mutateEveryDomain(world, "hostile");
+    const marker = join(world.root, "benign-marker");
+    const source = join(world.root, "benign-source");
+    writeFileSync(marker, "keep-marker");
+    writeFileSync(source, "keep-source");
+    const script = `
+      import { previewExecutionRestore, restoreExecutionBackup } from ${JSON.stringify(join(ROOT, "packages/engine/src/execution-recovery.ts"))};
+      const context = { harnessDir: ${JSON.stringify(world.harness)} };
+      const preview = await previewExecutionRestore(context, ${JSON.stringify(point.backupPath)});
+      const receipt = await restoreExecutionBackup(context, { preview, operator: ${JSON.stringify(OPERATOR)}, authorization: ${JSON.stringify(AUTHORIZATION)} });
+      console.log(JSON.stringify({ receipt, preview }));
+    `;
+    const output = execFileSync("bun", ["-e", script], {
+      cwd: world.root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        MSTAR_STORE_TEST_RUNNER: "1",
+        MSTAR_STORE_FAIL_EXECUTION_RESTORE: "before-live-hash",
+        MSTAR_STORE_PARK_EXECUTION_RESTORE: "*",
+        MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP: "*",
+        MSTAR_STORE_PARK_READY: marker,
+        MSTAR_STORE_PARK_RELEASE: source,
+      },
+    });
+    const result = JSON.parse(output.trim()) as { receipt: { epoch: number }; preview: ExecutionRecoveryPreview };
+    expect(result.receipt.epoch).toBeGreaterThan(result.preview.liveEpoch);
+    expect(footprint(world.dbPath).epoch).toBe(result.receipt.epoch);
+    expect(recoveryRecords(world)).toHaveLength(1);
+    expect(readFileSync(marker, "utf8")).toBe("keep-marker");
+    expect(readFileSync(source, "utf8")).toBe("keep-source");
+  });
+
   test("execution-restore-reclaims-its-own-safety-point-only-on-a-proven-pre-commit-refusal", async () => {
     const world = await recoveryWorld("restore-safety-reclaim");
     const point = await recoveryPoint(world, "safety-reclaim-point");
