@@ -1200,7 +1200,7 @@ describe("store-db publication makes the canonical directory entry durable", () 
     expect(await authorityState()).toBe("staged");
     const sourceBytes = readFileSync(join(projectsDir, "residuals.json"));
     const before = await openStore(context, "read");
-    let expectedIssues: unknown;
+    let expectedIssues: unknown[];
     try {
       expectedIssues = before.db.prepare("select * from issues order by id").all();
       expect(expectedIssues).toContainEqual(expect.objectContaining({ title: "Staged legacy residual", severity: "high" }));

@@ -470,7 +470,7 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
       `const receipt=await purgeCatalogRegistration(context,{workflowId:${JSON.stringify(workflowId)},operationId:${JSON.stringify(operationId)},expectedCatalogRevision:revisions.catalogRevision,actor:"project-manager"}); ` +
       `const revisionsAfter=await readCatalogRevisions(context); ` +
       `console.log(JSON.stringify({receipt,revisions,revisionsAfter}));`;
-    const childEnv = { ...process.env, CATALOG_HARNESS: harnessDir };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, CATALOG_HARNESS: harnessDir };
     for (const key of [
       "MSTAR_STORE_TEST_RUNNER",
       "MSTAR_STORE_PARK_CATALOG_PURGE",
