@@ -293,6 +293,25 @@ function discoverV1(
   // operator's `--ack-skip-workflow <original id>` must be able to skip it.
   const refusedSourceIds = new Set<string>();
   let refusal: string | undefined;
+  // A duplicated plan id is that id's own refused source: the conversion kept
+  // the first row in stable order and reported every later duplicate, so the
+  // operator's `--ack-skip-workflow <id>` can acknowledge the exact lost rows
+  // instead of one duplicated agent-authored row blocking every healthy sibling.
+  for (const duplicate of legacy.duplicatePlanIds) {
+    refusedSourceIds.add(duplicate.id);
+    const owner = duplicate.owner === null ? "unregistered (no iteration compass names it)" : `owned by iteration ${duplicate.owner}`;
+    if (!acknowledgedWorkflowSkips.has(duplicate.id)) {
+      refusal ??= `plan id ${duplicate.id} is claimed by ${duplicate.dropped.length + 1} rows in the v1 root plans[]: the first in stable order (plan id, then owning lifecycle id, then row ordinal) survives at plans[] index ${duplicate.kept} (${owner}) and the later duplicate row(s) at plans[] index ${duplicate.dropped.join(", ")} cannot be converted \u2014 every v1 row must land in exactly one snapshot. Rerun store upgrade with \`--ack-skip-workflow ${duplicate.id}\` to keep the first row and skip ONLY those duplicate rows; each lost row is reported in the receipt.`;
+      continue;
+    }
+    for (const ordinal of duplicate.dropped) {
+      skipped.push({
+        path: `status.json#plans[${ordinal}]`,
+        reason: `plan id ${duplicate.id} is duplicated in the v1 root plans[]; this run kept the row at plans[] index ${duplicate.kept} (${owner}) and skipped the later duplicate row at plans[] index ${ordinal} acknowledged by --ack-skip-workflow, so that row's status, progress and notes are not imported and stay only in the legacy status.json`,
+      });
+      legacy.dispositions.push(`plan id ${duplicate.id}: duplicate plan id in the v1 root plans[] \u2014 the row at plans[] index ${duplicate.kept} survives (${owner}) and the duplicate row at plans[] index ${ordinal} is not converted, so its status, progress and notes stay only in the legacy status.json (import disposal, not deletion, and every other source imports normally)`);
+    }
+  }
   for (const converted of legacy.snapshots) {
     try {
       const raw = converted.data as unknown as Record<string, unknown>;
@@ -875,11 +894,18 @@ export async function upgradeStoreMinimal(input: {
     const message = error instanceof Error ? error.message : String(error);
     // The advertised retry must be reachable in one step: the execution rows this
     // operation committed are native collisions for the next invocation, whose
-    // fresh operation id cannot replay this receipt.
+    // fresh operation id cannot replay this receipt. An unchanged v1 root also
+    // re-converts the same active standalone plan lift(s), so a retry that omits
+    // the declarations this invocation used refuses in declaration application
+    // before it ever reaches the legacy DSH phase.
+    const declarations = input.deliveryDeclarations ?? [];
+    const deliveries = declarations.length === 0
+      ? ""
+      : ` The same retry must also repeat the --delivery declaration(s) this invocation used (${declarations.map((entry) => `--delivery ${JSON.stringify(entry)}`).join(" ")}), because the unchanged v1 root still needs one per active standalone plan lift.`;
     const committed = result.imported > 0
       ? ` the next invocation sees them as native collisions, so include \`--ack-skip-workflow ${result.importedIds.join(" ")}\` in that same retry.`
       : "";
-    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed} DSH import did not commit.`;
+    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries} DSH import did not commit.`;
     if (error instanceof StoreError) {
       throw new StoreError(error.code, `${prefix} ${message}`, error.details);
     }

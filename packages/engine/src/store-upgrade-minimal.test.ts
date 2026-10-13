@@ -3464,6 +3464,57 @@ test("a DSH refusal names every acknowledgement its advertised retry needs", asy
   expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
 });
 
+test("a v1 root's DSH retry names the delivery declarations the unchanged root still needs", async () => {
+  const { context } = legacyV1Workspace("dsh-retry-v1");
+  const workflowId = "wf-dsh-retry-v1";
+  // A conflicting duplicate identity refuses the DSH phase after the execution
+  // phase committed this root's rows.
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-retry-v1", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  expect(error.message).toContain(`dsh-ledger:${workflowId}`);
+  expect(error.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
+  // The v1 root is unchanged, so the retry re-converts the same active
+  // standalone lift: the advertised retry must name the declaration that lift
+  // still needs, not only the acknowledgements.
+  expect(error.message).toContain("--delivery");
+  expect(error.message).toContain(JSON.stringify(V1_STANDALONE_DECLARATION[0]));
+  // The advertised retry is reachable in ONE invocation.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-retry-v1-2",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedSkips: [`dsh-ledger:${workflowId}`],
+    acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("a duplicated standalone v1 plan id is a skippable source instead of a whole-conversion abort", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-dup-row");
+  const status = JSON.parse(statusBytes.toString("utf8")) as { plans: Array<Record<string, unknown>> };
+  const duplicateIndex = status.plans.length;
+  status.plans.push({ ...status.plans.find((plan) => plan.id === "v1-standalone")!, title: "later duplicate" });
+  writeFileSync(join(context.harnessDir, "status.json"), JSON.stringify(status));
+  const input = { context, operator: "operator", operationId: "op-v1-dup-row", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  // The first row in stable order survives; the run refuses naming the id the
+  // acknowledgement addresses — one duplicated agent-authored row must not abort
+  // every healthy sibling source.
+  await expect(upgradeStoreMinimal(input))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow v1-standalone") });
+  const acked = await upgradeStoreMinimal({ ...input, operationId: "op-v1-dup-row-ack", acknowledgedWorkflowSkips: ["v1-standalone"] });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
+  // The exact loss of the later duplicate row, per duplicate.
+  expect(acked.skipped).toContainEqual({
+    path: `status.json#plans[${duplicateIndex}]`,
+    reason: expect.stringContaining("plan id v1-standalone is duplicated in the v1 root plans[]"),
+  });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("plan id v1-standalone: duplicate plan id in the v1 root plans[]"));
+});
+
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
   // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
   // so any digest difference comes from the ordering used to fold them.

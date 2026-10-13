@@ -91,7 +91,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
               : id === "store.init"
                 ? "Choose an empty harness root and run mstar store init."
                 : code === "store.upgrade-dsh-source-refused"
-                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; when the message also reports execution workflows that this invocation already committed, pass --ack-skip-workflow <id> for each of them in the same retry, because the next invocation sees those ids as native collisions. Ordinary retry remains available."
+                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; when the message also reports execution workflows that this invocation already committed, pass --ack-skip-workflow <id> for each of them in the same retry, because the next invocation sees those ids as native collisions, and repeat that invocation's --delivery <json> declarations when the source is a v1 root, because the unchanged root still needs one per active standalone plan lift and the message names the declarations to repeat. Ordinary retry remains available."
                   : id === "store.upgrade"
                     ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
                     : id === "store.migrate"
