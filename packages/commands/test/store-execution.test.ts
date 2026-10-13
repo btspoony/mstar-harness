@@ -323,6 +323,9 @@ describe("store and execution command surface", () => {
     // the acknowledgements would not be reachable in one invocation.
     expect(recovery).toContain("--delivery");
     expect(recovery).toContain("--ack-skip-compass");
+    // The advertised workflow list is a UNION: leaving out an acknowledgement the
+    // unchanged root already required would refuse that source again first.
+    expect(recovery).toContain("the original acknowledgements this unchanged root still requires");
     const unmatched = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-status"] }, root);
     expect(unmatched).toMatchObject({ status: "usage", code: "store.upgrade-dsh-ack-unmatched", exitCode: 2 });
     // A compass acknowledgement addresses no compass on this root: it is caller

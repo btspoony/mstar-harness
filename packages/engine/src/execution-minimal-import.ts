@@ -931,10 +931,13 @@ export async function upgradeStoreMinimal(input: {
     const message = error instanceof Error ? error.message : String(error);
     // The advertised retry must be reachable in one step: the execution rows this
     // operation committed are native collisions for the next invocation, whose
-    // fresh operation id cannot replay this receipt. An unchanged v1 root also
-    // re-converts the same active standalone plan lift(s), so a retry that omits
-    // the declarations this invocation used refuses in declaration application
-    // before it ever reaches the legacy DSH phase.
+    // fresh operation id cannot replay this receipt, AND the unchanged root still
+    // requires the workflow acknowledgements this invocation already accepted (a
+    // duplicated v1 plan id, an unsafe registered source or a pre-existing native
+    // collision is a property of the source, not of this commit). An unchanged v1
+    // root also re-converts the same active standalone plan lift(s), so a retry
+    // that omits the declarations this invocation used refuses in declaration
+    // application before it ever reaches the legacy DSH phase.
     const declarations = input.deliveryDeclarations ?? [];
     const deliveries = declarations.length === 0
       ? ""
@@ -943,9 +946,10 @@ export async function upgradeStoreMinimal(input: {
     const compasses = compassSkips.length === 0
       ? ""
       : ` The same retry must also repeat the --ack-skip-compass acknowledgement(s) this invocation used (${compassSkips.map((id) => `--ack-skip-compass ${id}`).join(" ")}), because the unchanged v1 root still refuses that non-regular compass.`;
-    const committed = result.imported > 0
-      ? ` the next invocation sees them as native collisions, so include \`--ack-skip-workflow ${result.importedIds.join(" ")}\` in that same retry.`
-      : "";
+    const workflowAcks = [...new Set([...(input.acknowledgedWorkflowSkips ?? []), ...result.importedIds])].sort();
+    const committed = workflowAcks.length === 0
+      ? ""
+      : ` the same retry must retain every workflow acknowledgement this invocation already used \u2014 the ids this invocation committed, which the next invocation sees as native collisions, together with the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id \u2014 so include \`--ack-skip-workflow ${workflowAcks.join(" ")}\` in that same retry.`;
     const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries}${compasses} DSH import did not commit.`;
     if (error instanceof StoreError) {
       throw new StoreError(error.code, `${prefix} ${message}`, error.details);

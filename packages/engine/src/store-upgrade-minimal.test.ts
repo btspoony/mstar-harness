@@ -3591,6 +3591,42 @@ test("the DSH retry names the compass acknowledgement and the delivery declarati
   expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
 });
 
+test("the advertised DSH retry retains the workflow acknowledgements the unchanged root still requires", async () => {
+  const { context } = legacyV1Workspace("dsh-dup-group");
+  const workflowId = "wf-dsh-dup-group";
+  // The compass registers this plan id and `plans[]` carries it twice: the
+  // duplicate rows make `--ack-skip-workflow <that id>` necessary BEFORE the DSH
+  // phase, while the import commits only the owning iteration (no standalone row
+  // for that id), so it never appears among the committed ids.
+  const status = JSON.parse(readFileSync(join(context.harnessDir, "status.json"), "utf8")) as { plans: Array<Record<string, unknown>> };
+  status.plans.push({ ...status.plans.find((plan) => plan.id === workflowId)!, title: "later duplicate" });
+  writeFileSync(join(context.harnessDir, "status.json"), JSON.stringify(status));
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-dup-group",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedWorkflowSkips: [workflowId],
+  }).then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  // The acknowledged duplicate is not a committed id, so the advertised list is
+  // the union of the acknowledgements this run already needed and the ids it
+  // committed.
+  const advertisedWorkflowAcks = /include `--ack-skip-workflow ([^`]+)` in that same retry/.exec(error.message);
+  expect(advertisedWorkflowAcks?.[1]!.split(" ")).toEqual(["iter-v1", "v1-standalone", workflowId]);
+  // Retry with EXACTLY what the refusal advertises, parsed from the message.
+  const advertisedDeliveries = /\(--delivery (\{.*?\})\)/.exec(error.message);
+  const advertisedDshSelectors = [...error.message.matchAll(/^- (\S+?): /gm)].map((match) => match[1]!);
+  expect(advertisedDshSelectors).toEqual([`dsh-ledger:${workflowId}`]);
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-dup-group-2",
+    deliveryDeclarations: advertisedDeliveries![1]!.split(" --delivery ").map((json) => JSON.parse(json)),
+    acknowledgedWorkflowSkips: advertisedWorkflowAcks![1]!.split(" "),
+    acknowledgedSkips: advertisedDshSelectors,
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
   // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
   // so any digest difference comes from the ordering used to fold them.
