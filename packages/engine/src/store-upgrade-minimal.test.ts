@@ -3231,3 +3231,100 @@ test("a v1 root converts from the verified register bytes without a second path 
   finally { store.close(); }
 });
 
+test("a malformed legacy plan row is skippable instead of blocking every other workflow", async () => {
+  const root = join(ROOT, "malformed-row", ".mstar");
+  const healthy = join(root, "workflows", "wf-healthy");
+  const broken = join(root, "workflows", "wf-broken");
+  mkdirSync(join(healthy, "sessions"), { recursive: true });
+  mkdirSync(broken, { recursive: true });
+  const snapshot = (id: string, plans: Array<Record<string, unknown>>): string => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" }, plans,
+  });
+  writeFileSync(join(healthy, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-healthy", [{ id: "wf-healthy-plan", title: "ok", status: "Todo", file: "wf-healthy-plan.md" }]));
+  writeFileSync(join(broken, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-broken", [
+    { id: "dup-plan", title: "first", status: "Todo", file: "first.md" },
+    { id: "dup-plan", title: "second", status: "Todo", file: "second.md" },
+  ]));
+  writeFileSync(join(root, "wf-healthy-plan.md"), "# wf-healthy-plan\n");
+  writeFileSync(join(root, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04", workflows: [
+      { id: "wf-healthy", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-healthy" },
+      { id: "wf-broken", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-broken" },
+    ],
+  }));
+  const context = { harnessDir: root };
+  // One agent-authored mistake refuses as a SOURCE the acknowledgement can name,
+  // not as a whole-run conflict.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-malformed-row" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-broken") });
+  const acked = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-malformed-row-ack", acknowledgedWorkflowSkips: ["wf-broken"] });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-healthy"] });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("workflow wf-broken: skipped by --ack-skip-workflow"));
+  expect(readFileSync(join(broken, WORKFLOW_SNAPSHOT_FILE), "utf8")).toContain("dup-plan");
+});
+
+test("a workflows entry that sources nothing no longer aborts the upgrade", async () => {
+  const root = join(ROOT, "workflows-file", ".mstar");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-10-04", workflows: [] }));
+  writeFileSync(join(root, "workflows"), "not a directory");
+  const result = await upgradeStoreMinimal({ context: { harnessDir: root }, operator: "operator", operationId: "op-workflows-file" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(readFileSync(join(root, "workflows"), "utf8")).toBe("not a directory");
+  // A registration UNDER it keeps the existing per-source refusal.
+  const registered = join(ROOT, "workflows-file-registered", ".mstar");
+  mkdirSync(registered, { recursive: true });
+  writeFileSync(join(registered, "workflows"), "not a directory");
+  writeFileSync(join(registered, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04",
+    workflows: [{ id: "wf-under-file", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-under-file" }],
+  }));
+  await expect(upgradeStoreMinimal({ context: { harnessDir: registered }, operator: "operator", operationId: "op-workflows-file-registered" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-under-file") });
+});
+
+test("a DSH refusal names every acknowledgement its advertised retry needs", async () => {
+  const { context } = legacyWorkspace("dsh-retry");
+  const workflowId = "wf-dsh-retry";
+  // Conflicting duplicate identities make the DSH phase refuse after the
+  // execution phase has already committed this workflow's rows.
+  writeFileSync(join(context.harnessDir, "workflows", workflowId, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const error = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-dsh-retry" })
+    .then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  expect(error.message).toContain("--ack-skip-dsh");
+  expect(error.message).toContain(`dsh-ledger:${workflowId}`);
+  // The committed ids are native collisions on the next invocation, so the same
+  // message must name the execution acknowledgement too.
+  expect(error.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-retry-2",
+    acknowledgedSkips: [`dsh-ledger:${workflowId}`], acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("each legacy source leaf is opened once: the digest hashes the bytes the import consumed", async () => {
+  const { context } = legacyWorkspace("single-acquisition");
+  const realOpen = nodeFs.openSync;
+  const opened: string[] = [];
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: unknown, ...rest: unknown[]) => {
+    if (typeof path === "string") opened.push(path);
+    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
+  }) as never);
+  let result;
+  try { result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-single-acquisition" }); }
+  finally { spy.mockRestore(); }
+  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
+  for (const leaf of [
+    "status.json",
+    `workflows/wf-single-acquisition/${WORKFLOW_SNAPSHOT_FILE}`,
+    "workflows/wf-single-acquisition/sessions/plan-pm.json",
+    "workflows/wf-single-acquisition/unknown.bin",
+  ]) {
+    const path = join(context.harnessDir, leaf);
+    expect({ leaf, opens: opened.filter((candidate) => candidate === path).length }).toEqual({ leaf, opens: 1 });
+  }
+});
+

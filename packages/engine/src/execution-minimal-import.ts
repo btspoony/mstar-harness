@@ -17,6 +17,8 @@ type MinimalWorkflowSkip = { id: string; path: string };
 export type MinimalImportResult = {
   verdict: "upgraded";
   imported: number;
+  /** The original workflow ids whose rows this operation committed. */
+  importedIds: string[];
   skipped: Array<{ path: string; reason: string }>;
   dispositions: string[];
   sourceDigest: string;
@@ -156,8 +158,9 @@ function assertWorkflowTreeIsReal(
   // execution workflows under it, those registered sources are what this run
   // refuses, so the operator's execution acknowledgement can skip exactly those
   // imports while the root's bytes stay in place; with no registration under it
-  // it is not an execution source at all and the DSH importer reports it as its
-  // own ignored source.
+  // it is not an execution source at all — the DSH importer reports it as its
+  // own ignored source, exactly like a symlinked root it can skip — so the run
+  // must not abort one healthy upgrade over a file that sources nothing.
   if (registeredUnderRoot.length > 0) {
     const refusedRegisteredIds = new Set(registeredUnderRoot.map(({ id }) => id));
     const unacknowledged = registeredUnderRoot.filter(({ id }) => !acknowledgedWorkflowSkips.has(id));
@@ -166,7 +169,7 @@ function assertWorkflowTreeIsReal(
     }
     return { enumerable: false, refusedRegisteredIds };
   }
-  conflict(`workflow root ${workflowsDir} is not a real directory; restore it as a real directory inside the control root, then rerun store upgrade.`);
+  return { enumerable: false, refusedRegisteredIds: new Set() };
 }
 
 function binding(value: unknown): Binding | null {
@@ -201,19 +204,19 @@ function readSourceBytes(path: string, label: string): Buffer {
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
-function readRegularJson(path: string, label: string): unknown | typeof UNPARSEABLE_JSON {
-  const bytes = readSourceBytes(path, label);
+function readRegularJson(path: string, label: string, read: (path: string, label: string) => Buffer = readSourceBytes): unknown | typeof UNPARSEABLE_JSON {
+  const bytes = read(path, label);
   try { return JSON.parse(bytes.toString("utf8")); } catch { return UNPARSEABLE_JSON; }
 }
 
-function verifyBinding(value: Binding, source: { root: string; dir: string; workflowId: string }): CoordinationSession {
+function verifyBinding(value: Binding, source: { root: string; dir: string; workflowId: string }, read: (path: string, label: string) => Buffer = readSourceBytes): CoordinationSession {
   const sessionsDir = join(source.dir, "sessions");
   const path = resolve(value.session_file);
   if (!isPathWithin(canonicalPath(sessionsDir), path) || path === canonicalPath(sessionsDir)) {
     conflict(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding, then rerun store upgrade.`);
   }
   let envelope: CoordinationSession;
-  try { envelope = parseSessionEnvelope(JSON.parse(readSourceBytes(path, "coordinator session envelope").toString("utf8")), path); }
+  try { envelope = parseSessionEnvelope(JSON.parse(read(path, "coordinator session envelope").toString("utf8")), path); }
   catch (error) {
     if (error instanceof UnsafeSourceError) throw error;
     conflict(`coordinator session envelope ${path} is malformed; repair the envelope or remove its coordinator binding, then rerun store upgrade.`);
@@ -234,7 +237,7 @@ function verifyBinding(value: Binding, source: { root: string; dir: string; work
  * unregistered terminal history exactly like an unregistered terminal v2
  * snapshot.
  */
-function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string): { rootDoc: StatusV2Doc; rows: Source[]; sourceDigest: string } {
+function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string, verifiedStatusBytes: Buffer): { rootDoc: StatusV2Doc; rows: Source[]; sourceDigest: string } {
   const rows: Source[] = [];
   const entries: WorkflowEntry[] = [];
   for (const converted of legacy.snapshots) {
@@ -277,12 +280,13 @@ function discoverV1(root: string, legacy: LegacyV1Conversion, operator: string):
     rows.push({ entry: registered ? entry : null, id: converted.id, dir: join(root, "workflows", converted.id), snapshot, coordinator: null, plans });
   }
   rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  // `legacy.sources` are already harness-relative; the digest covers the v1
-  // root plus every compass the conversion read.
+  // `legacy.sourceHashes` were computed where those files were read; the root
+  // register contributes its own verified bytes, so the digest is exactly the
+  // input this run consumed (no second acquisition on either route).
   const sourceDigest = createHash("sha256").update(JSON.stringify([
-    MIGRATE_STATUS_FILE,
-    ...legacy.sources,
-  ].sort().map((rel) => [rel, createHash("sha256").update(readSourceBytes(join(root, rel), `legacy source ${rel}`)).digest("hex")]))).digest("hex");
+    [MIGRATE_STATUS_FILE, createHash("sha256").update(verifiedStatusBytes).digest("hex")] as [string, string],
+    ...legacy.sourceHashes,
+  ].sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest };
 }
 
@@ -290,7 +294,16 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   const root = rootOf(context);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
-  const sourceFiles = new Set<string>();
+  // Every source byte that becomes a row is hashed where it is read, so the
+  // receipt digest names the bytes this run consumed instead of a later re-read
+  // of the same paths.
+  const sourceHashes = new Map<string, string>();
+  const relOf = (path: string) => relative(root, path).split(/[\\/]+/).join("/");
+  const readTracked = (path: string, label: string): Buffer => {
+    const bytes = readSourceBytes(path, label);
+    sourceHashes.set(relOf(path), createHash("sha256").update(bytes).digest("hex"));
+    return bytes;
+  };
   let parsed: unknown;
   // The one verified read of the root register on this route: the v1 conversion
   // below consumes these bytes instead of re-acquiring the path, so the
@@ -299,8 +312,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   if (!existsSync(statusPath)) {
     parsed = { version: 2, updated_at: SYNTHESIZED_DATE, workflows: [] };
   } else {
-    sourceFiles.add(statusPath);
-    statusBytes = readSourceBytes(statusPath, "status.json");
+    statusBytes = readTracked(statusPath, "status.json");
     try { parsed = JSON.parse(statusBytes.toString("utf8")); }
     catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
@@ -333,7 +345,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   // native rows; the legacy bytes stay on disk untouched.
   if (isPlainObject(parsed) && parsed.version === 1) {
     const legacy = convertLegacyV1Tree(root, declarations, statusBytes);
-    const converted = discoverV1(root, legacy, operator);
+    const converted = discoverV1(root, legacy, operator, statusBytes!);
     // The v1 route reads nothing from `workflows/`, so it reports no linked
     // skip of its own; its converted ids take the same collision/acknowledgement
     // contract in the import transaction below.
@@ -378,8 +390,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
       if (!dirent.isDirectory() || registeredIds.has(dirent.name)) continue;
       const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
       if (!existsSync(snapshotPath)) continue;
-      sourceFiles.add(snapshotPath);
-      const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`);
+      const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`, readTracked);
       const snapshotGate = snapshotValue === UNPARSEABLE_JSON
         ? { ok: false, violations: [{ code: "workflow.snapshot.invalid-json" }] }
         : validateWorkflowSnapshot(projectLegacySnapshot(snapshotValue));
@@ -461,7 +472,6 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     // placed AFTER the acknowledgement `continue` above, so an acknowledged
     // linked source is never canonicalized (which would resolve its link).
     if (!isPathWithin(root, dir) || dir === root) conflict(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration, then rerun store upgrade.`);
-    const workflowFiles = new Set<string>();
     try {
       const sessionsDir = join(dir, "sessions");
       const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
@@ -469,16 +479,13 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
         skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "registered workflow snapshot is missing; left in place" });
         continue;
       }
-      const snapshotValue = readRegularJson(snapshotPath, `snapshot for workflow ${entry.id}`);
-      workflowFiles.add(snapshotPath);
+      const snapshotValue = readRegularJson(snapshotPath, `snapshot for workflow ${entry.id}`, readTracked);
       if (snapshotValue === UNPARSEABLE_JSON) {
-        sourceFiles.add(snapshotPath);
         skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unparseable snapshot; left in place" });
         continue;
       }
       const snapshotGate = validateWorkflowSnapshot(projectLegacySnapshot(snapshotValue));
       if (!snapshotGate.ok) {
-        sourceFiles.add(snapshotPath);
         skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: `snapshot is unrecognizable (${snapshotGate.violations.map((v) => v.code).join(", ")}); left in place` });
         continue;
       }
@@ -494,8 +501,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
             skipped.push({ path: relative(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognized session entry; left in place" });
             continue;
           }
-          const envelopeBytes = readSourceBytes(sessionPath, `session envelope for workflow ${entry.id}`);
-          workflowFiles.add(sessionPath);
+          const envelopeBytes = readTracked(sessionPath, `session envelope for workflow ${entry.id}`);
           let rawEnvelope: unknown;
           try { rawEnvelope = JSON.parse(envelopeBytes.toString("utf8")); } catch { rawEnvelope = null; }
           if (isPlainObject(rawEnvelope) && rawEnvelope.role === "plan-pm") {
@@ -525,27 +531,26 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
       for (const rawPlan of snapshot.plans ?? []) {
         if (!isPlainObject(rawPlan)) continue;
         const id = rowPlanId(rawPlan) ?? "";
-        if (!id || planIds.has(id)) conflict(`workflow ${entry.id} has a missing or duplicate plan id; repair its plans array, then rerun store upgrade.`);
+        if (!id || planIds.has(id)) throw new UnsafeSourceError(`workflow ${entry.id} has a missing or duplicate plan id; a lost or duplicated row cannot be imported as-is. Repair its plans array, or acknowledge dropping this workflow's import.`);
         const rowGate = validatePlanRow(rawPlan);
-        if (!rowGate.ok) conflict(`plan ${id} of workflow ${entry.id} is invalid (${rowGate.violations.map((v) => v.code).join(", ")}); repair or remove the plan row, then rerun store upgrade.`);
+        if (!rowGate.ok) throw new UnsafeSourceError(`plan ${id} of workflow ${entry.id} is not convertible (${rowGate.violations.map((v) => v.code).join(", ")}); repair or remove the row, or acknowledge dropping this workflow's import.`);
         planIds.add(id);
         const planRow: Record<string, unknown> = { ...rawPlan, id };
         delete planRow.plan_id;
         const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
         plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, entry.id, id), droppedSession: rawFlags.droppedSession, droppedLease: rawFlags.droppedLease });
       }
-      if (coordinator !== null) verifyBinding(coordinator, { root, dir, workflowId: entry.id });
+      if (coordinator !== null) verifyBinding(coordinator, { root, dir, workflowId: entry.id }, readTracked);
       for (const dirent of readdirSync(dir, { withFileTypes: true })) {
         if (dirent.name === WORKFLOW_SNAPSHOT_FILE || dirent.name === "sessions") continue;
         const path = join(dir, dirent.name);
         if (dirent.isSymbolicLink()) throw new UnsafeSourceError(`workflow entry ${path} is a symlink.`);
         if (dirent.isFile()) {
-          workflowFiles.add(path);
+          readTracked(path, `workspace source ${relative(root, path)}`);
           skipped.push({ path: relative(root, path).split(/[\\/]+/).join("/"), reason: "unrecognized workflow entry; left in place" });
         }
       }
       rows.push({ entry: registeredIds.has(entry.id) ? entry : null, id: entry.id, dir, snapshot, coordinator, plans });
-      for (const path of workflowFiles) sourceFiles.add(path);
     } catch (error) {
       if (!(error instanceof UnsafeSourceError)) throw error;
       refusedSourceIds.add(entry.id);
@@ -560,10 +565,9 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   }
   rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   skipped.sort((a, b) => a.path.localeCompare(b.path));
-  const sourceDigest = createHash("sha256").update(JSON.stringify([...sourceFiles].sort().map((path) => [
-    relative(root, path).split(/[\\/]+/).join("/"),
-    createHash("sha256").update(readSourceBytes(path, `workspace source ${relative(root, path)}`)).digest("hex"),
-  ]))).digest("hex");
+  const sourceDigest = createHash("sha256").update(JSON.stringify([
+    [...sourceHashes].sort(([a], [b]) => a.localeCompare(b)),
+  ])).digest("hex");
   return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [], refusedSourceIds, refusal };
 }
 
@@ -635,11 +639,13 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       );
     }
     let imported = 0;
+    const importedIds: string[] = [];
     const skipped = [...source.skipped];
     const dispositions: string[] = [...source.dispositions];
     for (const row of importable) {
       writeImportedExecutionWorkflow(tx, row);
       imported++;
+      importedIds.push(row.id);
       for (const plan of row.plans) {
         if (plan.droppedLease) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations`);
         if (plan.droppedSession) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy plan-PM session binding dropped on import; that seat no longer exists`);
@@ -680,7 +686,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     } else if (imported > 0) {
       tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     }
-    const result: MinimalImportResult = { verdict: "upgraded", imported, skipped, dispositions, sourceDigest: source.sourceDigest };
+    const result: MinimalImportResult = { verdict: "upgraded", imported, importedIds, skipped, dispositions, sourceDigest: source.sourceDigest };
     tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash, JSON.stringify(result), new Date().toISOString());
     return result;
   });
@@ -785,13 +791,20 @@ export async function upgradeStoreMinimal(input: {
     dsh = await importDshHostStateFiles(input);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // The advertised retry must be reachable in one step: the execution rows this
+    // operation committed are native collisions for the next invocation, whose
+    // fresh operation id cannot replay this receipt.
+    const committed = result.imported > 0
+      ? ` the next invocation sees them as native collisions, so include \`--ack-skip-workflow ${result.importedIds.join(" ")}\` in that same retry.`
+      : "";
+    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed} DSH import did not commit.`;
     if (error instanceof StoreError) {
-      throw new StoreError(error.code, `Execution-state import committed (${result.imported} workflows); DSH import did not commit. ${message}`, error.details);
+      throw new StoreError(error.code, `${prefix} ${message}`, error.details);
     }
     if (error instanceof ExecutionError) {
-      throw new ExecutionError(error.code, `Execution-state import committed (${result.imported} workflows); DSH import did not commit. ${message}`);
+      throw new ExecutionError(error.code, `${prefix} ${message}`);
     }
-    throw new StoreError("store.upgrade-dsh-failed", `Execution-state import committed (${result.imported} workflows); DSH import did not commit. ${message}`);
+    throw new StoreError("store.upgrade-dsh-failed", `${prefix} ${message}`);
   }
   return { ...result, schemaVersion, authorityState: "active", dsh };
 }

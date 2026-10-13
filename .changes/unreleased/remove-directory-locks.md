@@ -15,6 +15,9 @@ packages: root, engine, commands, cli, dsh, omp, opencode, opencode-v2
 - **The v1 conversion consumes the already-verified register bytes** rather than re-acquiring `status.json` by path, so classification and the converted rows come from one descriptor-verified read on the supported v1 route.
 - **A store-upgrade receipt is bound to the imported source**: the source digest participates in the request identity, so reusing one `operationId` over changed legacy bytes conflicts instead of answering with a receipt that describes bytes the run never imported. Unchanged input still replays its retained receipt.
 - **The acknowledged skip disposition names the refused source, not a presumed cause**: a nested-source skip no longer asserts that its (real, in-root) containing directory is unsafe; the per-item reason carries the exact cause.
+- **A refused legacy source is always skippable by its id**: a registered snapshot whose plan rows are missing, duplicated or unconvertible now refuses as that workflow's own source (the default refusal names `--ack-skip-workflow`), so one malformed row no longer aborts the upgrade or blocks every healthy sibling import.
+- **A `workflows/` entry that sources nothing is treated as absent**, not as a conflict: a regular file (or other non-directory) with no registration under it no longer aborts the upgrade, while a registration under it keeps the existing per-source refusal.
+- **The upgrade receipt binds the bytes it consumed**: each source hash is taken from the single descriptor read that produced the rows (and the v1 compass reads record theirs), so the digest no longer re-acquires the same paths; a DSH refusal that follows a committed execution import names both acknowledgements its advertised retry needs.
 - **Catalog purge-registration settles the native execution journal only**, without reading, hashing or rewriting the recorded snapshot: the failed producer's source bytes are retained exactly, and an edited document no longer blocks journal cleanup. The recorded digest remains historical failure evidence on the receipt, never a re-certification of the live file; identity, generation, catalog-revision, ACTIVE and recorded-receipt replay guards remain.
 - **New store publication synchronizes its parent directory** before removing the fallback image. A failed barrier reports the published partial outcome, retains readable data and the fallback, and supports recovery through the same public upgrade entry.
 - Retired `mstar migrate` now recognizes its former delivery and branch flags before returning the explicit no-writer refusal. Legacy-status and Dsh workflow-selection diagnostics direct operators to `mstar store upgrade --operator <name> --harness <control-root>`.
@@ -33,6 +36,9 @@ packages: root, engine, commands, cli, dsh, omp, opencode, opencode-v2
 - **v1 转换消费已校验的 register 字节**，不再按路径二次读取 `status.json`，因此分类与转换出的行来自同一次描述符校验过的读取。
 - **store upgrade 回执绑定被导入的来源**：来源摘要纳入请求身份，因此同一 `operationId` 配上改动过的旧字节会冲突，而不是用一份描述本次从未导入字节的回执作答；输入未变时仍回放保留的回执。
 - **已确认跳过的 disposition 只描述被拒来源、不推断原因**：嵌套来源跳过不再声称其（真实且在根内的）所属目录不安全；具体原因由逐项 reason 承载。
+- **被拒的旧来源始终可按其 id 跳过**：已登记 snapshot 的 plan 行缺失、重复或无法转换时，改为以该 workflow 自身作为被拒来源（默认拒绝文本给出 `--ack-skip-workflow`），因此一处畸形行不再中止整次 upgrade，也不阻塞其他健康来源导入。
+- **不承载任何来源的 `workflows/` 条目按缺失处理**，不再是冲突：根下没有登记项时，普通文件（或其他非目录）不再中止 upgrade；根下有登记项时仍保留原有按来源拒绝。
+- **upgrade 回执绑定它实际消费的字节**：每个来源哈希取自产出该行的那一次描述符读取（v1 的 compass 读取同样在读取处记录），摘要不再二次打开同一路径；执行导入已提交后发生的 DSH 拒绝，会同时列出其宣称重试所需的两个确认。
 - 退役的 `mstar migrate` 现识别原 delivery/branch 参数后返回明确的无写入拒绝。旧状态与 Dsh workflow 选择诊断现指向 `mstar store upgrade --operator <name> --harness <control-root>`。
 - **catalog purge-registration 仅结算原生执行 journal**，不读取、不哈希、不改写记录的 snapshot：失败 producer 的来源字节原样保留，编辑过的文档不再阻塞 journal 清理。记录摘要仅作为 receipt 的历史失败证据，绝非对当前文件的重新认证；身份、generation、catalog revision、ACTIVE 与已记录 receipt 回放守卫均保留。
 - **新的 store 发布先同步父目录**，再删除 fallback 镜像。同步失败如实报告已发布的部分结果，保留可读数据及 fallback，并支持通过同一公共 upgrade 入口恢复。

@@ -61,6 +61,7 @@
  * must land in exactly one snapshot. All timestamps derive from legacy data
  * (deterministic, no clock reads).
  */
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { artifactVersion, readArtifactBytes } from "./coordination-write.js";
@@ -133,6 +134,8 @@ export type LegacyV1Conversion = {
   snapshots: MigrateSnapshot[];
   /** Harness-relative files the conversion read (source-digest input). */
   sources: string[];
+  /** sha256 of the exact bytes read for each entry of `sources`, same order. */
+  sourceHashes: Array<[string, string]>;
   /**
    * Facts the conversion could not carry verbatim, stated for the caller's
    * receipt — never a silent drop.
@@ -146,6 +149,8 @@ export type DeliveryLiftDeclarations = readonly DeliveryLiftDeclaration[];
 type CompassInfo = {
   id: string;
   file: string;
+  /** sha256 of the exact bytes this scan read (source-digest input). */
+  hash: string;
   status: unknown;
   plans: string[];
   startDate?: string;
@@ -209,8 +214,10 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     if (!entry.isDirectory()) continue;
     const compassPath = join(iterationsDir, entry.name, "delivery-compass.md");
     let content: string;
+    let bytes: Buffer;
     try {
-      content = readFileSync(compassPath, "utf8");
+      bytes = readFileSync(compassPath);
+      content = bytes.toString("utf8");
     } catch {
       continue; // dir without a canonical compass is not an iteration
     }
@@ -225,6 +232,9 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     out.push({
       id: typeof doc.iteration_id === "string" && doc.iteration_id !== "" ? doc.iteration_id : entry.name,
       file: compassPath,
+      // Hashed where it is read: the caller's digest then covers the bytes this
+      // conversion actually consumed instead of re-reading the same path.
+      hash: createHash("sha256").update(bytes).digest("hex"),
       status,
       plans,
       startDate: dateString(doc.start_date),
@@ -644,6 +654,10 @@ export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDecl
     updatedAt,
     snapshots,
     sources: compasses.map((compass) => relative(root, compass.file).split(/[\\/]+/).join("/")),
+    sourceHashes: compasses.map((compass) => [
+      relative(root, compass.file).split(/[\\/]+/).join("/"),
+      compass.hash,
+    ]),
     dispositions,
   };
 }

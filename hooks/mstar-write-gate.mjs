@@ -57,7 +57,7 @@ import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
 import { basename as basename12, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 import { readFileSync as readFileSync21 } from "node:fs";
 import { join as join28 } from "node:path";
 var __create = Object.create;
@@ -17366,7 +17366,7 @@ function readCompassSource(spec) {
       diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  return { state: "ok", sha256: createHash15("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
@@ -17563,12 +17563,12 @@ async function captureExecutionProjectionSources(context) {
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash15("sha256").update(content3, "utf8").digest("hex");
+      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash15("sha256").update(shaText, "utf8").digest("hex");
+      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
@@ -17750,7 +17750,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash15("sha256").update(payload, "utf8").digest("hex");
+  return createHash16("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -17896,7 +17896,7 @@ function projectionRenders(db, rowsOf) {
   });
 }
 function renderedDigest(tables) {
-  return createHash15("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
+  return createHash16("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
 }
 function captureRenders(db, capture) {
   return projectionRenders(db, (spec) => spec.captureRows(capture));
