@@ -10,6 +10,16 @@ For project roadmap content, use the CLI `mstar roadmap` family (not a slash com
 
 `mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing recognized v1/v2 workflow state directly into the local store. It creates or opens the store, activates execution authority, and reports unrecognized or unresolvable inputs while preserving original source bytes and paths. The standalone `mstar migrate` file-staging entry is retired; use `store upgrade` without a staging step. Stop older installed writers and align consumers before an authority upgrade; documentation changes do not perform that operational cutover.
 
+Active standalone v1 plan lifts require one addressed JSON object per original workflow ID via variadic `--delivery <json...>`. Take IDs from the refusal, not a directory basename. For example, if it lists `v1-build` and `v1-check`, retry the same source with both intents:
+
+```sh
+mstar-harness store upgrade --harness .mstar --operator maintenance \
+  --delivery '{"workflow":"v1-build","deliveryKind":"development","branchSource":"feature/build","branchTarget":"main"}' \
+  '{"workflow":"v1-check","deliveryKind":"verification/report-only","completionPolicy":"report at reports/check.md"}'
+```
+
+Each object requires `workflow` and `deliveryKind`; `development` also requires `branchSource`/`branchTarget`, while `verification/report-only` requires `completionPolicy`. Kind is never inferred. Missing, duplicate, unmatched or incoherent declarations refuse before execution-row registration; store initialization/activation may already have committed. Retry the same entry with the corrected declarations, preserving source bytes, IDs, statuses and progress. Completed v1 rows, v2 snapshots, iterations and empty roots need none: inapplicable declarations refuse, so omit them on retry rather than backfilling an immutable kind. Current help owns the exact flags and schema; MCP accepts the same objects in its `delivery` array.
+
 The six `store` verbs administer project harnesses, including the main worktree's canonical control root. `--harness <path>` selects that project explicitly; omitting it uses normal discovery from the working directory. CLI and MCP use the same domain operations. Native SQLite transactions/CAS, authorization, verified-backup checks and migration/activation guards remain; application file/directory mutexes do not.
 
 For an existing store, retain a verified recovery image before upgrading:
@@ -25,7 +35,9 @@ The remaining `store` verbs are `init`, `migrate`, `backup`, `activate`, and `re
 
 Backup captures a consistent native database image, including committed WAL state; it does not freeze ordinary documents, logs or `notes.jsonl`. Restore replaces the issue/catalog/execution/host authority domains in one native transaction on the same live database file, commits a new epoch and retains authorization, loss acknowledgement, stale-preview checks and a verified safety image. It neither rolls back ordinary file bodies nor renames the live database or removes its WAL/SHM files. Exact restore inputs and recovery belong to the current command help.
 
-The native restore receipt is authoritative. Failure to write its optional filesystem copy does not turn an already-committed restore into a refusal: the successful result returns `recoveryReceiptPath: null`. A proven pre-commit failure reclaims only that attempt's newly owned safety image; a changed or unreadable store generation preserves the image rather than treating a missing operation row as proof that no commit occurred. Dsh skip acknowledgements can recover unregistered Dsh-only symlink sources without following them, but do not authorize reading registered execution sources through symlinks.
+The native restore receipt is authoritative. Failure to write its optional filesystem copy does not turn an already-committed restore into a refusal: the successful result returns `recoveryReceiptPath: null`. A proven pre-commit failure reclaims only that attempt's newly owned safety image; a changed or unreadable store generation preserves the image rather than treating a missing operation row as proof that no commit occurred. Dsh skip acknowledgements can recover unregistered Dsh-only symlink sources without following them, including a symlinked whole `workflows/` root with `--ack-skip-dsh dsh-workflows`; the receipt discloses the dropped source while preserving the link and target bytes. This never authorizes reading or discarding registered execution sources through symlinks.
+
+Workflow notes are ordinary admitted append facts, not execution authority. Current-session, provenance and trusted-target checks still govern admission, but an admitted append may finish after a later session revocation. There is no cancellation-after-admission guarantee or SQLite writer transaction spanning the filesystem append; repeated IDs may append again, and receipts return only the note ID.
 
 | Command | Purpose | Owning skill |
 |---------|---------|--------------|
