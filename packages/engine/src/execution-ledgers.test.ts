@@ -726,16 +726,21 @@ writeFileSync(new URL("./payload-marker.txt", import.meta.url), ${JSON.stringify
   }, 30_000);
 
   test("test-control values in the invocation cwd .env cannot replace or shorten an ordinary append", async () => {
-    shared.seed({ ledger: "" });
+    // A clean fixture of its own: the shared one legitimately retains a
+    // historical snapshot and the two displaced inodes of the replacement
+    // regressions, so only a fresh body dir can assert "nothing else appeared".
+    const fixture = await notesFixture("hostile-env-mutate");
+    fixture.seed({ ledger: "" });
     const cwd = join(ROOT, "hostile-cwd-mutate");
     mkdirSync(cwd, { recursive: true });
+    expect(readdirSync(fixture.workflowDir)).toEqual(["notes.jsonl"]);
 
     // Both inode-replacement keys name THIS ledger, and the write-capacity key
     // asks for 12 bytes: the deleted family would have replaced the leaf with
     // `replacement inode canonical bytes` and cut the frame in half.
     const result = hostileAppendChild(
-      shared,
-      hostileEnvLines(shared, [
+      fixture,
+      hostileEnvLines(fixture, [
         "MSTAR_STORE_TEST_RUNNER",
         "MSTAR_LEDGER_REPLACE_BEFORE_COMMIT",
         "MSTAR_LEDGER_REPLACE_AFTER_FSYNC",
@@ -749,9 +754,9 @@ writeFileSync(new URL("./payload-marker.txt", import.meta.url), ${JSON.stringify
 
     // The whole frame landed, in the ledger the caller named, with no displaced
     // or replacement inode and no shortened write anywhere in the body dir.
-    expect(ledgerBytes(shared).toString("utf8")).toBe(framedLineOf(note("note-hostile-env", "ordinary authenticated note")));
-    expect(readdirSync(shared.workflowDir)).toEqual(["notes.jsonl"]);
-    const facts = factsOf(shared);
+    expect(ledgerBytes(fixture).toString("utf8")).toBe(framedLineOf(note("note-hostile-env", "ordinary authenticated note")));
+    expect(readdirSync(fixture.workflowDir)).toEqual(["notes.jsonl"]);
+    const facts = factsOf(fixture);
     expect(facts.format).toBe("versioned");
     expect(facts.tail).toBeNull();
   }, 30_000);
