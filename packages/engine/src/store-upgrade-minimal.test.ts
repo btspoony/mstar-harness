@@ -2041,7 +2041,11 @@ test("whole-root recovery classifies registered ids lexically: partial acknowled
   // receipt, and the trusted sibling outside the linked root still imports.
   // The platform fs calls are recorded so the forbidden linked targets can be
   // asserted un-probed rather than inferred from absent bytes.
-  const forbidden = [join(target, firstId), join(target, secondId)];
+  // Both the LINKED ALIAS a caller would use and the resolved TARGET child are
+  // forbidden: a probe reached through the linked root is recorded under the
+  // alias, so matching targets alone would miss it. The root itself is not
+  // forbidden — its own lstat is the preflight's legitimate check.
+  const forbidden = [firstId, secondId].flatMap((id) => [join(workflowsDir, id), join(target, id)]);
   const { result, accessed } = await withPathAccessLog(() => upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-two-id-complete",
     // The whole `workflows/` root is a symlink, so the DSH domain refuses it as
@@ -2060,10 +2064,11 @@ test("whole-root recovery classifies registered ids lexically: partial acknowled
     // Only the trusted relocation imports; neither linked id is fabricated.
     expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: trustedId }]);
   } finally { store.close(); }
-  // Neither linked target was ever probed: no recorded lstat/stat/exists/
-  // realpath/read/readdir argument named (or descended from) it. This is the
-  // real no-read/no-traversal boundary — the absent second target alone could
-  // not prove it, since a failed probe is swallowed.
+  // No linked alias OR resolved target child was ever probed: the recorded
+  // lstat/stat/exists/realpath/read/readdir arguments named neither. This is the
+  // real no-read/no-traversal boundary — a probe through the linked root is
+  // recorded under the alias, and the absent second target alone could not prove
+  // it because a failed probe is swallowed.
   const touchedForbidden = accessed.filter((path) => forbidden.some((f) => path === f || path.startsWith(`${f}/`) || path.startsWith(`${f}\\`)));
   expect(touchedForbidden).toEqual([]);
   expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
