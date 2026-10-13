@@ -940,6 +940,19 @@ describe("execution-restore", () => {
     const world = await recoveryWorld("restore-peer-cleanup-witness");
     const point = await recoveryPoint(world, "peer-cleanup-point");
     await mutateEveryDomain(world, "peer-cleanup");
+    const safetyState = (path: string) => withRawRead(path, (db) => ({
+      meta: db.prepare("select * from store_meta where id = 1").get(),
+      issues: db.prepare("select * from issues").all(),
+      catalog: db.prepare("select * from catalog_entities").all(),
+      workflows: db.prepare("select * from execution_workflows").all(),
+      registry: db.prepare("select * from execution_registry").all(),
+      plans: db.prepare("select * from execution_plans").all(),
+      inputs: db.prepare("select * from execution_inputs").all(),
+      sessions: db.prepare("select * from execution_sessions").all(),
+      operations: db.prepare("select * from execution_operations").all(),
+      receipts: db.prepare("select * from store_operations").all(),
+    }));
+    const beforeA = safetyState(world.dbPath);
     const childSource = new URL("./execution-recovery.ts", import.meta.url).href;
     const peerSource =
       `import { previewExecutionRestore, restoreExecutionBackup } from ${JSON.stringify(childSource)}; ` +
@@ -951,8 +964,8 @@ describe("execution-restore", () => {
     let peerRan = false;
     let ownedAttemptId: string | null = null;
     let ownedRecord: { storeId: string; newEpoch: number; preRestoreBackup: { backupPath: string } } | null = null;
-    let ownedSafetyFacts: Record<string, number> | null = null;
-    let ownedSafetyDigest: string | null = null;
+    let ownedSafetyPath: string | null = null;
+    let ownedSafetyFacts = beforeA;
     let peerReceipt: { storeId: string; epoch: number } | null = null;
     const openSpy = spyOn(storeDb, "openStore").mockImplementation(async (context, mode) => {
       const handle = await realOpenStore(context, mode);
@@ -971,8 +984,7 @@ describe("execution-restore", () => {
         ownedAttemptId = row.operation_id;
         ownedRecord = record;
         ownedSafetyPath = record.preRestoreBackup.backupPath;
-        ownedSafetyFacts = footprint(ownedSafetyPath);
-        ownedSafetyDigest = sha256OfBytes(readFileSync(ownedSafetyPath));
+        ownedSafetyFacts = safetyState(ownedSafetyPath);
         const peer = spawnSync(process.execPath, ["-e", peerSource], {
           cwd: world.root,
           env: { ...process.env, RESTORE_HARNESS: world.harness, RESTORE_POINT: point.backupPath },
@@ -995,8 +1007,9 @@ describe("execution-restore", () => {
       expect(peerReceipt).not.toBeNull();
       expect(ownedSafetyPath).not.toBeNull();
       expect(existsSync(ownedSafetyPath!)).toBe(true);
-      expect(sha256OfBytes(readFileSync(ownedSafetyPath!))).toBe(ownedSafetyDigest);
-      expect(footprint(ownedSafetyPath!)).toEqual(ownedSafetyFacts);
+      expect(ownedSafetyFacts).toEqual(beforeA);
+      expect(ownedSafetyFacts?.meta).toMatchObject({ store_id: world.storeId, authority_epoch: world.epoch, authority_state: "active" });
+      expect(safetyState(ownedSafetyPath!)).toEqual(ownedSafetyFacts);
       expect(footprint(world.dbPath).epoch).toBeGreaterThan(ownedRecord!.newEpoch);
       expect(peerReceipt!.storeId).toBe(world.storeId);
       expect(footprint(world.dbPath).epoch).toBe(peerReceipt!.epoch);
