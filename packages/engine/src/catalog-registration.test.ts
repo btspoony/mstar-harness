@@ -468,7 +468,8 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
       `const context={harnessDir:process.env.CATALOG_HARNESS}; ` +
       `const revisions=await readCatalogRevisions(context); ` +
       `const receipt=await purgeCatalogRegistration(context,{workflowId:${JSON.stringify(workflowId)},operationId:${JSON.stringify(operationId)},expectedCatalogRevision:revisions.catalogRevision,actor:"project-manager"}); ` +
-      `console.log(JSON.stringify(receipt));`;
+      `const revisionsAfter=await readCatalogRevisions(context); ` +
+      `console.log(JSON.stringify({receipt,revisions,revisionsAfter}));`;
     const childEnv = { ...process.env, CATALOG_HARNESS: harnessDir };
     for (const key of [
       "MSTAR_STORE_TEST_RUNNER",
@@ -483,10 +484,15 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     });
     expect(child.status).toBe(0);
     expect(child.stderr).toBe("");
-    expect(JSON.parse(child.stdout.trim())).toMatchObject({
+    const result = JSON.parse(child.stdout.trim()) as { receipt: unknown; revisions: { storeRevision: number; catalogRevision: number }; revisionsAfter: { storeRevision: number; catalogRevision: number } };
+    expect(result.receipt).toMatchObject({
       workflowId,
       preservedDigest: digest,
       sourceBytesRetained: true,
+    });
+    expect(result.revisionsAfter).toEqual({
+      storeRevision: result.revisions.storeRevision + 1,
+      catalogRevision: result.revisions.catalogRevision,
     });
     expect(readFileSync(markerPath, "utf8")).toBe(marker);
     expect(readFileSync(snapshotPath, "utf8")).toBe(snapshot);
