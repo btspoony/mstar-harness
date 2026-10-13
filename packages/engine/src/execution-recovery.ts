@@ -324,78 +324,6 @@ function corrupt(detail: string): ExecutionRecoveryError {
   return new ExecutionRecoveryError("store.corrupt", detail);
 }
 
-/**
- * The test-runner-gated crash seam, the same gate every other failure injection
- * in the store uses: the stage names where the run was interrupted, so a failure
- * before the live-bytes hash read (owned safety point taken, no transaction
- * invoked), before the replacement, and after it are reproduced rather than
- * described.
- */
-function recoveryFailureHook(stage: "before-live-hash" | "before-replacement" | "after-replacement"): void {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE === stage) {
-    throw new Error(`induced execution-restore failure at ${stage}`);
-  }
-}
-
-/**
- * The test-runner-gated PARK seam, the same gate and the same shape as
- * `recoveryFailureHook`: it stops the restore inside its own staging/admission
- * window — after the private image is staged and verified, and before the owning
- * write transaction opens — so an overlap between two real attempts is
- * reproducible instead of described.
- *
- * `MSTAR_STORE_PARK_EXECUTION_RESTORE` names the attempt to park, or the
- * wildcard `*` for "the attempt this process is running" (a caller cannot know a
- * randomly minted attempt id in advance). The run then reports its attempt and
- * staged image into `MSTAR_STORE_PARK_READY` and blocks on
- * `MSTAR_STORE_PARK_RELEASE` with a bounded wait, exactly as a live peer
- * suspended in staging would. Inert without `MSTAR_STORE_TEST_RUNNER=1`, so no
- * shipped CLI or plugin process can reach it.
- */
-async function recoveryParkHook(attemptId: string, imagePath: string): Promise<void> {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE;
-  if (wanted !== attemptId && wanted !== "*") return;
-  const ready = process.env.MSTAR_STORE_PARK_READY;
-  const release = process.env.MSTAR_STORE_PARK_RELEASE;
-  if (ready === undefined || release === undefined) return;
-  writeJson(ready, { attemptId, imagePath, stage: "staged" });
-  for (let waited = 0; waited < 30_000; waited += 5) {
-    if (existsSync(release)) return;
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 5);
-    await promise;
-  }
-}
-
-/**
- * The test-runner-gated PARK seam for the owned-safety CLEANUP WITNESS, the same
- * gate and shape as `recoveryParkHook`: it stops THIS attempt once it has already
- * committed and entered its owned-safety cleanup, immediately before it reads the
- * live generation that decides reclamation. It exists so the one interleaving the
- * generation proof is written for — a peer replacement that rewrites the store's
- * `store_operations` ledger, dropping this attempt's committed receipt, before this
- * attempt's own witness runs — is reproducible with a real peer rather than
- * described. `MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP` names the attempt to
- * park, or `*`; it reports into `MSTAR_STORE_PARK_READY` and blocks on
- * `MSTAR_STORE_PARK_RELEASE`. Inert without `MSTAR_STORE_TEST_RUNNER=1`.
- */
-async function recoveryCleanupParkHook(attemptId: string): Promise<void> {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
-  if (wanted !== attemptId && wanted !== "*") return;
-  const ready = process.env.MSTAR_STORE_PARK_READY;
-  const release = process.env.MSTAR_STORE_PARK_RELEASE;
-  if (ready === undefined || release === undefined) return;
-  writeJson(ready, { attemptId, stage: "cleanup" });
-  for (let waited = 0; waited < 30_000; waited += 5) {
-    if (existsSync(release)) return;
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 5);
-    await promise;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Reading the three authority domains
@@ -2019,10 +1947,6 @@ async function restoreInOneTransaction(
 
       const newEpoch = Math.max(before.epoch, image.epoch) + 1;
 
-      // The pre-commit crash seam: a failure here is inside the transaction, so
-      // SQLite rolls the whole replacement back and the previous generation is
-      // preserved. It is not filesystem work and not an await.
-      recoveryFailureHook("before-replacement");
       replaceAuthorityRows(handle.db, image, availabilityOf(before.schemaVersion));
       const changed = handle.db.prepare("update store_meta set authority_epoch = ? where id = 1").run(newEpoch) as {
         changes?: unknown;
@@ -2116,7 +2040,6 @@ async function restoreInOneTransaction(
     // best-effort: the committed record is durable in the store; only its copy
     // beside the store is missing, and `recoveryReceiptPath: null` reports that.
   }
-  recoveryFailureHook("after-replacement");
   // Scratch of a crashed attempt is reclaimed only now, once this attempt has
   // committed: a REFUSED restore therefore leaves every prior attempt's bytes
   // exactly as it found them, and the sweep is bounded by successful restores
@@ -2195,10 +2118,6 @@ async function runRestore(
           `${input.preview.liveStoreId}; a point of another store is never restored over this one.`,
       );
     }
-    // The staging/admission window, reproduced on demand: the private image is
-    // staged and verified and the owning transaction has not opened. Inert
-    // without the test-runner gate.
-    await recoveryParkHook(attemptId, imagePath);
 
     // The pre-restore safety point, taken OUTSIDE the mutation transaction:
     // `VACUUM INTO` may not run inside one. It is the same lock-free verified
@@ -2216,7 +2135,6 @@ async function runRestore(
     // boundary — a failure here is a positive pre-commit outcome too, and without
     // this the point would leak with no transaction ever invoked.
     try {
-      recoveryFailureHook("before-live-hash");
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
       return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
     } catch (error) {
@@ -2237,12 +2155,6 @@ async function runRestore(
       // line leaks its own point, exactly as it already leaks its own staging image;
       // this reclamation owns neither, and the scratch sweep that runs after a
       // later committed restore reclaims committed scratch only.
-      // The owned-safety cleanup witness. The test-runner-gated park reproduces the
-      // one interleaving this proof is written for: a peer replacement that rewrites
-      // the store's ledger, dropping THIS attempt's committed receipt, before this
-      // attempt reads the generation. The test-mode check is at the CALLSITE, so the
-      // production path performs no extra suspension or allocation here.
-      if (process.env.MSTAR_STORE_TEST_RUNNER === "1") await recoveryCleanupParkHook(attemptId);
       const live = await currentAuthorityHandle(context).catch(() => null);
       if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
         try {

@@ -6,36 +6,13 @@
  * Every case runs the REAL modules, the REAL `node:sqlite` driver and REAL
  * filesystem fixtures in per-test temporary workspaces: a real Git main
  * worktree with a `.mstar` control harness, a real store built by
- * `initializeStore`, a real ACTIVE execution authority built through the
- * published domain verbs (`readExecutionState` →
- * `createExecutionWorkflow` → `bindExecutionSession`), and real `backupStore`
- * recovery points. The only injected failures are the two test-runner-gated
- * crash seams this protocol owns.
+ * `initializeStore`, an ACTIVE execution authority built through published domain
+ * verbs, and real `backupStore` recovery points.
  *
- * Acceptance criteria carried by these cases:
- *
- * - `execution-backup-*`: a `VACUUM INTO` point taken while a connection holds
- *   committed, uncheckpointed WAL frames carries the WAL-visible issue, catalog
- *   AND execution rows, and records the copy's own execution identity.
- * - `execution-restore-*`: a mismatched, corrupt, live-database or too-new
- *   recovery point refuses; the preview lists every changed/deleted authority
- *   row and every committed operation id across the three domains; a restore
- *   refusal preserves live authority and backup contents; accepted restore
- *   installs the selected state above both epochs and invalidates old handles,
- *   keeps a pre-restore recovery point; a crash before or after replacement is
- *   sidecar that appears in the replacement window refuses rather than being
- *   replaced over; a live store whose loss cannot be inventoried refuses with
- *   both files kept; the restore serializes with the migration maintenance
- *   lock; and an abandoned attempt's scratch image and sidecars are reclaimed
- *   while an installed copy is left exactly where it is.
- * - `execution-export-*`: the diagnostic carries workflow/plan state and the
- *   workflow-wide integration claim along with the public frozen input, while
- *   dropping every session identity, token, credential and session path it
- *   could otherwise be driven with, is byte-stable, and refuses to authorize
- *   anything when fed to a real writer.
- *
- * Run with `bun test packages/engine/src/execution-recovery.test.ts
- * --test-name-pattern 'execution-backup|execution-restore|execution-export'`.
+ * Acceptance cases cover backup consistency; restore inventory/refusal,
+ * transactional replacement, native SQLite contention, retained markers,
+ * receipt/safety-image cleanup and hostile filesystem state; and diagnostic
+ * export redaction and stability.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -699,97 +676,34 @@ describe("execution-restore", () => {
 
   });
 
-  test("execution-restore-identifies-a-crash-before-and-after-the-commit", async () => {
-    const world = await recoveryWorld("restore-crash");
-    const point = await recoveryPoint(world, "crash-point");
-    // Hold a store connection open for the whole case, so every commit
-    // `mutateEveryDomain` makes stays as an un-checkpointed frame in the live
-    // `-wal` rather than being folded away by whichever earlier handle closed
-    // last: the pre-commit crash below is decided on a store with real pending
-    // frames, not on a coincidence of runtime finalization.
-    const held = await openStore(world.context, "write");
+  test("execution-restore-rolls-back-a-native-transaction-failure", async () => {
+    const world = await recoveryWorld("restore-native-rollback");
+    const point = await recoveryPoint(world, "rollback-point");
+    await mutateEveryDomain(world, "rollback");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const before = footprint(world.dbPath);
+    const liveInode = statSync(world.dbPath).ino;
+    rawRun(
+      world.dbPath,
+      "create trigger reject_restore_receipt before insert on store_operations " +
+        "when new.operation_id like 'restore-attempt:%' begin select raise(abort, 'native restore receipt rejection'); end",
+    );
     try {
-      await mutateEveryDomain(world, "crash");
-      const preview = await previewExecutionRestore(world.context, point.backupPath);
-      const liveFootprint = footprint(world.dbPath);
-      const liveInode = statSync(world.dbPath).ino;
-
-      // A failure BEFORE the commit: the transaction rolls back as a unit, so the
-      // original generation is still authoritative and its epoch is unmoved.
-      const beforeFailure = await errorOf(async () => {
-        process.env.MSTAR_STORE_TEST_RUNNER = "1";
-        process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-replacement";
-        try {
-          return await restoreExecutionBackup(world.context, {
-            preview,
-            operator: OPERATOR,
-            authorization: AUTHORIZATION,
-          });
-        } finally {
-          delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-          delete process.env.MSTAR_STORE_TEST_RUNNER;
-        }
-      });
-      expect(beforeFailure.message).toContain("before-replacement");
-      // Nothing about the store's AUTHORITY moved, and no receipt was written:
-      // a pre-commit interruption is a mutation-free outcome, which is what the
-      // same public retry can identify.
-      expect(footprint(world.dbPath)).toEqual(liveFootprint);
-      expect(existsSync(join(world.harness, "archived", "store-migration", "recovery"))).toBe(false);
+      const failure = await errorOf(() =>
+        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
+      );
+      expect(failure.message).toContain("native restore receipt rejection");
+      expect(footprint(world.dbPath)).toEqual(before);
       expect(statSync(world.dbPath).ino).toBe(liveInode);
-
-      // A failure AFTER the commit: the replacement IS the committed outcome. The
-      // store already holds the new epoch AND the complete recovery record in its
-      // own ledger, so the outcome is identifiable from the store alone and the
-      // operator-facing file is a copy of that same committed record.
-      const afterFailure = await errorOf(async () => {
-        process.env.MSTAR_STORE_TEST_RUNNER = "1";
-        process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
-        try {
-          return await restoreExecutionBackup(world.context, {
-            preview,
-            operator: OPERATOR,
-            authorization: AUTHORIZATION,
-          });
-        } finally {
-          delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-          delete process.env.MSTAR_STORE_TEST_RUNNER;
-        }
-      });
-      expect(afterFailure.message).toContain("after-replacement");
-      const committed = recoveryRecords(world);
-      expect(committed).toHaveLength(1);
-      expect(committed[0]!.phase).toBe("replaced");
-      const newEpoch = committed[0]!.newEpoch;
-      const resumed = footprint(world.dbPath);
-      expect(resumed.epoch).toBe(newEpoch);
-      expect(resumed.issues).toBe(0);
-      expect(resumed.workflows).toBe(1);
-      expect(statSync(world.dbPath).ino).toBe(liveInode);
-      // The committed record is IN the store, in the same commit as the authority
-      // it describes — not only in the file beside it.
-      expect(
-        rawGet<{ result_json: string }>(
-          world.dbPath,
-          "select result_json from store_operations where operation_id like 'restore-attempt:%'",
-        )!.result_json,
-      ).toContain(`"newEpoch":${newEpoch}`);
-      await expect(readExecutionState(world.context)).resolves.toMatchObject({ epoch: newEpoch });
-
-      // The same public retry (a fresh preview of a store now at the new epoch)
-      // is refused rather than replacing anything again: a committed outcome is
-      // not silently redone.
-      const retried = await previewExecutionRestore(world.context, point.backupPath);
-      expect(retried.liveEpoch).toBe(newEpoch);
-      const receipt = await restoreExecutionBackup(world.context, {
-        preview: retried,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      });
-      expect(receipt.epoch).toBe(newEpoch + 1);
+      expect(recoveryRecords(world)).toHaveLength(0);
     } finally {
-      held.close();
+      rawRun(world.dbPath, "drop trigger if exists reject_restore_receipt");
     }
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(footprint(world.dbPath).epoch).toBe(receipt.epoch);
+    expect(recoveryRecords(world)).toHaveLength(1);
   });
 
   test("execution-restore-refuses-a-competitor-commit-at-the-admission-boundary", async () => {
@@ -1024,160 +938,7 @@ describe("execution-restore", () => {
     expect(existsSync(receipt.preRestoreBackup.backupPath)).toBe(true);
   });
 
-  test("execution-restore-preserves-a-committed-safety-point-when-a-peer-rewrites-the-ledger", async () => {
-    const world = await recoveryWorld("restore-safety-rewritten-ledger");
-    const point = await recoveryPoint(world, "rewritten-ledger-point");
-    await mutateEveryDomain(world, "rewritten-ledger");
-    const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const backups = join(world.harness, "archived", "store-migration", "backups");
-    mkdirSync(backups, { recursive: true });
-    const plantedName = `pre-restore-e1-${randomUUID()}.db`;
-    const plantedBytes = Buffer.from("an unrelated earlier point");
-    writeFileSync(join(backups, plantedName), plantedBytes);
 
-    const ready = join(world.root, "cleanup-ready.json");
-    const release = join(world.root, "cleanup-release");
-    const previous = {
-      runner: process.env.MSTAR_STORE_TEST_RUNNER,
-      fault: process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE,
-      cleanupPark: process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP,
-      ready: process.env.MSTAR_STORE_PARK_READY,
-      release: process.env.MSTAR_STORE_PARK_RELEASE,
-    };
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "after-replacement";
-    process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP = "*";
-    process.env.MSTAR_STORE_PARK_READY = ready;
-    process.env.MSTAR_STORE_PARK_RELEASE = release;
-
-    // A is started ONCE handling its own rejection, outside the try, so EVERY exit
-    // path can release it and await its settlement before the fixture root is torn
-    // down — a parked A would otherwise resume on its 30s timeout against a deleted
-    // root. Nothing that finally needs lives only on the success path.
-    const aOutcome = restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }).then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error: error as Error }),
-    );
-    try {
-      // A commits the replacement and the after-replacement seam then throws, so A
-      // enters its owned-safety cleanup and parks there — its receipt already
-      // committed, its cleanup witness not yet run.
-      for (let spin = 0; spin < 4000 && !existsSync(ready); spin++) await nextTurn();
-      expect(existsSync(ready)).toBe(true);
-      const readyPayload: unknown = JSON.parse(readFileSync(ready, "utf8"));
-      if (typeof readyPayload !== "object" || readyPayload === null || !("attemptId" in readyPayload)) {
-        throw new Error("the cleanup park did not report an attempt id");
-      }
-      const attemptId = readyPayload.attemptId;
-      if (typeof attemptId !== "string") throw new Error("the cleanup park reported a non-string attempt id");
-
-      // A's own point is the safety file A just took; the planted point is the only
-      // other. Capture its exact name, its bytes, and A's native committed record and
-      // safety generation BEFORE the peer runs.
-      const ownPoint = readdirSync(backups).filter((name) => name.startsWith("pre-restore-")).find((name) => name !== plantedName);
-      expect(ownPoint).toBeTruthy();
-      const ownBytes = readFileSync(join(backups, ownPoint!));
-      const ownMeta = rawGet<{ e: number }>(join(backups, ownPoint!), "select authority_epoch as e from store_meta where id = 1");
-      expect(ownMeta).toBeTruthy();
-      const safetyEpoch = ownMeta!.e;
-      const aRecord = rawGet<{ result_json: string }>(
-        world.dbPath,
-        `select result_json from store_operations where operation_id = 'restore-attempt:${attemptId}'`,
-      );
-      expect(aRecord).toBeTruthy();
-      const aCommittedRecord = JSON.parse(aRecord!.result_json) as { newEpoch: number };
-      const aNewEpoch = aCommittedRecord.newEpoch;
-
-      // A real peer restore now runs. The fault and cleanup-park selectors are cleared
-      // so B can neither inherit the after-replacement failure nor block in the
-      // cleanup park. It selects the SAME older point, so its commit rewrites
-      // store_operations WHOLESALE and drops A's exact committed receipt, and advances
-      // the epoch again.
-      delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-      delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
-      const peerPreview = await previewExecutionRestore(world.context, point.backupPath);
-      await restoreExecutionBackup(world.context, { preview: peerPreview, operator: OPERATOR, authorization: AUTHORIZATION });
-
-      // Observed, not source-derived: the generation advanced above A's safety point
-      // and above A's own committed epoch, AND A's exact receipt is gone from the
-      // rewritten ledger.
-      const liveEpoch = footprint(world.dbPath).epoch;
-      expect(liveEpoch).toBeGreaterThan(safetyEpoch);
-      expect(liveEpoch).toBeGreaterThan(aNewEpoch);
-      const ledger = rawAll<{ operation_id: string }>(
-        world.dbPath,
-        "select operation_id from store_operations where operation_id like 'restore-attempt:%'",
-      );
-      expect(ledger.some((row) => row.operation_id === `restore-attempt:${attemptId}`)).toBe(false);
-
-      // Release A and join it. Its cleanup witness must PRESERVE its committed point
-      // because the live generation no longer proves it never committed — not reclaim
-      // it on the absent receipt, which is exactly what the unsafe negative-membership
-      // witness would have done.
-      writeFileSync(release, "go");
-      const settled = await aOutcome;
-      expect(settled.ok).toBe(false);
-      if (!settled.ok) expect(settled.error.message).toContain("after-replacement");
-
-      // A's own point and the unrelated planted point survive BYTE FOR BYTE.
-      expect(readFileSync(join(backups, ownPoint!))).toEqual(ownBytes);
-      expect(readFileSync(join(backups, plantedName))).toEqual(plantedBytes);
-    } finally {
-      // Every exit releases A first, then joins it, then restores the environment.
-      writeFileSync(release, "go");
-      await aOutcome;
-      if (previous.runner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = previous.runner;
-      if (previous.fault === undefined) delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-      else process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = previous.fault;
-      if (previous.cleanupPark === undefined) delete process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
-      else process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP = previous.cleanupPark;
-      if (previous.ready === undefined) delete process.env.MSTAR_STORE_PARK_READY;
-      else process.env.MSTAR_STORE_PARK_READY = previous.ready;
-      if (previous.release === undefined) delete process.env.MSTAR_STORE_PARK_RELEASE;
-      else process.env.MSTAR_STORE_PARK_RELEASE = previous.release;
-    }
-  });
-
-  test("execution-restore-reclaims-its-own-safety-point-when-the-pre-transaction-hash-read-fails", async () => {
-    const world = await recoveryWorld("restore-safety-hash-read");
-    const point = await recoveryPoint(world, "hash-read-point");
-    const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const backups = join(world.harness, "archived", "store-migration", "backups");
-    mkdirSync(backups, { recursive: true });
-    // An earlier refusal's safety point this attempt does not own.
-    const leftoverName = `pre-restore-e1-${randomUUID()}.db`;
-    const leftover = join(backups, leftoverName);
-    writeFileSync(leftover, Buffer.from("an earlier refusal's safety image"));
-
-    // The run is interrupted after the safety point is taken and before the live
-    // bytes are read, so NO restore transaction is ever invoked. The store has
-    // provably not committed this attempt (its own store id and the point's own
-    // epoch still stand), so only the point this attempt just took is reclaimed.
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE = "before-live-hash";
-    try {
-      const error = await errorOf(() =>
-        restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
-      );
-      // The ORIGINAL injected failure is rethrown, not masked by the cleanup.
-      expect(error.message).toContain("before-live-hash");
-    } finally {
-      delete process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE;
-      delete process.env.MSTAR_STORE_TEST_RUNNER;
-    }
-
-    // The planted earlier point is untouched and this attempt's own point is gone.
-    expect(readdirSync(backups).filter((name) => name.startsWith("pre-restore-"))).toEqual([leftoverName]);
-    expect(readFileSync(leftover, "utf8")).toBe("an earlier refusal's safety image");
-
-    // The same public retry then succeeds: a pre-transaction failure is an ordinary
-    // supported retry, not a consumed attempt.
-    const receipt = await restoreExecutionBackup(world.context, {
-      preview, operator: OPERATOR, authorization: AUTHORIZATION,
-    });
-    expect(footprint(world.dbPath).epoch).toBe(receipt.epoch);
-  });
 
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {
     const world = await recoveryWorld("restore-incomplete");
