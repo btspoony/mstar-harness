@@ -391,6 +391,12 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
           : `workflow ${entry.id} directory ${dir} is not a real in-root directory; replace it or remove its registration, then rerun store upgrade.`,
       );
     }
+    // Ordinary imports keep the physical containment the register previously had
+    // applied: a REGULAR leaf reached through an intermediate ancestor symlink
+    // must not escape the control root on the default path. It is deliberately
+    // placed AFTER the acknowledgement `continue` above, so an acknowledged
+    // linked source is never canonicalized (which would resolve its link).
+    if (!isPathWithin(root, dir) || dir === root) conflict(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration, then rerun store upgrade.`);
     const sessionsDir = join(dir, "sessions");
     const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
     if (info === null || !existsSync(snapshotPath)) {

@@ -1,5 +1,6 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
+import * as nodeFs from "node:fs";
 import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -24,6 +25,40 @@ afterAll(() => {
   setArtifactStore(undefined);
   rmSync(ROOT, { recursive: true, force: true });
 });
+
+/**
+ * Test-only instrumentation of the platform `node:fs` calls the importer
+ * resolves through, scoped to one callback and always restored. It replaces the
+ * functions on the shared namespace (exactly what the module's own `node:fs`
+ * import sees) and records every path argument, so a case can assert that a
+ * forbidden target or child path was NEVER probed by lstat/exists/realpath/read.
+ * Production exposes no hook, option, environment knob or test mode, and the
+ * recorded values are the real calls, not a mocked forwarding echo.
+ */
+async function withPathAccessLog<T>(run: () => Promise<T>): Promise<{ result: T; accessed: string[] }> {
+  const real = {
+    lstatSync: nodeFs.lstatSync,
+    statSync: nodeFs.statSync,
+    existsSync: nodeFs.existsSync,
+    realpathSync: nodeFs.realpathSync,
+    readFileSync: nodeFs.readFileSync,
+    readdirSync: nodeFs.readdirSync,
+  };
+  const accessed: string[] = [];
+  const spies: Array<{ mockRestore: () => void }> = [];
+  const record = (value: unknown) => { if (typeof value === "string") accessed.push(value); };
+  spies.push(spyOn(nodeFs, "lstatSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.lstatSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "statSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.statSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "existsSync").mockImplementation(((path: unknown) => { record(path); return real.existsSync(path as never); }) as never));
+  spies.push(spyOn(nodeFs, "realpathSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.realpathSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "readFileSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.readFileSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "readdirSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.readdirSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  try {
+    return { result: await run(), accessed };
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+}
 
 function legacyWorkspace(name: string): { context: StoreContext; unknownBytes: Buffer } {
   const harnessDir = join(ROOT, name, ".mstar");
@@ -1908,30 +1943,33 @@ test("changed execution acknowledgements under one operation id conflict with th
     schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
     delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" }, plans: [],
   });
+  // The whole `workflows/` root is ONE symlinked source, so the DSH domain
+  // refuses exactly one selector in BOTH rounds: `acknowledgedSkips` is held
+  // constant and only the execution acknowledgement set changes across rounds,
+  // making the changed request identity the sole cause of the conflict.
+  const target = join(harnessDir, "outside-identity-tree");
+  mkdirSync(join(target, firstId), { recursive: true });
+  writeFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), snapshotOf(firstId));
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(target, workflowsDir);
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows[0]!.dir = `workflows/${firstId}`;
+  writeFileSync(statusPath, JSON.stringify(status));
   const common = { context, operator: "operator", operationId, acknowledgedSkips: ["dsh-workflows"] };
 
-  // Round 1: only `firstId` is a linked (unsafe) registration, and it is the
-  // only acknowledgement its discovery admits.
-  const firstOutside = join(harnessDir, "outside-identity-tree");
-  const firstTargetBytes = snapshotOf(firstId);
-  mkdirSync(join(firstOutside, firstId), { recursive: true });
-  writeFileSync(join(firstOutside, firstId, WORKFLOW_SNAPSHOT_FILE), firstTargetBytes);
-  rmSync(join(workflowsDir, firstId), { recursive: true, force: true });
-  symlinkSync(join(firstOutside, firstId), join(workflowsDir, firstId));
-
+  // Round 1: only `firstId` is a linked (unsafe) registration, and it is exactly
+  // the acknowledgement its discovery admits.
   const first = await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId] });
   expect(first).toMatchObject({ verdict: "upgraded", imported: 0 });
   // A repeated id is one request, so this repeats and replays exactly.
   expect(await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, firstId] })).toEqual(first);
 
-  // Round 2: a SECOND registration becomes linked, so the valid acknowledgement
-  // set genuinely changes while both requests stay discovery-valid. Only the
-  // changed request identity can answer, and it must not replay round 1.
-  const secondOutside = join(harnessDir, "outside-identity-second");
-  mkdirSync(join(secondOutside, secondId), { recursive: true });
-  writeFileSync(join(secondOutside, secondId, WORKFLOW_SNAPSHOT_FILE), snapshotOf(secondId));
-  symlinkSync(join(secondOutside, secondId), join(workflowsDir, secondId));
-  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  // Round 2: a SECOND registration under the linked root makes the valid
+  // acknowledgement set genuinely change while `--ack-skip-dsh` stays identical,
+  // so both requests stay discovery-valid and only the changed request identity
+  // can answer — it must not replay round 1.
+  mkdirSync(join(target, secondId), { recursive: true });
+  writeFileSync(join(target, secondId, WORKFLOW_SNAPSHOT_FILE), snapshotOf(secondId));
   status.workflows.push({ id: secondId, type: "plan", started_at: "2026-10-04", dir: `workflows/${secondId}` });
   writeFileSync(statusPath, JSON.stringify(status));
 
@@ -1939,16 +1977,15 @@ test("changed execution acknowledgements under one operation id conflict with th
     .rejects.toMatchObject({ code: "execution.operation-conflict" });
 
   // The retained receipt and native state are unchanged: round 1's single
-  // operation receipt stands and no execution row was imported by either round.
+  // operation receipt stands and no execution row was imported by any call.
   const store = await openStore(context, "read");
   try {
     expect(store.db.prepare("select count(*) as n from store_operations where operation_id = ?").get(operationId)).toEqual({ n: 1 });
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
   } finally { store.close(); }
-  // Neither linked source was followed: both are still symlinks with unchanged targets.
-  expect(lstatSync(join(workflowsDir, firstId)).isSymbolicLink()).toBe(true);
-  expect(lstatSync(join(workflowsDir, secondId)).isSymbolicLink()).toBe(true);
-  expect(readFileSync(join(firstOutside, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(firstTargetBytes);
+  // The linked root and its target bytes were never rewritten.
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(snapshotOf(firstId));
 });
 
 test("whole-root recovery classifies registered ids lexically: partial acknowledgement refuses, complete skips both, trusted sibling imports", async () => {
@@ -1989,7 +2026,6 @@ test("whole-root recovery classifies registered ids lexically: partial acknowled
   // linked target visited.
   await expect(upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-two-id-partial",
-    acknowledgedSkips: ["dsh-workflows"],
     acknowledgedWorkflowSkips: [firstId],
   })).rejects.toMatchObject({
     code: "execution.migration-conflict",
@@ -2003,11 +2039,16 @@ test("whole-root recovery classifies registered ids lexically: partial acknowled
 
   // Complete acknowledgement of BOTH linked ids: each is skipped with a named
   // receipt, and the trusted sibling outside the linked root still imports.
-  const result = await upgradeStoreMinimal({
+  // The platform fs calls are recorded so the forbidden linked targets can be
+  // asserted un-probed rather than inferred from absent bytes.
+  const forbidden = [join(target, firstId), join(target, secondId)];
+  const { result, accessed } = await withPathAccessLog(() => upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-two-id-complete",
+    // The whole `workflows/` root is a symlink, so the DSH domain refuses it as
+    // its own source; that acknowledgement is separate from the two execution skips.
     acknowledgedSkips: ["dsh-workflows"],
     acknowledgedWorkflowSkips: [firstId, secondId],
-  });
+  }));
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
   expect(result.skipped.map(({ path }) => path)).toEqual([`workflows/${firstId}`, `workflows/${secondId}`]);
   expect(result.dispositions).toEqual(expect.arrayContaining([
@@ -2019,11 +2060,49 @@ test("whole-root recovery classifies registered ids lexically: partial acknowled
     // Only the trusted relocation imports; neither linked id is fabricated.
     expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: trustedId }]);
   } finally { store.close(); }
-  // The readable linked target is unvisited and unchanged; the absent one was
-  // never looked for, which is the observable no-read proof.
+  // Neither linked target was ever probed: no recorded lstat/stat/exists/
+  // realpath/read/readdir argument named (or descended from) it. This is the
+  // real no-read/no-traversal boundary — the absent second target alone could
+  // not prove it, since a failed probe is swallowed.
+  const touchedForbidden = accessed.filter((path) => forbidden.some((f) => path === f || path.startsWith(`${f}/`) || path.startsWith(`${f}\\`)));
+  expect(touchedForbidden).toEqual([]);
   expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
   expect(readFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(firstSnapshot);
   expect(existsSync(join(target, secondId))).toBe(false);
+});
+
+test("an ordinary registered workflow reached through an out-of-root ancestor symlink is refused by physical containment", async () => {
+  const { context } = legacyWorkspace("containment-ancestor");
+  const harnessDir = context.harnessDir;
+  const workflowId = "wf-containment-ancestor";
+  const statusPath = join(harnessDir, "status.json");
+  // The registration names an IN-ROOT path (`relocated/<id>`), but `relocated`
+  // is a symlink to a directory OUTSIDE the control root: the leaf itself is a
+  // real directory with a real snapshot, so only PHYSICAL containment can catch
+  // it. This is the ordinary trusted-import path, not the acknowledged one.
+  const outsideTree = join(ROOT, "containment-ancestor", "outside-tree");
+  mkdirSync(join(outsideTree, workflowId), { recursive: true });
+  writeFileSync(join(outsideTree, workflowId, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" }, plans: [],
+  }));
+  rmSync(join(harnessDir, "workflows"), { recursive: true, force: true });
+  symlinkSync(outsideTree, join(harnessDir, "relocated"));
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows[0]!.dir = `relocated/${workflowId}`;
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-containment-ancestor" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining("resolves outside control root"),
+    });
+  const store = await openStore(context, "read");
+  try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { store.close(); }
+  // The escaping tree is untouched: nothing was imported through the ancestor link.
+  expect(lstatSync(join(harnessDir, "relocated")).isSymbolicLink()).toBe(true);
+  expect(existsSync(join(outsideTree, workflowId, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
 });
 
 test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
