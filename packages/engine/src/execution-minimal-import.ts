@@ -557,20 +557,24 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
           if (isPlainObject(rawEnvelope) &&
               ((typeof rawEnvelope.workflow_id === "string" && rawEnvelope.workflow_id !== entry.id) ||
                (typeof rawEnvelope.harness_root === "string" && canonicalPath(rawEnvelope.harness_root) !== canonicalPath(root)))) {
-            conflict(`session envelope ${sessionPath} claims workflow ${String(rawEnvelope.workflow_id ?? "unknown")} or another control root; correct its owner identity or remove the foreign file, then rerun store upgrade.`);
+            throw new UnsafeSourceError(`session envelope ${sessionPath} claims workflow ${String(rawEnvelope.workflow_id ?? "unknown")} or another control root; correct its owner identity or remove the foreign file.`);
           }
           let envelope: CoordinationSession;
           try { envelope = parseSessionEnvelope(rawEnvelope, sessionPath); }
           catch { skipped.push({ path: relative(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognizable session envelope; left in place" }); continue; }
           if (envelope.workflow_id !== entry.id || canonicalPath(envelope.harness_root) !== canonicalPath(root)) {
-            conflict(`session envelope ${sessionPath} claims workflow ${envelope.workflow_id} or another control root; correct its owner identity or remove the foreign file, then rerun store upgrade.`);
+            throw new UnsafeSourceError(`session envelope ${sessionPath} claims workflow ${envelope.workflow_id} or another control root; correct its owner identity or remove the foreign file.`);
           }
         }
       }
-      if (snapshot.id !== entry.id || snapshot.type !== entry.type || snapshot.started_at !== entry.started_at) conflict(`workflow ${entry.id} entry and snapshot identity differ; repair status.json or snapshot.json, then rerun store upgrade.`);
+      // Every failure that this ONE workflow's own source causes is refused as that
+      // workflow's source, so the documented `--ack-skip-workflow <id>` can skip it
+      // with an explicit loss report instead of the whole run aborting and only
+      // manual source editing remaining.
+      if (snapshot.id !== entry.id || snapshot.type !== entry.type || snapshot.started_at !== entry.started_at) throw new UnsafeSourceError(`workflow ${entry.id} entry and snapshot identity differ; repair status.json or snapshot.json.`);
       const coordinatorValue = snapshot.coordination?.coordinator;
       const coordinator = coordinatorValue === undefined ? null : binding(coordinatorValue);
-      if (coordinatorValue !== undefined && coordinator === null) conflict(`workflow ${entry.id} has a malformed coordinator binding; repair or remove the binding, then rerun store upgrade.`);
+      if (coordinatorValue !== undefined && coordinator === null) throw new UnsafeSourceError(`workflow ${entry.id} has a malformed coordinator binding; repair or remove the binding.`);
       const plans: Plan[] = [];
       const planIds = new Set<string>();
       for (const rawPlan of snapshot.plans ?? []) {

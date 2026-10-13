@@ -24258,7 +24258,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
             continue;
           }
           if (isPlainObject(rawEnvelope) && (typeof rawEnvelope.workflow_id === "string" && rawEnvelope.workflow_id !== entry.id || typeof rawEnvelope.harness_root === "string" && canonicalPath(rawEnvelope.harness_root) !== canonicalPath(root))) {
-            conflict2(`session envelope ${sessionPath} claims workflow ${String(rawEnvelope.workflow_id ?? "unknown")} or another control root; correct its owner identity or remove the foreign file, then rerun store upgrade.`);
+            throw new UnsafeSourceError(`session envelope ${sessionPath} claims workflow ${String(rawEnvelope.workflow_id ?? "unknown")} or another control root; correct its owner identity or remove the foreign file.`);
           }
           let envelope;
           try {
@@ -24268,16 +24268,16 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
             continue;
           }
           if (envelope.workflow_id !== entry.id || canonicalPath(envelope.harness_root) !== canonicalPath(root)) {
-            conflict2(`session envelope ${sessionPath} claims workflow ${envelope.workflow_id} or another control root; correct its owner identity or remove the foreign file, then rerun store upgrade.`);
+            throw new UnsafeSourceError(`session envelope ${sessionPath} claims workflow ${envelope.workflow_id} or another control root; correct its owner identity or remove the foreign file.`);
           }
         }
       }
       if (snapshot.id !== entry.id || snapshot.type !== entry.type || snapshot.started_at !== entry.started_at)
-        conflict2(`workflow ${entry.id} entry and snapshot identity differ; repair status.json or snapshot.json, then rerun store upgrade.`);
+        throw new UnsafeSourceError(`workflow ${entry.id} entry and snapshot identity differ; repair status.json or snapshot.json.`);
       const coordinatorValue = snapshot.coordination?.coordinator;
       const coordinator = coordinatorValue === undefined ? null : binding(coordinatorValue);
       if (coordinatorValue !== undefined && coordinator === null)
-        conflict2(`workflow ${entry.id} has a malformed coordinator binding; repair or remove the binding, then rerun store upgrade.`);
+        throw new UnsafeSourceError(`workflow ${entry.id} has a malformed coordinator binding; repair or remove the binding.`);
       const plans = [];
       const planIds = new Set;
       for (const rawPlan of snapshot.plans ?? []) {

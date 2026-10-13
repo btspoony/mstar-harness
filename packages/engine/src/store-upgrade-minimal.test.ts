@@ -3299,6 +3299,45 @@ test("a v1 root's residual_findings are reported as not imported with their supp
   expect(reported).toContain("projects/<id>/residuals.json");
 });
 
+test("a workflow whose own identity disagrees is skippable, and a malformed binding is already a reported skip", async () => {
+  const root = join(ROOT, "malformed-binding", ".mstar");
+  const healthy = join(root, "workflows", "wf-healthy-binding");
+  const mismatched = join(root, "workflows", "wf-mismatched-binding");
+  const bindingBroken = join(root, "workflows", "wf-broken-binding");
+  for (const dir of [healthy, mismatched, bindingBroken]) mkdirSync(dir, { recursive: true });
+  const snapshot = (id: string, coordination?: Record<string, unknown>): string => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" },
+    ...(coordination === undefined ? {} : { coordination }),
+    plans: [{ id: `${id}-plan`, title: "row", status: "Todo", file: `${id}-plan.md` }],
+  });
+  writeFileSync(join(healthy, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-healthy-binding"));
+  // Its own snapshot carries another identity: this workflow's source is the
+  // refused unit, so the acknowledgement can dispose of exactly that import.
+  writeFileSync(join(mismatched, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-other-identity"));
+  // A binding the shared coordination validator rejects never reaches that
+  // comparison: the snapshot is already reported as an unrecognizable skip.
+  writeFileSync(join(bindingBroken, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-broken-binding", { coordinator: { session_id: "" } }));
+  writeFileSync(join(root, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04", workflows: [
+      { id: "wf-healthy-binding", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-healthy-binding" },
+      { id: "wf-mismatched-binding", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-mismatched-binding" },
+      { id: "wf-broken-binding", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-broken-binding" },
+    ],
+  }));
+  const context = { harnessDir: root };
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-mismatched-binding" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-mismatched-binding") });
+  const acked = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-mismatched-binding-ack", acknowledgedWorkflowSkips: ["wf-mismatched-binding"],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-healthy-binding"] });
+  expect(acked.skipped).toContainEqual(expect.objectContaining({
+    path: "workflows/wf-broken-binding/snapshot.json",
+    reason: expect.stringContaining("unrecognizable"),
+  }));
+});
+
 test("a malformed legacy plan row is skippable instead of blocking every other workflow", async () => {
   const root = join(ROOT, "malformed-row", ".mstar");
   const healthy = join(root, "workflows", "wf-healthy");
