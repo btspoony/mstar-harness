@@ -63,6 +63,7 @@ Same as default SDD for artifacts and L2 review; only implementer dispatch diffe
 6. Next task
 
 **Still required per task:** commit, `task-N-report.md`, task-level diff, task reviewer, `progress.md` line.
+Each task's commit uses the already-configured identity; missing/failing identity is Blocked, never fabricate or use per-commit identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 ## When to reset to `fresh`
 

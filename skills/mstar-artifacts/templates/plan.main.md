@@ -70,6 +70,7 @@ Run: `pytest tests/path/test.py -k exact_case -v` (replace with the actual affec
 Reuse unaffected evidence with its original range and applicability; do not repeat checks merely because HEAD changed.
 
 - [ ] **Step 5: Commit**
+  This task's commit uses the already-configured identity; missing/failing identity is Blocked, never fabricate or use per-commit identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 ### Scoped-check alternative (non-executable docs/policy)
 
