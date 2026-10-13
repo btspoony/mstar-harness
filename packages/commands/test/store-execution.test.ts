@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { captureIssue, getIssue, initializeStore, openStore } from "@mstar-harness/engine";
@@ -366,6 +366,77 @@ describe("store and execution command surface", () => {
       expect(initialized.db.prepare("select count(*) as n from store_operations where operation_id not like '%#dsh-host-state'").get()).toEqual({ n: 1 });
       expect(initialized.db.prepare("select count(*) as n from store_operations where operation_id like '%#dsh-host-state'").get()).toEqual({ n: 0 });
     } finally { initialized.close(); }
+  });
+  test("store upgrade exposes the execution-specific registered-source skip and keeps the DSH domain separate", async () => {
+    const root = fixture("store-upgrade-workflow-skip");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initialized = await initializeStore({ harnessDir: harness });
+    initialized.close();
+    const workflowId = "wf-skip-command";
+    const planId = `${workflowId}-plan`;
+    const workflowDir = join(harness, "workflows", workflowId);
+    const sessionsDir = join(workflowDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(harness, `${planId}.md`), `# ${planId}\n`);
+    writeFileSync(join(sessionsDir, "plan-pm.json"), JSON.stringify({
+      schema_version: 1, role: "plan-pm", session_id: "session-skip", workflow_id: workflowId, plan_id: planId, harness_root: harness,
+    }));
+    writeFileSync(join(harness, "status.json"), JSON.stringify({
+      version: 2, updated_at: "2026-10-04", workflows: [{ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }],
+    }));
+    const snapshot = {
+      schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" },
+      plans: [{ id: planId, title: "Skip fixture plan", file: `${planId}.md`, status: "Todo" }],
+    };
+    writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify(snapshot));
+    // The registered workflow's directory becomes a symlink to an out-of-root
+    // tree: nothing under it may be read, including by the DSH phase.
+    const target = join(root, "outside-command-tree", workflowId);
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "snapshot.json"), JSON.stringify(snapshot));
+    const linkedSnapshot = readFileSync(join(target, "snapshot.json"));
+    rmSync(workflowDir, { recursive: true, force: true });
+    symlinkSync(target, workflowDir);
+
+    const command = definition("store.upgrade");
+    // Default refuses and names the exact supported recovery on the same entry.
+    const refused = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(refused).toMatchObject({ status: "refused", code: "execution.migration-conflict", exitCode: 1 });
+    expect(refused.message).toContain(`--ack-skip-workflow ${workflowId}`);
+    // An acknowledgement that names no refused source is a caller-input error,
+    // never a silent skip of a trusted source.
+    const unmatched = await invoke(command, { harness, operator: "fixture", ackSkipWorkflow: ["wf-never-registered"] }, root);
+    expect(unmatched).toMatchObject({ status: "usage", code: "execution.workflow-skip-unmatched", exitCode: 2 });
+    // The execution skip does not dispose the DSH domain: the same linked child
+    // is independently a DSH source, so it still refuses there under its own
+    // selector even after the execution acknowledgement is supplied.
+    const dshRefused = await invoke(command, { harness, operator: "fixture", ackSkipWorkflow: [workflowId] }, root);
+    expect(dshRefused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused" });
+    expect(dshRefused.message).toContain("--ack-skip-dsh");
+    expect(dshRefused.message).toContain(`dsh-ledger:${workflowId}`);
+    // Both domains acknowledged: the registered source is skipped importing with
+    // a truthful receipt, and the DSH source is dropped as its own acknowledged loss.
+    const recovered = await invoke(command, {
+      harness, operator: "fixture", ackSkipWorkflow: [workflowId], ackSkipDsh: [`dsh-ledger:${workflowId}`],
+    }, root);
+    expect(recovered.status).toBe("ok");
+    const result = dataOf(recovered);
+    expect(result.skipped).toContainEqual({
+      path: `workflows/${workflowId}`,
+      reason: `registered workflow ${workflowId} skipped by --ack-skip-workflow; its symlinked legacy source was not read and no execution row was imported for it`,
+    });
+    expect(result.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
+    expect(JSON.parse(JSON.stringify(result.dsh))).toMatchObject({
+      findings: [expect.objectContaining({ kind: "dropped-by-ack", selector: `dsh-ledger:${workflowId}` })],
+    });
+    const store = await openStore({ harnessDir: harness }, "read");
+    try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+    finally { store.close(); }
+    // No linked byte was read or rewritten.
+    expect(lstatSync(workflowDir).isSymbolicLink()).toBe(true);
+    expect([...readFileSync(join(target, "snapshot.json"))]).toEqual([...linkedSnapshot]);
   });
   test("an acknowledged DSH import replays its receipt without a second write", async () => {
     const root = fixture("store-upgrade-dsh-replay");

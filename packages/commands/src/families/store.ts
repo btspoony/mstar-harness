@@ -48,6 +48,7 @@ const inputSchema = z.object({
   out: z.string().optional(),
   operator: z.string().optional(),
   ackSkipDsh: z.array(z.string()).optional(),
+  ackSkipWorkflow: z.array(z.string()).optional(),
   delivery: z.array(deliveryDeclarationSchema).optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
@@ -61,7 +62,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.internal-error`;
-  if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required")) {
+  if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required" || code === "execution.workflow-skip-unmatched")) {
     return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
   }
   return error instanceof SddScriptError
@@ -201,6 +202,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           operationId: randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
+          ...(input.ackSkipWorkflow === undefined ? {} : { acknowledgedWorkflowSkips: input.ackSkipWorkflow }),
           ...(input.delivery === undefined ? {} : { deliveryDeclarations: input.delivery }),
         }));
       }
@@ -267,11 +269,12 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
     operator: "--operator <name>",
     ackSkipDsh: "--ack-skip-dsh <selector...>",
+    ackSkipWorkflow: "--ack-skip-workflow <id...>",
     delivery: "--delivery <json...>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "delivery"],
+    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "delivery"],
     backup: ["harness", "out"],
     migrate: ["harness", "apply", "manifest", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
@@ -283,6 +286,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
     ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, dsh-status, or dsh-workflows (a symlinked workflows tree). The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
+    ackSkipWorkflow: "Explicitly skip IMPORTING the named registered workflows whose legacy execution source this run would otherwise refuse because its whole `workflows/` root or per-workflow directory is a symlink. Pass the exact original workflow ids (repeat or space-separate; a repeated id is harmless). A linked source is never followed: its raw bytes (and any target) stay in place, no execution row is imported or fabricated for it, and the report records the skip with its loss. Skipping a registration this run does NOT refuse is rejected, because that would silently drop a trusted source. Separate from --ack-skip-dsh, which can never discard a registered execution source. Default never skips.",
     delivery: `Declare the delivery kind of one active standalone v1 plan this upgrade lifts; repeat once per such lift (an active standalone v1 plan fixes its delivery kind at registration and cannot be closed without one, so the upgrade refuses before registering any of them until each is declared). Each value is one JSON object {"workflow": <lifted id>, "deliveryKind": "${WORKFLOW_DELIVERY_KINDS.join('" | "')}", plus "branchSource"/"branchTarget" for development or "completionPolicy" for verification/report-only}. Completed v1 rows, already-declared v2 snapshots and iterations need none; an entry addressing no active standalone lift is refused, never ignored.`,
   };
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
@@ -290,7 +294,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     key,
     flags: optionFlags[key],
     required: false,
-    variadic: key === "ackSkipDsh" || key === "delivery",
+    variadic: key === "ackSkipDsh" || key === "ackSkipWorkflow" || key === "delivery",
     ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
   }));
   return {
@@ -310,7 +314,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
       retire: ["read", "write"],
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
     description: `${verb === "upgrade"
-      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items."
+      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named registered workflows whose linked legacy source is never followed; every skip is reported with its loss."
       : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };

@@ -1657,7 +1657,7 @@ test("an acknowledged DSH-only symlinked workflows root drops that source throug
   expect(readFileSync(join(outside, "wf-linked", "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
 });
 
-test("a symlinked workflows root that registers an execution workflow is never discarded by an acknowledgement", async () => {
+test("a symlinked workflows root that registers an execution workflow is never discarded by a DSH acknowledgement", async () => {
   const { context } = legacyWorkspace("symlinked-registered-root");
   const workflowsDir = join(context.harnessDir, "workflows");
   const target = join(context.harnessDir, "outside-registered-tree");
@@ -1668,13 +1668,19 @@ test("a symlinked workflows root that registers an execution workflow is never d
   symlinkSync(target, workflowsDir);
 
   // The register names a workflow directory under the linked root: that is an
-  // execution source, so no acknowledgement may drop or skip it.
+  // execution source, so no *Dsh* acknowledgement may drop or skip it. Only the
+  // execution-specific `--ack-skip-workflow` can, and only for the named id.
+  const defaults = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-registered-symlinked-root-default",
+  }).then(() => { throw new Error("a registered execution source was imported through a linked root"); }, (error: Error & { code?: string }) => error);
+  expect(defaults.code).toBe("execution.migration-conflict");
   const refusal = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-registered-symlinked-root",
     acknowledgedSkips: ["dsh-workflows"],
-  }).then(() => { throw new Error("a registered execution source was discarded by an acknowledgement"); }, (error: Error & { code?: string }) => error);
+  }).then(() => { throw new Error("a registered execution source was discarded by a Dsh acknowledgement"); }, (error: Error & { code?: string }) => error);
   expect(refusal.code).toBe("execution.migration-conflict");
-  expect(refusal.message).toContain("registered execution source is never discarded");
+  expect(refusal.message).toContain("never discarded by a DSH acknowledgement");
+  expect(refusal.message).toContain("--ack-skip-workflow wf-symlinked-registered-root");
   const store = await openStore(context, "read");
   try {
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
@@ -1750,7 +1756,7 @@ test("an acknowledged DSH-only symlinked child recovers through --ack-skip-dsh w
   expect([...readFileSync(join(workflowsDir, "wf-symlinked-dsh-child", "unknown.bin"))]).toEqual([...unknownBytes]);
 });
 
-test("an acknowledged DSH selector cannot widen the skip to a registered symlinked workflow", async () => {
+test("a DSH child acknowledgement cannot widen the skip to a registered symlinked workflow", async () => {
   const { context } = legacyWorkspace("symlinked-registered");
   const workflowsDir = join(context.harnessDir, "workflows");
   // The SAME child shape, but registered: the registration is an execution
@@ -1781,6 +1787,141 @@ test("an acknowledged DSH selector cannot widen the skip to a registered symlink
   } finally { store.close(); }
   expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
   expect(readFileSync(join(realInRoot, "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+});
+
+test("an explicit execution acknowledgement skips exactly the named registered linked source and reports the loss", async () => {
+  const { context } = legacyWorkspace("acked-registered-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const target = join(context.harnessDir, "outside-acked-tree");
+  mkdirSync(join(target, "wf-acked-registered-root"), { recursive: true });
+  const snapshotBytes = readFileSync(join(workflowsDir, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE));
+  writeFileSync(join(target, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  // A second registered workflow that stays a real in-root directory, plus an
+  // unrelated linked source under the same root: the acknowledgement must skip
+  // exactly the named id and leave both of the others alone.
+  const keepId = "wf-acked-keep";
+  const keepDir = join(workflowsDir, keepId);
+  mkdirSync(keepDir, { recursive: true });
+  const keepSnapshot = JSON.parse(snapshotBytes.toString("utf8")) as Record<string, unknown>;
+  keepSnapshot.id = keepId;
+  keepSnapshot.plans = [];
+  keepSnapshot.status = "running";
+  keepSnapshot.branch = { source: `feature/${keepId}`, target: "main" };
+  writeFileSync(join(keepDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify(keepSnapshot));
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: keepId, type: "plan", started_at: "2026-10-04", dir: `workflows/${keepId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+  const linkedSnapshot = readFileSync(join(target, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE));
+  rmSync(workflowsDir, { recursive: true, force: true });
+  mkdirSync(workflowsDir);
+  mkdirSync(keepDir, { recursive: true });
+  writeFileSync(join(keepDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify(keepSnapshot));
+  symlinkSync(join(target, "wf-acked-registered-root"), join(workflowsDir, "wf-acked-registered-root"));
+  const untouchedId = "wf-acked-untouched";
+  const untouchedDir = join(workflowsDir, untouchedId);
+  mkdirSync(untouchedDir);
+  const untouchedSnapshot = JSON.stringify({ ...keepSnapshot, id: untouchedId, branch: { source: `feature/${untouchedId}`, target: "main" } });
+  writeFileSync(join(untouchedDir, WORKFLOW_SNAPSHOT_FILE), untouchedSnapshot);
+
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-acked-registered-root",
+    // The linked child is independently a DSH source, so completing the upgrade
+    // needs that domain's own acknowledgement too: the two domains stay separate.
+    acknowledgedSkips: ["dsh-ledger:wf-acked-registered-root"],
+    // A repeated id is a harmless caller slip: it means the same one skip.
+    acknowledgedWorkflowSkips: ["wf-acked-registered-root", "wf-acked-registered-root"],
+  });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.skipped).toContainEqual({
+    path: "workflows/wf-acked-registered-root",
+    reason: "registered workflow wf-acked-registered-root skipped by --ack-skip-workflow; its symlinked legacy source was not read and no execution row was imported for it",
+  });
+  expect(result.dispositions).toContainEqual(expect.stringContaining("workflow wf-acked-registered-root: skipped by --ack-skip-workflow"));
+  expect(result.dispositions).toContainEqual(expect.stringContaining("no resumption is fabricated"));
+  const store = await openStore(context, "read");
+  try {
+    // Only the trusted registered workflow and the unrelated unregistered one
+    // import; no row is fabricated for the skipped id or for the untracked
+    // symlink beside it.
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: keepId }, { workflow_id: untouchedId }]);
+  } finally { store.close(); }
+  // Nothing was followed through the link: it is still a symlink, its target
+  // bytes are untouched, and the unrelated sources keep their own bytes.
+  expect(lstatSync(join(workflowsDir, "wf-acked-registered-root")).isSymbolicLink()).toBe(true);
+  expect([...readFileSync(join(target, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE))]).toEqual([...linkedSnapshot]);
+  expect(readFileSync(join(untouchedDir, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(untouchedSnapshot);
+  // The skip is an import decision only: the same source retries as an ordinary
+  // refusal while it stays linked, and the registration is untouched.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-acked-registered-root-omit",
+  }).then(() => { throw new Error("an omitted acknowledgement silently skipped a registered source"); }, (error: Error & { code?: string }) => error);
+  expect(retried.code).toBe("execution.migration-conflict");
+  expect(JSON.parse(readFileSync(statusPath, "utf8"))).toMatchObject({ workflows: expect.arrayContaining([expect.objectContaining({ id: "wf-acked-registered-root" })]) });
+});
+
+test("an execution acknowledgement naming a trusted, unknown or v1 registration refuses before any row", async () => {
+  const trusted = legacyWorkspace("acked-trusted");
+  // `wf-acked-trusted` is a real in-root directory: this run would import it, so
+  // skipping it would silently drop a trusted source.
+  await expect(upgradeStoreMinimal({
+    context: trusted.context, operator: "operator", operationId: "op-acked-trusted",
+    acknowledgedWorkflowSkips: ["wf-acked-trusted"],
+  })).rejects.toMatchObject({
+    code: "execution.workflow-skip-unmatched",
+    message: expect.stringContaining("matched no registered workflow source this run refuses"),
+  });
+  const trustedStore = await openStore(trusted.context, "read");
+  try { expect(trustedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { trustedStore.close(); }
+
+  const unknown = legacyWorkspace("acked-unknown");
+  await expect(upgradeStoreMinimal({
+    context: unknown.context, operator: "operator", operationId: "op-acked-unknown",
+    acknowledgedWorkflowSkips: ["wf-never-registered"],
+  })).rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+
+  // A v1 root converts in memory and never reads `workflows/` (this fixture has
+  // no workflows tree at all), so its registrations are not skippable linked
+  // sources: the acknowledgement is refused rather than accepted and ignored.
+  const v1 = legacyV1Workspace("v1-acked-registration");
+  await expect(upgradeStoreMinimal({
+    context: v1.context, operator: "operator", operationId: "op-v1-acked-registration",
+    acknowledgedWorkflowSkips: ["wf-v1-acked-registration"],
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  })).rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+  const v1Store = await openStore(v1.context, "read");
+  try { expect(v1Store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { v1Store.close(); }
+});
+
+test("a repeated execution acknowledgement is one request, and an omitted one cannot replay a prior skip", async () => {
+  const { context } = legacyWorkspace("acked-request-identity");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const target = join(context.harnessDir, "outside-identity-tree");
+  mkdirSync(join(target, "wf-acked-request-identity"), { recursive: true });
+  const snapshotBytes = readFileSync(join(workflowsDir, "wf-acked-request-identity", WORKFLOW_SNAPSHOT_FILE));
+  writeFileSync(join(target, "wf-acked-request-identity", WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(target, workflowsDir);
+
+  const input = {
+    context, operator: "operator", operationId: "op-acked-request-identity",
+    // The whole root is a linked DSH source too, so that domain needs its own
+    // acknowledgement for this upgrade to complete.
+    acknowledgedSkips: ["dsh-workflows"],
+    acknowledgedWorkflowSkips: ["wf-acked-request-identity"],
+  };
+  const result = await upgradeStoreMinimal(input);
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
+  // The acknowledgement is part of the operation's request identity, and a
+  // repeated id normalizes to the same request: this is a real replay.
+  expect(await upgradeStoreMinimal({ ...input, acknowledgedWorkflowSkips: ["wf-acked-request-identity", "wf-acked-request-identity"] })).toEqual(result);
+  // The same original id without the acknowledgement is refused as a source
+  // conflict, never replayed as the earlier skip's success.
+  await expect(upgradeStoreMinimal({ ...input, acknowledgedWorkflowSkips: [] }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-acked-request-identity") });
 });
 
 test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
