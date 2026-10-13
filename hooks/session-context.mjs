@@ -24507,7 +24507,10 @@ async function upgradeStoreMinimal(input) {
     const compasses = compassSkips.length === 0 ? "" : ` The same retry must also repeat the --ack-skip-compass acknowledgement(s) this invocation used (${compassSkips.map((id) => `--ack-skip-compass ${id}`).join(" ")}), because the unchanged v1 root still refuses that non-regular compass.`;
     const workflowAcks = [...new Set([...input.acknowledgedWorkflowSkips ?? [], ...result.importedIds])].sort();
     const committed = workflowAcks.length === 0 ? "" : ` the same retry must retain every workflow acknowledgement this invocation already used — the ids this invocation committed, which the next invocation sees as native collisions, together with the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id — so include \`--ack-skip-workflow ${workflowAcks.join(" ")}\` in that same retry.`;
-    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries}${compasses} DSH import did not commit.`;
+    const refusedSelectors = error instanceof StoreError && error.code === "store.upgrade-dsh-source-refused" ? [...message.matchAll(/^- (\S+?): /gm)].map((match) => match[1]) : [];
+    const dshAcks = [...new Set([...input.acknowledgedSkips ?? [], ...refusedSelectors])].sort();
+    const dsh2 = refusedSelectors.length === 0 ? "" : ` the same retry must also repeat every DSH acknowledgement this invocation used together with the selectors this refusal names — an acknowledgement is not persisted, so the unchanged root refuses those selectors again — so include \`--ack-skip-dsh ${dshAcks.join(" ")}\` in that same retry.`;
+    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries}${compasses}${dsh2} DSH import did not commit.`;
     if (error instanceof StoreError) {
       throw new StoreError(error.code, `${prefix} ${message}`, error.details);
     }
@@ -28553,7 +28556,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
       let created = 0;
       let updated = 0;
       for (const [index2, row] of rows.entries()) {
-        hooks.afterRow?.(index2);
+        hooks.beforeRow?.(index2);
         if (row.mapping.classification !== "issue") {
           const priorEntry2 = priorByTuple.get(row.tuple);
           if (priorEntry2 !== undefined && priorEntry2.issueId !== "") {

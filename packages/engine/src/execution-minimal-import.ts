@@ -950,7 +950,19 @@ export async function upgradeStoreMinimal(input: {
     const committed = workflowAcks.length === 0
       ? ""
       : ` the same retry must retain every workflow acknowledgement this invocation already used \u2014 the ids this invocation committed, which the next invocation sees as native collisions, together with the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id \u2014 so include \`--ack-skip-workflow ${workflowAcks.join(" ")}\` in that same retry.`;
-    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries}${compasses} DSH import did not commit.`;
+    // The refusal body lists one `- <selector>: ...` line per fact group it
+    // refused. Those selectors stay refused on the unchanged root, and so do the
+    // selectors this invocation already acknowledged (an acknowledgement is
+    // never persisted), so the advertised retry is their union — never the
+    // acknowledgement of a different DSH failure, such as an unmatched selector.
+    const refusedSelectors = error instanceof StoreError && error.code === "store.upgrade-dsh-source-refused"
+      ? [...message.matchAll(/^- (\S+?): /gm)].map((match) => match[1]!)
+      : [];
+    const dshAcks = [...new Set([...(input.acknowledgedSkips ?? []), ...refusedSelectors])].sort();
+    const dsh = refusedSelectors.length === 0
+      ? ""
+      : ` the same retry must also repeat every DSH acknowledgement this invocation used together with the selectors this refusal names \u2014 an acknowledgement is not persisted, so the unchanged root refuses those selectors again \u2014 so include \`--ack-skip-dsh ${dshAcks.join(" ")}\` in that same retry.`;
+    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries}${compasses}${dsh} DSH import did not commit.`;
     if (error instanceof StoreError) {
       throw new StoreError(error.code, `${prefix} ${message}`, error.details);
     }

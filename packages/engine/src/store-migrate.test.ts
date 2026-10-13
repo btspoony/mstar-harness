@@ -612,7 +612,7 @@ describe("store-migrate apply", () => {
     // whole batch is proven instead of asserted.
     try {
       await applyStoreMigration(context, manifest, {
-        afterRow: (index) => {
+        beforeRow: (index) => {
           if (index === 1) throw new Error("induced migration failure after 1 imported row(s)");
         },
       });

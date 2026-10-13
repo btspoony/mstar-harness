@@ -3627,6 +3627,39 @@ test("the advertised DSH retry retains the workflow acknowledgements the unchang
   expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
 });
 
+test("a DSH refusal advertises the acknowledgements this invocation already used together with the selectors it refused", async () => {
+  const { context } = legacyWorkspace("dsh-ack-union");
+  const workflowId = "wf-dsh-ack-union";
+  // Two distinct refused DSH fact groups in one unchanged root: a conflicting
+  // duplicate identity (`dsh-ledger:<id>`) and an unparseable scan-bound sidecar
+  // (`dsh-bounds:<id>`). This invocation already acknowledges the bounds selector,
+  // so the refusal lists only the ledger selector while the retry needs both.
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  writeFileSync(join(dshDir, "workflow-ledger-cursors.json"), "not json");
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-ack-union",
+    acknowledgedSkips: [`dsh-bounds:${workflowId}`],
+  }).then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  // The refusal lists only the selector it refused on this attempt...
+  expect(error.message).toContain(`- dsh-ledger:${workflowId}: `);
+  expect(error.message).not.toContain(`- dsh-bounds:${workflowId}: `);
+  // ...but the advertised retry is the UNION: an acknowledgement is never
+  // persisted, so the next invocation refuses the selector this one already
+  // acknowledged unless the retry repeats it.
+  const advertisedDshAcks = /include `--ack-skip-dsh ([^`]+)` in that same retry/.exec(error.message);
+  expect(advertisedDshAcks?.[1]!.split(" ")).toEqual([`dsh-bounds:${workflowId}`, `dsh-ledger:${workflowId}`]);
+  const advertisedWorkflowAcks = /include `--ack-skip-workflow ([^`]+)` in that same retry/.exec(error.message);
+  // Retry with EXACTLY what the refusal advertises and no other DSH flags.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-ack-union-2",
+    acknowledgedSkips: advertisedDshAcks![1]!.split(" "),
+    acknowledgedWorkflowSkips: advertisedWorkflowAcks![1]!.split(" "),
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded" });
+});
+
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
   // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
   // so any digest difference comes from the ordering used to fold them.

@@ -295,6 +295,20 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 
+  test("an out-of-domain bounded wait (non-finite, non-positive or above the signed-32-bit maximum) falls back to the published 5000 ms default", async () => {
+    // The normaliser owns exactly one fallback: a floored value outside SQLite's
+    // positive signed-32-bit domain becomes the published constant, so every one
+    // of these caller mistakes yields the same 5000 ms bound instead of a
+    // pragma-visible NaN, zero, negative or overflowed number.
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1, 2147483648]) {
+      const dir = mkdtempSync(join(ROOT, "busy-out-of-domain-"));
+      const handle = await initializeStore({ harnessDir: dir }, { busyTimeoutMs: value });
+      const row = handle.db.prepare("pragma busy_timeout").get() as { timeout?: number; busy_timeout?: number };
+      handle.close();
+      expect({ value, timeout: row.timeout ?? row.busy_timeout }).toEqual({ value, timeout: 5000 });
+    }
+  });
+
   test("a non-integral bounded wait reaches the pragma as the exact integer every refusal reports", async () => {
     const dir = mkdtempSync(join(ROOT, "busy-fraction-"));
     const held = mkdtempSync(join(ROOT, "busy-fraction-holder-"));

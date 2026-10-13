@@ -965,7 +965,7 @@ function applyCatalogEntities(db: StoreDb, plan: CatalogImportPlan, at: string):
 export async function applyStoreMigration(
   context: StoreContext,
   manifest: MigrationManifest,
-  hooks: { afterRow?(index: number): void } = {},
+  hooks: { beforeRow?(index: number): void } = {},
 ): Promise<MigrationReceipt> {
   if (!manifest || manifest.version !== MIGRATION_MANIFEST_VERSION || typeof manifest.controlRoot !== "string") {
     throw new StoreMigrationError("store.migration-manifest-invalid", "the manifest is missing or carries an unsupported version; re-run the preview");
@@ -1054,9 +1054,11 @@ export async function applyStoreMigration(
       let updated = 0;
 
       for (const [index, row] of rows.entries()) {
-        // Test-owned injection: fires INSIDE the import transaction, so a throw
-        // proves the whole batch rolled back — no test-runner env var selects it.
-        hooks.afterRow?.(index);
+        // Test-owned injection: fires at the TOP of the row's turn, before the
+        // addressed row is processed and INSIDE the import transaction, so a
+        // throw proves the whole batch rolled back — no test-runner env var
+        // selects it.
+        hooks.beforeRow?.(index);
         // History/excluded rows are recorded on the receipt verbatim WITHOUT
         // allocating an issue (§3, FW-2). An imported issue is never demoted
         // by a re-review: a prior ISSUE tuple that the re-reviewed manifest
