@@ -320,7 +320,7 @@ function discoverV1(
   const sourceDigest = createHash("sha256").update(JSON.stringify([
     [MIGRATE_STATUS_FILE, createHash("sha256").update(verifiedStatusBytes).digest("hex")] as [string, string],
     ...legacy.sourceHashes,
-  ].sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
+  ].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest("hex");
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...(refusal === undefined ? {} : { refusal }) };
 }
 
@@ -611,7 +611,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   skipped.sort((a, b) => a.path.localeCompare(b.path));
   const sourceDigest = createHash("sha256").update(JSON.stringify([
-    [...sourceHashes].sort(([a], [b]) => a.localeCompare(b)),
+    [...sourceHashes].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
   ])).digest("hex");
   return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [], refusedSourceIds, refusal };
 }

@@ -1,7 +1,7 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import * as nodeFs from "node:fs";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -3202,36 +3202,55 @@ test("a legacy root register replaced after its verified read still answers with
   expect(await upgradeStoreMinimal(input)).toEqual(first);
 });
 
-test("a v1 compass that is not a regular file refuses instead of blocking the upgrade", async () => {
-  const { context } = legacyV1Workspace("v1-compass-fifo");
-  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
-  rmSync(compass);
-  execFileSync("mkfifo", [compass]);
-  // A blocking compass read cannot be interrupted in-process, so the probe runs
-  // in a child with a real timeout: a regression fails this case, not the suite.
-  const probe = (harnessDir: string, operationId: string): { status: string; code?: string; message?: string; imported?: number } =>
-    JSON.parse(execFileSync(process.execPath, ["-e", `
-      const mod = await import(${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))});
-      try {
-        const result = await mod.upgradeStoreMinimal({
-          context: { harnessDir: ${JSON.stringify(harnessDir)} }, operator: "operator",
-          operationId: ${JSON.stringify(operationId)},
-          deliveryDeclarations: ${JSON.stringify(V1_STANDALONE_DECLARATION)},
-        });
-        console.log(JSON.stringify({ status: "ok", verdict: result.verdict, imported: result.imported }));
-      } catch (error) {
-        console.log(JSON.stringify({ status: "threw", code: error && error.code, message: String(error && error.message).slice(0, 1200) }));
-      }
-    `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
-  const refused = probe(context.harnessDir, "op-v1-compass-fifo");
-  expect(refused.status).toBe("threw");
-  expect(refused.code).toBe("execution.migration-conflict");
-  expect(refused.message).toContain("delivery-compass.md");
-  expect(lstatSync(compass).isFIFO()).toBe(true);
-  // A decidable v1 root in the same run shape still imports its rows.
-  const { context: healthy } = legacyV1Workspace("v1-compass-fifo-control");
-  expect(probe(healthy.harnessDir, "op-v1-compass-control")).toMatchObject({ status: "ok", imported: 2 });
-}, 30_000);
+for (const swap of ["fifo", "symlink"] as const) {
+  test(`a v1 compass swapped for a ${swap === "fifo" ? "special file" : "link"} at the open boundary refuses by name`, async () => {
+    const { context } = legacyV1Workspace(`v1-compass-${swap}`);
+    const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+    const outside = join(ROOT, `v1-compass-${swap}-outside.md`);
+    writeFileSync(outside, ["---", "iteration_id: iter-v1", "status: active", "---", ""].join("\n"));
+    // The swap happens INSIDE the descriptor window, after the type probe, so the
+    // new bounded read is what has to refuse it. A blocking open cannot be
+    // interrupted in-process, so the probe runs in a child with a real timeout.
+    const probe = (harnessDir: string, operationId: string): { status: string; code?: string; message?: string; imported?: number } =>
+      JSON.parse(execFileSync(process.execPath, ["-e", `
+        const { createRequire } = await import("node:module");
+        const fs = createRequire(import.meta.url)("node:fs");
+        const realOpen = fs.openSync;
+        let swapped = false;
+        fs.openSync = (target, ...rest) => {
+          if (target === ${JSON.stringify(compass)} && !swapped) {
+            swapped = true;
+            fs.rmSync(target);
+            ${swap === "fifo"
+              ? `createRequire(import.meta.url)("node:child_process").execFileSync("mkfifo", [target]);`
+              : `fs.symlinkSync(${JSON.stringify(outside)}, target);`}
+          }
+          return realOpen(target, ...rest);
+        };
+        const mod = await import(${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))});
+        try {
+          const result = await mod.upgradeStoreMinimal({
+            context: { harnessDir: ${JSON.stringify(harnessDir)} }, operator: "operator",
+            operationId: ${JSON.stringify(operationId)},
+            deliveryDeclarations: ${JSON.stringify(V1_STANDALONE_DECLARATION)},
+          });
+          console.log(JSON.stringify({ status: "ok", verdict: result.verdict, imported: result.imported }));
+        } catch (error) {
+          console.log(JSON.stringify({ status: "threw", code: error && error.code, message: String(error && error.message).slice(0, 1200) }));
+        }
+      `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
+    const refused = probe(context.harnessDir, `op-v1-compass-${swap}`);
+    expect(refused.status).toBe("threw");
+    expect(refused.code).toBe("execution.migration-conflict");
+    expect(refused.message).toContain("delivery-compass.md");
+    expect(refused.message).toContain("is not a regular in-root file");
+    expect(refused.message).toContain("store init --harness");
+    expect(swap === "fifo" ? lstatSync(compass).isFIFO() : lstatSync(compass).isSymbolicLink()).toBe(true);
+    // A decidable v1 root in the same run shape still imports its rows.
+    const { context: healthy } = legacyV1Workspace(`v1-compass-${swap}-control`);
+    expect(probe(healthy.harnessDir, `op-v1-compass-${swap}-control`)).toMatchObject({ status: "ok", imported: 2 });
+  }, 30_000);
+}
 
 test("a malformed v1 plan row is skippable instead of blocking every other lifecycle", async () => {
   const { context, statusBytes } = legacyV1Workspace("v1-malformed-row");
@@ -3354,26 +3373,24 @@ test("a DSH refusal names every acknowledgement its advertised retry needs", asy
   expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
 });
 
-test("each legacy source leaf is opened once: the digest hashes the bytes the import consumed", async () => {
-  const { context } = legacyWorkspace("single-acquisition");
-  const realOpen = nodeFs.openSync;
-  const opened: string[] = [];
-  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: unknown, ...rest: unknown[]) => {
-    if (typeof path === "string") opened.push(path);
-    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
-  }) as never);
-  let result;
-  try { result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-single-acquisition" }); }
+test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
+  // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
+  // so any digest difference comes from the ordering used to fold them.
+  const { context: source } = legacyWorkspace("digest-locale");
+  const copyRoot = join(ROOT, "digest-locale-copy", ".mstar");
+  mkdirSync(copyRoot, { recursive: true });
+  cpSync(source.harnessDir, copyRoot, { recursive: true });
+  const first = await upgradeStoreMinimal({ context: source, operator: "operator", operationId: "op-digest-reference" });
+  // A comparator that reverses string order: a locale-dependent sort would now
+  // order the digest keys differently and change the identity of the same bytes.
+  const realCompare = String.prototype.localeCompare;
+  const spy = spyOn(String.prototype, "localeCompare").mockImplementation(function (this: string, other: string) {
+    return this > other ? -1 : this < other ? 1 : (realCompare.call(this, other) as number);
+  } as never);
+  let second: typeof first;
+  try { second = await upgradeStoreMinimal({ context: { harnessDir: copyRoot }, operator: "operator", operationId: "op-digest-hostile" }); }
   finally { spy.mockRestore(); }
-  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
-  for (const leaf of [
-    "status.json",
-    `workflows/wf-single-acquisition/${WORKFLOW_SNAPSHOT_FILE}`,
-    "workflows/wf-single-acquisition/sessions/plan-pm.json",
-    "workflows/wf-single-acquisition/unknown.bin",
-  ]) {
-    const path = join(context.harnessDir, leaf);
-    expect({ leaf, opens: opened.filter((candidate) => candidate === path).length }).toEqual({ leaf, opens: 1 });
-  }
+  expect(second.sourceDigest).toBe(first.sourceDigest);
+  expect(second).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-digest-locale"] });
 });
 

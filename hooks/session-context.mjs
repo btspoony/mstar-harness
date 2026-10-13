@@ -20336,22 +20336,27 @@ function scanCompasses(harnessDir) {
     } catch {
       continue;
     }
-    if (info.isSymbolicLink() || !info.isFile()) {
-      throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`);
-    }
+    const refusalPath = JSON.stringify(compassPath);
+    const notRegular = () => new Error(`refusing to convert: compass ${refusalPath} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade. To explicitly start WITHOUT any legacy imports, use \`store init --harness <new-empty-control-root>\`; existing stores and all legacy bytes remain untouched.`);
+    if (info.isSymbolicLink() || !info.isFile())
+      throw notRegular();
     let fd;
     try {
       fd = openSync2(compassPath, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
-      if (!fstatSync2(fd).isFile()) {
-        throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`);
-      }
+      const opened = fstatSync2(fd);
+      if (!opened.isFile())
+        throw notRegular();
+      if (opened.dev !== info.dev || opened.ino !== info.ino)
+        throw notRegular();
       bytes = readFileSync16(fd);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("refusing to convert"))
         throw error;
       const code2 = error.code;
-      if (code2 === "ENOENT" || code2 === "ELOOP") {
-        throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} changed between the probe and its read (${code2}); rerun store upgrade once the legacy tree is stable`);
+      if (code2 === "ELOOP")
+        throw notRegular();
+      if (code2 === "ENOENT") {
+        throw new Error(`refusing to convert: compass ${refusalPath} changed between the probe and its read (ENOENT); rerun store upgrade once the legacy tree is stable`);
       }
       continue;
     } finally {
@@ -23814,7 +23819,7 @@ function evaluate(context, now2) {
     if (e.code !== "ENOENT")
       refusals.push({ selector: "dsh-status", category: "status", facts: "bindings and emissions", discarded: "every legacy session binding and status emission in the envelope", reason: String(e), source: `${SNAPSHOTS}/${STATUS}` });
   }
-  const sourceDigest = hash(JSON.stringify(allFiles.sort(([a], [b]) => a.localeCompare(b))));
+  const sourceDigest = hash(JSON.stringify(allFiles.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)));
   return { rows: { workflows, bindings, emissions }, findings, refusals, sourceDigest };
 }
 async function importDshHostStateFiles(input) {
@@ -24076,7 +24081,7 @@ function discoverV1(root, legacy, operator, verifiedStatusBytes, acknowledgedWor
   const sourceDigest = createHash14("sha256").update(JSON.stringify([
     [MIGRATE_STATUS_FILE, createHash14("sha256").update(verifiedStatusBytes).digest("hex")],
     ...legacy.sourceHashes
-  ].sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
+  ].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest("hex");
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...refusal === undefined ? {} : { refusal } };
 }
 function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkips, declarations) {
@@ -24320,7 +24325,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   rows.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   skipped.sort((a, b) => a.path.localeCompare(b.path));
   const sourceDigest = createHash14("sha256").update(JSON.stringify([
-    [...sourceHashes].sort(([a], [b]) => a.localeCompare(b))
+    [...sourceHashes].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
   ])).digest("hex");
   return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [], refusedSourceIds, refusal };
 }

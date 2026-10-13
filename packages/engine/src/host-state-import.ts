@@ -387,7 +387,9 @@ function evaluate(context: StoreContext, now: string): Evaluation {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") refusals.push({ selector: "dsh-status", category: "status", facts: "bindings and emissions", discarded: "every legacy session binding and status emission in the envelope", reason: String(e), source: `${SNAPSHOTS}/${STATUS}` });
   }
-  const sourceDigest = hash(JSON.stringify(allFiles.sort(([a], [b]) => a.localeCompare(b))));
+  // Code-unit order, never the process locale: the digest identity must not change
+  // with LC_ALL/LANG or an ICU upgrade, or a same-input retry would falsely conflict.
+  const sourceDigest = hash(JSON.stringify(allFiles.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)));
   return { rows: { workflows, bindings, emissions }, findings, refusals, sourceDigest };
 }
 

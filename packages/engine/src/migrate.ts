@@ -222,29 +222,32 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     // treatment.
     let info;
     try { info = lstatSync(compassPath); } catch { continue; } // missing: not an iteration
-    if (info.isSymbolicLink() || !info.isFile()) {
-      throw new Error(
-        `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`,
-      );
-    }
+    // One refusal text for every non-regular shape (static or raced), naming both
+    // supported continuations plus the route that skips legacy imports entirely.
+    const refusalPath = JSON.stringify(compassPath);
+    const notRegular = (): Error => new Error(
+      `refusing to convert: compass ${refusalPath} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade. To explicitly start WITHOUT any legacy imports, use \`store init --harness <new-empty-control-root>\`; existing stores and all legacy bytes remain untouched.`,
+    );
+    if (info.isSymbolicLink() || !info.isFile()) throw notRegular();
     let fd: number | undefined;
     try {
       fd = openSync(compassPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-      if (!fstatSync(fd).isFile()) {
-        throw new Error(
-          `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade`,
-        );
-      }
+      const opened = fstatSync(fd);
+      if (!opened.isFile()) throw notRegular();
+      // Same-descriptor identity: the descriptor must be the file the probe saw,
+      // so a leaf swapped for another regular file cannot contribute its bytes.
+      if (opened.dev !== info.dev || opened.ino !== info.ino) throw notRegular();
       bytes = readFileSync(fd);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("refusing to convert")) throw error;
-      // The probe above OBSERVED this compass, so a vanished or newly linked leaf
-      // is a changed source rather than an absent one: refusing keeps the
-      // conversion from silently regrouping this iteration's rows.
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ELOOP") {
+      // A link raced into the open window refuses exactly like a static one; a
+      // leaf that vanished after the probe is a changed source, not an absent
+      // one. Other read errors keep the established "not an iteration" treatment.
+      if (code === "ELOOP") throw notRegular();
+      if (code === "ENOENT") {
         throw new Error(
-          `refusing to convert: compass ${JSON.stringify(compassPath)} changed between the probe and its read (${code}); rerun store upgrade once the legacy tree is stable`,
+          `refusing to convert: compass ${refusalPath} changed between the probe and its read (ENOENT); rerun store upgrade once the legacy tree is stable`,
         );
       }
       continue; // an unreadable compass is still not an iteration
