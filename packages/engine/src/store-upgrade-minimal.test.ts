@@ -3082,3 +3082,78 @@ try {
   expect(existsSync(join(context.harnessDir, ".status-write.lockdir"))).toBe(false);
   expect(existsSync(join(context.harnessDir, ".execution-maintenance"))).toBe(false);
 }, 60_000);
+
+for (const shape of ["symlink", "directory"] as const) {
+  test(`an unsafe nested ${shape} snapshot has same-entry recovery preserving native authority`, async () => {
+    const { context, workflowId, legacyBytes } = await nativeCollisionWorkspace(`nested-${shape}`);
+    const snapshot = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    const target = join(ROOT, `nested-${shape}-target.json`);
+    writeFileSync(target, legacyBytes);
+    rmSync(snapshot);
+    if (shape === "symlink") symlinkSync(target, snapshot);
+    else mkdirSync(snapshot);
+    const before = await protectedStore(context);
+    await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: `nested-${shape}-refuse` }))
+      .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining(`--ack-skip-workflow ${workflowId}`) });
+    expect(await protectedStore(context)).toEqual(before);
+    await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: `nested-${shape}-wrong`, acknowledgedWorkflowSkips: ["wf-not-a-source"] }))
+      .rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+    const { result, accessed } = await withPathAccessLog(() => upgradeStoreMinimal({
+      context, operator: "operator", operationId: `nested-${shape}-ack`, acknowledgedWorkflowSkips: [workflowId],
+    }));
+    expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
+    expect(result.skipped).toContainEqual(expect.objectContaining({ path: `workflows/${workflowId}` }));
+    expect(result.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
+    expect(accessed.filter((path) => path === target || path.startsWith(`${snapshot}/`))).toEqual([]);
+    const after = await protectedStore(context);
+    for (const [name, rows] of Object.entries(before.tables)) {
+      if (name.startsWith("execution_") && name !== "execution_operations") expect(after.tables[name]).toEqual(rows);
+    }
+    expect(readFileSync(target).equals(legacyBytes)).toBe(true);
+    expect(shape === "symlink" ? lstatSync(snapshot).isSymbolicLink() : lstatSync(snapshot).isDirectory()).toBe(true);
+  });
+}
+
+for (const leaf of ["status", "snapshot", "session"] as const) {
+  test(`a ${leaf} execution source replaced at open never contributes target bytes`, async () => {
+    const name = `execution-leaf-${leaf}`;
+    const { context } = legacyWorkspace(name);
+    const workflowId = `wf-${name}`;
+    const dir = join(context.harnessDir, "workflows", workflowId);
+    const source = leaf === "status" ? join(context.harnessDir, "status.json")
+      : leaf === "snapshot" ? join(dir, WORKFLOW_SNAPSHOT_FILE) : join(dir, "sessions", "plan-pm.json");
+    const target = join(ROOT, `${name}-outside.json`);
+    const bytes = readFileSync(source);
+    writeFileSync(target, bytes);
+    const outside = nodeFs.statSync(target);
+    const initialized = await initializeStore(context); initialized.close();
+    const before = await protectedStore(context);
+    const realLstat = nodeFs.lstatSync, realRead = nodeFs.readFileSync, realStat = nodeFs.statSync, realFstat = nodeFs.fstatSync;
+    let swapped = false, targetReads = 0;
+    const probe = spyOn(nodeFs, "lstatSync").mockImplementation(((path: string) => {
+      const info = realLstat(path);
+      if (path === source && !swapped) { swapped = true; rmSync(source); symlinkSync(target, source); }
+      return info;
+    }) as never);
+    const reads = spyOn(nodeFs, "readFileSync").mockImplementation(((path: string | number, ...args: unknown[]) => {
+      const info = typeof path === "number" ? realFstat(path) : realStat(path);
+      if (info.dev === outside.dev && info.ino === outside.ino) targetReads++;
+      return (realRead as (...args: unknown[]) => unknown)(path, ...args);
+    }) as never);
+    try {
+      await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: name }))
+        .rejects.toMatchObject({ code: "execution.migration-conflict" });
+    } finally { probe.mockRestore(); reads.mockRestore(); }
+    expect(swapped).toBe(true);
+    expect(targetReads).toBe(0);
+    expect(await protectedStore(context)).toEqual(before);
+    if (leaf === "status") {
+      const fresh = { harnessDir: join(ROOT, `${name}-fresh-native`) };
+      mkdirSync(fresh.harnessDir);
+      const initialized = await initializeStore(fresh); initialized.close();
+      expect((await readExecutionState(fresh)).data.workflows).toEqual([]);
+      expect(await protectedStore(context)).toEqual(before);
+    }
+    expect(readFileSync(target)).toEqual(bytes);
+  });
+}
