@@ -28,7 +28,7 @@ Do **not** mark an implement todo complete until:
   Each todo's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 - matching checkbox `- [x]` in the SSOT plan file
 - `status.json` updated when the coordination round requires it
-- evidence: real `git log -1 --oneline`
+- evidence: real `git log -1 --format='%h %an <%ae>'`
 
 ## Drift and paths
 

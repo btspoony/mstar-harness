@@ -88,7 +88,7 @@ Each implement task's commit uses the configured identity; missing/failing ident
 
 ## Implement todo completion gate (every code todo)
 
-Commit → SSOT checkbox → PM public plan-state update in store.db → `git log -1 --oneline` evidence; NEVER list → core. Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
+Commit → SSOT checkbox → PM public plan-state update in store.db → `git log -1 --format='%h %an <%ae>'` evidence; NEVER list → core. Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
 
 ## SwitchMode → Agent (pre-flight)
 
