@@ -14,7 +14,8 @@ packages: root, engine, commands, cli, dsh, omp, opencode, opencode-v2
 - **Legacy source leaves are opened non-blocking**, so a FIFO or other special file at a registered leaf refuses by type and names its recovery instead of hanging the command; a decidable sibling source in the same run still imports. The same bounded, type-checked, no-follow read covers the v1 `iterations/<id>/delivery-compass.md` leaf, which a special file at that path would otherwise have blocked.
 - **The v1 conversion consumes the already-verified register bytes** rather than re-acquiring `status.json` by path, so classification and the converted rows come from one descriptor-verified read on the supported v1 route.
 - **A store-upgrade receipt is bound to the imported source**: the source digest participates in the request identity, so reusing one `operationId` over changed legacy bytes conflicts instead of answering with a receipt that describes bytes the run never imported. Unchanged input still replays its retained receipt.
-- **The acknowledged skip disposition names the refused source, not a presumed cause**: a nested-source skip no longer asserts that its (real, in-root) containing directory is unsafe; the per-item reason carries the exact cause.
+- **The upgrade retry survives a publication race**: an upgrade that loses `initializeStore`'s create-only publication race is pointed back at `store upgrade` (its legacy import may be unfinished) instead of at the "do not initialize or migrate an existing store" instruction meant for `store init`.
+- **A history chunk that vanishes after enumeration refuses**: the DSH import no longer reads that `ENOENT` as "this workflow kept no retained history", so the identities in a vanished chunk cannot be skipped silently; a genuinely missing history directory keeps its previous treatment.
 - **A refused legacy source is always skippable by its id**: a registered snapshot whose plan rows are missing, duplicated or unconvertible now refuses as that workflow's own source (the default refusal names `--ack-skip-workflow`), so one malformed row no longer aborts the upgrade or blocks every healthy sibling import.
 - **A `workflows/` entry that sources nothing is treated as absent**, not as a conflict: a regular file (or other non-directory) with no registration under it no longer aborts the upgrade, while a registration under it keeps the existing per-source refusal.
 - **The upgrade receipt binds the bytes it consumed**: each source hash is taken from the single descriptor read that produced the rows (and the v1 compass reads record theirs), so the digest no longer re-acquires the same paths; a DSH refusal that follows a committed execution import names both acknowledgements its advertised retry needs.
@@ -36,6 +37,8 @@ packages: root, engine, commands, cli, dsh, omp, opencode, opencode-v2
 - **v1 转换消费已校验的 register 字节**，不再按路径二次读取 `status.json`，因此分类与转换出的行来自同一次描述符校验过的读取。
 - **store upgrade 回执绑定被导入的来源**：来源摘要纳入请求身份，因此同一 `operationId` 配上改动过的旧字节会冲突，而不是用一份描述本次从未导入字节的回执作答；输入未变时仍回放保留的回执。
 - **已确认跳过的 disposition 只描述被拒来源、不推断原因**：嵌套来源跳过不再声称其（真实且在根内的）所属目录不安全；具体原因由逐项 reason 承载。
+- **发布竞态下 upgrade 重试仍然有效**：输掉 `initializeStore` create-only 发布竞态的 upgrade 会被指回 `store upgrade`（其旧数据导入可能未完成），而不是收到本应属于 `store init` 的「不要初始化或迁移现有 store」提示。
+- **已枚举的历史 chunk 消失即拒绝**：DSH 导入不再把该 `ENOENT` 当作「该 workflow 没有保留历史」，因此消失 chunk 中的身份不会被静默跳过；历史目录确实缺失时保持原行为。
 - **被拒的旧来源始终可按其 id 跳过**：已登记 snapshot 的 plan 行缺失、重复或无法转换时，改为以该 workflow 自身作为被拒来源（默认拒绝文本给出 `--ack-skip-workflow`），因此一处畸形行不再中止整次 upgrade，也不阻塞其他健康来源导入。
 - **不承载任何来源的 `workflows/` 条目按缺失处理**，不再是冲突：根下没有登记项时，普通文件（或其他非目录）不再中止 upgrade；根下有登记项时仍保留原有按来源拒绝。
 - **upgrade 回执绑定它实际消费的字节**：每个来源哈希取自产出该行的那一次描述符读取（v1 的 compass 读取同样在读取处记录），摘要不再二次打开同一路径；执行导入已提交后发生的 DSH 拒绝，会同时列出其宣称重试所需的两个确认。

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as nodeFs from "node:fs";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -531,6 +532,34 @@ describe("store and execution command surface", () => {
       expect(store.db.prepare("select count(*) as n from dsh_ledger_events where workflow_id = ?").get("wf-replay")).toEqual({ n: 1 });
       expect(store.db.prepare("select revision from store_meta where id=1").get()).toEqual({ revision: 1 });
     } finally { store.close(); }
+  });
+
+  test("an upgrade that loses the create-only publication race is told to finish the upgrade", async () => {
+    const root = fixture("store-upgrade-race");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initialized = await initializeStore({ harnessDir: harness });
+    initialized.close();
+    const dbPath = join(harness, "store.db");
+    // Deterministic race: the competing initializer's store is already published
+    // while this run's existence check still reports nothing, which is how
+    // `store.already-exists` reaches the upgrade path.
+    const realExists = nodeFs.existsSync;
+    const spy = spyOn(nodeFs, "existsSync").mockImplementation(((path: unknown) => path === dbPath ? false : realExists(path as never)) as never);
+    let refused: CommandEnvelope;
+    try {
+      refused = await invoke(definition("store.upgrade"), { harness, operator: "fixture-operator" }, root);
+    } finally { spy.mockRestore(); }
+    expect(refused).toMatchObject({ status: "refused", code: "store.already-exists", exitCode: 1 });
+    const recovery = refused.status === "refused" ? String(refused.details?.recovery ?? "") : "";
+    // The upgrade loser must be pointed back at the upgrade instead of being told
+    // to leave an unfinished import alone.
+    expect(recovery).toContain("store upgrade");
+    expect(recovery).not.toContain("do not initialize or migrate");
+    // Initialization by contrast still refuses to touch an existing store.
+    const init = await invoke(definition("store.init"), { harness }, root);
+    expect(init).toMatchObject({ status: "refused", code: "store.already-exists" });
+    expect(init.status === "refused" ? String(init.details?.recovery ?? "") : "").toContain("do not initialize or migrate");
   });
 
 });

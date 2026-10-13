@@ -23512,12 +23512,14 @@ function evaluate(context, now2) {
         const historyIdentities = new Map;
         let historySafe = true;
         const historyDir = join26(dir, HISTORY);
+        let historyEnumerated = false;
         try {
           const hs = lstatSync9(historyDir);
           if (hs.isSymbolicLink() || !hs.isDirectory()) {
             historySafe = false;
             throw new Error("history path is not a real directory");
           }
+          historyEnumerated = true;
           for (const h of readdirSync14(historyDir).filter((n) => n.startsWith("chunk-") && n.endsWith(".jsonl")).sort()) {
             const b = readBytes(join26(historyDir, h));
             allFiles.push([`${source}/${HISTORY}/${h}`, hash(b)]);
@@ -23541,7 +23543,7 @@ function evaluate(context, now2) {
               }
           }
         } catch (e) {
-          if (e.code !== "ENOENT") {
+          if (e.code !== "ENOENT" || historyEnumerated) {
             historySafe = false;
             refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identity history completeness", discarded: registryLoss, reason: "retained history could not be completely validated", source });
           }

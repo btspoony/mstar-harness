@@ -149,9 +149,15 @@ function evaluate(context: StoreContext, now: string): Evaluation {
       const historyIdentities = new Map<string, string>();
       let historySafe = true;
       const historyDir = join(dir, HISTORY);
+      // Only the initial missing-directory case means "this workflow kept no
+      // history": a chunk that vanishes AFTER it was enumerated leaves the
+      // archive incomplete, so its identities cannot be checked and the
+      // completeness guard must refuse instead of silently importing the index.
+      let historyEnumerated = false;
       try {
         const hs = lstatSync(historyDir);
         if (hs.isSymbolicLink() || !hs.isDirectory()) { historySafe = false; throw new Error("history path is not a real directory"); }
+        historyEnumerated = true;
         for (const h of readdirSync(historyDir).filter((n) => n.startsWith("chunk-") && n.endsWith(".jsonl")).sort()) {
           const b = readBytes(join(historyDir, h)); allFiles.push([`${source}/${HISTORY}/${h}`, hash(b)]);
           for (const line of b.toString("utf8").split("\n")) if (line) {
@@ -168,7 +174,7 @@ function evaluate(context: StoreContext, now: string): Evaluation {
           }
         }
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT" || historyEnumerated) {
           historySafe = false;
           refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identity history completeness", discarded: registryLoss, reason: "retained history could not be completely validated", source });
         }

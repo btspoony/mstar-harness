@@ -624,6 +624,29 @@ test("a legacy source leaf swapped for a symlink at the open boundary is never f
   expect(readFileSync(outside, "utf8")).toBe(outsideBytes);
 });
 
+test("a history chunk that vanishes after enumeration refuses instead of skipping its identities", async () => {
+  const { context, workflow } = await fixture("vanished-chunk");
+  const history = join(workflow, "agent-flow-history");
+  mkdirSync(history, { recursive: true });
+  const chunk = join(history, "chunk-000001.jsonl");
+  writeFileSync(chunk, '{"eventId":"wfe1:dispatch:stream:1","n":1}\n');
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"wfe1:dispatch:stream:2","d":"digest"}\n');
+  const realOpen = nodeFs.openSync;
+  let removed = false;
+  // Deterministic: the chunk is enumerated, then removed before its read, which
+  // is exactly the window the completeness guard must not swallow as "no
+  // retained history".
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, ...rest: unknown[]) => {
+    if (typeof path === "string" && path === chunk && !removed) { removed = true; rmSync(chunk); }
+    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
+  }) as never);
+  try {
+    await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "vanished-chunk" }))
+      .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-ledger:wf-vanished-chunk") });
+  } finally { spy.mockRestore(); }
+  expect(removed).toBe(true);
+});
+
 test("a non-regular legacy DSH leaf refuses by type instead of blocking the upgrade", async () => {
   const { context, workflow } = await fixture("fifo-leaf");
   const idsPath = join(workflow, "agent-flow-ids.jsonl");
