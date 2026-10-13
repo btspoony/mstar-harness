@@ -6,7 +6,6 @@
  * does not create or finish journaled file registrations.
  */
 import { createHash } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, resolve, sep } from "node:path";
 import { promotedAuditSnapshot, type AuditWorkflowOptions } from "./audit.js";
 import {
@@ -981,24 +980,6 @@ export type PurgeCatalogRegistrationReceipt = {
   timestamp: string;
 };
 
-/** Opt-in fixture pause between selection and settlement, so an independent
- * writer can deterministically exercise the native generation guard. */
-async function catalogPurgeParkHook(operationId: string): Promise<void> {
-  const wanted = process.env.MSTAR_STORE_PARK_CATALOG_PURGE;
-  if (wanted !== operationId && wanted !== "*") return;
-  const ready = process.env.MSTAR_STORE_PARK_READY;
-  const release = process.env.MSTAR_STORE_PARK_RELEASE;
-  if (ready === undefined || release === undefined) return;
-  writeFileSync(ready, JSON.stringify({ operationId, stage: "selected" }));
-  for (let waited = 0; waited < 30_000; waited += 5) {
-    if (existsSync(release)) return;
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, 5);
-    await promise;
-  }
-  throw new Error(`catalog purge fixture pause timed out for ${operationId}`);
-}
-
 /** Settle a failed registration without changing its source snapshots. */
 export async function purgeCatalogRegistration(
   context: StoreContext,
@@ -1036,7 +1017,6 @@ export async function purgeCatalogRegistration(
   });
   // Current source bytes, including later edits, remain untouched; only native
   // journal identity and generation govern settlement.
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") await catalogPurgeParkHook(operationId);
   return await withJournalWrite(context, (db, generation) => {
     if (generation.storeId !== initial.generation.storeId || generation.epoch !== initial.generation.epoch) {
       throw new CatalogError("store.operation-conflict", "the selected store identity or authority epoch changed during purge-registration; re-read the pending registration and retry against the current authority");
