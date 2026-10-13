@@ -52,11 +52,22 @@ function lossStatement(refusal: Refusal): string {
 /**
  * Read one regular file through ONE descriptor: the leaf is opened without
  * following a final symlink and WITHOUT blocking, the same descriptor is
- * verified with `fstat`, read and closed, so a path swapped for a link after
- * any earlier ancestor check can never contribute another file's bytes and a
- * leaf that is not a regular file refuses by type instead of hanging the
- * command. Where a platform does not provide `O_NOFOLLOW`, the same-descriptor
- * `fstat` verification remains the boundary.
+ * verified with `fstat`, read and closed, so a swapped LEAF refuses by type
+ * instead of being followed or hanging the command.
+ *
+ * The guard's reach stops at that final component. The importers assume the
+ * control root they read is trusted and defend against ACCIDENTAL symlink
+ * traversal, not against a writer already inside that root: a swapped ANCESTOR
+ * directory is followed by the open into a regular file that then passes
+ * `fstat`. Where a supported flow imports a tree the operator does not trust
+ * (for example a `.mstar` copied from another checkout), the correct shape is a
+ * staged, re-validated private copy — not descriptor anchoring, which would
+ * also buy a platform matrix for a rare maintenance read.
+ *
+ * The guard is only as wide as the platform's constants: `O_NOFOLLOW` and
+ * `O_NONBLOCK` are OR-ed in as `?? 0`, so where a runtime omits one the leaf
+ * open degrades silently to a plain open (no Windows CI exercises this today).
+ * The guard is therefore described here, never implied.
  */
 function readBytes(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));

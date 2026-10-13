@@ -184,6 +184,27 @@ class UnsafeSourceError extends ExecutionError {
   }
 }
 
+/**
+ * Read one registered legacy source leaf through ONE descriptor: the leaf is
+ * opened without following a final symlink and WITHOUT blocking, and the same
+ * descriptor is verified against the probe by device/inode before it is read,
+ * so a swapped LEAF refuses after the type probe instead of being followed.
+ *
+ * That is the whole guard. These importers assume the control root they read is
+ * trusted and defend against ACCIDENTAL symlink traversal, not against a writer
+ * already inside that root: an intermediate ANCESTOR directory swapped after
+ * the probe is followed by the open into a regular file the `fstat` accepts.
+ * `isPathWithin` below still refuses a source that resolves *outside* the
+ * control root on the default path, but a redirect that stays in-root is not
+ * caught here. Where a supported flow imports a tree the operator does not
+ * trust (for example a `.mstar` copied from another checkout), the correct shape
+ * is a staged, re-validated private copy — not descriptor anchoring.
+ *
+ * The guard is also only as wide as the platform's constants: `O_NOFOLLOW` and
+ * `O_NONBLOCK` are OR-ed in as `?? 0`, so where a runtime omits one the leaf
+ * open degrades silently to a plain, blocking open (no Windows CI exercises
+ * this today). The guard is described here, never implied.
+ */
 function readSourceBytes(path: string, label: string): Buffer {
   let info;
   try { info = lstatSync(path); } catch { conflict(`${label} is missing at ${path}; restore the file or remove its registration, then rerun store upgrade.`); }
@@ -516,9 +537,11 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     }
     // Ordinary imports keep the physical containment the register previously had
     // applied: a REGULAR leaf reached through an intermediate ancestor symlink
-    // must not escape the control root on the default path. It is deliberately
-    // placed AFTER the acknowledgement `continue` above, so an acknowledged
-    // linked source is never canonicalized (which would resolve its link).
+    // must not escape the control root on the default path. That is an ESCAPE
+    // check only — a redirect that stays inside the trusted control root passes
+    // (see `readSourceBytes`). It is deliberately placed AFTER the
+    // acknowledgement `continue` above, so an acknowledged linked source is
+    // never canonicalized (which would resolve its link).
     try {
       // Inside the workflow scope on purpose: an escaping registration is this
       // workflow's own source failure, so the catch below registers the id and
