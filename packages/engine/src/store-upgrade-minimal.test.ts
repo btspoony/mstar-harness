@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
-import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
+import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
 import { mutateExecutionPlan } from "./execution-coordination.js";
@@ -2791,12 +2791,7 @@ const NON_DIRECTORY_BYTES = "NOT-A-WORKFLOW-SOURCE-BYTES\n";
  * non-directory recovery must leave every one of these rows byte-identical.
  * Returns the exact native content a post-recovery comparison needs.
  */
-async function seedUnrelatedNative(context: StoreContext, nativeId: string): Promise<{
-  workflow: { workflow_id: string; revision: number; state_json: string };
-  plan: { plan_id: string; revision: number; state_json: string };
-  input: { input_json: string; input_hash: string };
-  receipts: Array<Record<string, unknown>>;
-}> {
+async function seedUnrelatedNative(context: StoreContext, nativeId: string) {
   const root = await readExecutionState(context);
   await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId: nativeId, role: "coordinator" })), {
     entry: { id: nativeId, type: "plan", started_at: "2026-10-04", dir: `workflows/${nativeId}` },
@@ -2814,31 +2809,19 @@ async function seedUnrelatedNative(context: StoreContext, nativeId: string): Pro
     expected: root.token,
     operationId: `create-${nativeId}`,
   });
-  const store = await openStore(context, "read");
-  try {
-    return {
-      workflow: store.db.prepare("select workflow_id, revision, state_json from execution_workflows where workflow_id = ?").get(nativeId) as { workflow_id: string; revision: number; state_json: string },
-      plan: store.db.prepare("select plan_id, revision, state_json from execution_plans where workflow_id = ?").get(nativeId) as { plan_id: string; revision: number; state_json: string },
-      input: store.db.prepare("select input_json, input_hash from execution_inputs where workflow_id = ?").get(nativeId) as { input_json: string; input_hash: string },
-      receipts: store.db.prepare("select operation_id, workflow_id, result_json from execution_operations where workflow_id = ? order by operation_id").all(nativeId) as Array<Record<string, unknown>>,
-    };
-  } finally { store.close(); }
+  return readUnrelatedNative(context, nativeId);
 }
 
 /** Re-read the same unrelated native rows after a run, for a content comparison. */
-async function readUnrelatedNative(context: StoreContext, nativeId: string): Promise<{
-  workflow: { workflow_id: string; revision: number; state_json: string };
-  plan: { plan_id: string; revision: number; state_json: string };
-  input: { input_json: string; input_hash: string };
-  receipts: Array<Record<string, unknown>>;
-}> {
+async function readUnrelatedNative(context: StoreContext, nativeId: string) {
   const store = await openStore(context, "read");
   try {
     return {
-      workflow: store.db.prepare("select workflow_id, revision, state_json from execution_workflows where workflow_id = ?").get(nativeId) as { workflow_id: string; revision: number; state_json: string },
-      plan: store.db.prepare("select plan_id, revision, state_json from execution_plans where workflow_id = ?").get(nativeId) as { plan_id: string; revision: number; state_json: string },
-      input: store.db.prepare("select input_json, input_hash from execution_inputs where workflow_id = ?").get(nativeId) as { input_json: string; input_hash: string },
-      receipts: store.db.prepare("select operation_id, workflow_id, result_json from execution_operations where workflow_id = ? order by operation_id").all(nativeId) as Array<Record<string, unknown>>,
+      workflow: store.db.prepare("select * from execution_workflows where workflow_id = ?").get(nativeId),
+      registry: store.db.prepare("select * from execution_registry where workflow_id = ?").get(nativeId),
+      plans: store.db.prepare("select * from execution_plans where workflow_id = ? order by ordinal, plan_id").all(nativeId),
+      inputs: store.db.prepare("select * from execution_inputs where workflow_id = ? order by plan_id").all(nativeId),
+      receipts: store.db.prepare("select * from execution_operations where workflow_id = ? order by epoch, operation_id").all(nativeId),
     };
   } finally { store.close(); }
 }

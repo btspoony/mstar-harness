@@ -62,8 +62,9 @@ function rootOf(context: StoreContext): string {
  * enumerated as a real in-root directory, plus the registered execution ids
  * whose source this run refuses — a registered source that is not itself a real
  * in-root directory (a symlink, or a non-directory path). The caller rejects an
- * acknowledgement that addresses no such source. A MISSING registered path is
- * not classified here: it stays the per-registration guard's own reported skip.
+ * acknowledgement that addresses no such source. A missing registered directory
+ * retains the containment refusal; only a missing snapshot in a real directory
+ * is an ordinary reported skip.
  *
  * The ROOT is `lstat`-ed FIRST and every decision about which registrations it
  * makes an execution source is purely lexical, so no path is resolved (and
@@ -297,8 +298,8 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   const skippableRegistered = isPlainObject(parsed) && parsed.version === 1 ? [] : registeredExecution;
   const tree = assertWorkflowTreeIsReal(root, acknowledgedSkips, skippableRegistered, acknowledgedWorkflowSkips);
   const isRealWorkflowTree = tree.enumerable;
-  // The preflight classified linked-source refusals by lstat, before any target
-  // access. That half of the acknowledgement vocabulary is settled here; the
+  // Preflight classified refused registered sources before child or target access.
+  // That half of the acknowledgement vocabulary is settled here; the
   // other half (recognized legacy sources whose id the native authority already
   // holds) is only knowable inside the import transaction, so the whole-input
   // check runs at that seam instead of speculating about native state here.
