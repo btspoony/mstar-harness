@@ -460,49 +460,48 @@ import { isAbsolute as isAbsolute4, join as join13, normalize, sep as sep6 } fro
 import { existsSync as existsSync11, readFileSync as readFileSync12 } from "node:fs";
 import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep7 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync12, writeFileSync as writeFileSync4 } from "node:fs";
 import { basename as basename8, isAbsolute as isAbsolute6, resolve as resolve10, sep as sep8 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync13, realpathSync as realpathSync6 } from "node:fs";
+import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join15, resolve as resolve11 } from "node:path";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync14, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep9 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { createHash as createHash9, randomUUID as randomUUID5 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync15, fstatSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
 import { basename as basename9, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
 import { createHash as createHash10 } from "node:crypto";
 import { lstatSync as lstatSync7, readFileSync as readFileSync14, realpathSync as realpathSync7 } from "node:fs";
 import { createHash as createHash11 } from "node:crypto";
 import { basename as basename10, dirname as dirname11 } from "node:path";
 import { execFileSync as execFileSync5, spawn } from "node:child_process";
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync15, realpathSync as realpathSync8, statSync as statSync7, writeFileSync as writeFileSync5 } from "node:fs";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync15, realpathSync as realpathSync8, statSync as statSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename as basename11, dirname as dirname12, isAbsolute as isAbsolute9, join as join18, relative as relative5, resolve as resolve14 } from "node:path";
-import { existsSync as existsSync16, statSync as statSync8 } from "node:fs";
+import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
 import { basename as basename12, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { readFileSync as readFileSync16, readdirSync as readdirSync10 } from "node:fs";
 import { join as join20, relative as relative8 } from "node:path";
-import { existsSync as existsSync17, readdirSync as readdirSync11 } from "node:fs";
+import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
 import { basename as basename14, isAbsolute as isAbsolute10, join as join21, resolve as resolve17, sep as sep10 } from "node:path";
-import { existsSync as existsSync18 } from "node:fs";
+import { existsSync as existsSync17 } from "node:fs";
 import { join as join22 } from "node:path";
 import { readdirSync as readdirSync12 } from "node:fs";
 import { isAbsolute as isAbsolute11, join as join23 } from "node:path";
-import { existsSync as existsSync19, readdirSync as readdirSync13, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync18, readdirSync as readdirSync13, unlinkSync as unlinkSync4 } from "node:fs";
 import { basename as basename15, isAbsolute as isAbsolute12, join as join24, resolve as resolve18, sep as sep11 } from "node:path";
-import { existsSync as existsSync20, readFileSync as readFileSync18 } from "node:fs";
+import { existsSync as existsSync19, readFileSync as readFileSync18 } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join25, resolve as resolve19 } from "node:path";
-import { existsSync as existsSync21, lstatSync as lstatSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
+import { existsSync as existsSync20, lstatSync as lstatSync9, mkdirSync as mkdirSync7, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
 import { dirname as dirname16, isAbsolute as isAbsolute14, join as join27, relative as relative9, sep as sep12 } from "node:path";
 import { createHash as createHash13 } from "node:crypto";
 import { createHash as createHash12 } from "node:crypto";
-import { lstatSync as lstatSync8, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
+import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
 import { dirname as dirname15, join as join26 } from "node:path";
 import { dirname as dirname17, isAbsolute as isAbsolute15 } from "node:path";
 import { createHash as createHash14, randomUUID as randomUUID6 } from "node:crypto";
@@ -510,36 +509,36 @@ import { createHash as createHash15 } from "node:crypto";
 import { readFileSync as readFileSync21 } from "node:fs";
 import { join as join28 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
-import { existsSync as existsSync22, readFileSync as readFileSync22, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync21, readFileSync as readFileSync22, statSync as statSync9 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute16, join as join29 } from "node:path";
 import { createHash as createHash17 } from "node:crypto";
 import { createHash as createHash18 } from "node:crypto";
-import { existsSync as existsSync23, lstatSync as lstatSync10, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
+import { existsSync as existsSync22, lstatSync as lstatSync10, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
 import { join as join30, resolve as resolve20 } from "node:path";
 import {
-  closeSync as closeSync2,
+  closeSync as closeSync3,
   constants as fsConstants,
-  fstatSync as fstatSync2,
-  fsyncSync,
+  fstatSync as fstatSync3,
+  fsyncSync as fsyncSync2,
   lstatSync as lstatSync11,
   mkdirSync as mkdirSync8,
-  openSync as openSync2,
+  openSync as openSync3,
   writeSync
 } from "node:fs";
 import { dirname as dirname19, join as join31 } from "node:path";
 import { createHash as createHash19, randomUUID as randomUUID7 } from "node:crypto";
 import {
-  closeSync as closeSync3,
+  closeSync as closeSync4,
   copyFileSync as copyFileSync2,
   createReadStream,
-  existsSync as existsSync24,
+  existsSync as existsSync23,
   mkdtempSync,
-  openSync as openSync3,
+  openSync as openSync4,
   readFileSync as readFileSync24,
   readdirSync as readdirSync17,
   readSync as readSync2,
   rmSync as rmSync2,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync5
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname20, join as join32, relative as relative10, resolve as resolve21, sep as sep13 } from "node:path";
@@ -16219,24 +16218,6 @@ function parseJournalWorkflowId(row) {
     return;
   }
 }
-async function catalogPurgeParkHook(operationId) {
-  const wanted = process.env.MSTAR_STORE_PARK_CATALOG_PURGE;
-  if (wanted !== operationId && wanted !== "*")
-    return;
-  const ready = process.env.MSTAR_STORE_PARK_READY;
-  const release = process.env.MSTAR_STORE_PARK_RELEASE;
-  if (ready === undefined || release === undefined)
-    return;
-  writeFileSync4(ready, JSON.stringify({ operationId, stage: "selected" }));
-  for (let waited = 0;waited < 30000; waited += 5) {
-    if (existsSync12(release))
-      return;
-    const { promise, resolve: resolve112 } = Promise.withResolvers();
-    setTimeout(resolve112, 5);
-    await promise;
-  }
-  throw new Error(`catalog purge fixture pause timed out for ${operationId}`);
-}
 async function purgeCatalogRegistration(context, input) {
   const workflowId = requireText(input.workflowId, "workflowId");
   const operationId = requireText(input.operationId, "operationId");
@@ -16263,8 +16244,6 @@ async function purgeCatalogRegistration(context, input) {
     }
     return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, generation };
   });
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1")
-    await catalogPurgeParkHook(operationId);
   return await withJournalWrite(context, (db, generation) => {
     if (generation.storeId !== initial.generation.storeId || generation.epoch !== initial.generation.epoch) {
       throw new CatalogError("store.operation-conflict", "the selected store identity or authority epoch changed during purge-registration; re-read the pending registration and retry against the current authority");
@@ -16424,7 +16403,7 @@ function workflowEntryPreDispatchCheck(input, opts = {}) {
   if (iteration) {
     if (integrationPath === "") {
       violations.push(violation8("high", "worktree.entry.integration-path-missing", `iteration "${input.workflowId}" has no recorded integration_worktree_path`, `Create a dedicated checkout with \`git worktree add <absolute-path> ${shellQuote(integration)}\`, then register it through \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path <absolute-path>\`.`));
-    } else if (!existsSync13(integrationPath)) {
+    } else if (!existsSync12(integrationPath)) {
       violations.push(violation8("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, `Create the recorded checkout with \`git worktree add ${shellQuote(integrationPath)} ${shellQuote(integration)}\`, then register or verify it with \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path ${shellQuote(integrationPath)}\`.`));
     } else {
       const probe = probeBranch(integrationPath, opts);
@@ -16567,7 +16546,7 @@ function l1PreDispatchCheck(input, opts = {}) {
     violations.push(violation8("high", "worktree.l1.feature-branch-missing", `metadata.working_branch is empty for plan "${planId}"`, `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path ${rowWorktreePath.trim() === "" ? "<absolute-feature-worktree>" : JSON.stringify(rowWorktreePath)} --working-branch <feature-branch>\` to record the missing feature branch`));
   }
   if (integrationRequired && integrationWorktreePath.trim() !== "" && integrationBranch.trim() !== "") {
-    if (!existsSync13(integrationWorktreePath)) {
+    if (!existsSync12(integrationWorktreePath)) {
       violations.push(violation8("high", "worktree.l1.integration-missing", `integration worktree "${integrationWorktreePath}" does not exist for plan "${planId}" — the integration checkout must exist before dispatch`, `create it before dispatch: git worktree add ${shellQuote(integrationWorktreePath)} ${shellQuote(integrationBranch)}`));
     } else {
       const probe = probeBranch(integrationWorktreePath, opts);
@@ -16582,7 +16561,7 @@ function l1PreDispatchCheck(input, opts = {}) {
     if (resolve11(aPath) === resolve11(bPath)) {
       return violation8("critical", code2, `${describe} — the same checkout (normalized path equality) is not isolation`, fix);
     }
-    if (!existsSync13(aPath) || !existsSync13(bPath))
+    if (!existsSync12(aPath) || !existsSync12(bPath))
       return null;
     const a = checkout(aPath);
     const b = checkout(bPath);
@@ -16612,7 +16591,7 @@ function l1PreDispatchCheck(input, opts = {}) {
     if (v !== null)
       violations.push(v);
   }
-  if (rowWorktreePath.trim() !== "" && !existsSync13(rowWorktreePath)) {
+  if (rowWorktreePath.trim() !== "" && !existsSync12(rowWorktreePath)) {
     violations.push(violation8("high", "worktree.l1.feature-missing", `feature worktree directory "${rowWorktreePath}" does not exist for plan "${planId}"`, `create it before dispatch: git worktree add ${shellQuote(rowWorktreePath)} <working-branch>`));
   } else if (rowWorktreePath.trim() !== "" && rowWorkingBranch.trim() !== "") {
     const probe = probeBranch(rowWorktreePath, opts);
@@ -16646,7 +16625,7 @@ function l2PreDispatchCheck(input, opts = {}) {
       return;
     }
     seenPaths.add(normalized);
-    if (!existsSync13(track.worktreePath)) {
+    if (!existsSync12(track.worktreePath)) {
       violations.push(violation8("high", "worktree.l2.track-missing", `track worktree directory "${track.worktreePath}" does not exist`, `create it before dispatch: git worktree add ${track.worktreePath} ${track.workingBranch}`));
       return;
     }
@@ -16861,9 +16840,9 @@ function resolveIntentRoot(context, association) {
 }
 function workflowIdsAt(root) {
   const dir = resolveWorkflowDir(root, { harnessDir: root });
-  if (!existsSync14(dir))
+  if (!existsSync13(dir))
     return [];
-  return readdirSync9(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync14(join16(dir, entry.name, SNAPSHOT_FILE))).map((entry) => entry.name).sort();
+  return readdirSync9(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync13(join16(dir, entry.name, SNAPSHOT_FILE))).map((entry) => entry.name).sort();
 }
 function unresolvedTarget(input) {
   return {
@@ -16904,7 +16883,7 @@ function resolveIntentTarget(input) {
   const resolvedFrom = [source];
   const id = safePlanId(workflowId, "workflowId");
   const snapshotFile = snapshotPathOf(root, id);
-  if (!existsSync14(snapshotFile)) {
+  if (!existsSync13(snapshotFile)) {
     return unresolvedTarget({
       code: "coordination.workflow-not-found",
       needed: `the addressed workflow ${id}`,
@@ -16949,7 +16928,7 @@ function readSnapshot(dir) {
 }
 function readSnapshotWithPhase(dir) {
   const snapshotPath = join16(dir, SNAPSHOT_FILE);
-  if (!existsSync14(snapshotPath)) {
+  if (!existsSync13(snapshotPath)) {
     throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect the harness with mstar status validate.", {
       path: snapshotPath
     });
@@ -17140,7 +17119,7 @@ function assertEvidenceInsidePlanArea(roots, paths) {
     if (!roots.some((root) => isWithin(root, abs))) {
       throw new CoordinationError("coordination.path-mismatch", "Evidence path is outside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: abs, allowed: roots });
     }
-    if (!existsSync14(abs)) {
+    if (!existsSync13(abs)) {
       throw new CoordinationError("coordination.invalid-input", "Evidence path does not exist inside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: abs });
     }
   }
@@ -17184,7 +17163,7 @@ function gitCheckout(path2) {
   let operation;
   for (const [marker, label] of UNFINISHED_GIT_OPERATIONS) {
     const markerPath = gitRead(path2, ["rev-parse", "--git-path", marker]);
-    if (markerPath !== undefined && markerPath.length > 0 && existsSync14(resolve12(path2, markerPath))) {
+    if (markerPath !== undefined && markerPath.length > 0 && existsSync13(resolve12(path2, markerPath))) {
       operation = label;
       break;
     }
@@ -17202,11 +17181,11 @@ function currentGitHead(gitDir, commonDir) {
   const ref = head.slice(5);
   for (const root of [gitDir, commonDir]) {
     const path2 = join16(root, ref);
-    if (existsSync14(path2))
+    if (existsSync13(path2))
       return { head: readFileSync13(path2, "utf8").trim(), ref };
   }
   const packed = join16(commonDir, "packed-refs");
-  const entry = existsSync14(packed) ? readFileSync13(packed, "utf8").split(`
+  const entry = existsSync13(packed) ? readFileSync13(packed, "utf8").split(`
 `).find((line) => line.split(" ")[1] === ref) : undefined;
   return { head: entry?.split(" ")[0] ?? "", ref };
 }
@@ -17251,7 +17230,7 @@ function revalidateGitProofWitness(witness) {
     const gitIdentity = gitDirectoryIdentity(witness.gitDir);
     const commonIdentity = gitDirectoryIdentity(witness.commonDir);
     current = currentGitHead(witness.gitDir, witness.commonDir);
-    if (gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] && commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] && current.ref === witness.ref && current.head === witness.head && gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" && !UNFINISHED_GIT_OPERATIONS.some(([marker]) => existsSync14(join16(witness.gitDir, marker)) || existsSync14(join16(witness.commonDir, marker))))
+    if (gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] && commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] && current.ref === witness.ref && current.head === witness.head && gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" && !UNFINISHED_GIT_OPERATIONS.some(([marker]) => existsSync13(join16(witness.gitDir, marker)) || existsSync13(join16(witness.commonDir, marker))))
       return;
   } catch (error) {
     if (error instanceof CoordinationError)
@@ -17452,7 +17431,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync15(`${dbPath}-wal`))
+  if (existsSync14(`${dbPath}-wal`))
     return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
@@ -17840,7 +17819,7 @@ function isTransientReadOpenFailure(error, dbPath) {
     return false;
   if (!isRawCantOpen(error))
     return false;
-  return existsSync15(dbPath);
+  return existsSync14(dbPath);
 }
 function dropProbeConnection() {
   const current = probeConnection;
@@ -17872,7 +17851,7 @@ function probeConnectionFor(dbPath) {
 }
 function probeExecutionAuthority(dbPath) {
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
+  if (!existsSync14(dbPath)) {
     dropProbeConnection();
     return { kind: "absent", dbPath };
   }
@@ -17929,7 +17908,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
   }
   assertStoreRuntimeSupported();
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
+  if (!existsSync14(dbPath)) {
     throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" when legacy state must be imported; nothing was written.`);
   }
   dshTransactions.add(dbPath);
@@ -17991,7 +17970,7 @@ async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
+  if (!existsSync14(dbPath)) {
     throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
@@ -18049,13 +18028,26 @@ function publicationRefusal(step, error, dbPath) {
   const cause = publicationCause(error);
   return new StoreError("store.publication-failed", `The fresh store could not be ${step}: ${cause}. NO store was published at ${dbPath} — the canonical path ` + `holds no store and nothing was written to it. Resolve the filesystem condition named above (permissions, space, hard-link support) and rerun the same command, or select a harness on a filesystem that supports atomic hard links with --harness.`, { path: dbPath, cause });
 }
+function syncDirectoryEntry(dir) {
+  const fd = openSync(dir, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+function publicationBarrierRefusal(error, dbPath, phase) {
+  const cause = publicationCause(error);
+  const state = phase === "creation" ? `The store at ${dbPath} is complete and ACTIVE and was neither rolled back nor removed; this attempt's own staging name is retained beside it as a fallback reference to those same bytes. ` : `The canonical store at ${dbPath} is retained and readable with the schema state this call committed or verified, and it was neither rolled back nor removed. This call performed no import or activation, so the store's recorded authority state is unchanged. `;
+  return new StoreError("store.publication-barrier-failed", state + `The synchronization of its containing directory entry failed (${cause}), so that name is not CONFIRMED durable: a power loss before the next successful barrier could lose it. Directory synchronization (open + fsync) is a platform/filesystem capability, and this one refused with the cause above. Retry the ordinary public upgrade on the same published path to re-attempt the barrier once the condition clears: "mstar store upgrade --harness <control root> --operator <name>".`, { path: dbPath, published: true, barrier: phase, cause });
+}
 async function initializeStore(context, options = {}) {
   assertStoreRuntimeSupported();
   const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
   const dbPath = storeDbPath(context);
   const alreadyExists = () => new StoreError("store.already-exists", `An issue store already exists at ${dbPath}. "store init" is create-only and must not reuse store.not-initialized for an existing store; use the upgrade path for schema changes. Nothing was modified.`);
   await loadSqliteDriver();
-  if (existsSync15(dbPath))
+  if (existsSync14(dbPath))
     throw alreadyExists();
   const stagingPath = join17(dirname10(dbPath), `.${basename9(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
   let claim;
@@ -18109,6 +18101,11 @@ async function initializeStore(context, options = {}) {
     }
     throw publicationRefusal("linked into place at its canonical path", error, dbPath);
   }
+  try {
+    syncDirectoryEntry(dirname10(dbPath));
+  } catch (error) {
+    throw publicationBarrierRefusal(error, dbPath, "creation");
+  }
   removeStagingFiles(stagingPath);
   try {
     return await openStore(context, "write");
@@ -18121,7 +18118,7 @@ async function initializeStore(context, options = {}) {
 async function upgradeStore(context, options = {}) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
-  if (!existsSync15(dbPath)) {
+  if (!existsSync14(dbPath)) {
     throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}; there is nothing to upgrade. Run "mstar store init" for a genuinely empty workspace. Nothing was created.`);
   }
   const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
@@ -18131,16 +18128,22 @@ async function upgradeStore(context, options = {}) {
   } catch (error) {
     refuseOpenFailure(error, dbPath);
   }
+  let schemaVersion;
   try {
-    const schemaVersion = applyPendingMigrations(db, { attestation });
+    schemaVersion = applyPendingMigrations(db, { attestation });
     readStoreMeta(db);
     readExecutionMeta(db, schemaVersion);
-    return { schemaVersion };
   } catch (error) {
     refuseOpenFailure(error, dbPath);
   } finally {
     db.close();
   }
+  try {
+    syncDirectoryEntry(dirname10(dbPath));
+  } catch (error) {
+    throw publicationBarrierRefusal(error, dbPath, "upgrade");
+  }
+  return { schemaVersion };
 }
 function sha2563(value) {
   return createHash10("sha256").update(value).digest("hex");
@@ -19545,7 +19548,7 @@ function sddWorkspace(planId, opts = {}) {
   }
   const sddDir = resolveSddDir(harnessDir, planId);
   mkdirSync6(sddDir, { recursive: true });
-  writeFileSync5(join18(sddDir, ".gitignore"), `*
+  writeFileSync4(join18(sddDir, ".gitignore"), `*
 `);
   return realpathSync8(sddDir);
 }
@@ -19611,7 +19614,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   if (mkdirAfterGate !== null || !bound && !outFile) {
     mkdirSync6(mkdirAfterGate ?? (opts.sddDir ?? process.env.SDD_DIR), { recursive: true });
   }
-  writeFileSync5(out, `${printed.join(`
+  writeFileSync4(out, `${printed.join(`
 `)}
 `);
   return bound ? resolve14(observedCwd, out) : out;
@@ -19678,7 +19681,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
 `),
     run(["diff", "-U10", `${base}..${head}`])
   ];
-  writeFileSync5(out, Buffer.concat(parts));
+  writeFileSync4(out, Buffer.concat(parts));
   return bound ? resolve14(observedCwd, out) : out;
 }
 function assertBaseSha(ref, opts = {}) {
@@ -20185,7 +20188,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync16(filePath))
+  if (!existsSync15(filePath))
     return [];
   try {
     if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
@@ -21191,7 +21194,7 @@ function referenceExists(repoRoot, docText) {
   for (const { ref, isSymbol, module } of refs) {
     if (!isSymbol || module === undefined) {
       const candidate = ref.replace(LINE_SUFFIX_RE, "").replace(ANCHOR_RE, "");
-      if (existsSync17(resolve17(repoRoot, candidate))) {
+      if (existsSync16(resolve17(repoRoot, candidate))) {
         checked++;
       } else {
         violations.push(violation11("medium", "compound.reference.missing-file", `referenced path \`${ref}\` does not exist under ${repoRoot} (compound-refresh Phase 2: referenced code still exists?)`, "update the doc to reference an existing path, or delete the stale reference"));
@@ -21538,7 +21541,7 @@ function validateRoleMapping(rolesDir, options = {}) {
   const violations = [];
   const referenceById = new Map(mapping.map((m) => [m.agentId, m.reference]));
   for (const { agentId, reference } of mapping) {
-    if (!existsSync18(join22(rolesDir, reference))) {
+    if (!existsSync17(join22(rolesDir, reference))) {
       violations.push(violation13("medium", "roles.mapping.reference.missing", `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles § Role Reference Mapping)`, `create ${join22(rolesDir, reference)} or fix the mapping row`));
     }
   }
@@ -22760,7 +22763,7 @@ function createFsStore(harnessRoot) {
     async get(ref) {
       const filePath = resolveArtifactPath(root, ref);
       assertNotRetiredRegisterTarget(root, ref, filePath);
-      if (!existsSync19(filePath))
+      if (!existsSync18(filePath))
         return;
       return readJson(filePath);
     },
@@ -22771,7 +22774,7 @@ function createFsStore(harnessRoot) {
       if (protectedKind !== null) {
         assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
       }
-      if (existsSync19(filePath))
+      if (existsSync18(filePath))
         unlinkSync4(filePath);
     },
     async list(kind) {
@@ -22789,7 +22792,7 @@ function createFsStore(harnessRoot) {
       for (const name of listDirNames(sddDir)) {
         if (PLAN_SHAPED_KEY_RE.test(name)) {
           const getPath = tryResolveGetPath(root, kind, name);
-          if (getPath !== undefined && existsSync19(getPath))
+          if (getPath !== undefined && existsSync18(getPath))
             keys.push(name);
         }
       }
@@ -22858,7 +22861,7 @@ async function loadStoreModule(modulePath) {
     throw new Error(`loadStoreModule: only filesystem paths are allowed — got ${JSON.stringify(modulePath)} (URI schemes such as http:/https:/file: are rejected)`);
   }
   const resolved = resolve18(modulePath);
-  if (!existsSync19(resolved)) {
+  if (!existsSync18(resolved)) {
     throw new Error(`loadStoreModule: module file not found — ${JSON.stringify(resolved)}`);
   }
   const mod = await import(resolved);
@@ -22874,7 +22877,7 @@ function readSessionEnvelope(sessionPath) {
     throw new CoordinationError("coordination.invalid-input", "sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
   }
   const abs = resolve19(sessionPath);
-  if (!existsSync20(abs)) {
+  if (!existsSync19(abs)) {
     throw new CoordinationError("coordination.session-not-found", "Session envelope was not found. Inspect the harness authority with mstar status validate.", { path: abs });
   }
   let parsed;
@@ -23372,10 +23375,14 @@ function lossStatement(refusal) {
   }
 }
 function readBytes(path2) {
-  const st = lstatSync8(path2);
-  if (st.isSymbolicLink() || !st.isFile())
-    throw new Error(`not a regular file: ${path2}`);
-  return readFileSync19(path2);
+  const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
+  try {
+    if (!fstatSync2(fd).isFile())
+      throw new Error(`not a regular file: ${path2}`);
+    return readFileSync19(fd);
+  } finally {
+    closeSync2(fd);
+  }
 }
 function readInside(parent, child) {
   const st = lstatSync8(parent);
@@ -23438,6 +23445,37 @@ function evaluate(context, now2) {
 `).filter((line) => line.trim() !== "").length : 0;
         const knownTailLines = present[FLOW] ? nonBlankLines(present[FLOW]) : 0;
         const registryLoss = `the entire accepted-identity registry for ${entry.name} (${knownIndexLines} index line(s) present) and the coupled display tail (${knownTailLines} non-blank line(s) present) were discarded`;
+        const tailRows = [];
+        const tailIdentities = new Map;
+        let tailUndecidable = null;
+        if (present[FLOW] !== undefined) {
+          for (const [i, line] of present[FLOW].toString("utf8").split(`
+`).entries()) {
+            if (line.trim() === "")
+              continue;
+            let eventId = null;
+            try {
+              const parsed = JSON.parse(line);
+              const id = parsed !== null && typeof parsed === "object" && "eventId" in parsed ? parsed.eventId : undefined;
+              if (typeof id === "string")
+                eventId = id;
+            } catch {
+              if (line.includes('"wfe1:'))
+                tailUndecidable = `display-tail line ${i + 1} names a native event identity but is not a parseable row`;
+            }
+            tailRows.push({ eventId, lineJson: line, lineIndex: i + 1 });
+            if (eventId !== null && eventId.startsWith("wfe1:")) {
+              const digest = hash(line).slice(0, 32);
+              const prior = tailIdentities.get(eventId);
+              if (prior !== undefined && prior !== digest)
+                tailUndecidable = `the display tail holds native identity ${eventId} with two different byte sets`;
+              else
+                tailIdentities.set(eventId, digest);
+            }
+            if (tailUndecidable !== null)
+              break;
+          }
+        }
         const historyIdentities = new Map;
         let historySafe = true;
         const historyDir = join26(dir, HISTORY);
@@ -23476,6 +23514,7 @@ function evaluate(context, now2) {
           }
         }
         const identityRows = [];
+        const seen = new Map;
         let identityRefused = !historySafe || unreadable.has(IDS);
         if (unreadable.has(IDS))
           refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identity index", discarded: registryLoss, reason: `the identity index could not be safely read`, source });
@@ -23485,7 +23524,6 @@ function evaluate(context, now2) {
             refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identities", discarded: registryLoss, reason: "the identity index is absent while retained history holds identified rows", source });
           }
         } else if (!identityRefused) {
-          const seen = new Map;
           let malformed = null;
           for (const [i, line] of present[IDS].toString("utf8").split(`
 `).entries()) {
@@ -23593,6 +23631,8 @@ function evaluate(context, now2) {
           if (tailRefusal === null && journalDecision !== "invalid")
             findings.push({ source, kind: "journal", decision: journalDecision });
         }
+        if (tailRefusal === null && tailUndecidable !== null)
+          tailRefusal = tailUndecidable;
         const tailFacts = knownTailLines === 0 ? "display tail (unavailable; row count unknown)" : `tail rows (${knownTailLines})`;
         const tailLoss = `the display rows held back for ${entry.name} were not imported`;
         if (tailRefusal !== null) {
@@ -23601,18 +23641,28 @@ function evaluate(context, now2) {
           refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: tailFacts, discarded: tailLoss, reason: "the tail identities cannot be verified because the identity registry was refused", source });
         } else {
           const tailDigest = hash(present[FLOW]);
-          for (const [i, line] of present[FLOW].toString("utf8").split(`
-`).entries())
-            if (line.trim() !== "") {
-              let eventId = null;
-              try {
-                const id = JSON.parse(line).eventId;
-                if (typeof id === "string")
-                  eventId = id;
-              } catch {}
-              ledgerRows.push({ eventId, lineJson: line, lineIndex: i + 1, recordedAt: now2 });
+          let conflicting = null;
+          for (const [eventId, digest] of tailIdentities) {
+            const prior = seen.get(eventId);
+            if (prior !== undefined && prior !== digest) {
+              conflicting = eventId;
+              break;
             }
-          tailSourceDigest = ledgerRows.length ? tailDigest : null;
+          }
+          if (conflicting !== null) {
+            identityRefused = true;
+            identityRows.length = 0;
+            refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: `identity ${conflicting}`, discarded: registryLoss, reason: "the accepted identity index and the retained tail bytes disagree for this identity", source });
+          } else {
+            for (const [eventId, digest] of tailIdentities)
+              if (!seen.has(eventId)) {
+                seen.set(eventId, digest);
+                identityRows.push({ eventId, digest, acceptedAt: now2 });
+              }
+            for (const row of tailRows)
+              ledgerRows.push({ eventId: row.eventId, lineJson: row.lineJson, lineIndex: row.lineIndex, recordedAt: now2 });
+            tailSourceDigest = ledgerRows.length ? tailDigest : null;
+          }
         }
         const pendingBounds = [];
         if (unreadable.has(CURSORS))
@@ -23815,7 +23865,8 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     const refusedRegisteredIds = new Set;
     for (const entry of registeredExecution) {
       try {
-        if (lstatSync9(entry.dir).isSymbolicLink())
+        const entryInfo = lstatSync9(entry.dir);
+        if (entryInfo.isSymbolicLink() || !entryInfo.isDirectory())
           refusedRegisteredIds.add(entry.id);
       } catch {}
     }
@@ -23833,7 +23884,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
   }
   if (info.isSymbolicLink() && registeredUnderRoot.length === 0) {
     if (!acknowledgedSkips.includes("dsh-workflows")) {
-      conflict2(`workflow root ${workflowsDir} is not a real directory; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-workflows\` to drop exactly that source, otherwise replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
+      conflict2(`workflow root ${workflowsDir} is not a real directory; if it holds only legacy DSH host-state data, rerun store upgrade with \`--ack-skip-dsh dsh-workflows\` to drop exactly that source, otherwise restore it as a directory inside the control root, then rerun store upgrade.`);
     }
     return { enumerable: false, refusedRegisteredIds: new Set };
   }
@@ -23841,11 +23892,19 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     const refusedRegisteredIds = new Set(registeredUnderRoot.map(({ id }) => id));
     const unacknowledged = registeredUnderRoot.filter(({ id }) => !acknowledgedWorkflowSkips.has(id));
     if (unacknowledged.length > 0) {
-      conflict2(`workflow root ${workflowsDir} is a symlink and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative9(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a linked directory is never followed, so a registered execution source is never discarded by a DSH acknowledgement — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to skip importing exactly those registered workflows (their legacy sources remain in place and no execution row is imported for them), or replace the symlink with a real in-root directory holding those workflows, then rerun store upgrade.`);
+      return { enumerable: false, refusedRegisteredIds, refusal: `workflow root ${workflowsDir} is a symlink and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative9(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a linked directory is never followed, so a registered execution source is never discarded by a DSH acknowledgement — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to skip importing exactly those registered workflows (their legacy sources remain in place and no execution row is imported for them), or replace the symlink with a real in-root directory holding those workflows, then rerun store upgrade.` };
     }
     return { enumerable: false, refusedRegisteredIds };
   }
-  conflict2(`workflow root ${workflowsDir} is not a real directory; replace it with a directory inside the control root or remove it, then rerun store upgrade.`);
+  if (registeredUnderRoot.length > 0) {
+    const refusedRegisteredIds = new Set(registeredUnderRoot.map(({ id }) => id));
+    const unacknowledged = registeredUnderRoot.filter(({ id }) => !acknowledgedWorkflowSkips.has(id));
+    if (unacknowledged.length > 0) {
+      return { enumerable: false, refusedRegisteredIds, refusal: `workflow root ${workflowsDir} is not a real directory, and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative9(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a source that is not a real in-root directory is never read as a workflow source — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to keep the source in place and skip ONLY those legacy IMPORTs (each loss is reported in the receipt), or restore the root as a real in-root directory holding those workflows, then rerun store upgrade.` };
+    }
+    return { enumerable: false, refusedRegisteredIds };
+  }
+  conflict2(`workflow root ${workflowsDir} is not a real directory; restore it as a real directory inside the control root, then rerun store upgrade.`);
 }
 function binding(value) {
   if (!isPlainObject(value))
@@ -23947,7 +24006,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const skipped = [];
   const sourceFiles = new Set;
   let parsed;
-  if (!existsSync21(statusPath)) {
+  if (!existsSync20(statusPath)) {
     parsed = { version: 2, updated_at: SYNTHESIZED_DATE2, workflows: [] };
   } else {
     sourceFiles.add(statusPath);
@@ -23965,14 +24024,12 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const skippableRegistered = isPlainObject(parsed) && parsed.version === 1 ? [] : registeredExecution;
   const tree = assertWorkflowTreeIsReal(root, acknowledgedSkips, skippableRegistered, acknowledgedWorkflowSkips);
   const isRealWorkflowTree = tree.enumerable;
-  const unmatchedWorkflowSkips = [...acknowledgedWorkflowSkips].filter((id) => !tree.refusedRegisteredIds.has(id));
-  if (unmatchedWorkflowSkips.length > 0) {
-    throw new WorkflowSkipError(`--ack-skip-workflow ${unmatchedWorkflowSkips.join(" ")} matched no registered workflow source this run refuses because its whole root or per-workflow directory is a symlink. ` + `Skipping an unrefused registration would silently drop a workflow this run would otherwise import — pass only the original workflow ids named by the refusal, or omit --ack-skip-workflow entirely.`);
-  }
+  const refusedSourceIds = tree.refusedRegisteredIds;
+  let refusal = tree.refusal;
   if (isPlainObject(parsed) && parsed.version === 1) {
     const legacy = convertLegacyV1Tree(root, declarations);
     const converted = discoverV1(root, legacy, operator);
-    return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions };
+    return { root, ...converted, skipped, skippedWorkflowAcknowledgements: [], dispositions: legacy.dispositions, refusedSourceIds };
   }
   if (declarations.length > 0) {
     throw new DeliveryDeclarationError(`${declarations.length} --delivery declaration(s) (${declarations.map((entry) => JSON.stringify(entry.workflow)).join(", ")}) address no active standalone plan lift; this control root is ${isPlainObject(parsed) && parsed.version === 2 ? "already a v2 tree, whose snapshots declare their own delivery kinds" : "an empty root with no active standalone v1 lift to declare"} — ` + `pass --delivery only when upgrading a v1 root that holds an active standalone plan, or omit it entirely`);
@@ -23998,7 +24055,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       if (!dirent.isDirectory() || registeredIds.has(dirent.name))
         continue;
       const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);
-      if (!existsSync21(snapshotPath))
+      if (!existsSync20(snapshotPath))
         continue;
       sourceFiles.add(snapshotPath);
       const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`);
@@ -24040,12 +24097,12 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       const path2 = relative9(root, dir).split(/[\\/]+/).join("/");
       skipped.push({
         path: path2,
-        reason: `registered workflow ${entry.id} skipped by --ack-skip-workflow; its symlinked legacy source was not read and no execution row was imported for it`
+        reason: `registered workflow ${entry.id} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`
       });
       skippedWorkflowAcknowledgements.push({ id: entry.id, path: path2 });
       continue;
     }
-    const info = (() => {
+    const info = refusedRegistered && !isRealWorkflowTree ? null : (() => {
       try {
         return lstatSync9(dir);
       } catch {
@@ -24053,14 +24110,16 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       }
     })();
     if (refusedRegistered || info?.isSymbolicLink() || info !== null && !info.isDirectory()) {
-      const linked = refusedRegistered || info?.isSymbolicLink() === true;
-      conflict2(linked ? `workflow ${entry.id} directory ${dir} is not a real in-root directory (a linked source is never followed); rerun store upgrade with \`--ack-skip-workflow ${entry.id}\` to skip importing that registered workflow while its legacy source stays in place, or replace it with a real in-root directory, then rerun store upgrade.` : `workflow ${entry.id} directory ${dir} is not a real in-root directory; replace it or remove its registration, then rerun store upgrade.`);
+      const kind = !isRealWorkflowTree || info === null ? "its registered path cannot be read as a workflow source" : info.isSymbolicLink() ? "a linked source is never followed" : "a non-directory path is not a workflow source";
+      refusedSourceIds.add(entry.id);
+      refusal ??= `workflow ${entry.id} directory ${dir} is not a real in-root directory (${kind}); rerun store upgrade with \`--ack-skip-workflow ${entry.id}\` to keep that source in place and skip ONLY its legacy IMPORT (the loss is reported in the receipt), or restore it as a real in-root directory, then rerun store upgrade.`;
+      continue;
     }
     if (!isPathWithin(root, dir) || dir === root)
       conflict2(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration, then rerun store upgrade.`);
     const sessionsDir = join27(dir, "sessions");
     const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);
-    if (info === null || !existsSync21(snapshotPath)) {
+    if (info === null || !existsSync20(snapshotPath)) {
       skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "registered workflow snapshot is missing; left in place" });
       continue;
     }
@@ -24077,7 +24136,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     }
     const rawInventory = legacySnapshotInventory(snapshotValue);
     const snapshot = projectLegacySnapshot(snapshotValue);
-    if (existsSync21(sessionsDir)) {
+    if (existsSync20(sessionsDir)) {
       const sessionsInfo = lstatSync9(sessionsDir);
       if (sessionsInfo.isSymbolicLink() || !sessionsInfo.isDirectory())
         conflict2(`workflow ${entry.id} sessions path is not a real directory; replace it with a real directory or remove it, then rerun store upgrade.`);
@@ -24158,7 +24217,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     relative9(root, path2).split(/[\\/]+/).join("/"),
     createHash13("sha256").update(readSourceBytes(path2, `workspace source ${relative9(root, path2)}`)).digest("hex")
   ]))).digest("hex");
-  return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [] };
+  return { root, rootDoc, rows, skipped, skippedWorkflowAcknowledgements, sourceDigest, dispositions: [], refusedSourceIds, refusal };
 }
 async function importExecutionMinimal(input) {
   const { context, operator, operationId } = input;
@@ -24180,16 +24239,29 @@ async function importExecutionMinimal(input) {
     if (prior !== undefined) {
       if (prior.request_hash !== requestHash3)
         throw new ExecutionError("execution.operation-conflict", `operationId ${operationId} was already used for a different store upgrade request.`);
+      if (source.refusal !== undefined)
+        conflict2(source.refusal);
       return JSON.parse(String(prior.result_json));
     }
     const existing = new Set(tx.db.prepare("select workflow_id from execution_workflows").all().map(({ workflow_id }) => workflow_id));
+    const collidingIds = new Set(source.rows.filter((row) => existing.has(row.id)).map(({ id }) => id));
+    const importable = source.rows.filter((row) => !collidingIds.has(row.id));
+    const acknowledgedCollisions = source.rows.filter((row) => collidingIds.has(row.id) && workflowSkips.has(row.id)).map((row) => ({ id: row.id, path: relative9(source.root, row.dir).split(/[\\/]+/).join("/") }));
+    const unmatchedWorkflowSkips = [...workflowSkips].filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
+    if (unmatchedWorkflowSkips.length > 0) {
+      throw new WorkflowSkipError(`--ack-skip-workflow ${unmatchedWorkflowSkips.join(" ")} matched no workflow source this run refuses — neither a registered source that is not a real in-root directory (a linked source or a non-directory path) nor a recognized legacy source whose id the native execution authority already holds. ` + `Skipping an unrefused source would silently drop a workflow this run would otherwise import — pass only the original workflow ids named by the refusal, or omit --ack-skip-workflow entirely.`);
+    }
+    if (source.refusal !== undefined)
+      conflict2(source.refusal);
+    const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id));
+    if (refusedCollisions.length > 0) {
+      conflict2(`the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow. Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`);
+    }
     let imported = 0;
+    const skipped = [...source.skipped];
     const dispositions = [...source.dispositions];
-    for (const row of source.rows) {
-      if (existing.has(row.id))
-        continue;
+    for (const row of importable) {
       writeImportedExecutionWorkflow(tx, row);
-      existing.add(row.id);
       imported++;
       for (const plan of row.plans) {
         if (plan.droppedLease)
@@ -24201,8 +24273,16 @@ async function importExecutionMinimal(input) {
         dispositions.push(`workflow ${row.id}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`);
       }
     }
+    for (const entry of acknowledgedCollisions) {
+      skipped.push({
+        path: entry.path,
+        reason: `legacy source for workflow ${entry.id} skipped by --ack-skip-workflow; the native execution authority already holds that id, so its native rows were kept and its legacy IMPORT was skipped`
+      });
+      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the native execution authority already holds that id, so this run kept the native workflow/plan rows, coordination, header and revisions unchanged and imported nothing from the retained legacy source at ${entry.path}. The legacy bytes remain in place and the native progress stays authoritative even if that source body was later edited — this is import disposal, not deletion, and no prior import or resumption is inferred.`);
+    }
+    skipped.sort((a, b) => a.path.localeCompare(b.path));
     for (const entry of source.skippedWorkflowAcknowledgements) {
-      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The source at ${entry.path} was not read (a symlinked source is never followed) and its bytes remain in place — this is import disposal, not deletion, and no resumption is fabricated.`);
+      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The source at ${entry.path} is not a real in-root directory (a linked source is never followed) and its bytes remain in place — this is import disposal, not deletion, and no resumption is fabricated.`);
     }
     const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get();
     if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
@@ -24225,7 +24305,7 @@ async function importExecutionMinimal(input) {
     } else if (imported > 0) {
       tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     }
-    const result = { verdict: "upgraded", imported, skipped: source.skipped, dispositions, sourceDigest: source.sourceDigest };
+    const result = { verdict: "upgraded", imported, skipped, dispositions, sourceDigest: source.sourceDigest };
     tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash3, JSON.stringify(result), new Date().toISOString());
     return result;
   });
@@ -24236,7 +24316,7 @@ async function upgradeStoreMinimal(input) {
   const dbPath = storeDbPath(context);
   let schemaVersion;
   mkdirSync7(dirname16(dbPath), { recursive: true });
-  if (!existsSync21(dbPath)) {
+  if (!existsSync20(dbPath)) {
     const initialized = await initializeStore(context, { attestation });
     schemaVersion = initialized.schemaVersion;
     initialized.close();
@@ -26978,7 +27058,7 @@ async function readPhaseEvidence(context, workflowId, operation) {
   if (canonical2 !== expected) {
     throw new CoordinationError("coordination.scope-mismatch", "Phase transition must use the workflow's registered compass; inspect the workflow with mstar status validate.", { workflow_id: workflowId, expected, actual: canonical2 });
   }
-  if (!existsSync22(canonical2)) {
+  if (!existsSync21(canonical2)) {
     throw invalidWorkflowTransition("The registered compass does not exist; repair it, then retry through mstar workflow phase.", {
       workflow_id: workflowId,
       compass_path: canonical2
@@ -27026,7 +27106,7 @@ async function readIntegrationWorktreeEvidence(context, workflowId, operation) {
   if (path2 === mainRoot || path2 === canonicalTarget(control)) {
     throw invalidWorkflowTransition("The integration checkout is the control checkout; provide a dedicated worktree, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2, expected: `a checkout distinct from ${mainRoot}` });
   }
-  if (!existsSync22(path2) || !statSync9(path2).isDirectory()) {
+  if (!existsSync21(path2) || !statSync9(path2).isDirectory()) {
     throw invalidWorkflowTransition("The integration checkout does not exist; provide an existing checkout path, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2 });
   }
   const owner = readMainWorktree(path2);
@@ -27073,7 +27153,7 @@ function revalidateWorkflowEvidence(evidence) {
   const checkout = evidence.worktree ?? evidence.checkout;
   if (checkout !== undefined && checkout.branch !== null) {
     const { path: path2, branch } = checkout;
-    if (!existsSync22(path2) || !statSync9(path2).isDirectory()) {
+    if (!existsSync21(path2) || !statSync9(path2).isDirectory()) {
       throw new CoordinationError("coordination.integration-unresolved", `the integration checkout ${path2} disappeared after it was validated; restore the checkout at the registered path and retry the workflow transition`, { path: path2 });
     }
     const alignment = assertBranchAlignment(path2, branch);
@@ -28168,7 +28248,7 @@ function readCounter(db) {
   return row.next_value;
 }
 async function ensureStagedStore(context) {
-  if (!existsSync23(storeDbPath(context))) {
+  if (!existsSync22(storeDbPath(context))) {
     const created = await initializeStore(context);
     created.close();
   }
@@ -28526,7 +28606,7 @@ function scanLedger(bytes) {
 function openWithoutFollowing(path2, flags, mode) {
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   try {
-    return mode === undefined ? openSync2(path2, flags | noFollow) : openSync2(path2, flags | noFollow, mode);
+    return mode === undefined ? openSync3(path2, flags | noFollow) : openSync3(path2, flags | noFollow, mode);
   } catch (error) {
     if (error.code === "ELOOP") {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is a symbolic link; a retained ledger leaf is opened directly and never followed.`);
@@ -28535,11 +28615,11 @@ function openWithoutFollowing(path2, flags, mode) {
   }
 }
 function fsyncDirectory(dir) {
-  const fd = openSync2(dir, "r");
+  const fd = openSync3(dir, "r");
   try {
-    fsyncSync(fd);
+    fsyncSync2(fd);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
 }
 function assertLedgerPathIdentity(path2, opened, phase) {
@@ -28566,7 +28646,7 @@ function commitLedgerFrame(path2, frame) {
     fd = openWithoutFollowing(path2, fsConstants.O_WRONLY | fsConstants.O_APPEND);
   }
   try {
-    opened = fstatSync2(fd);
+    opened = fstatSync3(fd);
     if (!opened.isFile()) {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is not a regular file; nothing was written.`);
     }
@@ -28577,9 +28657,9 @@ function commitLedgerFrame(path2, frame) {
     if (written !== line.length) {
       throw new ExecutionLedgerError("execution-ledgers.append-short", `only ${written} of ${line.length} bytes of the framed note reached ${path2}; the partial bytes stay in place and are never repaired or truncated in a peer's name. Retry the append with a new record id.`);
     }
-    fsyncSync(fd);
+    fsyncSync2(fd);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
   if (created)
     fsyncDirectory(dirname19(path2));
@@ -28752,51 +28832,6 @@ function conflict3(detail) {
 function corrupt2(detail) {
   return new ExecutionRecoveryError("store.corrupt", detail);
 }
-function recoveryFailureHook(stage) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  if (process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE === stage) {
-    throw new Error(`induced execution-restore failure at ${stage}`);
-  }
-}
-async function recoveryParkHook(attemptId, imagePath) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE;
-  if (wanted !== attemptId && wanted !== "*")
-    return;
-  const ready = process.env.MSTAR_STORE_PARK_READY;
-  const release = process.env.MSTAR_STORE_PARK_RELEASE;
-  if (ready === undefined || release === undefined)
-    return;
-  writeJson(ready, { attemptId, imagePath, stage: "staged" });
-  for (let waited = 0;waited < 30000; waited += 5) {
-    if (existsSync24(release))
-      return;
-    const { promise, resolve: resolve22 } = Promise.withResolvers();
-    setTimeout(resolve22, 5);
-    await promise;
-  }
-}
-async function recoveryCleanupParkHook(attemptId) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  const wanted = process.env.MSTAR_STORE_PARK_EXECUTION_RESTORE_CLEANUP;
-  if (wanted !== attemptId && wanted !== "*")
-    return;
-  const ready = process.env.MSTAR_STORE_PARK_READY;
-  const release = process.env.MSTAR_STORE_PARK_RELEASE;
-  if (ready === undefined || release === undefined)
-    return;
-  writeJson(ready, { attemptId, stage: "cleanup" });
-  for (let waited = 0;waited < 30000; waited += 5) {
-    if (existsSync24(release))
-      return;
-    const { promise, resolve: resolve22 } = Promise.withResolvers();
-    setTimeout(resolve22, 5);
-    await promise;
-  }
-}
 function text6(row, column) {
   const value = row[column];
   if (typeof value === "string")
@@ -28939,7 +28974,7 @@ function walStoreShapeOf(context) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES2);
   let fd;
   try {
-    fd = openSync3(dbPath, "r");
+    fd = openSync4(dbPath, "r");
   } catch {
     return null;
   }
@@ -28948,11 +28983,11 @@ function walStoreShapeOf(context) {
   } catch {
     return null;
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
   if (header[18] !== WAL_FILE_FORMAT_VERSION2 || header[19] !== WAL_FILE_FORMAT_VERSION2)
     return null;
-  return { header: header.toString("hex"), wal: existsSync24(`${dbPath}-wal`) };
+  return { header: header.toString("hex"), wal: existsSync23(`${dbPath}-wal`) };
 }
 async function openWalWithoutJournalReadSnapshot(context) {
   const walWithoutJournal = walStoreShapeOf(context);
@@ -28962,7 +28997,7 @@ async function openWalWithoutJournalReadSnapshot(context) {
   try {
     const image = join32(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
-    writeFileSync6(`${image}-wal`, "");
+    writeFileSync5(`${image}-wal`, "");
     const handle = await openStore({ harnessDir: scratch }, "read");
     return {
       handle: {
@@ -29184,7 +29219,7 @@ function recoveryPointPath(context, root, backupPath) {
   if (point3 === liveStore || point3 === `${liveStore}-wal` || point3 === `${liveStore}-shm`) {
     throw new StoreActivationError("store.activation-stale", `the recovery point ${backupPath} names the live store database itself. §8: copying \`store.db\` bytes is not a backup, ` + `so the live database and its WAL/SHM sidecars are never their own recovery point.`);
   }
-  if (!existsSync24(point3)) {
+  if (!existsSync23(point3)) {
     throw new StoreActivationError("store.activation-stale", `no recovery point exists at ${point3}. Select an existing recovery point or create one with store backup --out <path> inside ${root}; run store execution restore-preview against that point before retrying restore.`);
   }
   return point3;
@@ -29432,7 +29467,6 @@ async function restoreInOneTransaction(context, root, input, image, safetyReceip
         throw lossUnaccepted(`the restore would discard work outside the authorized loss inventory${unapprovedRow === undefined ? "" : ` (${unapprovedRow.domain}:${unapprovedRow.key})`}${unapprovedOperation === undefined ? "" : ` (operation ${unapprovedOperation})`}. Nothing was replaced. The live store is at ${moved}. Run store execution restore-preview again and authorize its current loss before retrying restore.`);
       }
       const newEpoch = Math.max(before.epoch, image.epoch) + 1;
-      recoveryFailureHook("before-replacement");
       replaceAuthorityRows(handle.db, image, availabilityOf(before.schemaVersion));
       const changed = handle.db.prepare("update store_meta set authority_epoch = ? where id = 1").run(newEpoch);
       if (Number(changed?.changes) !== 1) {
@@ -29490,7 +29524,6 @@ async function restoreInOneTransaction(context, root, input, image, safetyReceip
     writeJson(receiptPath, record);
     placedReceiptPath = receiptPath;
   } catch {}
-  recoveryFailureHook("after-replacement");
   reclaimAbandonedRestoreScratch(root, attemptId, committedBefore);
   return {
     storeId: record.storeId,
@@ -29532,17 +29565,13 @@ async function runRestore(context, root, input) {
     if (image.storeId !== input.preview.liveStoreId) {
       throw new StoreActivationError("store.activation-stale", `the recovery point at ${point3} belongs to store ${image.storeId}, not to the live store ${input.preview.liveStoreId}; a point of another store is never restored over this one.`);
     }
-    await recoveryParkHook(attemptId, imagePath);
     const safety = await backupStore(context, {
       out: join32(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID7()}.db`)
     });
     try {
-      recoveryFailureHook("before-live-hash");
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
       return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
     } catch (error) {
-      if (process.env.MSTAR_STORE_TEST_RUNNER === "1")
-        await recoveryCleanupParkHook(attemptId);
       const live = await currentAuthorityHandle(context).catch(() => null);
       if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
         try {
@@ -29613,7 +29642,7 @@ function sourceStatusOf(root, manifestJson) {
     const kind = isNonEmptyString(record.kind) ? record.kind : "deferred";
     const path2 = typeof record.path === "string" ? record.path : "";
     if (kind === "session-envelope") {
-      return { kind, relativePath: null, state: existsSync24(path2) ? "present" : "absent" };
+      return { kind, relativePath: null, state: existsSync23(path2) ? "present" : "absent" };
     }
     const bytes = readIfExists2(path2);
     if (bytes === undefined)

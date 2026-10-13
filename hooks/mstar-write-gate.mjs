@@ -45,15 +45,15 @@ import { execFileSync as execFileSync2 } from "node:child_process";
 import { basename as basename6, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
 import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep7 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync13, realpathSync as realpathSync6 } from "node:fs";
+import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync14, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
+import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep9 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync15, fstatSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
 import { basename as basename9, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
-import { existsSync as existsSync16, statSync as statSync8 } from "node:fs";
+import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
 import { basename as basename12, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
@@ -15828,7 +15828,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync15(`${dbPath}-wal`))
+  if (existsSync14(`${dbPath}-wal`))
     return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
@@ -16173,7 +16173,7 @@ function isTransientReadOpenFailure(error, dbPath) {
     return false;
   if (!isRawCantOpen(error))
     return false;
-  return existsSync15(dbPath);
+  return existsSync14(dbPath);
 }
 function dropProbeConnection() {
   const current = probeConnection;
@@ -16205,7 +16205,7 @@ function probeConnectionFor(dbPath) {
 }
 function probeExecutionAuthority(dbPath) {
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
+  if (!existsSync14(dbPath)) {
     dropProbeConnection();
     return { kind: "absent", dbPath };
   }
@@ -16259,7 +16259,7 @@ async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
+  if (!existsSync14(dbPath)) {
     throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
@@ -17085,7 +17085,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync16(filePath))
+  if (!existsSync15(filePath))
     return [];
   try {
     if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
