@@ -13,7 +13,7 @@
  * unsafe/duplicate id refusals, and cross-class id collisions.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJson } from "../src/core.js";
@@ -311,14 +311,51 @@ describe("convertLegacyV1Tree — refusals", () => {
     }
   });
 
-  test("duplicate plan ids refuse (every row must land in exactly one snapshot)", () => {
+  test("a duplicated plan id keeps the first row in stable order and reports the loss", () => {
     const root = fixtureTree();
     try {
       const doc = readJson(join(root, MIGRATE_STATUS_FILE)) as { plans: Array<Record<string, unknown>> };
       const first = doc.plans[0]!;
-      doc.plans.push({ ...first });
+      doc.plans.push({ ...first, title: "later duplicate" });
       writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
-      expect(() => convertLegacyV1Tree(root)).toThrow(/duplicate plan id/);
+      // The conversion no longer aborts: the first row (plan id, owning
+      // lifecycle id, row ordinal) survives and the later duplicate is reported
+      // so the importer can refuse it as its own skippable source.
+      const converted = convertLegacyV1Tree(root);
+      expect(converted.duplicatePlanIds).toEqual([{
+        id: first.id, owner: "iter-00000814-fallbacks-integration", kept: 0, dropped: [doc.plans.length - 1],
+      }]);
+      expect(converted.snapshots).toHaveLength(29);
+      // The surviving row is the first one in stable order: exactly one row
+      // carries that id, and it is the original (the duplicate's title is not).
+      const carried = converted.snapshots
+        .flatMap((snapshot) => (snapshot.data.plans ?? []) as Array<Record<string, unknown>>)
+        .filter((plan) => plan.id === first.id);
+      expect(carried).toHaveLength(1);
+      expect(carried[0]!.title).toBe(first.title);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a duplicated standalone plan id keeps the lower row ordinal and reports the later one", () => {
+    const root = fixtureTree();
+    try {
+      const doc = readJson(join(root, MIGRATE_STATUS_FILE)) as { plans: Array<Record<string, unknown>> };
+      // `00000717-kimi-host` is a fixture row no compass registers (its id comes
+      // from the legacy `plan_id` key): both competing rows are standalone, so
+      // the row ordinal decides.
+      doc.plans.unshift({
+        ...doc.plans.find((plan) => plan.id === "00000717-kimi-host" || plan.plan_id === "00000717-kimi-host")!,
+        title: "duplicate at ordinal 0",
+      });
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
+      const ordinals = doc.plans.flatMap((plan, index) => (plan.id === "00000717-kimi-host" || plan.plan_id === "00000717-kimi-host" ? [index] : []));
+      const converted = convertLegacyV1Tree(root);
+      expect(converted.duplicatePlanIds).toEqual([{ id: "00000717-kimi-host", owner: null, kept: ordinals[0], dropped: ordinals.slice(1) }]);
+      const standalone = converted.snapshots.filter((snapshot) => snapshot.id === "00000717-kimi-host");
+      expect(standalone).toHaveLength(1);
+      expect((standalone[0]!.data.plans ?? [])[0]).toMatchObject({ title: "duplicate at ordinal 0" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -343,6 +380,39 @@ describe("convertLegacyV1Tree — refusals", () => {
       doc.plans.push({ id: "v2.0.0", title: "collides with the iteration", file: "x.md", status: "Todo" });
       writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
       expect(() => convertLegacyV1Tree(root)).toThrow(/lifecycle id collision/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an acknowledged non-regular compass is not read and its plans convert as standalone rows", () => {
+    const root = fixtureTree();
+    try {
+      const compass = join(root, "iterations", "v2.0.0", "delivery-compass.md");
+      const outside = join(root, "relocated-compass.md");
+      writeFileSync(outside, readFileSync(compass));
+      rmSync(compass);
+      symlinkSync(outside, compass);
+      // Default: the refusal names the acknowledgement that skips exactly this
+      // iteration, alongside the two filesystem repairs.
+      expect(() => convertLegacyV1Tree(root)).toThrow(/--ack-skip-compass v2\.0\.0/);
+      // An acknowledgement naming a compass this conversion did not refuse is
+      // caller input, never a silent no-op.
+      expect(() => convertLegacyV1Tree(root, [], undefined, ["v9.9.9"])).toThrow(/--ack-skip-compass v9\.9\.9 matched no refused compass/);
+      const converted = convertLegacyV1Tree(root, [], undefined, ["v2.0.0"]);
+      expect(converted.skippedCompasses).toEqual([{ id: "v2.0.0", path: "iterations/v2.0.0/delivery-compass.md" }]);
+      expect(converted.snapshots.some((snapshot) => snapshot.id === "v2.0.0")).toBe(false);
+      for (const planId of [
+        "00000808-slice1-engine-foundation",
+        "00000808-slice2-sdd-iteration",
+        "00000808-slice3-dispatch-git-gates",
+        "00000808-slice4-lints-scaffolds",
+        "00000808-slice5-hardgates-close",
+      ]) {
+        const snapshot = converted.snapshots.find((candidate) => candidate.id === planId)!;
+        expect(snapshot.type).toBe("plan");
+        expect(snapshot.data.plans).toHaveLength(1);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

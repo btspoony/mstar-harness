@@ -5,7 +5,7 @@ import { parseSessionEnvelope, type CoordinationSession } from "./coordination-e
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
-import { convertLegacyV1Tree, DeliveryDeclarationError, MIGRATE_STATUS_FILE, type DeliveryLiftDeclarations, type LegacyV1Conversion } from "./migrate.js";
+import { CompassSkipError, convertLegacyV1Tree, DeliveryDeclarationError, MIGRATE_STATUS_FILE, type DeliveryLiftDeclarations, type LegacyV1Conversion } from "./migrate.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
@@ -184,6 +184,34 @@ class UnsafeSourceError extends ExecutionError {
   }
 }
 
+/**
+ * Read one registered legacy source leaf through ONE descriptor: the leaf is
+ * opened without following a final symlink and WITHOUT blocking, and the same
+ * descriptor is verified against the `lstat` probe by device/inode before it is
+ * read, so a LEAF swapped after that probe refuses instead of contributing the
+ * replacement's bytes.
+ *
+ * That is the whole guard. These importers assume the control root they read is
+ * trusted and defend against ACCIDENTAL symlink traversal, not against a writer
+ * already inside that root. This reader's uncovered case is an intermediate
+ * ANCESTOR directory replaced BEFORE the leaf probe: the probe and the open then
+ * both observe the redirected regular file, so the device/inode comparison
+ * (which rejects a post-probe leaf swap) sees one consistent inode and passes.
+ * `isPathWithin` below still refuses a source that resolves *outside* the
+ * control root on the default path, but a redirect that stays in-root is not
+ * caught here. Where a supported flow imports a tree the operator does not
+ * trust (for example a `.mstar` copied from another checkout), the correct shape
+ * is a staged, re-validated private copy — not descriptor anchoring.
+ *
+ * The guard is also only as wide as the platform's constants, and each flag
+ * degrades independently (`O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`). Where a runtime
+ * omits `O_NOFOLLOW`, only the no-follow protection disappears, so a final
+ * symlink would be followed; where it omits `O_NONBLOCK`, only the non-blocking
+ * open disappears, so a FIFO or other special file could block the open. In both
+ * cases the descriptor checks remain: the regular-file `fstat` refusal, and the
+ * device/inode comparison against the probe. No Windows CI exercises this today,
+ * so the guard is described here, never implied.
+ */
 function readSourceBytes(path: string, label: string): Buffer {
   let info;
   try { info = lstatSync(path); } catch { conflict(`${label} is missing at ${path}; restore the file or remove its registration, then rerun store upgrade.`); }
@@ -265,6 +293,35 @@ function discoverV1(
   // operator's `--ack-skip-workflow <original id>` must be able to skip it.
   const refusedSourceIds = new Set<string>();
   let refusal: string | undefined;
+  // A duplicated plan id is that id's own refused source: the conversion kept
+  // the first row in stable order and reported every later duplicate, so the
+  // operator's `--ack-skip-workflow <id>` can acknowledge the exact lost rows
+  // instead of one duplicated agent-authored row blocking every healthy sibling.
+  for (const duplicate of legacy.duplicatePlanIds) {
+    refusedSourceIds.add(duplicate.id);
+    const owner = duplicate.owner === null ? "unregistered (no iteration compass names it)" : `owned by iteration ${duplicate.owner}`;
+    if (!acknowledgedWorkflowSkips.has(duplicate.id)) {
+      refusal ??= `plan id ${duplicate.id} is claimed by ${duplicate.dropped.length + 1} rows in the v1 root plans[]: the first in stable order (plan id, then owning lifecycle id, then row ordinal) survives at plans[] index ${duplicate.kept} (${owner}) and the later duplicate row(s) at plans[] index ${duplicate.dropped.join(", ")} cannot be converted \u2014 every v1 row must land in exactly one snapshot. Rerun store upgrade with \`--ack-skip-workflow ${duplicate.id}\` to keep the first row and skip ONLY those duplicate rows; each lost row is reported in the receipt.`;
+      continue;
+    }
+    for (const ordinal of duplicate.dropped) {
+      skipped.push({
+        path: `status.json#plans[${ordinal}]`,
+        reason: `plan id ${duplicate.id} is duplicated in the v1 root plans[]; this run kept the row at plans[] index ${duplicate.kept} (${owner}) and skipped the later duplicate row at plans[] index ${ordinal} acknowledged by --ack-skip-workflow, so that row's status, progress and notes are not imported and stay only in the legacy status.json`,
+      });
+      legacy.dispositions.push(`plan id ${duplicate.id}: duplicate plan id in the v1 root plans[] \u2014 the row at plans[] index ${duplicate.kept} survives (${owner}) and the duplicate row at plans[] index ${ordinal} is not converted, so its status, progress and notes stay only in the legacy status.json (import disposal, not deletion, and every other source imports normally)`);
+    }
+  }
+  // An acknowledged non-regular compass was never read: it produced no iteration
+  // lifecycle, so every plan row it registered converts as a standalone row.
+  // The receipt names the skipped iteration and reports that grouping loss.
+  for (const compass of legacy.skippedCompasses) {
+    skipped.push({
+      path: compass.path,
+      reason: `iteration ${compass.id} skipped by --ack-skip-compass; its canonical compass was not read (a non-regular leaf is never opened or followed), so this invocation created no iteration lifecycle for it and every plan row it registered converts as a standalone plan row`,
+    });
+    legacy.dispositions.push(`iteration ${compass.id}: skipped by --ack-skip-compass \u2014 its compass at ${compass.path} was not read, so this conversion produced no iteration lifecycle for it and every plan row it registered converts as a standalone plan row instead. An unread compass cannot enumerate its registered plan set, so the receipt lists this invocation's imported and skipped plan lifecycles for the operator to compare against that iteration's plans; an active standalone lift still needs its own --delivery declaration.`);
+  }
   for (const converted of legacy.snapshots) {
     try {
       const raw = converted.data as unknown as Record<string, unknown>;
@@ -327,7 +384,7 @@ function discoverV1(
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...(refusal === undefined ? {} : { refusal }) };
 }
 
-function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; skippedWorkflowAcknowledgements: MinimalWorkflowSkip[]; sourceDigest: string; dispositions: string[]; refusedSourceIds: ReadonlySet<string>; refusal?: string } {
+function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations, acknowledgedCompassSkips: ReadonlySet<string>): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; skippedWorkflowAcknowledgements: MinimalWorkflowSkip[]; sourceDigest: string; dispositions: string[]; refusedSourceIds: ReadonlySet<string>; refusal?: string } {
   const root = rootOf(context);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
@@ -381,7 +438,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
   // A recognizable v1 root converts in memory and imports through the same
   // native rows; the legacy bytes stay on disk untouched.
   if (isPlainObject(parsed) && parsed.version === 1) {
-    const legacy = convertLegacyV1Tree(root, declarations, statusBytes);
+    const legacy = convertLegacyV1Tree(root, declarations, statusBytes, [...acknowledgedCompassSkips]);
     const converted = discoverV1(root, legacy, operator, statusBytes!, acknowledgedWorkflowSkips);
     // The v1 route reads nothing from `workflows/`, so it reports no linked
     // skip of its own; its converted ids take the same collision/acknowledgement
@@ -398,6 +455,17 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
       refusedSourceIds: converted.refusedSourceIds,
       ...(converted.refusal === undefined ? {} : { refusal: converted.refusal }),
     };
+  }
+  // A compass acknowledgement addresses the canonical compasses of a v1
+  // conversion. Only the v1 route scans them, so on any other root the id names
+  // no refused compass: refuse it (caller input) rather than silently ignoring
+  // the acknowledgement the operator asked to spend.
+  if (acknowledgedCompassSkips.size > 0) {
+    throw new CompassSkipError(
+      `--ack-skip-compass ${[...acknowledgedCompassSkips].sort().join(" ")} matched no refused compass; ` +
+        `this control root is ${isPlainObject(parsed) && parsed.version === 2 ? "already a v2 tree, whose lifecycles carry no v1 compass to skip" : "an empty root with no compass at all"} \u2014 ` +
+        `pass --ack-skip-compass only when upgrading a v1 root whose canonical compass this invocation refuses as non-regular, or omit it entirely`,
+    );
   }
   // Declarations describe the ACTIVE standalone lifts a v1 conversion produces.
   // A v2 tree declares its kinds in its own snapshots and an empty root has no
@@ -516,9 +584,11 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     }
     // Ordinary imports keep the physical containment the register previously had
     // applied: a REGULAR leaf reached through an intermediate ancestor symlink
-    // must not escape the control root on the default path. It is deliberately
-    // placed AFTER the acknowledgement `continue` above, so an acknowledged
-    // linked source is never canonicalized (which would resolve its link).
+    // must not escape the control root on the default path. That is an ESCAPE
+    // check only — a redirect that stays inside the trusted control root passes
+    // (see `readSourceBytes`). It is deliberately placed AFTER the
+    // acknowledgement `continue` above, so an acknowledged linked source is
+    // never canonicalized (which would resolve its link).
     try {
       // Inside the workflow scope on purpose: an escaping registration is this
       // workflow's own source failure, so the catch below registers the id and
@@ -629,7 +699,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
 }
 
 
-export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[]; acknowledgedWorkflowSkips?: readonly string[]; deliveryDeclarations?: DeliveryLiftDeclarations }): Promise<MinimalImportResult> {
+export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[]; acknowledgedWorkflowSkips?: readonly string[]; acknowledgedCompassSkips?: readonly string[]; deliveryDeclarations?: DeliveryLiftDeclarations }): Promise<MinimalImportResult> {
   const { context, operator, operationId } = input;
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
   assertOperationId(operationId);
@@ -638,7 +708,8 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   // raw values are kept, so a blank or unknown id stays a caller fact that the
   // unmatched guard below reports rather than a silently discarded input.
   const workflowSkips = new Set(input.acknowledgedWorkflowSkips ?? []);
-  const source = discover(context, operator, input.acknowledgedSkips ?? [], workflowSkips, input.deliveryDeclarations ?? []);
+  const compassSkips = new Set(input.acknowledgedCompassSkips ?? []);
+  const source = discover(context, operator, input.acknowledgedSkips ?? [], workflowSkips, input.deliveryDeclarations ?? [], compassSkips);
   const requestHash = createHash("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,
@@ -646,6 +717,9 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     operationId,
     deliveryDeclarations: input.deliveryDeclarations ?? [],
     acknowledgedWorkflowSkips: [...workflowSkips].sort(),
+    // A compass acknowledgement selects which lifecycles the conversion
+    // produces, so it is part of the request identity a retained receipt binds.
+    acknowledgedCompassSkips: [...compassSkips].sort(),
     // The imported input is part of the request identity: a retained receipt
     // must never vouch for bytes that were never imported, so reusing one
     // operationId across changed legacy bytes conflicts instead of replaying.
@@ -774,6 +848,16 @@ export async function upgradeStoreMinimal(input: {
    */
   acknowledgedWorkflowSkips?: readonly string[];
   /**
+   * The operator's `--ack-skip-compass <iteration-id>` acknowledgements: the
+   * iteration DIRECTORY names under `iterations/` whose canonical compass this
+   * run refuses as non-regular. The acknowledged compass is never read, so that
+   * iteration produces no lifecycle and the plan rows it registered convert as
+   * standalone rows; the receipt reports the skipped iteration and that
+   * grouping loss. An id naming no such refused compass is caller input
+   * (usage), never a silent skip.
+   */
+  acknowledgedCompassSkips?: readonly string[];
+  /**
    * Per-lift delivery declarations for the ACTIVE standalone v1 plans this
    * import lifts (the former `migrate` declaration contract): a lifted plan
    * workflow fixes its delivery kind at registration, so an undeclared or
@@ -808,20 +892,13 @@ export async function upgradeStoreMinimal(input: {
     // legacy source: it is reported as its own code so the command surface can
     // return the actionable usage refusal naming the exact retry. It is raised
     // before any execution row is registered.
-    if (error instanceof DeliveryDeclarationError) {
-      throw new ExecutionError(
-        "execution.delivery-declaration-required",
-        `${error.message}. No execution workflow was registered from this tree; the legacy source bytes are unchanged, so rerun the same \`store upgrade\` with the declarations above.`,
-      );
-    }
-    // An unmatched execution acknowledgement is the same class of caller-input
-    // condition: reported with its own code and the exact same-entry retry.
-    if (error instanceof WorkflowSkipError) {
-      throw new ExecutionError(
-        "execution.workflow-skip-unmatched",
-        `${error.message} No execution workflow was registered from this tree; the legacy source bytes are unchanged, so rerun the same \`store upgrade\` with corrected acknowledgements.`,
-      );
-    }
+    const earlyRefusalCode = error instanceof DeliveryDeclarationError
+      ? "execution.delivery-declaration-required"
+      : error instanceof WorkflowSkipError
+        ? "execution.workflow-skip-unmatched"
+        : error instanceof CompassSkipError
+          ? "execution.compass-skip-unmatched"
+          : undefined;
     let authority = "authority state could not be read";
     try {
       const store = await openStore(context, "read");
@@ -838,6 +915,10 @@ export async function upgradeStoreMinimal(input: {
       // Keep the original import failure and disclose that state could not be observed.
     }
     const cause = error instanceof Error ? error.message : String(error);
+    if (earlyRefusalCode !== undefined) {
+      const causeSentence = cause.endsWith(".") ? cause : `${cause}.`;
+      throw new ExecutionError(earlyRefusalCode, `${causeSentence} The legacy source bytes are unchanged. Schema version ${schemaVersion} was committed before legacy execution import failed; ${authority}. The failed import transaction committed no rows, and existing execution rows remain unchanged. Resolve the reported cause through its source owner, then retry \`mstar store upgrade --operator <name>\`.`);
+    }
     const detail = `Schema version ${schemaVersion} was committed before legacy execution import failed; ${authority}. The failed import transaction committed no rows, and existing execution rows remain unchanged. Resolve the reported cause through its source owner, then retry \`mstar store upgrade --operator <name>\`. Original refusal: ${cause}`;
     if (error instanceof ExecutionError) throw new ExecutionError(error.code, detail);
     if (error instanceof StoreError) throw new StoreError(error.code, detail, error.details);
@@ -850,11 +931,38 @@ export async function upgradeStoreMinimal(input: {
     const message = error instanceof Error ? error.message : String(error);
     // The advertised retry must be reachable in one step: the execution rows this
     // operation committed are native collisions for the next invocation, whose
-    // fresh operation id cannot replay this receipt.
-    const committed = result.imported > 0
-      ? ` the next invocation sees them as native collisions, so include \`--ack-skip-workflow ${result.importedIds.join(" ")}\` in that same retry.`
-      : "";
-    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed} DSH import did not commit.`;
+    // fresh operation id cannot replay this receipt, AND the unchanged root still
+    // requires the workflow acknowledgements this invocation already accepted (a
+    // duplicated v1 plan id, an unsafe registered source or a pre-existing native
+    // collision is a property of the source, not of this commit). An unchanged v1
+    // root also re-converts the same active standalone plan lift(s), so a retry
+    // that omits the declarations this invocation used refuses in declaration
+    // application before it ever reaches the legacy DSH phase.
+    const declarations = input.deliveryDeclarations ?? [];
+    const deliveries = declarations.length === 0
+      ? ""
+      : ` The same retry must also repeat the --delivery declaration(s) this invocation used (${declarations.map((entry) => `--delivery ${JSON.stringify(entry)}`).join(" ")}), because the unchanged v1 root still needs one per active standalone plan lift.`;
+    const compassSkips = [...(input.acknowledgedCompassSkips ?? [])];
+    const compasses = compassSkips.length === 0
+      ? ""
+      : ` The same retry must also repeat the --ack-skip-compass acknowledgement(s) this invocation used (${compassSkips.map((id) => `--ack-skip-compass ${id}`).join(" ")}), because the unchanged v1 root still refuses that non-regular compass.`;
+    const workflowAcks = [...new Set([...(input.acknowledgedWorkflowSkips ?? []), ...result.importedIds])].sort();
+    const committed = workflowAcks.length === 0
+      ? ""
+      : ` the same retry must retain every workflow acknowledgement this invocation already used \u2014 the ids this invocation committed, which the next invocation sees as native collisions, together with the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id \u2014 so include \`--ack-skip-workflow ${workflowAcks.join(" ")}\` in that same retry.`;
+    // The refusal body lists one `- <selector>: ...` line per fact group it
+    // refused. Those selectors stay refused on the unchanged root, and so do the
+    // selectors this invocation already acknowledged (an acknowledgement is
+    // never persisted), so the advertised retry is their union — never the
+    // acknowledgement of a different DSH failure, such as an unmatched selector.
+    const refusedSelectors = error instanceof StoreError && error.code === "store.upgrade-dsh-source-refused"
+      ? [...message.matchAll(/^- (\S+?): /gm)].map((match) => match[1]!)
+      : [];
+    const dshAcks = [...new Set([...(input.acknowledgedSkips ?? []), ...refusedSelectors])].sort();
+    const dsh = refusedSelectors.length === 0
+      ? ""
+      : ` the same retry must also repeat every DSH acknowledgement this invocation used together with the selectors this refusal names \u2014 an acknowledgement is not persisted, so the unchanged root refuses those selectors again \u2014 so include \`--ack-skip-dsh ${dshAcks.join(" ")}\` in that same retry.`;
+    const prefix = `Execution-state import committed (${result.imported} workflows${result.imported > 0 ? `: ${result.importedIds.join(", ")}` : ""});${committed}${deliveries}${compasses}${dsh} DSH import did not commit.`;
     if (error instanceof StoreError) {
       throw new StoreError(error.code, `${prefix} ${message}`, error.details);
     }

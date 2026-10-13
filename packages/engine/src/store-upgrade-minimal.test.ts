@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
-import { upgradeStoreMinimal } from "./execution-minimal-import.js";
+import { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
 import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
@@ -1941,13 +1941,16 @@ test("an execution acknowledgement naming a trusted, unknown or v1 registration 
   const trusted = legacyWorkspace("acked-trusted");
   // `wf-acked-trusted` is a real in-root directory: this run would import it, so
   // skipping it would silently drop a trusted source.
-  await expect(upgradeStoreMinimal({
+  const trustedRefusal = await upgradeStoreMinimal({
     context: trusted.context, operator: "operator", operationId: "op-acked-trusted",
     acknowledgedWorkflowSkips: ["wf-acked-trusted"],
-  })).rejects.toMatchObject({
-    code: "execution.workflow-skip-unmatched",
-    message: expect.stringContaining("matched no workflow source this run refuses"),
-  });
+  }).then(() => { throw new Error("an unmatched acknowledgement unexpectedly succeeded"); }, (error: Error & { code?: string; message: string }) => error);
+  expect(trustedRefusal.code).toBe("execution.workflow-skip-unmatched");
+  expect(trustedRefusal.message).toContain("matched no workflow source this run refuses");
+  expect(trustedRefusal.message).toContain("Schema version");
+  expect(trustedRefusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(trustedRefusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(trustedRefusal.message).toContain("retry `mstar store upgrade --operator <name>`");
   const trustedStore = await openStore(trusted.context, "read");
   try { expect(trustedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
   finally { trustedStore.close(); }
@@ -2565,6 +2568,10 @@ test("an active standalone v1 plan without a declared delivery kind refuses befo
   expect(refusal.message).toContain("v1-standalone");
   expect(refusal.message).toContain("--delivery");
   expect(refusal.message).toContain("legacy source bytes are unchanged");
+  expect(refusal.message).toContain("Schema version");
+  expect(refusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(refusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(refusal.message).toContain("retry `mstar store upgrade --operator <name>`");
   const refusedStore = await openStore(context, "read");
   try {
     expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
@@ -3455,6 +3462,202 @@ test("a DSH refusal names every acknowledgement its advertised retry needs", asy
     acknowledgedSkips: [`dsh-ledger:${workflowId}`], acknowledgedWorkflowSkips: [workflowId],
   });
   expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("a v1 root's DSH retry names the delivery declarations the unchanged root still needs", async () => {
+  const { context } = legacyV1Workspace("dsh-retry-v1");
+  const workflowId = "wf-dsh-retry-v1";
+  // A conflicting duplicate identity refuses the DSH phase after the execution
+  // phase committed this root's rows.
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-retry-v1", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  expect(error.message).toContain(`dsh-ledger:${workflowId}`);
+  expect(error.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
+  // The v1 root is unchanged, so the retry re-converts the same active
+  // standalone lift: the advertised retry must name the declaration that lift
+  // still needs, not only the acknowledgements.
+  expect(error.message).toContain("--delivery");
+  expect(error.message).toContain(JSON.stringify(V1_STANDALONE_DECLARATION[0]));
+  // The advertised retry is reachable in ONE invocation.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-retry-v1-2",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedSkips: [`dsh-ledger:${workflowId}`],
+    acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("a duplicated standalone v1 plan id is a skippable source instead of a whole-conversion abort", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-dup-row");
+  const status = JSON.parse(statusBytes.toString("utf8")) as { plans: Array<Record<string, unknown>> };
+  const duplicateIndex = status.plans.length;
+  status.plans.push({ ...status.plans.find((plan) => plan.id === "v1-standalone")!, title: "later duplicate" });
+  writeFileSync(join(context.harnessDir, "status.json"), JSON.stringify(status));
+  const input = { context, operator: "operator", operationId: "op-v1-dup-row", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  // The first row in stable order survives; the run refuses naming the id the
+  // acknowledgement addresses — one duplicated agent-authored row must not abort
+  // every healthy sibling source.
+  await expect(upgradeStoreMinimal(input))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow v1-standalone") });
+  const acked = await upgradeStoreMinimal({ ...input, operationId: "op-v1-dup-row-ack", acknowledgedWorkflowSkips: ["v1-standalone"] });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
+  // The exact loss of the later duplicate row, per duplicate.
+  expect(acked.skipped).toContainEqual({
+    path: `status.json#plans[${duplicateIndex}]`,
+    reason: expect.stringContaining("plan id v1-standalone is duplicated in the v1 root plans[]"),
+  });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("plan id v1-standalone: duplicate plan id in the v1 root plans[]"));
+});
+
+test("an acknowledged non-regular v1 compass is never read and its plans import as standalone rows", async () => {
+  const { context } = legacyV1Workspace("v1-ack-compass");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const relocated = join(context.harnessDir, "relocated-compass.md");
+  writeFileSync(relocated, readFileSync(compass));
+  rmSync(compass);
+  symlinkSync(relocated, compass);
+  const input = { context, operator: "operator", operationId: "op-v1-ack-compass", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  // Default: the refusal names the exact acknowledgement that skips this
+  // iteration, and nothing commits.
+  const error = await upgradeStoreMinimal(input)
+    .then(() => { throw new Error("expected a compass refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("execution.migration-conflict");
+  expect(error.message).toContain("--ack-skip-compass iter-v1");
+  // An acknowledgement naming a compass this invocation did not refuse is caller
+  // input (exit 2 at the command surface), never a silent skip.
+  await expect(upgradeStoreMinimal({ ...input, operationId: "op-v1-ack-compass-unmatched", acknowledgedCompassSkips: ["iter-not-refused"] }))
+    .rejects.toMatchObject({ code: "execution.compass-skip-unmatched" });
+  // With the acknowledgement the compass is never opened, the iteration does not
+  // exist as a lifecycle and its registered plan imports as a standalone row.
+  const realOpen = nodeFs.openSync;
+  const opened: string[] = [];
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((target: string, ...rest: unknown[]) => {
+    if (typeof target === "string") opened.push(target);
+    return (realOpen as (...args: unknown[]) => number)(target, ...rest);
+  }) as never);
+  let acked: MinimalStoreUpgradeResult;
+  try {
+    acked = await upgradeStoreMinimal({ ...input, operationId: "op-v1-ack-compass-acked", acknowledgedCompassSkips: ["iter-v1"] });
+  } finally { spy.mockRestore(); }
+  expect(opened).not.toContain(compass);
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["v1-standalone", "wf-v1-ack-compass"] });
+  expect(acked.skipped).toContainEqual({
+    path: "iterations/iter-v1/delivery-compass.md",
+    reason: expect.stringContaining("iteration iter-v1 skipped by --ack-skip-compass"),
+  });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("iteration iter-v1: skipped by --ack-skip-compass"));
+  const store = await openStore(context, "read");
+  try {
+    const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("wf-v1-ack-compass") as { state_json: string };
+    expect(JSON.parse(row.state_json)).toMatchObject({ type: "plan" });
+  } finally { store.close(); }
+});
+
+test("the DSH retry names the compass acknowledgement and the delivery declaration it still needs", async () => {
+  const { context } = legacyV1Workspace("dsh-retry-compass");
+  const workflowId = "wf-dsh-retry-compass";
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const relocated = join(context.harnessDir, "relocated-compass.md");
+  writeFileSync(relocated, readFileSync(compass));
+  rmSync(compass);
+  symlinkSync(relocated, compass);
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const input = {
+    context, operator: "operator", operationId: "op-dsh-retry-compass",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedCompassSkips: ["iter-v1"],
+  };
+  const error = await upgradeStoreMinimal(input)
+    .then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  expect(error.message).toContain(`dsh-ledger:${workflowId}`);
+  // The unchanged root still refuses that compass and still needs the delivery
+  // declaration, so the advertised retry names all three acknowledgements.
+  expect(error.message).toContain("--ack-skip-compass iter-v1");
+  expect(error.message).toContain(JSON.stringify(V1_STANDALONE_DECLARATION[0]));
+  expect(error.message).toContain("--ack-skip-workflow v1-standalone wf-dsh-retry-compass");
+  const retried = await upgradeStoreMinimal({
+    ...input, operationId: "op-dsh-retry-compass-2",
+    acknowledgedSkips: [`dsh-ledger:${workflowId}`],
+    acknowledgedWorkflowSkips: ["v1-standalone", "wf-dsh-retry-compass"],
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("the advertised DSH retry retains the workflow acknowledgements the unchanged root still requires", async () => {
+  const { context } = legacyV1Workspace("dsh-dup-group");
+  const workflowId = "wf-dsh-dup-group";
+  // The compass registers this plan id and `plans[]` carries it twice: the
+  // duplicate rows make `--ack-skip-workflow <that id>` necessary BEFORE the DSH
+  // phase, while the import commits only the owning iteration (no standalone row
+  // for that id), so it never appears among the committed ids.
+  const status = JSON.parse(readFileSync(join(context.harnessDir, "status.json"), "utf8")) as { plans: Array<Record<string, unknown>> };
+  status.plans.push({ ...status.plans.find((plan) => plan.id === workflowId)!, title: "later duplicate" });
+  writeFileSync(join(context.harnessDir, "status.json"), JSON.stringify(status));
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-dup-group",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedWorkflowSkips: [workflowId],
+  }).then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  // The acknowledged duplicate is not a committed id, so the advertised list is
+  // the union of the acknowledgements this run already needed and the ids it
+  // committed.
+  const advertisedWorkflowAcks = /include `--ack-skip-workflow ([^`]+)` in that same retry/.exec(error.message);
+  expect(advertisedWorkflowAcks?.[1]!.split(" ")).toEqual(["iter-v1", "v1-standalone", workflowId]);
+  // Retry with EXACTLY what the refusal advertises, parsed from the message.
+  const advertisedDeliveries = /\(--delivery (\{.*?\})\)/.exec(error.message);
+  const advertisedDshSelectors = [...error.message.matchAll(/^- (\S+?): /gm)].map((match) => match[1]!);
+  expect(advertisedDshSelectors).toEqual([`dsh-ledger:${workflowId}`]);
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-dup-group-2",
+    deliveryDeclarations: advertisedDeliveries![1]!.split(" --delivery ").map((json) => JSON.parse(json)),
+    acknowledgedWorkflowSkips: advertisedWorkflowAcks![1]!.split(" "),
+    acknowledgedSkips: advertisedDshSelectors,
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("a DSH refusal advertises the acknowledgements this invocation already used together with the selectors it refused", async () => {
+  const { context } = legacyWorkspace("dsh-ack-union");
+  const workflowId = "wf-dsh-ack-union";
+  // Two distinct refused DSH fact groups in one unchanged root: a conflicting
+  // duplicate identity (`dsh-ledger:<id>`) and an unparseable scan-bound sidecar
+  // (`dsh-bounds:<id>`). This invocation already acknowledges the bounds selector,
+  // so the refusal lists only the ledger selector while the retry needs both.
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  writeFileSync(join(dshDir, "workflow-ledger-cursors.json"), "not json");
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-ack-union",
+    acknowledgedSkips: [`dsh-bounds:${workflowId}`],
+  }).then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  // The refusal lists only the selector it refused on this attempt...
+  expect(error.message).toContain(`- dsh-ledger:${workflowId}: `);
+  expect(error.message).not.toContain(`- dsh-bounds:${workflowId}: `);
+  // ...but the advertised retry is the UNION: an acknowledgement is never
+  // persisted, so the next invocation refuses the selector this one already
+  // acknowledged unless the retry repeats it.
+  const advertisedDshAcks = /include `--ack-skip-dsh ([^`]+)` in that same retry/.exec(error.message);
+  expect(advertisedDshAcks?.[1]!.split(" ")).toEqual([`dsh-bounds:${workflowId}`, `dsh-ledger:${workflowId}`]);
+  const advertisedWorkflowAcks = /include `--ack-skip-workflow ([^`]+)` in that same retry/.exec(error.message);
+  // Retry with EXACTLY what the refusal advertises and no other DSH flags.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-ack-union-2",
+    acknowledgedSkips: advertisedDshAcks![1]!.split(" "),
+    acknowledgedWorkflowSkips: advertisedWorkflowAcks![1]!.split(" "),
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded" });
 });
 
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {

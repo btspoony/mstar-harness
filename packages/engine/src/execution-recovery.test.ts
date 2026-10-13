@@ -1160,16 +1160,14 @@ describe("execution-restore", () => {
     try {
       competitor.exec("pragma busy_timeout=0");
       competitor.exec("begin immediate");
-      process.env.MSTAR_STORE_TEST_RUNNER = "1";
-      process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
+      // No injection: the restore really waits out the published bounded-wait
+      // default and then refuses store.busy.
       const blocked = await refusalOf(() =>
         restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
       );
       expect(blocked.code).toBe("store.busy");
       expect(footprint(world.dbPath).epoch).toBe(preview.liveEpoch);
     } finally {
-      delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-      delete process.env.MSTAR_STORE_TEST_RUNNER;
       try {
         competitor.exec("rollback");
       } catch {
@@ -1201,7 +1199,9 @@ describe("execution-restore", () => {
     expect(receipt.recoveryReceiptPath).not.toBeNull();
     expect(existsSync(receipt.recoveryReceiptPath!)).toBe(true);
     expect(receipt.recoveryReceiptPath!.startsWith(canonicalPath(world.harness))).toBe(true);
-  });
+    // One real bounded wait at the published 5000ms default, on top of the
+    // fixture and the retry.
+  }, 60_000);
 
   test("execution-restore-preview-leaves-the-live-store-file-state-untouched", async () => {
     const world = await recoveryWorld("restore-preview-state");

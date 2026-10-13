@@ -608,22 +608,17 @@ describe("store-migrate apply", () => {
 
   test("an injected mid-import failure rolls back the whole apply", async () => {
     const { context, harness, manifest } = await createStagedApplyFixture("rollback-");
-    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
-    const previousHook = process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER;
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER = "1";
+    // Test-owned injection inside the import transaction, so the rollback of the
+    // whole batch is proven instead of asserted.
     try {
-      try {
-        await applyStoreMigration(context, manifest);
-        throw new Error("expected the injected failure to abort the apply");
-      } catch (error) {
-        expect((error as Error).message).toContain("induced migration failure");
-      }
-    } finally {
-      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
-      if (previousHook === undefined) delete process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER;
-      else process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER = previousHook;
+      await applyStoreMigration(context, manifest, {
+        beforeRow: (index) => {
+          if (index === 1) throw new Error("induced migration failure after 1 imported row(s)");
+        },
+      });
+      throw new Error("expected the injected failure to abort the apply");
+    } catch (error) {
+      expect((error as Error).message).toContain("induced migration failure");
     }
 
     // No partial state survived: no issues, no receipt, counter and revision

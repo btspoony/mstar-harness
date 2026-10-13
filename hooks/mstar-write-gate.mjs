@@ -12158,39 +12158,7 @@ function findRetirementRow(rows, activationReceiptId, live) {
   }
   return;
 }
-function failureHook(stage, completed) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  if (stage === "flip") {
-    if (process.env.MSTAR_STORE_FAIL_ACTIVATION_AFTER === "flip")
-      throw new Error("induced activation failure after the authority flip");
-    return;
-  }
-  if (stage === "section-write") {
-    if (process.env.MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE === "1") {
-      throw new Error("induced retirement failure after the section rewrite");
-    }
-    return;
-  }
-  const raw = process.env.MSTAR_STORE_FAIL_RETIREMENT_AFTER;
-  if (raw === undefined || raw === "")
-    return;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isInteger(parsed) && parsed === completed)
-    throw new Error(`induced retirement failure after ${completed} item(s)`);
-}
-function legacyWriteHook(stage) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  if (process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER !== stage)
-    return;
-  const target = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET;
-  const source = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_FROM;
-  if (target === undefined || source === undefined)
-    return;
-  copyFileSync(source, target);
-}
-async function activateStore(context, receipt, attestation) {
+async function activateStore(context, receipt, attestation, hooks = {}) {
   if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
     throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
   }
@@ -12235,7 +12203,7 @@ async function activateStore(context, receipt, attestation) {
     label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
     reuseMatchingIdentity: true
   });
-  legacyWriteHook("inspection");
+  hooks.afterStage?.("inspection", 0);
   const flip = await openStore(context, "write");
   try {
     const at = new Date().toISOString();
@@ -12259,7 +12227,7 @@ async function activateStore(context, receipt, attestation) {
       });
       flip.db.prepare("update store_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? where id = 1").run(epoch, revision, at);
       flip.db.prepare("update migration_receipts set activated_at = ? where id = ?").run(at, receipt.receiptId);
-      failureHook("flip", 0);
+      hooks.afterStage?.("flip", 0);
       const stored = {
         receiptVersion: ACTIVATION_PROTOCOL_VERSION,
         activationHash,
@@ -12389,7 +12357,7 @@ function selectReviewedSection(live, item) {
   }
   return best;
 }
-function retireSection(context, ledgerPath, ledger, item) {
+function retireSection(context, ledgerPath, ledger, item, hooks) {
   const livePath = join9(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
@@ -12425,7 +12393,7 @@ function retireSection(context, ledgerPath, ledger, item) {
   writeLedger(ledgerPath, ledger);
   writeTextAtomic(livePath, excised);
   item.state = "verified";
-  failureHook("section-write", 0);
+  hooks.afterStage?.("section-write", 0);
   verifyRetiredSection(livePath, item);
   writeLedger(ledgerPath, ledger);
 }
@@ -12441,7 +12409,7 @@ function verifyRetiredSection(livePath, item) {
     throw new StoreActivationError("store.migration-source-changed", `the archived original of ${item.relativePath} is missing; refusing to claim retirement.`);
   }
 }
-async function retireStoreSources(context, activationReceipt) {
+async function retireStoreSources(context, activationReceipt, hooks = {}) {
   if (!activationReceipt || activationReceipt.phase !== "activated" || typeof activationReceipt.receiptId !== "number" || typeof activationReceipt.activationHash !== "string" || typeof activationReceipt.storeId !== "string" || typeof activationReceipt.epoch !== "number") {
     throw new StoreActivationError("store.activation-stale", 'retirement requires the recorded activation receipt (receiptId, activationHash, storeId, epoch); run "store activate" first.');
   }
@@ -12550,12 +12518,12 @@ async function retireStoreSources(context, activationReceipt) {
       }
       retireRegister(context, ledgerPath, ledger, item);
       completed += 1;
-      failureHook("retirement", completed);
+      hooks.afterStage?.("retirement", completed);
     }
     for (const item of ledger.sections) {
-      retireSection(context, ledgerPath, ledger, item);
+      retireSection(context, ledgerPath, ledger, item, hooks);
       completed += 1;
-      failureHook("retirement", completed);
+      hooks.afterStage?.("retirement", completed);
     }
     const at = new Date().toISOString();
     const retiredRegisters = ledger.registers.map((item) => ({
@@ -15735,20 +15703,15 @@ function storeDbPath(context) {
   const root = resolve13(context.harnessDir);
   return join17(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
-function busyTimeoutMs() {
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
-    const raw = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-    const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed > 0)
-      return parsed;
-  }
-  return DEFAULT_BUSY_TIMEOUT_MS;
+function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
+  const floored = Math.floor(value);
+  return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
-function refuseOpenFailure(error, dbPath) {
+function refuseOpenFailure(error, dbPath, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
   if (error instanceof StoreError)
     throw error;
   if (isBusyError(error)) {
-    throw new StoreError("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs()}ms). Retry when the competing writer is done; no write was accepted.`);
+    throw new StoreError("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
   }
   throw new StoreError("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
 }
@@ -15756,10 +15719,10 @@ function isBusyError(error) {
   const err = error;
   return err?.errcode === 5 || err?.errcode === "SQLITE_BUSY" || err?.code === "SQLITE_BUSY" || /database is locked|SQLITE_BUSY/.test(String(err?.message ?? ""));
 }
-function busyAware(db, path2) {
+function busyAware(db, path2, timeout) {
   const refuseBusy = (error) => {
     if (isBusyError(error)) {
-      throw new StoreError("store.busy", `Another writer held ${path2} past the bounded wait (${busyTimeoutMs()}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
+      throw new StoreError("store.busy", `Another writer held ${path2} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
     }
     throw error;
   };
@@ -15788,9 +15751,9 @@ function busyAware(db, path2) {
     close: () => db.close()
   };
 }
-async function connect(dbPath, mode) {
+async function connect(dbPath, mode, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
   const { DatabaseSync } = await loadSqliteDriver();
-  return openConnection(dbPath, mode, DatabaseSync);
+  return openConnection(dbPath, mode, DatabaseSync, timeout);
 }
 function assertAbsentOrRegularStoreFile(dbPath) {
   let stats;
@@ -15854,7 +15817,7 @@ function ensureJournalForRead(dbPath) {
   }
   closeSync(journal);
 }
-function openConnection(dbPath, mode, DatabaseSync) {
+function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
   let db;
   try {
     assertAbsentOrRegularStoreFile(dbPath);
@@ -15864,14 +15827,14 @@ function openConnection(dbPath, mode, DatabaseSync) {
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error))
       throw error;
-    refuseOpenFailure(error, dbPath);
+    refuseOpenFailure(error, dbPath, timeout);
   }
   const fail = (message) => {
     db.close();
     throw new StoreError("store.corrupt", `${message} (opening ${dbPath})`);
   };
   try {
-    db.exec(`pragma busy_timeout=${busyTimeoutMs()}`);
+    db.exec(`pragma busy_timeout=${timeout}`);
     if (mode === "read") {
       db.exec("pragma query_only=ON");
       if (db.prepare("pragma query_only").get()?.query_only !== 1) {
@@ -15896,9 +15859,9 @@ function openConnection(dbPath, mode, DatabaseSync) {
     } catch {}
     if (mode === "read" && isRawCantOpen(error))
       throw error;
-    refuseOpenFailure(error, dbPath);
+    refuseOpenFailure(error, dbPath, timeout);
   }
-  return busyAware(db, dbPath);
+  return busyAware(db, dbPath, timeout);
 }
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -16255,9 +16218,10 @@ function withExecutionReadGuard(context, body) {
   }
   return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
 }
-async function openStore(context, mode) {
+async function openStore(context, mode, options = {}) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
+  const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync14(dbPath)) {
     throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
@@ -16265,23 +16229,23 @@ async function openStore(context, mode) {
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
     try {
-      return await openStoreOnce(dbPath, mode);
+      return await openStoreOnce(dbPath, mode, timeout);
     } catch (error) {
       if (attempt >= attempts || !isTransientReadOpenFailure(error, dbPath)) {
-        refuseOpenFailure(error, dbPath);
+        refuseOpenFailure(error, dbPath, timeout);
       }
       await sleep(READ_OPEN_BACKOFF_MS);
     }
   }
 }
-async function openStoreOnce(dbPath, mode) {
+async function openStoreOnce(dbPath, mode, timeout) {
   let db;
   try {
-    db = await connect(dbPath, mode);
+    db = await connect(dbPath, mode, timeout);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error))
       throw error;
-    refuseOpenFailure(error, dbPath);
+    refuseOpenFailure(error, dbPath, timeout);
   }
   try {
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
@@ -16306,6 +16270,7 @@ var MIN_NODE_VERSION = "24.18.0";
 var DEFAULT_BUSY_TIMEOUT_MS = 5000;
 var StoreError;
 var requireDriver;
+var MAX_BUSY_TIMEOUT_MS = 2147483647;
 var DATABASE_HEADER_BYTES = 100;
 var SQLITE_FORMAT_MAGIC = "SQLite format 3\x00";
 var WAL_FILE_FORMAT_VERSION = 2;
@@ -17536,9 +17501,6 @@ async function captureExecutionProjectionSources(context) {
   }
   let servedGraph;
   try {
-    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR) {
-      throw new SyntaxError(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
-    }
     servedGraph = (await readExecutionState(context)).data;
   } catch (error) {
     const sourceKey = sourceKeyOf2("root", "harness", "execution/registry");
@@ -18028,8 +17990,6 @@ function selectWhereIn(db, sql, ids, params) {
   return rows;
 }
 async function attemptPublication(context, capture, attempts) {
-  if (capture.storeRevision !== undefined)
-    await applyDatabaseChurn(context);
   const handle = await openStore(context, "write");
   const db = handle.db;
   try {
@@ -18072,44 +18032,13 @@ async function attemptPublication(context, capture, attempts) {
     handle.close();
   }
 }
-async function applyDatabaseChurn(context) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  const encoded = process.env.MSTAR_PROJECTION_DB_CHURN;
-  if (!encoded)
-    return;
-  const request = JSON.parse(encoded);
-  const requests = Array.isArray(request) ? request : [request];
-  const next = requests.shift();
-  if (requests.length === 0)
-    delete process.env.MSTAR_PROJECTION_DB_CHURN;
-  else
-    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify(requests);
-  if (!isPlainObject(next) || next.kind !== "insert-plan" && next.kind !== "update-row" || typeof next.workflowId !== "string" || typeof next.planId !== "string") {
-    throw new Error("invalid projection DB churn test request");
-  }
-  const handle = await openStore(context, "write");
-  try {
-    if (next.kind === "insert-plan") {
-      handle.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')").run(next.workflowId, next.planId, next.workflowId, JSON.stringify({ id: next.planId, title: next.planId, file: `plans/${next.planId}.md`, status: "Todo" }));
-    } else {
-      const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(next.workflowId);
-      if (!current)
-        throw new Error("projection DB churn workflow is missing");
-      const state = JSON.parse(current.state_json);
-      state.updated_at = `${String(state.updated_at)}-churn`;
-      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), next.workflowId);
-    }
-    handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-  } finally {
-    handle.close();
-  }
-}
-async function refreshProjections(context) {
+async function refreshProjections(context, hooks = {}) {
   let capture = await captureProjectionSources(context);
+  await hooks.beforePublish?.(1);
   let attempt = await attemptPublication(context, capture, 1);
   if (attempt.kind === "source-stale") {
     capture = await captureProjectionSources(context);
+    await hooks.beforePublish?.(2);
     attempt = await attemptPublication(context, capture, 2);
     if (attempt.kind === "source-stale") {
       const handle = await openStore(context, "write");

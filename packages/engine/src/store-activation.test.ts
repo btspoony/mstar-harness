@@ -4,10 +4,8 @@
  *
  * Every case runs the real barrier/retirement/backup code over real register,
  * index and database fixtures in per-test temporary harness roots. The
- * retirement resume path is driven by the same test-runner-gated crash seam
- * the store already uses (`MSTAR_STORE_FAIL_RETIREMENT_AFTER`), so a
- * mid-retirement crash is reproduced rather than described, and the atomicity
- * of the epoch flip is reproduced with `MSTAR_STORE_FAIL_ACTIVATION_AFTER`.
+ * retirement resume path is driven by test-owned callbacks that throw at the
+ * crash boundary, and the epoch flip atomicity assertion uses the same hook.
  * No live control root, no lease/session state and no installed consumer is
  * touched.
  *
@@ -274,22 +272,8 @@ async function refusalOf(code: StoreActivationErrorCode, run: () => Promise<unkn
   throw new Error(`expected the refusal ${code}`);
 }
 
-/** Set test-runner-gated environment for one call, then restore it. */
-async function withEnv<T>(vars: Record<string, string>, run: () => Promise<T>): Promise<T> {
-  const previous = new Map(Object.keys(vars).map((key) => [key, process.env[key]] as const));
-  const runner = process.env.MSTAR_STORE_TEST_RUNNER;
-  process.env.MSTAR_STORE_TEST_RUNNER = "1";
-  for (const [key, value] of Object.entries(vars)) process.env[key] = value;
-  try {
-    return await run();
-  } finally {
-    if (runner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-    else process.env.MSTAR_STORE_TEST_RUNNER = runner;
-    for (const [key, value] of previous) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+function failAt(stage: "flip" | "retirement" | "section-write", completed: number, message: string) {
+  return { afterStage(actual: string, count: number) { if (actual === stage && count === completed) throw new Error(message); } };
 }
 
 type MetaRow = { store_id: string; authority_state: "staged" | "active"; authority_epoch: number; revision: number };
@@ -438,14 +422,9 @@ describe("store activation barrier", () => {
       `${JSON.stringify({ entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" }), entry({ id: "R9", severity: "low" })] } }, null, 2)}\n`,
     );
 
-    const activation = await withEnv(
-      {
-        MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER: "inspection",
-        MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET: registerPath,
-        MSTAR_STORE_INJECT_LEGACY_WRITE_FROM: lateRegister,
-      },
-      () => activateStore(context, apply, attestation()),
-    );
+    const activation = await activateStore(context, apply, attestation(), {
+      afterStage(stage) { if (stage === "inspection") writeFileSync(registerPath, readFileSync(lateRegister)); },
+    });
     // The register path set is unchanged, so the epoch bumps even though the
     // register's bytes differ from the reviewed ones.
     expect(activation.epoch).toBe(stagedMeta.authority_epoch + 1);
@@ -472,14 +451,9 @@ describe("store activation barrier", () => {
       `${[...INDEX_HEAD, ...INDEX_TABLE, "| `iter-late` | `iter-late/` | added by an old binary | `active` |", ...INDEX_TAIL].join("\n")}\n`,
     );
 
-    const activation = await withEnv(
-      {
-        MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER: "inspection",
-        MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET: readmePath,
-        MSTAR_STORE_INJECT_LEGACY_WRITE_FROM: lateIndex,
-      },
-      () => activateStore(context, apply, attestation()),
-    );
+    const activation = await activateStore(context, apply, attestation(), {
+      afterStage(stage) { if (stage === "inspection") writeFileSync(readmePath, readFileSync(lateIndex)); },
+    });
     expect(activation.epoch).toBe(stagedMeta.authority_epoch + 1);
 
     const after = await metaOf(context);
@@ -518,10 +492,7 @@ describe("store activation barrier", () => {
     const { context, apply } = await stagedFixture("activation-atomic-");
     const stagedMeta = await metaOf(context);
 
-    const induced = await withEnv({ MSTAR_STORE_FAIL_ACTIVATION_AFTER: "flip" }, () =>
-      activateStore(context, apply, attestation()).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced activation failure");
+    const induced = await activateStore(context, apply, attestation(), failAt("flip", 0, "induced activation failure")).catch((error: unknown) => error);
     const afterCrash = await metaOf(context);
     expect(afterCrash.authority_state).toBe("staged");
     expect(afterCrash.authority_epoch).toBe(1);
@@ -759,10 +730,7 @@ describe("store retirement", () => {
     const crashed = await activatedFixture("retirement-resume-crash-");
     const clean = await activatedFixture("retirement-resume-clean-");
 
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER: "2" }, () =>
-      retireStoreSources(crashed.context, crashed.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after 2 item(s)");
+    const induced = await retireStoreSources(crashed.context, crashed.activation, failAt("retirement", 2, "induced retirement failure after 2 item(s)")).catch((error: unknown) => error);
 
     const ledger = JSON.parse(readFileSync(ledgerPathOf(crashed, crashed.activation), "utf8")) as {
       registers: { state: string }[];
@@ -806,10 +774,7 @@ describe("store retirement", () => {
     const reviewedLive = readFileSync(readmePath, "utf8");
     expect(reviewedLive).toContain("| `iter-one` |");
 
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     // The reviewed row `iter-one` declared the location `alias-one/`. After the
     // crash an unrelated, never-reviewed table reuses that location as ITS OWN
@@ -838,10 +803,7 @@ describe("store retirement", () => {
     const readmePath = join(fixture.harness, "knowledge", "README.md");
     expect(readFileSync(readmePath, "utf8")).toContain("`guides//intro.md`");
 
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     // The reviewed row referenced `guides//intro.md`, which the catalog parser
     // records as `guides/intro.md`. Restore the same row spelled `guides/./intro.md`:
@@ -867,10 +829,7 @@ describe("store retirement", () => {
     const readmePath = join(fixture.harness, "iterations", "README.md");
 
     // Crash after the reviewed table's rewrite, before its verification.
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     // Permitted prose drift below the reviewed slot moves the reviewed
     // `iter-one` table down, and an unrelated recognized iteration table that
@@ -917,10 +876,7 @@ describe("store retirement", () => {
 
     // Crash after the archive copy and the live rewrite, before verification:
     // the archive exists and the ledger still holds the item as pending.
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     // A permitted edit both moves the still-present target and adds a
     // recognized column to its header, so a header-equality locator would read
@@ -955,10 +911,7 @@ describe("store retirement", () => {
 
     // Crash right after the FIRST reviewed table (`iter-one`) was rewritten; the
     // second reviewed table is still pending.
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER: "5" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after 5 item(s)");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("retirement", 5, "induced retirement failure after 5 item(s)")).catch((error: unknown) => error);
     const liveAfterCrash = readFileSync(readmePath, "utf8");
     expect(liveAfterCrash).not.toContain("| `iter-one` |");
     expect(liveAfterCrash).toContain("| `iter-two` |");
@@ -991,10 +944,7 @@ describe("store retirement", () => {
     const fixture = await activatedFixture("retirement-section-resume-");
     const readmePath = join(fixture.harness, "iterations", "README.md");
 
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     const ledger = JSON.parse(readFileSync(ledgerPathOf(fixture, fixture.activation), "utf8")) as {
       registers: { state: string }[];
@@ -1026,10 +976,7 @@ describe("store retirement", () => {
     // Crash AFTER the archive was written and the ledger recorded, but BEFORE
     // the live rewrite (the seam throws right after the rewrite; restoring the
     // reviewed bytes below reconstructs the live-still-holds-the-table state).
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     const ledger = JSON.parse(readFileSync(ledgerPathOf(fixture, fixture.activation), "utf8")) as {
       sections: { state: string; startLine: number; endLine: number; preservedLines: number }[];
@@ -1076,10 +1023,7 @@ describe("store retirement", () => {
 
     // Crash BEFORE the live rewrite: the archive exists and the ledger holds the
     // item as pending, but the target table is still live.
-    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
-      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
-    );
-    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+    const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
 
     // A permitted edit to the still-present target's column labels (an extra
     // recognized column) plus a rebuilt table with the same row count: the

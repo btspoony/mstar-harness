@@ -49,6 +49,7 @@ const inputSchema = z.object({
   operator: z.string().optional(),
   ackSkipDsh: z.array(z.string()).optional(),
   ackSkipWorkflow: z.array(z.string()).optional(),
+  ackSkipCompass: z.array(z.string()).optional(),
   delivery: z.array(deliveryDeclarationSchema).optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
@@ -62,7 +63,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.internal-error`;
-  if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required" || code === "execution.workflow-skip-unmatched")) {
+  if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required" || code === "execution.workflow-skip-unmatched" || code === "execution.compass-skip-unmatched")) {
     return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
   }
   return error instanceof SddScriptError
@@ -91,7 +92,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
               : id === "store.init"
                 ? "Choose an empty harness root and run mstar store init."
                 : code === "store.upgrade-dsh-source-refused"
-                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; when the message also reports execution workflows that this invocation already committed, pass --ack-skip-workflow <id> for each of them in the same retry, because the next invocation sees those ids as native collisions. Ordinary retry remains available."
+                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for EVERY selector the refusal names in that same retry, because its list is the union of the selectors this invocation already acknowledged (an acknowledgement is not persisted, so the unchanged root refuses them again) and the selectors this refusal names, so leaving one out refuses that source again; pass --ack-skip-workflow <id> for EVERY id the refusal names in that same retry, because its list is the union of the ids this invocation committed (the next invocation sees them as native collisions) and the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id, so leaving one out refuses that source again before the legacy Dsh phase; repeat that invocation's --delivery <json> declarations and --ack-skip-compass <iteration-id> acknowledgements when the source is a v1 root, because the unchanged root still needs one delivery declaration per active standalone plan lift and still refuses that non-regular compass; the message names every value to repeat. Ordinary retry remains available."
                   : id === "store.upgrade"
                     ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
                     : id === "store.migrate"
@@ -210,6 +211,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
           ...(input.ackSkipWorkflow === undefined ? {} : { acknowledgedWorkflowSkips: input.ackSkipWorkflow }),
+          ...(input.ackSkipCompass === undefined ? {} : { acknowledgedCompassSkips: input.ackSkipCompass }),
           ...(input.delivery === undefined ? {} : { deliveryDeclarations: input.delivery }),
         }));
       }
@@ -277,11 +279,12 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     operator: "--operator <name>",
     ackSkipDsh: "--ack-skip-dsh <selector...>",
     ackSkipWorkflow: "--ack-skip-workflow <id...>",
+    ackSkipCompass: "--ack-skip-compass <iteration-id...>",
     delivery: "--delivery <json...>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "delivery"],
+    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "ackSkipCompass", "delivery"],
     backup: ["harness", "out"],
     migrate: ["harness", "apply", "manifest", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
@@ -295,13 +298,14 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, dsh-status, or dsh-workflows (a symlinked workflows tree). The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
     ackSkipWorkflow: "Explicitly skip IMPORTING the named registered workflows whose legacy execution source this run refuses. A registered source is refused when its whole `workflows/` root or per-workflow path is not a real in-root directory \u2014 a symlink (never followed) or a non-directory path \u2014 or when a recognized legacy source's id already exists in the native execution authority (an upgrade never overwrites, deletes or silently omits an existing native workflow). Pass the exact original workflow ids (repeat or space-separate; a repeated id is harmless). Either way the native rows and the source bytes stay in place, no execution row is imported or fabricated for the named id, and the report records the skipped import with its loss. Skipping a source this run does NOT refuse is rejected, because that would silently drop a trusted source. Separate from --ack-skip-dsh, which can never discard a registered execution source. Default never skips.",
     delivery: `Declare the delivery kind of one active standalone v1 plan this upgrade lifts; repeat once per such lift (an active standalone v1 plan fixes its delivery kind at registration and cannot be closed without one, so the upgrade refuses before registering any of them until each is declared). Each value is one JSON object {"workflow": <lifted id>, "deliveryKind": "${WORKFLOW_DELIVERY_KINDS.join('" | "')}", plus "branchSource"/"branchTarget" for development or "completionPolicy" for verification/report-only}. Completed v1 rows, already-declared v2 snapshots and iterations need none; an entry addressing no active standalone lift is refused, never ignored.`,
+    ackSkipCompass: "Acknowledge dropping a v1 iteration's grouping when its canonical `iterations/<iteration-id>/delivery-compass.md` is not a regular in-root file (a link, FIFO, socket or device is never read). Pass the iteration DIRECTORY name the refusal names (repeat or space-separate; a repeated id is harmless): the compass is not read, that iteration produces no lifecycle, and the plans it registered convert as standalone plan rows instead \u2014 an active standalone lift then needs its own --delivery declaration, and the receipt names the skipped iteration and that loss. An id that names no compass this run refuses is rejected, because that would silently spend an acknowledgement on nothing. Default never skips.",
   };
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
   const options = optionKeys.map((key) => ({
     key,
     flags: optionFlags[key],
     required: false,
-    variadic: key === "ackSkipDsh" || key === "ackSkipWorkflow" || key === "delivery",
+    variadic: key === "ackSkipDsh" || key === "ackSkipWorkflow" || key === "ackSkipCompass" || key === "delivery",
     ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
   }));
   return {
@@ -321,7 +325,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
       retire: ["read", "write"],
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
     description: `${verb === "upgrade"
-      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses: a registered source that is not a real in-root directory (a linked or non-directory path), a registered source whose nested bytes cannot be read as a workflow (a linked entry, a non-regular snapshot, a session path that is not a real directory, a plan row that is missing, duplicated or unconvertible), a converted v1 lifecycle whose converted plan rows cannot be imported, or a recognized legacy id the native authority already holds. Every skip is reported with its loss."
+      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses: a registered source that is not a real in-root directory (a linked or non-directory path), a registered source whose nested bytes cannot be read as a workflow (a linked entry, a non-regular snapshot, a session path that is not a real directory, a plan row that is missing, duplicated or unconvertible), a converted v1 lifecycle whose converted plan rows cannot be imported, or a recognized legacy id the native authority already holds. A duplicated v1 plan id is that id's own refused, skippable source: the first row in stable order (plan id, owning lifecycle id, row ordinal) survives and --ack-skip-workflow <plan id> acknowledges losing exactly the later duplicate rows. The separate --ack-skip-compass <iteration-id>... answers a non-regular v1 iteration compass: the compass is not read, that iteration produces no lifecycle, and the plans it registered convert as standalone plan rows. Every skip is reported with its loss."
       : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };

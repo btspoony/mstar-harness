@@ -84,8 +84,6 @@ function tracked(fx: Fixture): Fixture {
 }
 afterEach(() => {
   for (const fx of fixtures.splice(0)) rmSync(fx.root, { recursive: true, force: true });
-  delete process.env.MSTAR_STORE_TEST_RUNNER;
-  delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
 });
 
 describe("execution-route \u2014 the ACTIVE store is the only read authority", () => {
@@ -182,9 +180,8 @@ describe("execution-route \u2014 every non-ACTIVE store is a typed refusal with 
       holder.exec("pragma journal_mode=delete");
       holder.exec("begin exclusive");
       holder.prepare("select count(*) as n from store_meta").get();
-      process.env.MSTAR_STORE_TEST_RUNNER = "1";
-      process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
-
+      // No injection: the route and the source read both wait out the published
+      // bounded-wait default and then report the busy refusal.
       expect(await refusalOf(() => resolveExecutionReadRoute(held.context))).toMatchObject({ code: "store.busy" });
       expect(await refusalOf(() => readExecutionSource(held.context))).toMatchObject({ code: "store.busy" });
     } finally {
@@ -195,7 +192,8 @@ describe("execution-route \u2014 every non-ACTIVE store is a typed refusal with 
       }
       holder?.close();
     }
-  });
+    // Two real bounded waits at the published 5000ms default.
+  }, 30_000);
 });
 
 describe("execution-route \u2014 the migration importer entry points stay reachable", () => {

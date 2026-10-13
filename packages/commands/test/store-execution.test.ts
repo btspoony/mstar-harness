@@ -318,8 +318,17 @@ describe("store and execution command surface", () => {
     const recovery = String(refused.details?.recovery ?? "");
     expect(recovery).toContain("--ack-skip-dsh");
     expect(recovery).toContain("--ack-skip-workflow");
+    // ...and the delivery declarations: an unchanged v1 root still needs one
+    // per active standalone lift on the retry, so a recovery that named only
+    // the acknowledgements would not be reachable in one invocation.
+    expect(recovery).toContain("--delivery");
+    expect(recovery).toContain("--ack-skip-compass");
     const unmatched = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-status"] }, root);
     expect(unmatched).toMatchObject({ status: "usage", code: "store.upgrade-dsh-ack-unmatched", exitCode: 2 });
+    // A compass acknowledgement addresses no compass on this root: it is caller
+    // input (exit 2), never a silent no-op.
+    const compassUnmatched = await invoke(command, { harness, operator: "fixture", ackSkipCompass: ["iter-never-refused"] }, root);
+    expect(compassUnmatched).toMatchObject({ status: "usage", code: "execution.compass-skip-unmatched", exitCode: 2 });
     const recovered = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-ledger:wf-recovery"] }, root);
     expect(recovered.status).toBe("ok");
     const result = dataOf(recovered);

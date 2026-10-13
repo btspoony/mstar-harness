@@ -418,15 +418,13 @@ describe("execution-authority-read \u2014 one exact read of the committed author
     const holderRoot = controlRoot("authority-read-busy-holder");
     await backupStore(await activeGraph("authority-read-busy"), { out: join(holderRoot.harnessDir, "store.db") });
     const holder = new DatabaseSync(join(holderRoot.harnessDir, "store.db"));
-    const sessionRunner = process.env.MSTAR_STORE_TEST_RUNNER;
-    const busyTimeout = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
     try {
       holder.exec("pragma busy_timeout=0");
       holder.exec("pragma journal_mode=delete");
       holder.exec("begin exclusive");
       holder.prepare("select count(*) as n from store_meta").get();
-      process.env.MSTAR_STORE_TEST_RUNNER = "1";
-      process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
+      // No injection: the read really waits out the published bounded-wait
+      // default and then reports the busy refusal.
       expect(await refusalOf(() => readExecutionAuthority(holderRoot))).toEqual({ code: "store.busy" });
       expect(await refusalOf(() => resolveExecutionReadRoute(holderRoot))).toEqual({ code: "store.busy" });
     } finally {
@@ -436,12 +434,10 @@ describe("execution-authority-read \u2014 one exact read of the committed author
         // the exclusive section may already be gone
       }
       holder.close();
-      if (sessionRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
-      else process.env.MSTAR_STORE_TEST_RUNNER = sessionRunner;
-      if (busyTimeout === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = busyTimeout;
     }
-  });
+    // Two real bounded waits (readExecutionAuthority + resolveExecutionReadRoute)
+    // at the published 5000ms default, on top of the fixture.
+  }, 30_000);
 });
 
 /* ------------------------------------------------------------------------ *

@@ -118,6 +118,7 @@ export type ExecutionErrorCode =
   | "execution.adoption-invalid"
   | "execution.delivery-declaration-required"
   | "execution.workflow-skip-unmatched"
+  | "execution.compass-skip-unmatched"
   | "store.not-active"
   | "store.stale-epoch";
 

@@ -14,7 +14,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeStore, listIssues, openStore, readExecutionAuthority, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
+import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
@@ -632,4 +632,120 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
     },
     { timeout: 120_000 },
   );
+});
+describe("hostile invocation-cwd dotenv", () => {
+  test("the built dashboard CLI ignores projection test controls from cwd .env", async () => {
+    const { dir, context } = await workspace("hostile-dotenv-");
+    const workflowId = "wf-hostile-dotenv";
+    const planId = "plan-hostile-dotenv";
+    await registerCatalogEntity(context, {
+      kind: "plan", id: planId, title: "Hostile dotenv plan", rootKind: "plans", relativePath: `${planId}.md`,
+    }, { actor: "dashboard-test", operationId: "register-hostile-dotenv-plan" });
+    const authority = await readExecutionAuthority(context);
+    await createExecutionWorkflow({
+      ...context, caller: { role: "coordinator", sessionId: "dashboard-hostile-dotenv", workflowId },
+    }, {
+      expected: authority.token, operationId: "create-hostile-dotenv-workflow",
+      entry: { id: workflowId, type: "plan", started_at: RECORDED_AT, dir: `workflows/${workflowId}` },
+      snapshot: {
+        schema_version: 1, id: workflowId, type: "plan", status: "running",
+        started_at: RECORDED_AT, updated_at: RECORDED_AT,
+        plans: [{ id: planId, title: "Hostile dotenv plan", file: `${planId}.md`, status: "Todo" }],
+      },
+    });
+    const initial = await refreshProjections(context);
+    const beforeHandle = await openStore(context, "read");
+    let before: { revision: number; generation: number; planRows: Record<string, unknown>[] };
+    try {
+      before = {
+        revision: (beforeHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision,
+        generation: (beforeHandle.db.prepare("select generation from projection_meta where id = 1").get() as { generation: number }).generation,
+        planRows: beforeHandle.db.prepare("select * from projection_plans order by plan_id").all() as Record<string, unknown>[],
+      };
+    } finally { beforeHandle.close(); }
+    expect(initial.generation).toBe(before.generation);
+    expect(before.planRows.map((row) => row.plan_id)).toEqual([planId]);
+
+    const churn = JSON.stringify({ kind: "update-row", workflowId, planId });
+    const invocationDir = mkdtempSync(join(ROOT, "hostile-invocation-cwd-"));
+    expect(existsSync(join(invocationDir, ".mstar"))).toBe(false);
+    writeFileSync(join(invocationDir, ".env"), [
+      "MSTAR_STORE_TEST_RUNNER=1",
+      `MSTAR_PROJECTION_DB_CHURN='${churn}'`,
+      "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR=induced",
+      `MSTAR_HARNESS_DIR=${context.harnessDir}`,
+      "",
+    ].join("\n"));
+    const env = { ...process.env };
+    for (const key of ["MSTAR_STORE_TEST_RUNNER", "MSTAR_PROJECTION_DB_CHURN", "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR", "MSTAR_HARNESS_DIR"]) delete env[key];
+
+    const cliDir = join(import.meta.dir, "..");
+    const bundle = join(cliDir, "dist", "mstar-harness.js");
+    expect(existsSync(bundle)).toBe(true);
+    // No local `.mstar` exists: the built CLI can serve this fixture only if
+    // Bun loaded MSTAR_HARNESS_DIR from this same invocation cwd's `.env`.
+    const child = spawn("bun", [bundle, "dashboard", "--port", "0"], {
+      cwd: invocationDir, env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let dashboardUrl: string | undefined;
+    try {
+      dashboardUrl = await new Promise<string>((resolve, reject) => {
+        let buffer = "";
+        let output = "";
+        const timer = setTimeout(() => reject(new Error(`dashboard startup timed out; output: ${output}`)), 10_000);
+        child.stdout.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let newline = buffer.indexOf("\n");
+          while (newline >= 0) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            newline = buffer.indexOf("\n");
+            try {
+              const envelope = JSON.parse(line) as { command?: string; status?: string; data?: { url?: string }; message?: string };
+              if (envelope.command !== "dashboard") continue;
+              if (envelope.status !== "ok" || typeof envelope.data?.url !== "string") {
+                clearTimeout(timer);
+                reject(new Error(`dashboard failed: ${envelope.message ?? "no URL returned"}`));
+                return;
+              }
+              clearTimeout(timer);
+              resolve(envelope.data.url);
+              return;
+            } catch {
+              output += `${line}\n`;
+            }
+          }
+        });
+        child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+        child.once("error", (error) => { clearTimeout(timer); reject(error); });
+        child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`dashboard exited early (${code}); output: ${output}`)); });
+      });
+      const apiUrl = new URL("/api/workflows", dashboardUrl);
+      apiUrl.searchParams.set("token", new URL(dashboardUrl).searchParams.get("token")!);
+      // Bound the real HTTP request independently of the process startup and shutdown bounds.
+      const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10_000) });
+      expect(response.status).toBe(200);
+      const envelope = await response.json() as { projection: { freshness: string; generation: number }; data: { items: Array<{ id: string }> } };
+      expect(envelope.projection.freshness).toBe("current");
+      expect(envelope.projection.generation).toBe(before.generation);
+      expect(envelope.data.items.map((item) => item.id)).toEqual([workflowId]);
+    } finally {
+      child.kill("SIGTERM");
+      const exit = await new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => resolve("timeout"), 10_000);
+        child.once("exit", (code) => { clearTimeout(timer); resolve(code === null ? "signal" : String(code)); });
+      });
+      if (exit === "timeout") child.kill("SIGKILL");
+    }
+
+    const afterHandle = await openStore(context, "read");
+    try {
+      const after = {
+        revision: (afterHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision,
+        generation: (afterHandle.db.prepare("select generation from projection_meta where id = 1").get() as { generation: number }).generation,
+        planRows: afterHandle.db.prepare("select * from projection_plans order by plan_id").all() as Record<string, unknown>[],
+      };
+      expect(after).toEqual(before);
+    } finally { afterHandle.close(); }
+  }, { timeout: 60_000 });
 });

@@ -12,7 +12,8 @@
  *
  * Usage: node|bun <bundle> <scenario> <root-dir>
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import type { StoreError as StoreErrorClass } from "./store-db.js";
 
@@ -247,12 +248,11 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
    * post-refusal increment both survive.
    */
   async "second-writer-busy"(rootDir) {
-    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "200";
-    const first = await initializeStore({ harnessDir: rootDir });
+    const first = await initializeStore({ harnessDir: rootDir }, { busyTimeoutMs: 200 });
     first.db.exec("begin immediate");
     first.db.exec("update store_meta set revision = revision + 1 where id = 1");
 
-    const second = await openStore({ harnessDir: rootDir }, "write");
+    const second = await openStore({ harnessDir: rootDir }, "write", { busyTimeoutMs: 200 });
     await expectStoreErrorAsync("store.busy", async () => {
       second.db.exec("begin immediate");
     });
@@ -295,7 +295,13 @@ export async function runScenario(name: string, rootDir: string): Promise<string
 }
 
 const argv = process.argv.slice(2);
-if (import.meta.url === `file://${process.argv[1]}` || (argv.length === 2 && process.env.MSTAR_STORE_TEST_RUNNER === "1")) {
+// Executed only as the bundled child (`node|bun <bundle> <scenario> <root-dir>`):
+// the entry file's realpath is the whole guard — no environment variable
+// selects whether this scenario runner runs. `realpathSync` because a symlinked
+// invocation path (macOS `/tmp` → `/private/tmp`) would otherwise never equal
+// `import.meta.url` and the child would silently do nothing.
+const entry = process.argv[1];
+if (entry !== undefined && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry)) {
   if (argv.length !== 2) {
     console.error("usage: store-test-runtime <scenario> <root-dir>");
     process.exit(2);
