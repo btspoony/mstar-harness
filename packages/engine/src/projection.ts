@@ -492,9 +492,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   }
   let servedGraph: ExecutionState;
   try {
-    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR) {
-      throw new SyntaxError(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
-    }
     servedGraph = (await readExecutionState(context)).data;
   } catch (error) {
     const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
@@ -1248,8 +1245,6 @@ function selectWhereIn<T>(db: StoreDb, sql: (placeholders: string) => string, id
 }
 
 async function attemptPublication(context: StoreContext, capture: ProjectionCapture, attempts: number): Promise<PublishAttempt> {
-  if (capture.storeRevision !== undefined) await applyDatabaseChurn(context);
-
   const handle = await openStore(context, "write");
   const db = handle.db;
   try {
@@ -1324,44 +1319,13 @@ export async function publishProjectionCapture(context: StoreContext, capture: P
  * Content digests never make a capture stale. Source problems are represented
  * in the report; unusable stores remain visible to the caller.
  */
-async function applyDatabaseChurn(context: StoreContext): Promise<void> {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  const encoded = process.env.MSTAR_PROJECTION_DB_CHURN;
-  if (!encoded) return;
-  const request: unknown = JSON.parse(encoded);
-  const requests = Array.isArray(request) ? request : [request];
-  const next = requests.shift();
-  if (requests.length === 0) delete process.env.MSTAR_PROJECTION_DB_CHURN;
-  else process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify(requests);
-  if (!isPlainObject(next) || (next.kind !== "insert-plan" && next.kind !== "update-row") ||
-      typeof next.workflowId !== "string" || typeof next.planId !== "string") {
-    throw new Error("invalid projection DB churn test request");
-  }
-  const handle = await openStore(context, "write");
-  try {
-    if (next.kind === "insert-plan") {
-      handle.db.prepare(
-        "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
-          "values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')",
-      ).run(next.workflowId, next.planId, next.workflowId, JSON.stringify({ id: next.planId, title: next.planId, file: `plans/${next.planId}.md`, status: "Todo" }));
-    } else {
-      const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(next.workflowId) as { state_json: string } | undefined;
-      if (!current) throw new Error("projection DB churn workflow is missing");
-      const state = JSON.parse(current.state_json) as Record<string, unknown>;
-      state.updated_at = `${String(state.updated_at)}-churn`;
-      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), next.workflowId);
-    }
-    handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-  } finally {
-    handle.close();
-  }
-}
-
-export async function refreshProjections(context: StoreContext): Promise<RefreshReport> {
+export async function refreshProjections(context: StoreContext, hooks: { beforePublish?(attempt: number): void | Promise<void> } = {}): Promise<RefreshReport> {
   let capture = await captureProjectionSources(context);
+  await hooks.beforePublish?.(1);
   let attempt = await attemptPublication(context, capture, 1);
   if (attempt.kind === "source-stale") {
     capture = await captureProjectionSources(context);
+    await hooks.beforePublish?.(2);
     attempt = await attemptPublication(context, capture, 2);
     if (attempt.kind === "source-stale") {
       const handle = await openStore(context, "write");

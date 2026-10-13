@@ -30,7 +30,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
@@ -54,9 +54,6 @@ const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
-});
-afterEach(() => {
-  delete process.env.MSTAR_STORE_TEST_RUNNER;
 });
 
 type Fixture = { dir: string; harness: string; context: StoreContext };
@@ -1267,37 +1264,29 @@ describe("projection views", () => {
 
   test("an unavailable projection is disclosed as unavailable, not as zero work", async () => {
     const { context } = await workspace("unavailable-");
-    // The projection's execution-ROW source is the ACTIVE authority: an
-    // unreadable authority is `unavailable`, never an empty projection.
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "Unexpected token 'not json'";
+    const handle = await openStore(context, "write");
     try {
-      const envelope = await withStoreRead(context, queryDashboard("workflows"));
-      expect(envelope.projection.generation).toBeNull();
-      expect(envelope.projection.freshness).toBe("unavailable");
-      expect(envelope.projection.builtAt).toBeNull();
-      expect(envelope.projection.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("root:harness:execution/registry");
-      expect(envelope.data).toEqual({ items: [], total: 0 });
-    } finally {
-      delete process.env.MSTAR_STORE_TEST_RUNNER;
-      delete process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR;
-    }
+      handle.db.prepare("insert into execution_workflows(workflow_id, creator_session_id, revision, state_json, created_at, updated_at) values ('wf-corrupt', null, 1, ?, ?, ?)")
+        .run(JSON.stringify({ schema_version: 1, id: "wf-corrupt", type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT }), STARTED_AT, STARTED_AT);
+      handle.db.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-corrupt', '{ malformed')").run();
+    } finally { handle.close(); }
+    const envelope = await withStoreRead(context, queryDashboard("workflows"));
+    expect(envelope.projection.generation).toBeNull();
+    expect(envelope.projection.freshness).toBe("unavailable");
+    expect(envelope.projection.builtAt).toBeNull();
+    expect(envelope.projection.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("root:harness:execution/registry");
+    expect(envelope.data).toEqual({ items: [], total: 0 });
   });
 
   test("a projection view reads only committed store data, never source JSON", async () => {
     const { context } = await projectedWorkspace("no-source-io-");
-    // The view layer must not consult the sources: with the ACTIVE authority
-    // made unreadable after publication, a published generation still answers --
-    // and the refresh that precedes it keeps the last good generation.
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "authority went away";
-    let envelope;
-    try {
-      envelope = await withStoreRead(context, queryDashboard("workflows"));
-    } finally {
-      delete process.env.MSTAR_STORE_TEST_RUNNER;
-      delete process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR;
-    }
+    // The view layer must not consult sources: corrupt the ACTIVE registry
+    // after publication and retain the already-committed generation.
+    await withWrite(context, (db) => {
+      db.prepare("update execution_registry set entry_json = '{ malformed' where workflow_id = 'wf-read'").run();
+      db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    });
+    const envelope = await withStoreRead(context, queryDashboard("workflows"));
     expect(envelope.projection.freshness).toBe("stale");
     expect(envelope.projection.generation).not.toBeNull();
     expect(envelope.data.items.map((item) => item.id)).toEqual(["wf-read"]);

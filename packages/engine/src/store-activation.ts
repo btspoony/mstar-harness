@@ -1342,51 +1342,6 @@ function findRetirementRow(
   return undefined;
 }
 
-/**
- * Test seams, gated exactly like the store's other failure injections: honored
- * only under `MSTAR_STORE_TEST_RUNNER=1`, so a shipped CLI/plugin process can
- * never reach them. `MSTAR_STORE_FAIL_ACTIVATION_AFTER=flip` throws after the
- * authority flip and before the receipt row, inside the SAME transaction, so
- * the barrier's atomicity is observable instead of asserted;
- * `MSTAR_STORE_FAIL_RETIREMENT_AFTER=<n>` throws after the n-th item was
- * archived and ledged, and `MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE=1`
- * throws between a section's live rewrite and its verification — so both
- * retirement resume windows are exercised for real.
- */
-function failureHook(stage: "flip" | "retirement" | "section-write", completed: number): void {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (stage === "flip") {
-    if (process.env.MSTAR_STORE_FAIL_ACTIVATION_AFTER === "flip") throw new Error("induced activation failure after the authority flip");
-    return;
-  }
-  if (stage === "section-write") {
-    if (process.env.MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE === "1") {
-      throw new Error("induced retirement failure after the section rewrite");
-    }
-    return;
-  }
-  const raw = process.env.MSTAR_STORE_FAIL_RETIREMENT_AFTER;
-  if (raw === undefined || raw === "") return;
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isInteger(parsed) && parsed === completed) throw new Error(`induced retirement failure after ${completed} item(s)`);
-}
-
-/**
- * Second test seam, gated the same way: an OLD BINARY that lands a register
- * write in the window between the inspection pass and the barrier transaction
- * — the window the barrier-time revalidation closes. The seam only copies
- * bytes; which register and which bytes are the test's, so no fixture shape
- * lives here. Inert without `MSTAR_STORE_TEST_RUNNER=1`, so no shipped CLI,
- * plugin or hook process can reach it.
- */
-function legacyWriteHook(stage: "inspection"): void {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER !== stage) return;
-  const target = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET;
-  const source = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_FROM;
-  if (target === undefined || source === undefined) return;
-  copyFileSync(source, target);
-}
 
 // ---------------------------------------------------------------------------
 // Activation barrier (§7)
@@ -1404,6 +1359,7 @@ export async function activateStore(
   context: StoreContext,
   receipt: MigrationReceipt,
   attestation: ActivationAttestation,
+  hooks: { afterStage?(stage: "flip" | "inspection" | "retirement" | "section-write", completed: number): void } = {},
 ): Promise<ActivationReceipt> {
   if (
     !receipt ||
@@ -1500,7 +1456,7 @@ export async function activateStore(
 
   // Test seam: an old binary writes a register here — after the inspection pass
   // above and before the barrier transaction below.
-  legacyWriteHook("inspection");
+  hooks.afterStage?.("inspection", 0);
 
   const flip = await openStore(context, "write");
   try {
@@ -1549,7 +1505,7 @@ export async function activateStore(
         .prepare("update store_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? where id = 1")
         .run(epoch, revision, at);
       flip.db.prepare("update migration_receipts set activated_at = ? where id = ?").run(at, receipt.receiptId);
-      failureHook("flip", 0);
+      hooks.afterStage?.("flip", 0);
       const stored = {
         receiptVersion: ACTIVATION_PROTOCOL_VERSION,
         activationHash,
@@ -1817,7 +1773,7 @@ function selectReviewedSection(
  * re-derives them from the reviewed span. Completion is proven by the reviewed
  * rows' absence, not by a total length or an archive.
  */
-function retireSection(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerSectionItem): void {
+function retireSection(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerSectionItem, hooks: { afterStage?(stage: "section-write", completed: number): void }): void {
   const livePath = join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
@@ -1859,7 +1815,7 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
   writeLedger(ledgerPath, ledger);
   writeTextAtomic(livePath, excised);
   item.state = "verified";
-  failureHook("section-write", 0);
+  hooks.afterStage?.("section-write", 0);
   verifyRetiredSection(livePath, item);
   writeLedger(ledgerPath, ledger);
 }
@@ -1895,7 +1851,11 @@ function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
  * unexpected unreviewed register stops the transition without deleting
  * anything.
  */
-export async function retireStoreSources(context: StoreContext, activationReceipt: ActivationReceipt): Promise<RetirementReceipt> {
+export async function retireStoreSources(
+  context: StoreContext,
+  activationReceipt: ActivationReceipt,
+  hooks: { afterStage?(stage: "retirement" | "section-write", completed: number): void } = {},
+): Promise<RetirementReceipt> {
   if (
     !activationReceipt ||
     activationReceipt.phase !== "activated" ||
@@ -2063,12 +2023,12 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       }
       retireRegister(context, ledgerPath, ledger, item);
       completed += 1;
-      failureHook("retirement", completed);
+      hooks.afterStage?.("retirement", completed);
     }
     for (const item of ledger.sections) {
-      retireSection(context, ledgerPath, ledger, item);
+      retireSection(context, ledgerPath, ledger, item, hooks);
       completed += 1;
-      failureHook("retirement", completed);
+      hooks.afterStage?.("retirement", completed);
     }
 
     const at = new Date().toISOString();

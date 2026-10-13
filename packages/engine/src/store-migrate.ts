@@ -962,7 +962,11 @@ function applyCatalogEntities(db: StoreDb, plan: CatalogImportPlan, at: string):
  * reimport, and ordinary issue/catalog mutations refuse a staged
  * store elsewhere. Legacy register files are never written.
  */
-export async function applyStoreMigration(context: StoreContext, manifest: MigrationManifest): Promise<MigrationReceipt> {
+export async function applyStoreMigration(
+  context: StoreContext,
+  manifest: MigrationManifest,
+  hooks: { afterRow?(index: number): void } = {},
+): Promise<MigrationReceipt> {
   if (!manifest || manifest.version !== MIGRATION_MANIFEST_VERSION || typeof manifest.controlRoot !== "string") {
     throw new StoreMigrationError("store.migration-manifest-invalid", "the manifest is missing or carries an unsupported version; re-run the preview");
   }
@@ -1049,15 +1053,10 @@ export async function applyStoreMigration(context: StoreContext, manifest: Migra
       let created = 0;
       let updated = 0;
 
-      // Injected mid-import failure hook (test-runner gated, like C1's init hook).
-      const failAfterRaw = process.env.MSTAR_STORE_FAIL_MIGRATION_AFTER;
-      const failAfter =
-        process.env.MSTAR_STORE_TEST_RUNNER === "1" && failAfterRaw !== undefined ? Number.parseInt(failAfterRaw, 10) : Number.NaN;
-
       for (const [index, row] of rows.entries()) {
-        if (Number.isInteger(failAfter) && index === failAfter) {
-          throw new Error(`induced migration failure after ${failAfter} imported row(s)`);
-        }
+        // Test-owned injection: fires INSIDE the import transaction, so a throw
+        // proves the whole batch rolled back — no test-runner env var selects it.
+        hooks.afterRow?.(index);
         // History/excluded rows are recorded on the receipt verbatim WITHOUT
         // allocating an issue (§3, FW-2). An imported issue is never demoted
         // by a re-review: a prior ISSUE tuple that the re-reviewed manifest

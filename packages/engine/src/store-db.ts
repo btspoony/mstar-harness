@@ -231,25 +231,25 @@ export function storeDbPath(context: { harnessDir: string }): string {
   return join(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 
-/** Bounded wait is fixed at 5000ms in production (contract §2). The
- * `MSTAR_STORE_BUSY_TIMEOUT_MS` override is test-runner-gated: it is
- * honored only when `MSTAR_STORE_TEST_RUNNER` is set, so a shipped
- * CLI/plugin process cannot change the timeout or the refusal text. */
-function busyTimeoutMs(): number {
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
-    const raw = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
-    const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return DEFAULT_BUSY_TIMEOUT_MS;
+/** SQLite's `busy_timeout` is a signed 32-bit millisecond count. */
+const MAX_BUSY_TIMEOUT_MS = 2147483647;
+
+/** The bounded wait, normalised ONCE at each public entry (contract §2): the
+ * pragma only accepts a signed 32-bit integer millisecond count, so a caller's
+ * value is floored into that domain and falls back to the published 5000ms
+ * constant when even the floor is out of it — the number the pragma uses is
+ * then the number every refusal reports. */
+function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
+  const floored = Math.floor(value);
+  return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
 
-function refuseOpenFailure(error: unknown, dbPath: string): never {
+function refuseOpenFailure(error: unknown, dbPath: string, timeout = DEFAULT_BUSY_TIMEOUT_MS): never {
   if (error instanceof StoreError) throw error;
   if (isBusyError(error)) {
     throw new StoreError(
       "store.busy",
-      `Another writer held the store past the bounded wait (${busyTimeoutMs()}ms). ` +
+      `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). ` +
         `Retry when the competing writer is done; no write was accepted.`,
     );
   }
@@ -276,12 +276,12 @@ function isBusyError(error: unknown): boolean {
  * §2: BUSY is a visible refusal, never a lost accepted write). Reads pass
  * through untouched.
  */
-function busyAware(db: StoreDb, path: string): StoreDb {
+function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
   const refuseBusy = (error: unknown): never => {
     if (isBusyError(error)) {
       throw new StoreError(
         "store.busy",
-        `Another writer held ${path} past the bounded wait (${busyTimeoutMs()}ms). ` +
+        `Another writer held ${path} past the bounded wait (${timeout}ms). ` +
           `The statement was refused \u2014 roll back the current transaction and retry when the ` +
           `competing writer is done; no write was accepted.`,
       );
@@ -319,9 +319,9 @@ function busyAware(db: StoreDb, path: string): StoreDb {
  * then WAL (verified), then synchronous=FULL on writers, query_only=ON on
  * readers, and foreign_keys=ON (verified) on both.
  */
-async function connect(dbPath: string, mode: "read" | "write"): Promise<StoreDb> {
+async function connect(dbPath: string, mode: "read" | "write", timeout = DEFAULT_BUSY_TIMEOUT_MS): Promise<StoreDb> {
   const { DatabaseSync } = await loadSqliteDriver();
-  return openConnection(dbPath, mode, DatabaseSync);
+  return openConnection(dbPath, mode, DatabaseSync, timeout);
 }
 
 /** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
@@ -453,6 +453,7 @@ function openConnection(
   dbPath: string,
   mode: "read" | "write",
   DatabaseSync: SqliteModule["DatabaseSync"],
+  timeout = DEFAULT_BUSY_TIMEOUT_MS,
 ): StoreDb {
   // node:sqlite rejects an explicit `undefined` options argument — open
   // writers without a second argument, readers with the read-only option.
@@ -467,14 +468,14 @@ function openConnection(
     db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
-    refuseOpenFailure(error, dbPath);
+    refuseOpenFailure(error, dbPath, timeout);
   }
   const fail = (message: string): never => {
     db.close();
     throw new StoreError("store.corrupt", `${message} (opening ${dbPath})`);
   };
   try {
-    db.exec(`pragma busy_timeout=${busyTimeoutMs()}`);
+    db.exec(`pragma busy_timeout=${timeout}`);
     if (mode === "read") {
       db.exec("pragma query_only=ON");
       if ((db.prepare("pragma query_only").get() as { query_only?: number } | undefined)?.query_only !== 1) {
@@ -499,9 +500,9 @@ function openConnection(
       // already closed by fail()
     }
     if (mode === "read" && isRawCantOpen(error)) throw error;
-    refuseOpenFailure(error, dbPath);
+    refuseOpenFailure(error, dbPath, timeout);
   }
-  return busyAware(db, dbPath);
+  return busyAware(db, dbPath, timeout);
 }
 
 // ---------------------------------------------------------------------------
@@ -1578,7 +1579,7 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
  */
 function applyPendingMigrations(
   db: StoreDb,
-  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"] } = {},
+  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"]; busyTimeoutMs?: number } = {},
 ): number {
   const own = !options.alreadyInTransaction;
   if (own) db.exec("begin immediate");
@@ -1620,7 +1621,7 @@ function applyPendingMigrations(
     if (isBusyError(error)) {
       throw new StoreError(
         "store.busy",
-        `Another writer held the store past the bounded wait (${busyTimeoutMs()}ms); the migration batch ` +
+        `Another writer held the store past the bounded wait (${busyTimeoutMs(options.busyTimeoutMs)}ms); the migration batch ` +
           `was rolled back and nothing was committed. Retry when the competing writer is done.`,
       );
     }
@@ -2124,9 +2125,16 @@ export type StoreHandle = {
  * and nothing else changes: a persistent failure still refuses with the same
  * code and message the single-shot open produced.
  */
-export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
+export async function openStore(
+  context: StoreContext,
+  mode: "read" | "write",
+  options: { busyTimeoutMs?: number } = {},
+): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
+  // One normalisation for this whole open: the pragma's wait, the refusal text
+  // and every wrapped-write refusal below all report THIS number.
+  const timeout = busyTimeoutMs(options.busyTimeoutMs);
   // The existence discrimination runs on the final path WITHOUT following a
   // link: a dangling symlink or any other non-regular file is an existing store
   // that cannot be read — `store.corrupt`, never "no store" — so neither this
@@ -2145,10 +2153,10 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await openStoreOnce(dbPath, mode);
+      return await openStoreOnce(dbPath, mode, timeout);
     } catch (error) {
       if (attempt >= attempts || !isTransientReadOpenFailure(error, dbPath)) {
-        refuseOpenFailure(error, dbPath);
+        refuseOpenFailure(error, dbPath, timeout);
       }
       await sleep(READ_OPEN_BACKOFF_MS);
     }
@@ -2160,13 +2168,13 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
  * from setup so the caller can retry them; the CONTENT stage rethrows the
  * driver's own error so a read-open CANTOPEN remains distinguishable from a
  * real content verdict. This caller owns retrying the former and mapping either. */
-async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<StoreHandle> {
+async function openStoreOnce(dbPath: string, mode: "read" | "write", timeout: number): Promise<StoreHandle> {
   let db: StoreDb;
   try {
-    db = await connect(dbPath, mode);
+    db = await connect(dbPath, mode, timeout);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
-    refuseOpenFailure(error, dbPath);
+    refuseOpenFailure(error, dbPath, timeout);
   }
   try {
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
@@ -2322,13 +2330,14 @@ function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creat
  */
 export async function initializeStore(
   context: StoreContext,
-  options: { attestation?: unknown } = {},
+  options: { attestation?: unknown; busyTimeoutMs?: number; afterStagingClaim?: () => void } = {},
 ): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   // The operator's stop evidence is validated by the existing activation
   // validator before any file is created: a thin or malformed document is never
   // accepted as authority for a cutover.
   const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
+  const timeout = busyTimeoutMs(options.busyTimeoutMs);
   const dbPath = storeDbPath(context);
   const alreadyExists = (): StoreError =>
     new StoreError(
@@ -2357,13 +2366,13 @@ export async function initializeStore(
   closeSync(claim);
   let db: StoreDb | undefined;
   try {
-    db = await connect(stagingPath, "write");
-    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_STORE_FAIL_INIT === "1") {
-      throw new Error("induced init failure");
-    }
+    db = await connect(stagingPath, "write", timeout);
+    // Test-owned injection at the staging claim: the hook runs inside this try
+    // so a throw leaves the same cleanup path a real post-claim failure takes.
+    options.afterStagingClaim?.();
     db.exec("begin immediate");
     try {
-      applyPendingMigrations(db, { alreadyInTransaction: true, attestation });
+      applyPendingMigrations(db, { alreadyInTransaction: true, attestation, busyTimeoutMs: timeout });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
@@ -2440,7 +2449,7 @@ export async function initializeStore(
   // unlinked, never reported as if nothing was created — and the caller is
   // pointed at the supported continuation for its entry.
   try {
-    return await openStore(context, "write");
+    return await openStore(context, "write", { busyTimeoutMs: timeout });
   } catch (error) {
     const cause = publicationCause(error);
     const causeCode = error instanceof StoreError ? error.code : "";
