@@ -1896,45 +1896,59 @@ test("an execution acknowledgement naming a trusted, unknown or v1 registration 
   finally { v1Store.close(); }
 });
 
-test("repeated execution acknowledgements are one request, and a differing acknowledgement set conflicts with the retained receipt", async () => {
+test("changed execution acknowledgements under one operation id conflict with the retained receipt", async () => {
   const { context } = legacyWorkspace("acked-request-identity");
-  const workflowsDir = join(context.harnessDir, "workflows");
-  const target = join(context.harnessDir, "outside-identity-tree");
-  mkdirSync(join(target, "wf-acked-request-identity"), { recursive: true });
-  const snapshotBytes = readFileSync(join(workflowsDir, "wf-acked-request-identity", WORKFLOW_SNAPSHOT_FILE));
-  writeFileSync(join(target, "wf-acked-request-identity", WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
-  rmSync(workflowsDir, { recursive: true, force: true });
-  symlinkSync(target, workflowsDir);
+  const harnessDir = context.harnessDir;
+  const workflowsDir = join(harnessDir, "workflows");
+  const statusPath = join(harnessDir, "status.json");
+  const firstId = "wf-acked-request-identity";
+  const secondId = "wf-acked-request-identity-second";
+  const operationId = "op-acked-request-identity";
+  const snapshotOf = (id: string) => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" }, plans: [],
+  });
+  const common = { context, operator: "operator", operationId, acknowledgedSkips: ["dsh-workflows"] };
 
-  // The whole linked root is also a DSH source, so that domain needs its own
-  // acknowledgement for an upgrade to reach the applier.
-  const input = {
-    context, operator: "operator", operationId: "op-acked-request-identity",
-    acknowledgedSkips: ["dsh-workflows"],
-    acknowledgedWorkflowSkips: ["wf-acked-request-identity"],
-  };
-  const result = await upgradeStoreMinimal(input);
-  expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
-  // The acknowledgement is part of the operation request identity, and a
-  // repeated id normalizes to the same request: this is a real replay.
-  expect(await upgradeStoreMinimal({ ...input, acknowledgedWorkflowSkips: ["wf-acked-request-identity", "wf-acked-request-identity"] })).toEqual(result);
+  // Round 1: only `firstId` is a linked (unsafe) registration, and it is the
+  // only acknowledgement its discovery admits.
+  const firstOutside = join(harnessDir, "outside-identity-tree");
+  const firstTargetBytes = snapshotOf(firstId);
+  mkdirSync(join(firstOutside, firstId), { recursive: true });
+  writeFileSync(join(firstOutside, firstId, WORKFLOW_SNAPSHOT_FILE), firstTargetBytes);
+  rmSync(join(workflowsDir, firstId), { recursive: true, force: true });
+  symlinkSync(join(firstOutside, firstId), join(workflowsDir, firstId));
 
-  // A differing acknowledgement set for the SAME operation id reaches the
-  // applier and must conflict. Discovery is kept out of the way (the settled
-  // fixture below has no linked source) so the assertion can only be satisfied
-  // by the request-hash guard, not by a discovery refusal.
-  const settled = legacyWorkspace("acked-request-identity-settled");
-  const settledInput = { context: settled.context, operator: "operator", operationId: "op-acked-request-identity-settled" };
-  const settledResult = await upgradeStoreMinimal(settledInput);
-  expect(settledResult).toMatchObject({ imported: 1 });
-  await expect(upgradeStoreMinimal({ ...settledInput, acknowledgedWorkflowSkips: ["wf-acked-request-identity-settled"] }))
+  const first = await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId] });
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 0 });
+  // A repeated id is one request, so this repeats and replays exactly.
+  expect(await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, firstId] })).toEqual(first);
+
+  // Round 2: a SECOND registration becomes linked, so the valid acknowledgement
+  // set genuinely changes while both requests stay discovery-valid. Only the
+  // changed request identity can answer, and it must not replay round 1.
+  const secondOutside = join(harnessDir, "outside-identity-second");
+  mkdirSync(join(secondOutside, secondId), { recursive: true });
+  writeFileSync(join(secondOutside, secondId, WORKFLOW_SNAPSHOT_FILE), snapshotOf(secondId));
+  symlinkSync(join(secondOutside, secondId), join(workflowsDir, secondId));
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: secondId, type: "plan", started_at: "2026-10-04", dir: `workflows/${secondId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  await expect(upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, secondId] }))
     .rejects.toMatchObject({ code: "execution.operation-conflict" });
-  // The retained receipt and the native row are unchanged by the conflicting call.
-  const settledStore = await openStore(settled.context, "read");
+
+  // The retained receipt and native state are unchanged: round 1's single
+  // operation receipt stands and no execution row was imported by either round.
+  const store = await openStore(context, "read");
   try {
-    expect(settledStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
-  } finally { settledStore.close(); }
-  expect(await upgradeStoreMinimal(settledInput)).toEqual(settledResult);
+    expect(store.db.prepare("select count(*) as n from store_operations where operation_id = ?").get(operationId)).toEqual({ n: 1 });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // Neither linked source was followed: both are still symlinks with unchanged targets.
+  expect(lstatSync(join(workflowsDir, firstId)).isSymbolicLink()).toBe(true);
+  expect(lstatSync(join(workflowsDir, secondId)).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(firstOutside, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(firstTargetBytes);
 });
 
 test("whole-root recovery classifies registered ids lexically: partial acknowledgement refuses, complete skips both, trusted sibling imports", async () => {
