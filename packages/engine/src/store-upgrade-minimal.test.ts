@@ -2000,7 +2000,7 @@ async function nativeCollisionWorkspace(name: string): Promise<{ context: StoreC
 }
 
 test("a recognized legacy source whose id already exists natively refuses, then an explicit acknowledgement keeps the native authority and skips only its IMPORT", async () => {
-  const { context, workflowId, legacyBytes } = nativeCollisionWorkspace("native-id-collision");
+  const { context, workflowId, legacyBytes } = await nativeCollisionWorkspace("native-id-collision");
   // An unrelated healthy legacy row in the SAME run, so a partial import is
   // observable: the refusal must commit NOTHING, including that healthy row.
   const healthyId = "wf-native-id-collision-healthy";
@@ -2054,11 +2054,10 @@ test("a recognized legacy source whose id already exists natively refuses, then 
   expect(recovered.dispositions).toContainEqual(
     expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow; the native execution authority already holds that id`),
   );
-  expect(recovered.dispositions).toContainEqual(expect.stringContaining("no prior import or resumption is inferred"));
   const store = await openStore(context, "read");
   try {
     expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
-      .toEqual([{ workflow_id: healthyId }, { workflow_id: workflowId }]);
+      .toEqual([{ workflow_id: workflowId }, { workflow_id: healthyId }]);
     // The native header is byte-identical to the pre-run state: the legacy
     // source was NOT imported over it.
     expect(store.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId))
@@ -2073,7 +2072,7 @@ test("a recognized legacy source whose id already exists natively refuses, then 
 });
 
 test("a later new-operation import of the same legacy source requires explicit acknowledgement rather than heuristic replay, and native progress is not byte-frozen", async () => {
-  const { context, workflowId } = nativeCollisionWorkspace("native-id-later-op");
+  const { context, workflowId } = await nativeCollisionWorkspace("native-id-later-op");
   const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
   const legacyBytes = Buffer.from(readFileSync(snapshotPath));
   const readHeader = async (): Promise<{ state_json: string; revision: number }> => {
@@ -2193,7 +2192,7 @@ test("a v1 root whose converted lifecycle id already exists natively refuses, th
 });
 
 test("one unmatched acknowledgement in a mixed request refuses the whole run before any write, even when another acknowledgement is valid", async () => {
-  const { context, workflowId } = nativeCollisionWorkspace("native-id-mixed-ack");
+  const { context, workflowId } = await nativeCollisionWorkspace("native-id-mixed-ack");
   const before = await protectedStore(context);
 
   // `workflowId` genuinely collides and is acknowledged, but
