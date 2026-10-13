@@ -39,13 +39,14 @@ For repo/process edits, provide the PM the actual edit time, editor seat, observ
 
 Apply when the assignment writes tracked repo files:
 
-- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files — Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
+- **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files — Completion Report **Git** must show real commit evidence per the identity rule below unless read-only was assigned.
 - **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
 - **NEVER** skip checkout verification when the Assignment includes **`Worktree path`**: before the first repo write or commit, use `cd` to enter that directory and verify with `git rev-parse --show-toplevel` that the checkout root matches it; never fall back to the default repo root, the PM integration checkout, or the primary checkout. Completion Report must state **`Worktree path used`** (absolute) when assigned.
 - **Commit identity**: author and committer MUST use the user's already-configured `git config user.name` / `git config user.email` (repository or global scope).
+  - Before committing, verify `git config --get user.name` and `git config --get user.email` are non-empty in the working checkout; an empty value is **Blocked** — do not let Git synthesize an identity.
   - **NEVER** fabricate an identity (`mstar`, a harness/role/agent name, a placeholder or invented email), or override it per commit via `-c user.name=` / `-c user.email=`, `--author`, `GIT_AUTHOR_*` / `GIT_COMMITTER_*`.
-  - Git's unknown-identity commit refusal is **Blocked**: report to PM; the operator must set `user.name` / `user.email` in Git configuration, or use a checkout where the user's identity is configured.
-  - Completion Report **Git:** MUST show the real `git log -1 --oneline` with that configured author; a fabricated or overridden identity means the task is not done.
+  - Empty configured values or Git's unknown-identity commit refusal are **Blocked**: report to PM; the operator sets `git config user.name` / `git config user.email` in the checkout or with `--global`, or uses a checkout where the user's identity is configured.
+  - Completion Report **Git:** MUST include real `git log -1 --format='%h %an <%ae>'` evidence showing that configured author; a synthesized, fabricated or overridden identity means the task is not done.
 
 ## Plan & Documentation Rules
 
