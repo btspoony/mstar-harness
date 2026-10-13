@@ -2292,6 +2292,31 @@ test("changed execution acknowledgements under one operation id conflict with th
   expect(readFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(snapshotOf(firstId));
 });
 
+for (const shape of ["symlink", "file"] as const) {
+  test(`an unmatched acknowledgement outranks a registered ${shape} root refusal without probing its children`, async () => {
+    const { context } = legacyWorkspace(`wrong-ack-${shape}-root`);
+    const workflowsDir = join(context.harnessDir, "workflows");
+    const target = join(ROOT, `wrong-ack-${shape}-target`);
+    mkdirSync(target);
+    rmSync(workflowsDir, { recursive: true, force: true });
+    if (shape === "symlink") symlinkSync(target, workflowsDir);
+    else writeFileSync(workflowsDir, "retained source");
+    const initialized = await initializeStore(context);
+    initialized.close();
+    const before = await protectedStore(context);
+    const { accessed } = await withPathAccessLog(async () => {
+      await expect(upgradeStoreMinimal({
+        context, operator: "operator", operationId: `op-wrong-ack-${shape}`,
+        acknowledgedWorkflowSkips: ["wf-not-a-source"],
+      })).rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+    });
+    expect(accessed.filter((path) => path.startsWith(`${workflowsDir}/`) || path === target || path.startsWith(`${target}/`))).toEqual([]);
+    expect(await protectedStore(context)).toEqual(before);
+    if (shape === "symlink") expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+    else expect(readFileSync(workflowsDir, "utf8")).toBe("retained source");
+  });
+}
+
 test("whole-root recovery classifies registered ids lexically: partial acknowledgement refuses, complete skips both, trusted sibling imports", async () => {
   const { context } = legacyWorkspace("acked-two-id-root");
   const workflowsDir = join(context.harnessDir, "workflows");
