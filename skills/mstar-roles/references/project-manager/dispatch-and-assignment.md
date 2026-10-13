@@ -187,7 +187,7 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 **Residuals disclosure**: <open R# list — id + severity + tracking location; `N/A — none open` when none>
 **Plan Update**: ...
 **Handoff**: narrative to `project-manager` (not auto-dispatch)
-**Git**: <commit lines or N/A>
+**Git**: <real `git log -1 --format='%h %an <%ae>'` showing the configured author, or N/A for read-only; missing/failing identity is Blocked, never fabricate or use per-commit identity overrides — `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes)>
 **Worktree path**: <absolute path or N/A>
 ```
 

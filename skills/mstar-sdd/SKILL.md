@@ -64,6 +64,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 9. Release dependent tasks only after reviewed prerequisite commits are present in their assigned base, per Dependent-task readiness above; independent ready tasks need not wait
 
 **Never** dispatch parallel writers without isolated worktrees and disjoint ownership. Merge their outputs serially before producing the plan review-package.
+Serial integration merge commits use the already-configured identity; missing/failing identity is Blocked, never fabricate or use per-commit identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 Detail: **`references/file-handoffs.md`**.
 

@@ -42,7 +42,8 @@ Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepar
 | `spec-register` | Register store-backed workflow/plan rows through `mstar workflow register`; prepare via `mstar plan prepare` + spec stub if applicable |
 | `mirror-plan` | Write SSOT main plan under `{PLAN_DIR}/` |
 
-Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → PM public plan-state update in store.db → `git log -1 --oneline` evidence.
+Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → PM public plan-state update in store.db → `git log -1 --format='%h %an <%ae>'` evidence.
+Each implement todo's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 Before **SwitchMode → Agent for ordinary per-plan implementation**: mirror plan exists, `mstar status validate` / `mstar plan show` confirms registered workflow/plan identity, bootstrap todos are done. Never use only the Cursor URI as **Plan Path**. Phase 1 restricted-prototype preparation uses the exception below, not premature formal drafts.
 

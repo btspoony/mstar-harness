@@ -150,6 +150,7 @@ If `{HARNESS_DIR}/` does not exist:
 ## Phase 7: Commit
 
 All bootstrap artifacts must be committed:
+Bootstrap commits use the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 ```bash
 git add STRATEGY.md CONCEPTS.md AGENTS.md {HARNESS_DIR}/ {KNOWLEDGE_DIR}/

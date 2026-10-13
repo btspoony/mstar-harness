@@ -60,9 +60,10 @@ After the host plan is created, keep the host plan body and mirror file **in syn
 **Before marking the todo done:**
 
 1. **Commit**: `git add` + `git commit` on the authorized **Working branch** for this **task id** (one commit per task unless PM explicitly allowed batched commits in Assignment).
+   Each todo's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 2. **Plan checkbox**: Set `- [x]` on the matching line in `{PLAN_DIR}/<plan-id>-<name>.md`.
 3. **Execution state** (PM only): use the appropriate public `mstar plan` verb for store-backed status; append notes through the authorized notes ledger operation. Keep `notes.jsonl` append-only; never patch ACTIVE status/snapshot files.
-4. **Evidence**: Record real `git log -1 --oneline` in Completion Report **Git** (or the plan-mode status note if executing as PM in Plan mode).
+4. **Evidence**: Record real `git log -1 --format='%h %an <%ae>'` in Completion Report **Git** (or the plan-mode status note if executing as PM in Plan mode).
 
 **NEVER**
 

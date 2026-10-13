@@ -92,6 +92,7 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 **QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上，默认 **仅可** 写入或编辑 Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。权限范围应按 Assignment 的绝对报告路径配置；worktree 默认根为 `<parent-of-repo-root>/{repo-basename}.worktrees/`（repo root 为 Git top-level 的 realpath），不据此假定任何相对权限 glob 的解析基准或覆盖范围。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
 **QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（authored artifact；默认 gitignored），并在当轮捕获/关闭 store 中的 plan-linked issues。**跨 clone 须持久的** finding 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
+PM 提交显式 opt-in 的 tracked reports 时仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
 
 ## 主 plan 内任务清单（Markdown checkbox）
 

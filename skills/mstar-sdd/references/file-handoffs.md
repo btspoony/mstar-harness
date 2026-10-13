@@ -44,6 +44,7 @@ Implementer writes full report to `task-N-report.md` — its own output, and an 
 
 - Status: `DONE` | `DONE_WITH_CONCERNS` | `NEEDS_CONTEXT` | `BLOCKED`
 - Commits (SHAs)
+  Report task commits using the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 - One-line verification summary (affected tests or scoped static evidence)
 - Concerns (if any)
 

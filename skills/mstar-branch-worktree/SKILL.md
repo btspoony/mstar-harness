@@ -94,6 +94,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 3. 只能执行 PM 在 Assignment 中定义的分支策略。
 4. 禁止自行切回 `main`/`master` 再重开分支流程。
 5. 若 Assignment 含糊或与本地分支状态冲突，先停下并回报 PM。
+6. 提交仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或用 `-c` 覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
 
 ### 回报要求
 
