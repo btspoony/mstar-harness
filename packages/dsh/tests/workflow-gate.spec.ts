@@ -654,7 +654,7 @@ describe('workflow gate — P-b lease attribution', () => {
 function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
   // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
   // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
-  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))
+  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')
   if (view === null) throw new Error(`ledger unreadable at ${join(app.harnessDir, 'workflows/wf-1')}`)
   return view.events
 }
@@ -818,7 +818,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     expect(decision.reason).toContain('plan-orphan')
     // The verdict row records into the ACTIVE workflow dir of the calling
     // workspace's harness (`.agents/workflows/wf-1/agent-flow.jsonl`).
-    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
+    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'), 'wf-1')!.events
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
       kind: 'workflow-verdict',
@@ -842,7 +842,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(violationCodes(advisories[0])).toContain('workflow.lease.uncovered')
-    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
+    const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'), 'wf-1')!.events
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
       kind: 'workflow-verdict',
@@ -939,7 +939,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir), throwingCache, resolveExecutionLedgerTarget)
       sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-throw-e2e', name: 'deploy-x' })
       await drainLedger()
-      const view = readAgentFlow(join(harnessDir, 'workflows/wf-1'))
+      const view = readAgentFlow(join(harnessDir, 'workflows/wf-1'), 'wf-1')
       expect(view).not.toBeNull()
       // The ledger append succeeded despite the throwing cache hook.
       expect(view!.events.map((e) => e.kind)).toEqual(['workflow-run'])
@@ -1078,7 +1078,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // is the SESSION's workspace (`.agents` — `harnessDir: null` leaves the
     // plugin resolving from the workspace), so its ledger is read there, not at
     // the boot's own harness dir.
-    const sessionLedger = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))
+    const sessionLedger = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'), 'wf-1')
     expect(sessionLedger?.events.some((e) => e.kind === 'workflow-run')).toBe(true)
     expect(app.ctx.dshHostAdapter.workflowAskCache.get('deploy-x')).toBeUndefined()
 

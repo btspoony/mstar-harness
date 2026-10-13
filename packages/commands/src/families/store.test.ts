@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { WORKFLOW_SNAPSHOT_FILE, initializeStore, openStore } from "@mstar-harness/engine";
+import { DatabaseSync } from "node:sqlite";
+import { WORKFLOW_SNAPSHOT_FILE, initializeStore, MIGRATIONS, migrationChecksum, openStore, SCHEMA_VERSION_TABLE_SQL } from "@mstar-harness/engine";
 import type { InvocationContext } from "../types.js";
 import { executeCommand, getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
@@ -195,42 +196,30 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
       qa_gate: "mandatory", findings_cleanup: "allow-residual",
       prepared_by: "host-coord", prepared_at: "2026-10-04T00:00:00Z",
     };
-    const initialized = await initializeStore({ harnessDir: harness });
+    // Reconstruct the ACTUAL schema-8 store from the owning engine's own
+    // migration SQL: versions 1..8 applied verbatim, so the historical
+    // execution_sessions (plan-pm seat), execution_leases and
+    // execution_integration_leases exist exactly as migration 8 left them, and
+    // the attested retry below applies migrations 9..11 — including the
+    // retirement normalize — against true history rather than a demolished
+    // schema-11 file.
+    const db = new DatabaseSync(join(harness, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin immediate");
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    for (const migration of MIGRATIONS.slice(0, 8)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        migrationChecksum(migration),
+        "2026-10-04T00:00:00.000Z",
+      );
+    }
+    db.exec("commit");
+    db.close();
+    const initialized = await openStore({ harnessDir: harness }, "write");
     try {
-      // Reconstruct the actual schema-8 shape, as in the owning engine fixture:
-      // the historical session CHECK/indexes and per-plan lease table must exist
-      // before inserting the retired identity. Initialization alone is schema 9.
-      initialized.db.exec(`
-        delete from schema_version where version = 9;
-        create table execution_sessions_v8(
-          workflow_id text not null references execution_workflows(workflow_id),
-          role text not null check (role in ('coordinator','plan-pm')),
-          session_id text not null,
-          plan_id text,
-          epoch integer not null check (epoch > 0),
-          revision integer not null check (revision > 0),
-          state text not null check (state in ('active','suspended','revoked')),
-          bound_at text not null,
-          primary key (workflow_id, role, session_id),
-          foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
-          check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
-        );
-        drop table execution_sessions;
-        alter table execution_sessions_v8 rename to execution_sessions;
-        create unique index execution_sessions_active_coordinator
-          on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
-        create unique index execution_sessions_active_plan_pm
-          on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
-        create table execution_leases(
-          workflow_id text not null,
-          plan_id text not null,
-          revision integer not null check (revision > 0),
-          owner_epoch integer not null check (owner_epoch > 0),
-          lease_json text not null,
-          primary key (workflow_id, plan_id),
-          foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
-        );
-      `);
       initialized.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
       // Historical FK order: workflow, registry/business row, then identities
       // and claims. Retirement is keyed by this actual workflow/session pair.
@@ -349,7 +338,8 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
 
     const store = await openStore({ harnessDir: harness }, "read");
     try {
-      expect(store.schemaVersion).toBe(9);
+      // The attested retry applies every pending migration of this build.
+      expect(store.schemaVersion).toBe(MIGRATIONS.length);
       expect(store.db.prepare("select name from sqlite_schema where type = 'table' and name = 'execution_leases'").get()).toBeUndefined();
       expect(store.db.prepare("select * from execution_sessions where workflow_id = ? and session_id = ?").get(workflowId, sessionId)).toBeUndefined();
       expect(store.db.prepare("select * from execution_sessions where workflow_id = ?").all(workflowId)).toEqual([{

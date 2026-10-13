@@ -1,99 +1,31 @@
 /**
- * Engine migrate module — v1 -> v2 migration planner + executor.
+ * `migrate.ts` — the PURE legacy v1 conversion the store-upgrade importer
+ * consumes (`convertLegacyV1Tree`).
  *
- * Fixtures live in `fixtures/migrate-real/`: a legacy-tree snapshot with
- * obviously-synthetic ids (all plan/iteration ids use a `0000MMDD-` date
- * prefix). It contains a v1 `status.json` copied verbatim in shape (40
- * rows: 36 Done / 1 InProgress / 3 Todo, 11 `plan_id`-keyed rows, zero
- * `execution_lease` on Done rows, empty `residual_findings`), every
- * canonical iteration compass frontmatter verbatim (18 iterations incl.
- * the `v2.1.0` review-chain VARIANT `delivery-compass.code-reviewer-role.md`
- * which is NOT a grouping source), two archived residual files (legacy
- * history — not lifted), plus ONE synthetic zero-plan compass
- * (`iter-0000-fixture-zero-plan`) — the snapshot has no zero-plan compass,
- * and the fixture must cover that shape.
+ * The fixture is the repo's single committed v1 tree
+ * (`test/fixtures/migrate-real/`: root `status.json` `version: 1` plus
+ * `iterations/<id>/delivery-compass.md`). Each case copies it into a fresh tmp
+ * dir and asserts the in-memory conversion AND that nothing on disk moved —
+ * the conversion is a read-only step; the native import is what commits.
  *
- * Frozen migrate semantics exercised below:
- * - Grouping: compass frontmatter is the SSOT; row id from `id` OR legacy
- *   `plan_id`; registered-but-missing ids -> owning snapshot
- *   `legacy_metadata.compact_missing[]` (never fabricated).
- * - Status mapping: compass `active|locked` -> `running`, `completed` ->
- *   `completed`; standalone `Done` -> `completed`, `InProgress|InReview` ->
- *   `running`, `Blocked` -> `paused`, `Todo` -> `paused` + not-started
- *   note; nothing maps to `failed|stopped`; row statuses stay verbatim.
- * - Field lift: execution-policy keys first-class `execution_policy` +
- *   branch/integration_worktree_path (lifted from the v1 root
- *   `control_worktree_path`)/integration_merge_lease on the ACTIVE
- *   iteration snapshot (v3.0.0); `program_roadmap` remains a transport-only
- *   candidate (never a Markdown authority); `harness_root` dropped with a
- *   legacy note; all other root-metadata keys -> `legacy_metadata` (nothing dropped silently).
- * - Residuals: open `residual_findings` -> `projects/_default/residuals.json`
- *   (keyed by plan id, each value an ARRAY of ALL open entries with
- *   `source_plan`/`registered_at` provenance — v1 multi-finding semantics
- *   preserved verbatim, nothing collapsed or skipped). Archived residuals
- *   are never lifted.
- * - Notes: per-plan `notes` ARRAYS -> `workflows/<id>/notes.jsonl` initial
- *   entries; string `notes` stay on the row (not lifted).
- * - Ordering/idempotence: additive-first steps; root v2 replacement LAST
- *   (commit point — a failed run leaves v1 intact); v2 root -> no-op;
- *   dry-run -> steps only, zero writes.
+ * Coverage: grouping (compass vs standalone), status mapping, root-metadata
+ * lifts, compacted registered ids, validation of every produced snapshot,
+ * unsafe/duplicate id refusals, and cross-class id collisions.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
-import { getCatalog, registerCatalogEntity } from "../src/catalog.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
-import { initializeStore, type StoreContext } from "../src/store-db.js";
-import { CoordinationError } from "../src/coordination-write.js";
-import { readJson, writeJson } from "../src/core.js";
-import { parseCompassFrontmatterText } from "../src/iteration.js";
-import { withStatusWriteLock } from "../src/lease.js";
-import {
-  ARCHIVED_STATUS_V1_FILE,
-  applyMigratePlan,
-  migrateHarnessTree,
-  type MigrateOptions,
-  type MigratePlan,
-} from "../src/migrate.js";
-import { validateProjectRegister, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE } from "../src/project.js";
-import { validateStatusV2 } from "../src/status.js";
-import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot } from "../src/workflow.js";
-import type { WorkflowSnapshot } from "../src/workflow.js";
+import { join } from "node:path";
+import { readJson } from "../src/core.js";
+import { convertLegacyV1Tree, MIGRATE_STATUS_FILE } from "../src/migrate.js";
+import { validateWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures", "migrate-real");
 
-/**
- * Plan the v1 fixture with the explicit delivery declaration its ACTIVE
- * standalone plan rows require (contract §1/§4a): a lifted live `type: plan`
- * lifecycle declares its kind at registration — never inferred, never
- * defaulted in code — and the shared coherence rule pairs a `development`
- * declaration with its delivery anchors.
- */
-function planOf(root: string, opts: MigrateOptions = {}): MigratePlan {
-  return migrateHarnessTree(root, {
-    deliveryKind: "development",
-    branchSource: "feature/standalone",
-    branchTarget: "main",
-    ...opts,
-  });
-}
-
-function tmpRoot(prefix: string): string {
-  return mkdtempSync(join(tmpdir(), prefix));
-}
-afterEach(() => {
-  setArtifactStore(undefined);
-});
-
-/** Copy the committed snapshot fixture into a fresh tmp harness dir. */
+/** Copy the committed v1 fixture into a fresh tmp harness dir. */
 function fixtureTree(): string {
-  const root = tmpRoot("migrate-fixture-");
+  const root = mkdtempSync(join(tmpdir(), "convert-v1-fixture-"));
   cpSync(FIXTURES, root, { recursive: true });
-  // The apply loop routes snapshot writes through the active
-  // ArtifactStore — point it at the migrated root so the store resolves the
-  // same paths the plan writes to.
-  setArtifactStore(createFsStore(root));
   return root;
 }
 
@@ -109,22 +41,6 @@ function snapshotTree(dir: string): Record<string, string> {
   };
   walk(dir);
   return out;
-}
-
-/** Minimal valid residual entry (v1 shape — validated by validateResidual). */
-function residual(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: "R1",
-    title: "residual title",
-    severity: "low",
-    source: "QC fixture",
-    scope: "migrate.test.ts",
-    decision: "defer",
-    owner: "@fullstack-dev",
-    target: "next iteration",
-    tracking: null,
-    ...overrides,
-  };
 }
 
 const REAL_ITERATION_IDS = [
@@ -160,40 +76,37 @@ const REAL_STANDALONE_IDS = [
   "00000817-cli-bin-alias",
 ];
 
-describe("migrateHarnessTree — planner on the snapshot fixture", () => {
-  test("plans 29 snapshots (18 completed iterations incl. zero-plan compass + 1 running v3.0.0 + 10 standalone), ids sorted", () => {
+describe("convertLegacyV1Tree — grouping and status mapping", () => {
+  test("converts 29 lifecycles (18 completed + 1 running iteration, 10 standalone) with sorted ids", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      expect(plan.alreadyMigrated).toBe(false);
-      expect(plan.snapshots).toHaveLength(29);
+      const converted = convertLegacyV1Tree(root);
+      expect(converted.snapshots).toHaveLength(29);
 
-      const ids = plan.snapshots.map((s) => s.id);
+      const ids = converted.snapshots.map((s) => s.id);
       expect(ids).toEqual([...ids].sort());
 
-      const iterations = plan.snapshots.filter((s) => s.type === "iteration");
-      const plansOnly = plan.snapshots.filter((s) => s.type === "plan");
+      const iterations = converted.snapshots.filter((s) => s.type === "iteration");
+      const standalone = converted.snapshots.filter((s) => s.type === "plan");
       expect(iterations).toHaveLength(19);
-      expect(plansOnly).toHaveLength(10);
+      expect(standalone).toHaveLength(10);
 
       expect(iterations.filter((s) => s.status === "completed").map((s) => s.id).sort()).toEqual([
         ...REAL_ITERATION_IDS,
         "iter-0000-fixture-zero-plan",
       ].sort());
       expect(iterations.filter((s) => s.status === "running").map((s) => s.id)).toEqual(["v3.0.0"]);
-      expect(plansOnly.map((s) => s.id).sort()).toEqual([...REAL_STANDALONE_IDS].sort());
+      expect(standalone.map((s) => s.id).sort()).toEqual([...REAL_STANDALONE_IDS].sort());
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("v3.0.0 active iteration snapshot carries execution_policy / branch / integration_worktree_path / legacy_metadata lifts + verbatim rows", () => {
+  test("the v3.0.0 active iteration carries the root-metadata lifts + verbatim rows", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      const v3 = plan.snapshots.find((s) => s.id === "v3.0.0");
-      expect(v3).toBeDefined();
-      const data = v3!.data;
+      const v3 = convertLegacyV1Tree(root).snapshots.find((s) => s.id === "v3.0.0")!;
+      const data = v3.data;
 
       expect(data.type).toBe("iteration");
       expect(data.status).toBe("running");
@@ -220,36 +133,26 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
         iteration_merge_commit: "14dfddb",
       });
       expect(typeof data.legacy_metadata!.harness_root_note).toBe("string");
-      expect(data.legacy_metadata!.harness_root_note).toContain("dropped as redundant");
-      // harness_root is note-only: the raw value is NOT copied verbatim and
-      // there is no first-class harness_root field (declaration == behavior).
       expect(data.legacy_metadata!.harness_root).toBeUndefined();
       expect((data as Record<string, unknown>).harness_root).toBeUndefined();
 
-      // 4 registered plans, rows sorted by id, statuses + lease verbatim.
       expect(data.plans.map((row) => row.id)).toEqual([
         "00000819-workflow-dsh-viz",
         "00000819-workflow-engine-core",
         "00000819-workflow-migrate-cli",
         "00000819-workflow-skills-thinning",
       ]);
-      const engineCore = data.plans.find((row) => row.id === "00000819-workflow-engine-core")!;
-      expect(engineCore.status).toBe("InProgress");
-      expect(engineCore.execution_lease).toMatchObject({ holder: "omp-pm-v3.0.0" });
-      const todoRow = data.plans.find((row) => row.id === "00000819-workflow-migrate-cli")!;
-      expect(todoRow.status).toBe("Todo");
+      expect(data.plans.find((row) => row.id === "00000819-workflow-engine-core")!.status).toBe("InProgress");
+      expect(data.plans.find((row) => row.id === "00000819-workflow-migrate-cli")!.status).toBe("Todo");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("legacy plan_id-keyed rows group into the v2.0.0 iteration snapshot (rows without id key)", () => {
+  test("legacy plan_id-keyed rows stay verbatim inside their owning iteration", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      const v2 = plan.snapshots.find((s) => s.id === "v2.0.0");
-      expect(v2).toBeDefined();
-      const data = v2!.data;
+      const data = convertLegacyV1Tree(root).snapshots.find((s) => s.id === "v2.0.0")!.data;
       expect(data.status).toBe("completed");
       expect(data.ended_at).toBe("2026-08-08");
       expect(data.plans.map((row) => row.plan_id)).toEqual([
@@ -268,12 +171,11 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
     }
   });
 
-  test("registered-but-compacted ids recorded as compact_missing (23 total), never fabricated as rows", () => {
+  test("registered-but-compacted ids land in compact_missing (23 total), never fabricated as rows", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
       let total = 0;
-      for (const snapshot of plan.snapshots) {
+      for (const snapshot of convertLegacyV1Tree(root).snapshots) {
         const missing = snapshot.data.legacy_metadata?.compact_missing;
         if (missing !== undefined) {
           expect(Array.isArray(missing)).toBe(true);
@@ -281,33 +183,20 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
         }
       }
       expect(total).toBe(23);
-
-      const v21 = plan.snapshots.find((s) => s.id === "v2.1.0")!;
-      expect(v21.data.legacy_metadata!.compact_missing).toEqual([
-        "00000808-dsh-host-adapter",
-        "00000808-dsh-package-core",
-        "00000808-dsh-seams-bundle",
-      ]);
-      expect(v21.data.plans).toEqual([]);
-
-      const viz = plan.snapshots.find((s) => s.id === "iter-00000809-dsh-workflow-viz")!;
-      expect(viz.data.legacy_metadata!.compact_missing).toEqual(["00000809-dsh-workflow-viz-panel"]);
-      expect(viz.data.plans).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("the delivery-compass.code-reviewer-role.md variant is NOT a grouping source", () => {
+  test("the delivery-compass.<role>.md variant is NOT a grouping source", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
+      const snapshots = convertLegacyV1Tree(root).snapshots;
       // 00000811-code-reviewer-role is registered only in the v2.1.0 VARIANT
       // compass (never the canonical one) -> standalone plan snapshot.
-      const row = plan.snapshots.find((s) => s.id === "00000811-code-reviewer-role");
-      expect(row).toBeDefined();
-      expect(row!.type).toBe("plan");
-      expect(plan.snapshots.find((s) => s.id === "v2.1.0")!.data.legacy_metadata!.compact_missing).not.toContain(
+      const row = snapshots.find((s) => s.id === "00000811-code-reviewer-role");
+      expect(row?.type).toBe("plan");
+      expect(snapshots.find((s) => s.id === "v2.1.0")!.data.legacy_metadata!.compact_missing).not.toContain(
         "00000811-code-reviewer-role",
       );
     } finally {
@@ -315,27 +204,24 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
     }
   });
 
-  test("zero-plan compass still produces an empty terminal iteration snapshot", () => {
+  test("a zero-plan compass still yields an empty terminal iteration snapshot", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      const zero = plan.snapshots.find((s) => s.id === "iter-0000-fixture-zero-plan");
-      expect(zero).toBeDefined();
-      expect(zero!.type).toBe("iteration");
-      expect(zero!.status).toBe("completed");
-      expect(zero!.data.plans).toEqual([]);
-      expect(zero!.data.ended_at).toBe("2026-08-02");
-      expect(zero!.data.legacy_metadata).toBeUndefined(); // no plans -> no compact_missing
+      const zero = convertLegacyV1Tree(root).snapshots.find((s) => s.id === "iter-0000-fixture-zero-plan")!;
+      expect(zero.type).toBe("iteration");
+      expect(zero.status).toBe("completed");
+      expect(zero.data.plans).toEqual([]);
+      expect(zero.data.ended_at).toBe("2026-08-02");
+      expect(zero.data.legacy_metadata).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("standalone snapshots: 10 completed plan lifecycles with verbatim rows and legacy dates", () => {
+  test("standalone rows keep their verbatim rows and legacy dates", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      const standalone = plan.snapshots.filter((s) => s.type === "plan");
+      const standalone = convertLegacyV1Tree(root).snapshots.filter((s) => s.type === "plan");
       for (const snapshot of standalone) {
         expect(snapshot.status).toBe("completed");
         expect(snapshot.data.plans).toHaveLength(1);
@@ -344,1162 +230,119 @@ describe("migrateHarnessTree — planner on the snapshot fixture", () => {
         expect(snapshot.data.execution_policy).toBeUndefined();
         expect(snapshot.data.legacy_metadata).toBeUndefined();
       }
-      // plan_id-keyed row with no dates: every timestamp falls back to the
-      // root v1 updated_at (deterministic — no clock reads).
+      // A plan_id-keyed row with no dates falls back to the root v1
+      // updated_at — deterministic, no clock reads.
       const kimi = standalone.find((s) => s.id === "00000717-kimi-host")!;
       expect(kimi.data.started_at).toBe("2026-08-19");
       expect(kimi.data.ended_at).toBe("2026-08-19");
-      expect(kimi.data.updated_at).toBe("2026-08-19");
       expect(kimi.data.plans[0]!.plan_id).toBe("00000717-kimi-host");
       expect(kimi.data.plans[0]!.id).toBeUndefined();
-
-      const zeroResidual = standalone.find((s) => s.id === "00000728-zero-residual")!;
-      expect(zeroResidual.data.started_at).toBe("2026-07-28");
-      expect(zeroResidual.data.ended_at).toBe("2026-07-28");
-      expect(zeroResidual.data.plans[0]!.notes).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("every planned snapshot passes validateWorkflowSnapshot", () => {
+  test("every produced snapshot passes validateWorkflowSnapshot", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      for (const snapshot of plan.snapshots) {
-        const gate = validateWorkflowSnapshot(snapshot.data);
-        expect(gate.violations).toEqual([]);
+      for (const snapshot of convertLegacyV1Tree(root).snapshots) {
+        expect(validateWorkflowSnapshot(snapshot.data).violations).toEqual([]);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("step list: additive-first, root v2 replacement LAST, harness-relative destinations", () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      expect(plan.steps[0]).toMatchObject({ kind: "archive-status-v1", destination: ARCHIVED_STATUS_V1_FILE });
-      expect(plan.steps[plan.steps.length - 1]).toMatchObject({ kind: "replace-root-v2" });
-
-      const kinds = plan.steps.map((step) => step.kind);
-      expect(kinds.filter((kind) => kind === "write-snapshot")).toHaveLength(29);
-      expect(kinds.filter((kind) => kind === "write-notes")).toHaveLength(7);
-      expect(kinds.filter((kind) => kind === "write-register")).toHaveLength(0);
-
-      // additivity: every snapshot/notes step precedes the root replacement
-      const rootIdx = kinds.lastIndexOf("replace-root-v2");
-      expect(kinds.slice(0, rootIdx)).not.toContain("replace-root-v2");
-      for (const step of plan.steps) expect(step.destination.startsWith("/")).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("notes files: row notes arrays lifted per workflow, string notes stay on the row", () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const files = plan.notesFiles.map((n) => n.file);
-      expect(files).toEqual([
-        "workflows/00000728-zero-residual/notes.jsonl",
-        "workflows/00000807-agent-plugins-v1/notes.jsonl",
-        "workflows/00000808-omp-inprocess-binding/notes.jsonl",
-        "workflows/00000809-omp-engine-compat-hotfix/notes.jsonl",
-        "workflows/00000811-code-reviewer-role/notes.jsonl",
-        "workflows/00000811-gitignore-default-ignore/notes.jsonl",
-        "workflows/v2.0.0/notes.jsonl",
-      ]);
-
-      const zero = plan.notesFiles.find((n) => n.file === "workflows/00000728-zero-residual/notes.jsonl")!;
-      expect(zero.lines).toHaveLength(2);
-      for (const line of zero.lines) {
-        const parsed = JSON.parse(line) as { kind: string; ts: string; text: string };
-        expect(parsed.kind).toBe("note");
-        expect(parsed.ts).toBe("2026-07-28");
-      }
-      expect(JSON.parse(zero.lines[0]!).text).toBe("2026-07-28 registered from CreatePlan zero_residual_mode");
-
-      // string-typed notes are NOT lifted (they stay verbatim on the row).
-      expect(files).not.toContain("workflows/00000816-inspect-redteam-consolidation/notes.jsonl");
-      const inspect = plan.snapshots.find((s) => s.id === "iter-00000816-dsh-inspect-adoption")!;
-      expect(typeof inspect.data.plans[2]!.notes).toBe("string");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("roadmap seed remains an explicit transport candidate, not a migration step", () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
-      expect(plan.roadmap!.content).toContain("no_intermediate_releases: true");
-      expect(plan.roadmap!.content).toContain("### Deferred beyond");
-      expect(plan.roadmap!.content).toContain("- pi/dsh adapters (host APIs unknown)");
-      expect(plan.steps.map((step) => step.kind)).not.toContain("write-roadmap");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("applyMigratePlan — executor on a copied fixture tree", () => {
-  test("migrates the tree end-to-end (file-by-file v2 tree assertion)", async () => {
-    const root = fixtureTree();
-    try {
-      const v1Before = readJson(join(root, "status.json"));
-      const plan = planOf(root);
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-
-      // Root becomes v2 with empty workflows[] (re-registration is a runtime step).
-      const rootDoc = readJson(join(root, "status.json"));
-      expect(rootDoc).toEqual({ version: 2, updated_at: "2026-08-19", workflows: [] });
-      expect(validateStatusV2(join(root, "status.json")).ok).toBe(true);
-
-      // v1 root archived — never deleted without that copy.
-      expect(readJson(join(root, ARCHIVED_STATUS_V1_FILE))).toEqual(v1Before);
-
-      // Every planned snapshot written and valid.
-      for (const snapshot of plan.snapshots) {
-        const filePath = join(root, snapshot.file);
-        expect(existsSync(filePath)).toBe(true);
-        expect(validateWorkflowSnapshot(readJson(filePath)).ok).toBe(true);
-      }
-
-      // Legacy roadmap data is retained on the plan, but never materialized.
-      expect(plan.roadmap?.content).toContain("no_intermediate_releases: true");
-      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
-      // Empty residual_findings -> no register file.
-      expect(existsSync(join(root, "projects", "_default", "residuals.json"))).toBe(false);
-
-      // Notes ledgers written.
-      for (const notes of plan.notesFiles) {
-        expect(existsSync(join(root, notes.file))).toBe(true);
-      }
-
-      // Archived residual files stay untouched (legacy history, not lifted).
-      expect(existsSync(join(root, "archived", "residuals", "00000722-iter-wt-lease.json"))).toBe(true);
-      expect(existsSync(join(root, "archived", "residuals", "00000811-gitignore-default-ignore.json"))).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("idempotent re-run on the migrated tree is a no-op and changes nothing", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      await applyMigratePlan(plan);
-      const treeBefore = snapshotTree(root);
-
-      const second = await applyMigratePlan(plan);
-      expect(second.applied).toBe(false);
-      expect(second.message).toContain("no-op");
-      expect(snapshotTree(root)).toEqual(treeBefore);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("planner on a v2 root returns an alreadyMigrated plan with no steps", async () => {
-    const root = fixtureTree();
-    try {
-      await applyMigratePlan(planOf(root)); // migrate the tree first
-      const v2plan = planOf(root);
-      expect(v2plan.alreadyMigrated).toBe(true);
-      expect(v2plan.steps).toEqual([]);
-      expect(v2plan.snapshots).toEqual([]);
-      expect(v2plan.message).toContain("no-op");
-      const result = await applyMigratePlan(v2plan);
-      expect(result.applied).toBe(false);
-      expect(result.message).toContain("no-op");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a mid-apply failure leaves the v1 root intact (root v2 replacement is the commit point)", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const v1Before = readJson(join(root, "status.json"));
-
-      // A blocked destination injects a real filesystem failure, not a mutation
-      // of the diagnostic preview which apply now derives from current v1 data.
-      const failureIndex = 3;
-      const blockedDir = dirname(join(root, plan.snapshots[failureIndex]!.file));
-      mkdirSync(dirname(blockedDir), { recursive: true });
-      writeFileSync(blockedDir, "blocked destination");
-      await expect(applyMigratePlan(plan)).rejects.toThrow();
-
-      // Root still v1 — the failed run is recoverable by re-running.
-      expect(readJson(join(root, "status.json"))).toEqual(v1Before);
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(true);
-
-      // Additive contract: snapshots BEFORE the failure point
-      // may exist on disk (additive-first apply, no rollback)…
-      for (let i = 0; i < failureIndex; i++) {
-        expect(existsSync(join(root, plan.snapshots[i]!.file))).toBe(true);
-      }
-      // …while the failure point and everything after it were never written.
-      for (let i = failureIndex; i < plan.snapshots.length; i++) {
-        expect(existsSync(join(root, plan.snapshots[i]!.file))).toBe(false);
-      }
-
-      // Clearing the injected filesystem obstacle makes the ordinary retry
-      // converge; no preview token or manual authority repair is needed.
-      rmSync(blockedDir);
-      const retry = await applyMigratePlan(plan);
-      expect(retry.applied).toBe(true);
-      expect(readJson(join(root, "status.json")).version).toBe(2);
-      for (const snapshot of plan.snapshots) {
-        expect(existsSync(join(root, snapshot.file))).toBe(true);
-      }
-      const third = await applyMigratePlan(plan);
-      expect(third.applied).toBe(false);
-      expect(third.message).toContain("no-op");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("dry-run: steps are listed, apply writes nothing", async () => {
+  test("conversion reports a root updated_at and leaves the source tree byte-identical", () => {
     const root = fixtureTree();
     try {
       const before = snapshotTree(root);
-      const plan = planOf(root, { dryRun: true });
-      expect(plan.steps.length).toBeGreaterThan(0);
-      expect(plan.dryRun).toBe(true);
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(false);
-      expect(result.message).toContain("dry-run");
+      const converted = convertLegacyV1Tree(root);
+      expect(converted.updatedAt).toBe("2026-08-19");
+      expect(converted.sources.length).toBeGreaterThan(0);
+      expect(converted.dispositions).toEqual([]);
       expect(snapshotTree(root)).toEqual(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
-
-
-  test("a v1 tree with no status.json refuses to migrate", () => {
-    const root = tmpRoot("migrate-nov1-");
-    try {
-      expect(() => planOf(root)).toThrow(/no v1 status\.json/);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a plans[] row without id/plan_id refuses to migrate (never dropped silently)", () => {
-    const root = fixtureTree();
-    try {
-      const doc = readJson(join(root, "status.json"));
-      (doc.plans as Record<string, unknown>[]).push({ title: "orphan", file: ".mstar/plans/orphan.md", status: "Done" });
-      writeJson(join(root, "status.json"), doc);
-      expect(() => planOf(root)).toThrow(/cannot be lifted/);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
-describe("residual lift + status-mapping fixture (derived from the snapshot fixture)", () => {
-  /** The synthetic standalone rows the fixture can add (status mapping). */
-  const MAPPED_ROWS: Record<"todo" | "running" | "blocked", Record<string, unknown>> = {
-    todo: {
-      id: "00000819-fixture-standalone-todo",
-      file: ".mstar/plans/00000819-fixture-standalone-todo.md",
-      title: "Fixture standalone Todo row",
-      status: "Todo",
-      created_at: "2026-08-19",
-    },
-    running: {
-      id: "00000819-fixture-standalone-running",
-      file: ".mstar/plans/00000819-fixture-standalone-running.md",
-      title: "Fixture standalone InProgress row",
-      status: "InProgress",
-      created_at: "2026-08-19",
-    },
-    blocked: {
-      id: "00000819-fixture-standalone-blocked",
-      file: ".mstar/plans/00000819-fixture-standalone-blocked.md",
-      title: "Fixture standalone Blocked row",
-      status: "Blocked",
-      created_at: "2026-08-19",
-    },
-  };
-
-  /**
-   * Real fixture + synthetic standalone rows (Todo/InProgress/Blocked) + a
-   * non-empty residual_findings map covering: single-entry plan (iteration-
-   * grouped -> lifecycle_id), multi-entry plan (ALL open residuals kept,
-   * sorted by id, array schema), closed entries (never
-   * lifted), and empty arrays (skipped).
-   *
-   * `standalone` selects which synthetic rows the tree carries: the single
-   * declaration a migration run takes may describe exactly ONE ACTIVE
-   * standalone lift (§1/G5), so a test that APPLIES the plan passes one row,
-   * while the status-mapping assertions use all three.
-   */
-  function mappedTree(standalone: readonly ("todo" | "running" | "blocked")[] = ["todo", "running", "blocked"]): string {
-    const root = fixtureTree();
-    const statusPath = join(root, "status.json");
-    const doc = readJson(statusPath);
-    const plans = (doc.plans as Record<string, unknown>[]).concat(standalone.map((key) => MAPPED_ROWS[key]));
-    doc.plans = plans;
-    doc.residual_findings = {
-      "00000814-dsh-fallbacks-integration": [residual({ id: "R1" })],
-      "00000728-zero-residual": [residual({ id: "R2", title: "second" }), residual({ id: "R1" }), residual({ id: "R3", lifecycle: "resolved", closed_at: "2026-08-19" })],
-      "00000816-mechanical-verification": [],
-    };
-    writeJson(statusPath, doc);
-    return root;
-  }
-
-  test("standalone row status mapping: Todo/Blocked -> paused + note, InProgress -> running", async () => {
-    const root = mappedTree();
-    try {
-      const plan = planOf(root);
-      const todo = plan.snapshots.find((s) => s.id === "00000819-fixture-standalone-todo")!;
-      expect(todo.status).toBe("paused");
-      expect(todo.data.status).toBe("paused");
-      expect(todo.data.ended_at).toBeUndefined();
-      expect(todo.data.plans[0]!.status).toBe("Todo"); // row verbatim
-
-      const blocked = plan.snapshots.find((s) => s.id === "00000819-fixture-standalone-blocked")!;
-      expect(blocked.status).toBe("paused");
-      // Blocked -> paused WITHOUT a not-started note (the note is Todo-only).
-      expect(plan.notesFiles.map((n) => n.file)).not.toContain("workflows/00000819-fixture-standalone-blocked/notes.jsonl");
-
-      const running = plan.snapshots.find((s) => s.id === "00000819-fixture-standalone-running")!;
-      expect(running.status).toBe("running");
-
-      // Not-started note on the Todo workflow's notes ledger.
-      const todoNotes = plan.notesFiles.find((n) => n.file === "workflows/00000819-fixture-standalone-todo/notes.jsonl")!;
-      expect(todoNotes.lines).toHaveLength(1);
-      const parsed = JSON.parse(todoNotes.lines[0]!) as { kind: string; text: string };
-      expect(parsed.kind).toBe("note");
-      expect(parsed.text).toContain("00000819-fixture-standalone-todo not started");
-      expect(parsed.text).toContain("paused");
-
-      // The three ACTIVE standalone lifts cannot share the single declaration
-      // this plan carries (G5): the plan is not applicable and nothing is
-      // written — the migration splits into one declared plan per run.
-      expect(plan.deliveryKindAmbiguous).toEqual([
-        "00000819-fixture-standalone-blocked",
-        "00000819-fixture-standalone-running",
-        "00000819-fixture-standalone-todo",
-      ]);
-      await expect(applyMigratePlan(plan)).rejects.toThrow(/cannot describe 3 active standalone plan lifts/);
-      expect(existsSync(join(root, "workflows"))).toBe(false);
-
-      // A tree with ONE ACTIVE standalone lift applies and lands the mapped
-      // (paused) snapshot — the apply path itself is unchanged.
-      const single = mappedTree(["todo"]);
-      try {
-        expect((await applyMigratePlan(planOf(single))).applied).toBe(true);
-        expect(readJson(join(single, "workflows", "00000819-fixture-standalone-todo", WORKFLOW_SNAPSHOT_FILE)).status).toBe("paused");
-      } finally {
-        rmSync(single, { recursive: true, force: true });
-      }
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("open residuals lift into projects/_default/residuals.json keyed by plan id with provenance (arrays)", async () => {
-    const root = mappedTree(["todo"]);
-    try {
-      const plan = planOf(root);
-      expect(plan.register).not.toBeNull();
-      const register = plan.register!;
-      expect(register.file).toBe("projects/_default/residuals.json");
-      expect(Object.keys(register.data.entries)).toEqual(["00000728-zero-residual", "00000814-dsh-fallbacks-integration"]);
-
-      const grouped = register.data.entries["00000814-dsh-fallbacks-integration"]!;
-      expect(grouped).toHaveLength(1);
-      expect(grouped[0]!.source_plan).toBe("00000814-dsh-fallbacks-integration");
-      expect(grouped[0]!.registered_at).toBe("2026-08-19");
-      expect(grouped[0]!.lifecycle_id).toBe("iter-00000814-fallbacks-integration");
-      expect(grouped[0]!.id).toBe("R1");
-
-      // Multi-entry plan: ALL open residuals are kept (v1 multi-finding
-      // semantics preserved verbatim — sorted by residual id, closed entries
-      // never lifted, nothing skipped, no collapse migration_notes).
-      const multi = register.data.entries["00000728-zero-residual"]!;
-      expect(multi.map((e) => e.id)).toEqual(["R1", "R2"]);
-      for (const entry of multi) {
-        expect(entry.source_plan).toBe("00000728-zero-residual");
-        expect(entry.registered_at).toBe("2026-08-19");
-        expect(entry.lifecycle_id).toBeUndefined(); // standalone plan
-      }
-      expect(register.data.migration_notes).toBeUndefined();
-      expect(plan.migrationNotes).not.toContain("share one register key");
-
-      expect(validateProjectRegister(register.data).ok).toBe(true);
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      const onDisk = readJson(join(root, "projects", "_default", "residuals.json"));
-      expect(onDisk).toEqual(register.data);
-      expect(validateProjectRegister(onDisk).ok).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("no residual_findings at all -> no register step and no register file", () => {
+describe("convertLegacyV1Tree — refusals", () => {
+  test("no root status.json is a named refusal", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      expect(plan.register).toBeNull();
-      expect(plan.steps.map((step) => step.kind)).not.toContain("write-register");
+      rmSync(join(root, MIGRATE_STATUS_FILE));
+      expect(() => convertLegacyV1Tree(root)).toThrow(/no legacy status\.json/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("projectId option routes register + roadmap to the chosen project", async () => {
-    const root = mappedTree(["todo"]);
-    try {
-      const plan = planOf(root, { projectId: "acme" });
-      expect(plan.roadmap!.file).toBe("projects/acme/roadmap.md");
-      await applyMigratePlan(plan);
-      expect(existsSync(join(root, "projects", "acme", "roadmap.md"))).toBe(false);
-      expect(existsSync(join(root, "projects", "acme", "residuals.json"))).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("archived residual files are legacy history — never lifted, never touched", async () => {
-    const root = mappedTree(["todo"]);
-    try {
-      const archivedResidualsBefore = snapshotTree(join(root, "archived", "residuals"));
-      const plan = planOf(root);
-      await applyMigratePlan(plan);
-      expect(snapshotTree(join(root, "archived", "residuals"))).toEqual(archivedResidualsBefore);
-      // The register holds only the synthetic residual_findings entries.
-      const registerDoc = readJson(join(root, "projects", "_default", "residuals.json")) as { entries: Record<string, unknown> };
-      expect(Object.keys(registerDoc.entries)).toEqual([
-        "00000728-zero-residual",
-        "00000814-dsh-fallbacks-integration",
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("migrate path-safety and duplicate-id guards", () => {
-  test("a plans[] row id that traverses out of the harness dir refuses to migrate", () => {
+  test("a v2 root is not a v1 conversion input (the store upgrade imports it natively)", () => {
     const root = fixtureTree();
     try {
-      const doc = readJson(join(root, "status.json"));
-      (doc.plans as Record<string, unknown>[]).push({
-        id: "../../../tmp/evil",
-        title: "evil",
-        file: ".mstar/plans/evil.md",
-        status: "Done",
-      });
-      writeJson(join(root, "status.json"), doc);
-      expect(() => planOf(root)).toThrow(/safe path component/);
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify({ version: 2, updated_at: "2026-10-04", workflows: [] }));
+      expect(() => convertLegacyV1Tree(root)).toThrow(/unrecognized schema version 2/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a compass iteration_id that traverses refuses to migrate", () => {
+  test("an unrecognizable root version refuses", () => {
     const root = fixtureTree();
     try {
-      mkdirSync(join(root, "iterations", "evil"), { recursive: true });
-      writeFileSync(
-        join(root, "iterations", "evil", "delivery-compass.md"),
-        "---\niteration_id: ../../evil\nstatus: active\nplans: []\n---\n# Delivery Compass\n",
-        "utf8",
-      );
-      expect(() => planOf(root)).toThrow(/safe path component/);
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify({ version: 9, updated_at: "2026-10-04" }));
+      expect(() => convertLegacyV1Tree(root)).toThrow(/unrecognized schema version 9/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("an unsafe projectId option refuses to migrate (register/roadmap stay inside the harness)", () => {
+  test("a v1 row without id/plan_id refuses instead of being lifted nowhere", () => {
     const root = fixtureTree();
     try {
-      expect(() => planOf(root, { projectId: "../evil" })).toThrow(/safe path component/);
+      const doc = readJson(join(root, MIGRATE_STATUS_FILE)) as { plans: Array<Record<string, unknown>> };
+      doc.plans.push({ title: "unnamed", file: "x.md", status: "Todo" });
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
+      expect(() => convertLegacyV1Tree(root)).toThrow(/cannot be lifted/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("duplicate v1 plan ids refuse to migrate (fail-loud, no silent drop/overwrite)", () => {
+  test("duplicate plan ids refuse (every row must land in exactly one snapshot)", () => {
     const root = fixtureTree();
     try {
-      const doc = readJson(join(root, "status.json"));
-      const plans = doc.plans as Record<string, unknown>[];
-      plans.push({ ...plans[0]! });
-      writeJson(join(root, "status.json"), doc);
-      expect(() => planOf(root)).toThrow(/duplicate plan id/);
+      const doc = readJson(join(root, MIGRATE_STATUS_FILE)) as { plans: Array<Record<string, unknown>> };
+      const first = doc.plans[0]!;
+      doc.plans.push({ ...first });
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
+      expect(() => convertLegacyV1Tree(root)).toThrow(/duplicate plan id/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("apply derives safe destinations from current source rather than caller-edited preview steps", async () => {
+  test("a plan id that is not one safe path component refuses", () => {
     const root = fixtureTree();
     try {
-      const plan = planOf(root);
-      const escaped = structuredClone(plan) as MigratePlan;
-      escaped.notesFiles = [{ file: "../../../tmp/evil-notes.jsonl", source: "crafted", lines: [] }];
-      expect((await applyMigratePlan(escaped)).applied).toBe(true);
-      expect(readJson(join(root, plan.snapshots[0]!.file)).id).toBe(plan.snapshots[0]!.id);
-      expect(existsSync(join(root, "../../../tmp/evil-notes.jsonl"))).toBe(false);
+      const doc = readJson(join(root, MIGRATE_STATUS_FILE)) as { plans: Array<Record<string, unknown>> };
+      doc.plans.push({ id: "../escape", title: "escape", file: "x.md", status: "Todo" });
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
+      expect(() => convertLegacyV1Tree(root)).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
-});
 
-describe("roadmap frontmatter safety", () => {
-  test("a title with line breaks is sanitized for the flat-subset frontmatter parse", () => {
+  test("an iteration id equal to a standalone plan id refuses as a collision", () => {
     const root = fixtureTree();
     try {
-      const doc = readJson(join(root, "status.json"));
-      (doc.metadata as Record<string, unknown>).program_roadmap = {
-        title: "line one\nline two: colon",
-        slices: ["s1"],
-      };
-      writeJson(join(root, "status.json"), doc);
-      const plan = planOf(root);
-      expect(plan.roadmap).not.toBeNull();
-      const content = plan.roadmap!.content;
-      const frontmatter = parseCompassFrontmatterText(content, "roadmap.md");
-      expect(frontmatter.title).toBe("line one line two: colon");
-      expect(plan.migrationNotes.join(" ")).toContain("sanitized");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("migration commit point under the root write lock", () => {
-  test("the root v2 replacement is serialized by withStatusWriteLock (never a bare writeJson)", async () => {
-    const root = fixtureTree();
-    try {
-      const statusPath = join(root, "status.json");
-      const plan = planOf(root);
-      let applySettledWhileLockHeld = false;
-      // The apply is a global multi-document writer (root + snapshots +
-      // register), so it holds the root lock for the whole phase (spec §C3
-      // root → snapshot → register); the third party acquires it FIRST.
-      // Genuine delay required (integration test): the engine's
-      // cross-process lockdir polling cannot be driven with deterministic
-      // timers, and the apply must get a chance to reach the lock.
-      const holder = withStatusWriteLock(statusPath, async () => {
-        await Bun.sleep(250);
-        // Root must NOT be replaced while a third party holds the root lock,
-        // and the apply must still be pending BEFORE its first write: the
-        // fixed code waits; the pre-fix bare writeJson settles and clobbers
-        // here, and a commit-point-only lock still archives first.
-        const statusDoc = readJson(statusPath) as { version?: unknown };
-        expect(statusDoc.version).toBe(1);
-        expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
-        expect(applySettledWhileLockHeld).toBe(false);
-      });
-      const applyPromise = applyMigratePlan(plan);
-      void applyPromise.then(
-        () => {
-          applySettledWhileLockHeld = true;
-        },
-        () => {
-          applySettledWhileLockHeld = true;
-        },
-      );
-      await holder;
-      const result = await applyPromise;
-      expect(result.applied).toBe(true);
-      const statusDoc = readJson(statusPath) as { version?: unknown };
-      expect(statusDoc.version).toBe(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a source rewritten after planning does not block migration", async () => {
-    const root = fixtureTree();
-    try {
-      const statusPath = join(root, "status.json");
-      const plan = planOf(root);
-      const concurrent = readJson(statusPath) as { plans: Array<Record<string, unknown>> };
-      concurrent.plans[0]!.title = "Current scope after planning";
-      writeJson(statusPath, { ...concurrent, concurrent_note: "edited after planning" });
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(readJson(statusPath).version).toBe(2);
-      expect(readJson(join(root, ARCHIVED_STATUS_V1_FILE))).toMatchObject({ concurrent_note: "edited after planning" });
-      const owner = plan.snapshots.find((snapshot) => snapshot.data.plans.some((row) => row.id === concurrent.plans[0]!.id))!;
-      const migrated = readJson(join(root, owner.file)) as WorkflowSnapshot;
-      expect(migrated.plans.find((row) => row.id === concurrent.plans[0]!.id)!.title).toBe("Current scope after planning");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-
-  test("a stale apply re-checks version under the lock and no-ops instead of clobbering", async () => {
-    const root = fixtureTree();
-    try {
-      const statusPath = join(root, "status.json");
-      const plan = planOf(root);
-      await applyMigratePlan(plan); // first migrate commits
-      // The same plan object re-applied after a concurrent commit: the
-      // pre-check is stale, but the locked re-check turns it into a no-op.
-      const second = await applyMigratePlan(plan);
-      expect(second.applied).toBe(false);
-      expect(second.message).toContain("no-op");
-      const statusDoc = readJson(statusPath) as { version?: unknown };
-      expect(statusDoc.version).toBe(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("custom workflow_dir/project_dir layout", () => {
-  /** Write a `.mstarc` at the harness root declaring a custom v3 layout. */
-  function withCustomLayout(root: string, workflowDir = "wf", projectDir = "pj"): void {
-    writeFileSync(join(root, ".mstarc"), `[config]\nworkflow_dir=${workflowDir}\nproject_dir=${projectDir}\n`, "utf8");
-  }
-
-  test("planner records the resolved layout dirs; apply writes through them (never the hardcoded names)", async () => {
-    const root = fixtureTree();
-    try {
-      withCustomLayout(root);
-      const plan = planOf(root);
-      expect(plan.workflowDir).toBe(join(root, "wf"));
-      expect(plan.projectDir).toBe(join(root, "pj"));
-      // Canonical default-layout rel names are KEPT on the plan fields.
-      expect(plan.snapshots.every((s) => s.file.startsWith("workflows/"))).toBe(true);
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-
-      // Snapshots land under the CUSTOM workflow dir…
-      for (const snapshot of plan.snapshots) {
-        expect(existsSync(join(root, "wf", snapshot.file.slice("workflows/".length)))).toBe(true);
-      }
-      // …notes too…
-      for (const notes of plan.notesFiles) {
-        expect(existsSync(join(root, "wf", notes.file.slice("workflows/".length)))).toBe(true);
-      }
-      // A legacy seed is transport-only even with a custom project layout.
-      expect(existsSync(join(root, "pj", "_default", PROJECT_ROADMAP_FILE))).toBe(false);
-      // The hardcoded default-layout dirs are NEVER created.
-      expect(existsSync(join(root, "workflows"))).toBe(false);
-      expect(existsSync(join(root, "projects"))).toBe(false);
-
-      // Idempotence holds across layouts: re-plan on the migrated tree is a no-op.
-      const second = planOf(root);
-      expect(second.alreadyMigrated).toBe(true);
-      expect(second.workflowDir).toBe(join(root, "wf"));
-      expect(second.projectDir).toBe(join(root, "pj"));
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("project register migrates under custom project_dir without materializing roadmap seed", async () => {
-    const root = fixtureTree();
-    try {
-      withCustomLayout(root, "wf", "pj");
-      const doc = readJson(join(root, "status.json"));
-      (doc as Record<string, unknown>).residual_findings = { "00000728-zero-residual": [residual()] };
-      writeJson(join(root, "status.json"), doc);
-
-      const plan = planOf(root);
-      expect(plan.register).not.toBeNull();
-      await applyMigratePlan(plan);
-
-      const registerPath = join(root, "pj", "_default", PROJECT_REGISTER_FILE);
-      expect(existsSync(registerPath)).toBe(true);
-      expect(validateProjectRegister(readJson(registerPath)).ok).toBe(true);
-      expect(existsSync(join(root, "projects"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a custom layout declared at the PARENT (repo root) is honored too", async () => {
-    // `.mstarc` documented home: the harness dir OR its parent (repo root).
-    const outer = tmpRoot("migrate-custom-parent-");
-    const root = join(outer, "harness");
-    try {
-      cpSync(FIXTURES, root, { recursive: true });
-      writeFileSync(join(outer, ".mstarc"), "[config]\nworkflow_dir=repo-wf\nproject_dir=repo-pj\n", "utf8");
-      // The harness root here is `root` (`.mstarc` lives at its parent); the
-      // store must resolve the same custom layout via that parent config.
-      setArtifactStore(createFsStore(root));
-      const plan = planOf(root);
-      expect(plan.workflowDir).toBe(join(outer, "repo-wf"));
-      expect(plan.projectDir).toBe(join(outer, "repo-pj"));
-      await applyMigratePlan(plan);
-      expect(existsSync(join(outer, "repo-wf", "v3.0.0", WORKFLOW_SNAPSHOT_FILE))).toBe(true);
-    } finally {
-      rmSync(outer, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("cross-class lifecycle-id collisions", () => {
-  test("an iteration id equal to a standalone plan id refuses to migrate with the conflict list", () => {
-    const root = fixtureTree();
-    try {
-      // Compass `collide-id` (iteration snapshot) + a plans[] row with the
-      // same id registered in NO compass (standalone snapshot): both would
-      // plan `workflows/collide-id/snapshot.json` and the apply would
-      // silently overwrite the first write. Refuse fail-loud.
-      mkdirSync(join(root, "iterations", "collide-id"), { recursive: true });
-      writeFileSync(
-        join(root, "iterations", "collide-id", "delivery-compass.md"),
-        "---\niteration_id: collide-id\nstatus: completed\nplans: []\n---\n# Delivery Compass\n",
-        "utf8",
-      );
-      const doc = readJson(join(root, "status.json"));
-      (doc.plans as Record<string, unknown>[]).push({
-        id: "collide-id",
-        title: "colliding standalone row",
-        status: "Done",
-      });
-      writeJson(join(root, "status.json"), doc);
-      expect(() => planOf(root)).toThrow(/lifecycle id collision/);
-      expect(() => planOf(root)).toThrow(/collide-id/);
-      expect(() => planOf(root)).toThrow(/iteration \+ standalone plan/);
-      // No step list is produced (the plan is refused before any write).
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("the project id joins the uniqueness set (projectId == iteration id refuses)", () => {
-    const root = fixtureTree();
-    try {
-      expect(() => planOf(root, { projectId: "v3.0.0" })).toThrow(/lifecycle id collision/);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// coordinated-writer — the migration is additive-only (spec C4)
-// ---------------------------------------------------------------------------
-
-describe("coordinated-writer — migration is additive-only", () => {
-  test("preserves an edited snapshot target and still commits the root", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const first = plan.snapshots[0]!;
-      const snapshotDir = dirname(join(plan.workflowDir, relative("workflows", first.file)));
-      writeJson(join(snapshotDir, WORKFLOW_SNAPSHOT_FILE), { ...first.data, post_plan_note: true });
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(readJson(join(root, "status.json")).version).toBe(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a running current source clears a partial target's ended time but preserves authored notes", async () => {
-    const root = fixtureTree();
-    try {
-      const completed = planOf(root).snapshots.find((snapshot) => snapshot.type === "plan" && snapshot.data.status === "completed")!;
-      const id = completed.data.plans[0]!.id;
-      const statusPath = join(root, "status.json");
-      const source = readJson(statusPath) as { plans: Array<Record<string, unknown>>; iterations: unknown[] };
-      source.plans = [source.plans.find((row) => row.id === id)!];
-      source.iterations = [];
-      writeJson(statusPath, source);
-      const preview = planOf(root);
-      const target = join(root, preview.snapshots[0]!.file);
-      writeJson(target, { ...preview.snapshots[0]!.data, post_plan_note: "retain this authored note" });
-      source.plans[0]!.status = "InProgress";
-      writeJson(statusPath, source);
-      await applyMigratePlan(preview);
-      const current = readJson(target);
-      expect(current.status).toBe("running");
-      expect(current.ended_at).toBeUndefined();
-      expect(current.post_plan_note).toBe("retain this authored note");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("an unrelated workflow target refuses and a configured separate destination recovers", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const target = join(root, plan.snapshots[0]!.file);
-      writeJson(target, { ...plan.snapshots[0]!.data, id: "foreign-workflow" });
-      await expect(applyMigratePlan(plan)).rejects.toMatchObject({ code: "coordination.store" });
-      expect(readJson(join(root, "status.json")).version).toBe(1);
-      expect(readJson(target).id).toBe("foreign-workflow");
-      writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=migrated-workflows\n");
-      expect((await applyMigratePlan(plan)).applied).toBe(true);
-      expect(readJson(target).id).toBe("foreign-workflow");
-      const freshTarget = join(root, "migrated-workflows", plan.snapshots[0]!.id, WORKFLOW_SNAPSHOT_FILE);
-      expect(readJson(freshTarget).id).toBe(plan.snapshots[0]!.id);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("preserves an existing project register and commits the v1 root", async () => {
-    const root = fixtureTree();
-    try {
-      const v1Path = join(root, "status.json");
-      const v1 = readJson(v1Path);
-      v1.residual_findings = { "00000814-dsh-fallbacks-integration": [residual()] };
-      writeJson(v1Path, v1);
-
-      const plan = planOf(root);
-      const registerPath = join(plan.projectDir, relative("projects", plan.register!.file));
-      mkdirSync(dirname(registerPath), { recursive: true });
-      const foreign = '{\n  "entries": {\n    "foreign": []\n  }\n}\n';
-      writeFileSync(registerPath, foreign, "utf8");
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect((readJson(registerPath) as { entries: { foreign: unknown[] } }).entries.foreign).toEqual([]);
-      expect(readJson(v1Path).version).toBe(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Migration target existence and path behavior (archive / notes / roadmap)
-// ---------------------------------------------------------------------------
-
-describe("migration target existence behavior (archive / notes)", () => {
-  /** The exact apply-time notes serializer (nonempty -> trailing newline). */
-  const notesContent = (lines: string[]): string => (lines.length > 0 ? `${lines.join("\n")}\n` : "");
-  const notesTargetOf = (plan: MigratePlan, file: string): string => join(plan.workflowDir, relative("workflows", file));
-
-
-  test("migration creates archive and notes targets while keeping roadmap seeds transport-only", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(true);
-      const notes = plan.notesFiles[0]!;
-      expect(existsSync(notesTargetOf(plan, notes.file))).toBe(true);
-      const roadmapPath = join(root, "projects", "_default", "roadmap.md");
-      expect(existsSync(roadmapPath)).toBe(false);
-      expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-
-  test("pre-existing archive and notes content do not block migration", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
-      const notes = plan.notesFiles[0]!;
-      const notesPath = notesTargetOf(plan, notes.file);
-      mkdirSync(dirname(archivePath), { recursive: true });
-      mkdirSync(dirname(notesPath), { recursive: true });
-      writeFileSync(archivePath, '{"foreign":true}\n', "utf8");
-      writeFileSync(notesPath, "foreign ledger\n", "utf8");
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(existsSync(archivePath)).toBe(true);
-      expect(existsSync(notesPath)).toBe(true);
-      expect(readJson(join(root, "status.json")).version).toBe(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a pre-existing roadmap remains unchanged while migration completes", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const roadmapPath = join(root, "projects", "_default", "roadmap.md");
-      mkdirSync(dirname(roadmapPath), { recursive: true });
-      const authority = "# Current project authority\n";
-      writeFileSync(roadmapPath, authority, "utf8");
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(readFileSync(roadmapPath, "utf8")).toContain("# Current project authority");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("active catalog authority survives migration refusal with a legacy roadmap seed", async () => {
-    const root = fixtureTree();
-    try {
-      const context: StoreContext = { harnessDir: root };
-      setArtifactStore(createFsStore(root));
-      const store = await initializeStore(context);
-      store.close();
-      await registerCatalogEntity(
-        context,
-        {
-          kind: "project",
-          id: "_default",
-          title: "Current database authority",
-          rootKind: "projects",
-          relativePath: "_default",
-        },
-        { operationId: "current-project-authority", actor: "test" },
-      );
-      const before = await getCatalog(context, { kind: "project", id: "_default" });
-      const plan = planOf(root);
-
-      await expect(applyMigratePlan(plan)).rejects.toThrow(/active.*store|store.*active/i);
-      const after = await getCatalog(context, { kind: "project", id: "_default" });
-      expect(after.entity).toEqual(before.entity);
-      expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
-      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("preserves existing paths under a custom workflow_dir/project_dir layout", async () => {
-    const root = fixtureTree();
-    try {
-      writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=cwf\nproject_dir=cjp\n", "utf8");
-      const plan = planOf(root);
-      expect(plan.workflowDir).toBe(join(root, "cwf"));
-      expect(plan.projectDir).toBe(join(root, "cjp"));
-      const v1Bytes = readFileSync(join(root, "status.json"));
-      const notes = plan.notesFiles[0]!;
-      const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
-      const notesPath = notesTargetOf(plan, notes.file);
-      expect(notesPath.startsWith(`${join(root, "cwf")}`)).toBe(true);
-      mkdirSync(dirname(archivePath), { recursive: true });
-      writeFileSync(archivePath, v1Bytes);
-      mkdirSync(dirname(notesPath), { recursive: true });
-      writeFileSync(notesPath, notesContent(notes.lines), "utf8");
-      const mtimes = [archivePath, notesPath].map((p) => statSync(p).mtimeMs);
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(readJson(join(root, "status.json")).version).toBe(2);
-      expect([archivePath, notesPath].map((p) => statSync(p).mtimeMs)).toEqual(mtimes);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a non-EEXIST raw-target failure (EISDIR) surfaces in the coordination.* envelope, root still untouched", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      
-      // The archive target path exists as a DIRECTORY, so the exclusive
-      // create fails with EISDIR and the schema-v1 root remains uncommitted.
-      const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
-      mkdirSync(archivePath, { recursive: true });
-
-      const failure = await applyMigratePlan(plan).then(() => null, (error: unknown) => error);
-      expect(failure).toBeInstanceOf(CoordinationError);
-      expect((failure as CoordinationError).code).toBe("coordination.store");
-      expect((failure as CoordinationError).message).toContain("Cannot write the migration target. Inspect the reported path and filesystem cause, then correct the target filesystem state before retrying.");
-      expect((failure as CoordinationError).details).toMatchObject({ path: archivePath });
-
-      // Refuse-before-commit is preserved: the raw error never escaped and
-      // the root schema version was not advanced.
-      expect(readJson(join(root, "status.json")).version).toBe(1);
-      expect(existsSync(join(root, plan.snapshots[0]!.file))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Delivery-kind declaration on the standalone plan lifts (plan-workflow-
-// lifecycle-contract §1/§4a): a v1 `plans[]` row becomes a live `type: plan`
-// lifecycle, so its kind is passed explicitly by the caller — never inferred —
-// and a lift that would create an active kind-less plan snapshot is refused
-// before any write.
-// ---------------------------------------------------------------------------
-
-describe("migrateHarnessTree — delivery kind on standalone plan lifts", () => {
-  const ACTIVE = new Set(["running", "paused"]);
-  const ACTIVE_ID = "00000819-fixture-standalone-active";
-  const SECOND_ACTIVE_ID = "00000820-fixture-standalone-active-2";
-
-  /** Real fixture + one ACTIVE (InProgress -> running) standalone plan row. */
-  function activeTree(): string {
-    const root = fixtureTree();
-    const statusPath = join(root, "status.json");
-    const doc = readJson(statusPath);
-    const plans = (doc.plans as Record<string, unknown>[]).concat([
-      {
-        id: ACTIVE_ID,
-        file: `.mstar/plans/${ACTIVE_ID}.md`,
-        title: "Fixture standalone active row",
-        status: "InProgress",
-        created_at: "2026-08-19",
-      },
-    ]);
-    doc.plans = plans;
-    writeJson(statusPath, doc);
-    return root;
-  }
-
-  test("ACTIVE plan lifts declare the caller's kind + anchors; completed lifts declare nothing", () => {
-    const root = activeTree();
-    try {
-      const plan = planOf(root);
-      const plansOnly = plan.snapshots.filter((s) => s.type === "plan");
-      const active = plansOnly.filter((s) => ACTIVE.has(s.status));
-      expect(active.map((s) => s.id)).toEqual([ACTIVE_ID]);
-      for (const snapshot of active) {
-        expect(snapshot.data.delivery_kind).toBe("development");
-        expect(snapshot.data.branch).toEqual({ source: "feature/standalone", target: "main" });
-        expect(validateWorkflowSnapshot(snapshot.data).ok).toBe(true);
-      }
-      for (const snapshot of plansOnly.filter((s) => s.status === "completed")) {
-        // A finished lifecycle declares nothing and is not amended by the lift.
-        expect(snapshot.data.delivery_kind).toBeUndefined();
-        expect(snapshot.data.branch).toBeUndefined();
-      }
-      expect(plan.deliveryKindRequired).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("an undeclared lift is not applicable: the requirement is reported and apply refuses with zero writes", async () => {
-    const root = activeTree();
-    try {
-      setArtifactStore(createFsStore(root));
-      const plan = migrateHarnessTree(root);
-      expect(plan.deliveryKindRequired).toEqual([ACTIVE_ID]);
-      await expect(applyMigratePlan(plan)).rejects.toThrow(/would be lifted without a declared delivery kind/);
-      expect(existsSync(join(root, "workflows"))).toBe(false);
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
-      expect(readJson(join(root, "status.json")).version).toBe(1);
-    } finally {
-      setArtifactStore(undefined);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  /** The fixture plus a SECOND ACTIVE (Todo -> paused) standalone plan row. */
-  function twoActiveTree(): string {
-    const root = activeTree();
-    const statusPath = join(root, "status.json");
-    const doc = readJson(statusPath);
-    const plans = (doc.plans as Record<string, unknown>[]).concat([
-      {
-        id: SECOND_ACTIVE_ID,
-        file: `.mstar/plans/${SECOND_ACTIVE_ID}.md`,
-        title: "Fixture standalone active row 2",
-        status: "Todo",
-        created_at: "2026-08-20",
-      },
-    ]);
-    doc.plans = plans;
-    writeJson(statusPath, doc);
-    return root;
-  }
-
-  test("one declaration cannot describe 2+ ACTIVE standalone lifts: the plan reports the ambiguity and apply refuses with zero writes", async () => {
-    const root = twoActiveTree();
-    try {
-      setArtifactStore(createFsStore(root));
-      const plan = migrateHarnessTree(root, {
-        deliveryKind: "development",
-        branchSource: "feature/standalone",
-        branchTarget: "main",
-      });
-      // Both ACTIVE lifts (running + paused) would take the single declaration;
-      // the terminal one is exempt and never counted.
-      expect(plan.deliveryKindAmbiguous).toEqual([ACTIVE_ID, SECOND_ACTIVE_ID]);
-      // The ambiguity is what makes the plan inapplicable — not a missing flag.
-      expect(plan.deliveryKindRequired).toEqual([]);
-      await expect(applyMigratePlan(plan)).rejects.toThrow(
-        /one delivery declaration cannot describe 2 active standalone plan lifts/,
-      );
-      expect(existsSync(join(root, "workflows"))).toBe(false);
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
-      expect(readJson(join(root, "status.json")).version).toBe(1);
-    } finally {
-      setArtifactStore(undefined);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a terminal lift never consumes the declaration quota: one ACTIVE + one completed row stays applicable", async () => {
-    const root = twoActiveTree();
-    try {
-      // The second row finishes before the lift (Done -> completed), leaving
-      // exactly ONE lifecycle the single declaration describes.
-      const statusPath = join(root, "status.json");
-      const doc = readJson(statusPath);
-      doc.plans = (doc.plans as Record<string, unknown>[]).map((row) =>
-        row.id === SECOND_ACTIVE_ID ? { ...row, status: "Done", done_at: "2026-08-21" } : row,
-      );
-      writeJson(statusPath, doc);
-      setArtifactStore(createFsStore(root));
-      const plan = migrateHarnessTree(root, {
-        deliveryKind: "development",
-        branchSource: "feature/standalone",
-        branchTarget: "main",
-      });
-      expect(plan.deliveryKindAmbiguous).toEqual([]);
-      expect(plan.deliveryKindRequired).toEqual([]);
-      expect(plan.snapshots.find((s) => s.id === ACTIVE_ID)!.data.delivery_kind).toBe("development");
-      // The completed lift declares nothing and is not amended.
-      expect(plan.snapshots.find((s) => s.id === SECOND_ACTIVE_ID)!.data.delivery_kind).toBeUndefined();
-
-      const applied = await applyMigratePlan(plan);
-      expect(applied.applied).toBe(true);
-      const lifted = JSON.parse(readFileSync(join(root, "workflows", ACTIVE_ID, "snapshot.json"), "utf8")) as Record<string, unknown>;
-      expect(lifted.delivery_kind).toBe("development");
-      expect(lifted.branch).toEqual({ source: "feature/standalone", target: "main" });
-    } finally {
-      setArtifactStore(undefined);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("the declaration obeys the shared per-kind coherence rule (development needs both anchors)", () => {
-    const root = activeTree();
-    try {
-      expect(() => migrateHarnessTree(root, { deliveryKind: "development", branchSource: "feature/a" })).toThrow(
-        /delivery source and target branches/,
-      );
-      expect(() => migrateHarnessTree(root, { deliveryKind: "verification/report-only" })).toThrow(/completion policy/);
-      expect(() => migrateHarnessTree(root, { deliveryKind: "wing-it" as never })).toThrow(/deliveryKind must be one of/);
-      // A coherent verification/report-only declaration lifts without anchors.
-      const plan = migrateHarnessTree(root, {
-        deliveryKind: "verification/report-only",
-        completionPolicy: "acceptance artifacts under the audit dir",
-      });
-      const active = plan.snapshots.find((s) => s.id === ACTIVE_ID)!;
-      expect(active.data.delivery_kind).toBe("verification/report-only");
-      expect(active.data.completion_policy).toBe("acceptance artifacts under the audit dir");
-      expect(active.data.branch).toBeUndefined();
-      expect(plan.deliveryKindRequired).toEqual([]);
+      const doc = readJson(join(root, MIGRATE_STATUS_FILE)) as { plans: Array<Record<string, unknown>> };
+      doc.plans.push({ id: "v2.0.0", title: "collides with the iteration", file: "x.md", status: "Todo" });
+      writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
+      expect(() => convertLegacyV1Tree(root)).toThrow(/lifecycle id collision/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

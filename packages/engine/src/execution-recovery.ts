@@ -11,12 +11,12 @@
  *   store's journal mode. It verifies the recovery point through the
  *   same verdict `backupStore` applies (§8 "re-open it for `integrity_check` +
  *   `foreign_key_check`", migration checksums, identity, execution identity),
- *   then inventories the WHOLE store — issue, catalog and execution — against
- *   the live authority, and returns the canonical `lossDigest` of that
- *   inventory. It writes no authority row, no receipt and no artifact of its
- *   own, so it is safe to run at any time. Receipt retention is an expected
- *   source of backup-only `execution` operation rows: a terminal close or
- *   adoption prunes that workflow's operation receipts (each listed in a
+ *   then inventories the WHOLE store — issue, catalog, execution and host
+ *   state — against the live authority, and returns the canonical `lossDigest`
+ *   of that inventory. It writes no authority row, no receipt and no artifact
+ *   of its own, so it is safe to run at any time. Receipt retention is an
+ *   expected source of backup-only `execution` operation rows: a terminal close
+ *   or adoption prunes that workflow's operation receipts (each listed in a
  *   preview of an older point with `liveRevision: null`), the init-time purge
  *   beside the in-place epoch bump clears the superseded epoch's, and a restore
  *   preserves prior-epoch receipt rows as history under its frozen
@@ -26,19 +26,23 @@
  *   change keep their full form, later rows carry the slim envelope, so
  *   inventory digests compare write-time bytes per row and mixed forms never
  *   produce same-key content drift.
- * - `restoreExecutionBackup` is the destructive step. It re-derives the loss
- *   inventory under the maintenance lock and records it as the honest account
- *   of what the replacement costs; the operator and authorization reference are
- *   the audit record of who accepted it, and the recorded `lossDigest` is
- *   provenance rather than an admission input. It takes a fresh pre-restore
- *   recovery point, checkpoints the live WAL, then installs a verified SIBLING
- *   image whose epoch is already above both the live store and the point — so
- *   the atomic rename is the single cutover and no window exists in which the
- *   restored bytes carry a still-valid generation. It decides that the store is
- *   still quiesced in ONE non-yielding sequence immediately before that rename:
- *   the store's own `(dev, ino)` identity and its recorded sidecar identities
- *   are the last synchronous state the replacement is decided on, so a writer
- *   cannot slip a WAL in between.
+ * - `restoreExecutionBackup` is the destructive step. It stages and verifies the
+ *   selected recovery point as a private image, takes a fresh pre-restore
+ *   recovery point, and then installs the staged authority in ONE native write
+ *   transaction on the live database: the same `store.db` pathname and inode
+ *   stay in place, no file is renamed, and no WAL/SHM sidecar is touched. The
+ *   transaction re-reads the store's own identity/epoch/revisions and every
+ *   fact governing the approved loss on ITS OWN snapshot before it replaces a
+ *   single row, so a competitor that commits in the admission window refuses
+ *   instead of being silently discarded. It replaces every authority row of all
+ *   four domains in FK-safe order, commits a new epoch above both generations,
+ *   and commits the complete recovery record with them in the store's own
+ *   `store_operations` ledger — the durable receipt — placing a copy of that
+ *   committed record beside the store best-effort, so a copy this run cannot
+ *   write leaves the committed outcome reported rather than looking refused.
+ *   The operator and authorization reference are the audit record of who
+ *   accepted the loss; the recorded `lossDigest` is provenance, never an
+ *   admission input.
  * - `exportExecutionState` is a diagnostic, not an authority: canonical data
  *   with the store/execution identity, the recorded migrations and their source
  *   status, and workflow/plan/lease/frozen-input state — with every session
@@ -47,27 +51,15 @@
  * ## The loss inventory, and why it is complete
  *
  * §8 asks the preview to list "changed/deleted authoritative rows and committed
- * operation ids across all three domains, not just an execution revision
+ * operation ids across all domains, not just an execution revision
  * difference". The inventory below enumerates EVERY authority table of the
- * three domains (the durable `projection_*` tables are excluded: contract §5
- * makes them disposable and rebuildable, never authority), compares each row on
- * both sides by its canonical content — a purely informational comparison that
+ * store's domains (issue, catalog, execution and the native Dsh host state;
+ * the durable `projection_*` tables are excluded: contract §5 makes them
+ * disposable and rebuildable, never authority), compares each row on both
+ * sides by its canonical content — a purely informational comparison that
  * decides only whether the row is LISTED, never whether a replacement is
  * admitted — and additionally lists the committed operation receipts of the
- * three domains.
- *
- * §7 R4 completes that with the RETAINED ACCEPTED BODIES. A whole-store SQLite
- * copy does not carry the file-native ledgers, so the recovery point also
- * freezes an inventory of them (bytes, ordered accepted-record identities,
- * checkpoint) beside the copy, and the preview compares it with the live
- * bodies: a body whose accepted records still carry the point's, in order and
- * by exact hash, is an append-only extension and its extra records are
- * PRESERVED; a body that was replaced or deleted — or the body carrying the
- * durable selection/cache facts — is listed as a difference. The restore never
- * rewrites those bodies, so the difference is disclosed, approved and recorded
- * rather than silently "rolled back", and an unterminated trailing record the
- * point did not record refuses the whole inventory with both stores and every
- * body retained, asking for an explicit salvage scope.
+ * domains.
  *
  * `authorityDifferences` reports, per differing row, the row's OWN authority
  * revision when its table carries one, and `null` when the row is absent on
@@ -92,17 +84,28 @@
  * it admits or refuses a replacement. Any change on either side — including
  * a change to a row the readable list can only mark as `1`/`1` — changes it.
  *
+ * A database image does NOT roll back the append-only logs and authored
+ * documents beside the store (notes, agent-flow history, launch journal,
+ * selection snapshot): those are ordinary retained files, never a second
+ * transactionally frozen authority, so the preview neither freezes nor
+ * inventories them and a restore leaves every one of their bytes in place.
+ *
  * ## Crash identification
  *
- * One durable receipt per attempt is written under
- * `<root>/archived/store-migration/recovery/` BEFORE the rename (`phase:
- * "replacing"`, naming the live store path and the prepared image's staging
- * path) and rewritten AFTER it (`phase: "replaced"`). A crash is therefore
- * decidable from the receipt alone: a `phase: "replacing"` record whose staged
- * copy still exists under that attempt's own staging path is a copy the rename
- * never consumed, and a `phase: "replaced"` record says the replacement
- * completed. The record decides by the recorded phase and the staged copy's own
- * existence, never by a byte digest.
+ * The record is committed, not written to a file: the complete recovery record
+ * (`phase: "replaced"`) is one `store_operations` row inserted inside the SAME
+ * native transaction as the authority it describes, so a committed replacement
+ * and its record become durable together and nothing sits between them. A crash
+ * is therefore decided from the store alone: the live `store_meta.authority_epoch`
+ * is the single cutover — an attempt that committed advanced it above both
+ * generations and left its record row, and one that never committed advanced
+ * nothing, because SQLite rolled the whole replacement back as a unit and no
+ * intermediate state is observable. A copy of the committed record is also placed
+ * beside the store under `<root>/archived/store-migration/recovery/`, AFTER the
+ * commit; it is an operator-facing convenience over that same committed row, so a
+ * run that could not write it reports the committed outcome with a null copy path
+ * rather than a refusal. The retry of an interrupted attempt is the same public
+ * verb with the same preview, refused if the loss moved on.
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -110,15 +113,12 @@ import {
   copyFileSync,
   createReadStream,
   existsSync,
-  lstatSync,
   mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
   readSync,
-  renameSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -126,7 +126,6 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { writeJson } from "./core.js";
 import { serializeExecutionValue } from "./execution-store.js";
-import { withStatusWriteLock } from "./lease.js";
 import {
   MIGRATIONS,
   StoreError,
@@ -139,32 +138,31 @@ import {
 } from "./store-db.js";
 import {
   StoreActivationError,
-  backupStoreUnderExclusion,
+  backupStore,
   canonicalPath,
-  freezeRetainedBodies,
+  currentAuthorityHandle,
   inspectBackupCopy,
   isPathWithin,
-  readRetainedBodyInventory,
-  withExecutionMaintenanceLock,
   type BackupExecutionMeta,
   type BackupInspection,
   type BackupReceipt,
-  type RetainedBodyCheckpoint,
-  type RetainedBodyInventory,
 } from "./store-activation.js";
 
 /**
  * Transport version of the recovery receipt, of the diagnostic export and of
  * the loss payload.
  *
- * Version 2 is §7 R4's loss-aware whole-store restore: the preview and the
- * durable receipt additionally carry the retained accepted-body inventory
- * digest, the live bodies' digest and the disclosed body/selection
- * differences. A version-1 payload is refused by name rather than decoded as
- * `restoreExecutionBackup`'s input, because a version-1 preview cannot describe
- * a body loss at all.
+ * Version 3 is the schema-owned whole-store loss payload: the preview and the
+ * durable receipt carry the authority rows and committed operation ids of
+ * EVERY authority domain (issue, catalog, execution and the native Dsh host
+ * state), and nothing about file-native bodies — notes, agent-flow ledgers,
+ * cursors, the launch journal and the selection snapshot are ordinary retained
+ * files, never a second transactionally frozen authority, so no payload
+ * describes them and a database image does not roll their bytes back. A
+ * payload of an earlier generation is refused by name rather than decoded as
+ * `restoreExecutionBackup`'s input.
  */
-export const EXECUTION_RECOVERY_PROTOCOL_VERSION = 2;
+export const EXECUTION_RECOVERY_PROTOCOL_VERSION = 3;
 
 /**
  * Stable refusal codes. `execution.recovery-loss-unaccepted` is §5's verdict
@@ -191,47 +189,18 @@ export class ExecutionRecoveryError extends Error {
 
 /** §8: one authority row that differs between the live store and the point. */
 export type ExecutionRecoveryAuthorityDifference = {
-  domain: "issue" | "catalog" | "execution";
+  domain: "issue" | "catalog" | "execution" | "host";
   key: string;
   liveRevision: number | null;
   backupRevision: number | null;
 };
 
-/**
- * §7 R4: one retained accepted body (or selection fact) that differs between
- * the point's frozen inventory and the live bodies.
- *
- * `lostRecords` counts the point's accepted records the live body no longer
- * carries (a deleted or replaced body); `preservedRecords` counts the live
- * accepted records the point does not hold — §7 preserves append-only
- * post-point history where identities do not conflict, so those records are
- * never deleted by a restore. `kind: "selection"` marks the body that carries
- * the durable selection/cache facts.
- */
-export type ExecutionRecoveryRetainedDifference = {
-  /** The control-root-relative retained body this difference is about. */
-  path: string;
-  /**
-   * `deleted`: the point froze it and the live store no longer has it.
-   * `replaced`: the live body no longer carries the point's accepted records.
-   * `preserved`: the live body only EXTENDED the point's accepted records, and
-   * §7 keeps that history instead of deleting it.
-   * `selection`: the body carries the durable selection/cache facts.
-   */
-  kind: "deleted" | "replaced" | "preserved" | "selection";
-  lostRecords: number;
-  preservedRecords: number;
-  pointSha256: string;
-  /** `null` when the body the point froze is gone entirely. */
-  liveSha256: string | null;
-};
-
 /** §8 (verbatim): what restoring one recovery point would cost. */
 export type ExecutionRecoveryPreview = {
   /**
-   * §7 R4: the loss-payload generation. A preview of another generation is
-   * refused by `restoreExecutionBackup` rather than silently losing the
-   * retained-body loss it cannot describe.
+   * The loss-payload generation. A preview of another generation is refused by
+   * `restoreExecutionBackup` rather than decoded with a loss inventory it does
+   * not carry.
    */
   version: number;
   backupPath: string;
@@ -240,14 +209,8 @@ export type ExecutionRecoveryPreview = {
   liveEpoch: number;
   backupEpoch: number;
   lostOperationIds: string[];
-  /** §7 R4: the retained accepted bodies the restore would NOT roll back. */
-  retainedDifferences: ExecutionRecoveryRetainedDifference[];
-  /** §7 R4: the point's frozen retained inventory digest. */
-  retainedDigest: string;
-  /** §7 R4: the live retained inventory digest the preview compared against it. */
-  retainedLiveDigest: string;
   /**
-   * §7 R4/§4.2: the populated coverage generation each side records for its
+   * §4.2: the populated coverage generation each side records for its
    * ACTIVE migration — the point's own bytes and the live store's, read from
    * each store rather than asserted. `null` when a side records none (a staged
    * pre-activation store).
@@ -263,17 +226,19 @@ export type ExecutionRestoreReceipt = {
   storeId: string;
   epoch: number;
   restoredFromSha256: string;
-  /** §7 R4: the point's frozen retained accepted-body inventory digest. */
-  retainedDigest: string;
-  /** §7 R4: the live retained inventory digest this attempt re-froze and recorded. */
-  retainedLiveDigest: string;
-  /** §7 R4: the retained bodies/selection facts this restore did NOT roll back. */
-  retainedDifferences: ExecutionRecoveryRetainedDifference[];
-  /** §7 R4/§4.2: the coverage generation each side recorded for its active migration. */
+  /** §4.2: the coverage generation each side recorded for its active migration. */
   backupCoverageDigest: string | null;
   liveCoverageDigest: string | null;
   preRestoreBackup: BackupReceipt;
-  recoveryReceiptPath: string;
+  /**
+   * The operator-facing copy of the committed record, or `null` when that copy
+   * could not be written (an unwritable recovery directory, a full disk). The
+   * committed record is durable in the store's own `store_operations` ledger
+   * either way — the copy is a convenience beside it, never the evidence — so a
+   * copy this run could not place never turns a committed destructive operation
+   * into a reported failure.
+   */
+  recoveryReceiptPath: string | null;
 };
 
 /** §8 (verbatim): the diagnostic projection of the execution authority. */
@@ -291,6 +256,31 @@ const CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name 
 /** The migration that introduced provenance origin. */
 const PROVENANCE_ORIGIN_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced project content authority (roadmaps). */
+const ROADMAP_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that added coverage to execution migration rows. */
+const EXECUTION_COVERAGE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced project milestones (both tables exist from here). */
+const MILESTONE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced the native Dsh host-state domain. */
+const DSH_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
+/**
+ * The migration that made the execution session domain coordinator-only. It
+ * DROPPED `execution_sessions.plan_id` (and the plan-PM seat) by rebuilding the
+ * table, so a store below it carries a session column the current schema does
+ * not — and one of its CHECK constraints requires that column's presence for a
+ * plan-PM row. The inventory therefore gates the column by this migration, the
+ * same way it gates the columns later migrations ADDED.
+ */
+const EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "execution-coordinator-only")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that recorded Dsh ledger legacy provenance columns. */
+const DSH_LEGACY_PROVENANCE_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;
 
 /** §4.3: the canonical control harness root that owns this context's store. */
 function controlRootOf(context: StoreContext): string {
@@ -316,20 +306,6 @@ function readIfExists(path: string): Buffer | undefined {
   }
 }
 
-/** One file's (dev, ino) identity — how "positively owned" is decided. */
-function identityOf(path: string): { dev: number; ino: number } | undefined {
-  try {
-    const stats = lstatSync(path);
-    return { dev: stats.dev, ino: stats.ino };
-  } catch {
-    return undefined;
-  }
-}
-
-function sameIdentity(a: { dev: number; ino: number } | undefined, b: { dev: number; ino: number } | undefined): boolean {
-  return a === undefined || b === undefined ? a === b : a.dev === b.dev && a.ino === b.ino;
-}
-
 /**
  * §8: the loss the operator has to approve explicitly. Every refusal that means
  * "the inventory cannot be trusted" or "the approval does not describe this
@@ -348,27 +324,28 @@ function corrupt(detail: string): ExecutionRecoveryError {
   return new ExecutionRecoveryError("store.corrupt", detail);
 }
 
-/**
- * The test-runner-gated crash seam, the same gate every other failure injection
- * in the store uses: the stage names where the run was interrupted, so "crash
- * before the replacement" and "crash after it" are reproduced rather than
- * described.
- */
-function recoveryFailureHook(stage: "before-replacement" | "after-replacement"): void {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env.MSTAR_STORE_FAIL_EXECUTION_RESTORE === stage) {
-    throw new Error(`induced execution-restore failure at ${stage}`);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Reading the three authority domains
 // ---------------------------------------------------------------------------
 
-type AuthorityDomain = "issue" | "catalog" | "execution";
+type AuthorityDomain = "issue" | "catalog" | "execution" | "host";
 
-/** One enumerated authority row: its key, its own revision (or presence), its content digest. */
-type AuthorityRow = { domain: AuthorityDomain; key: string; revision: number | null; digest: string };
+/**
+ * One enumerated authority row: its key, its own revision (or presence), its
+ * content digest, and the exact column values the row holds. `values` is what
+ * makes a whole-domain replacement faithful: the restore installs the selected
+ * point's own row content, never a reconstruction from the inventory.
+ */
+type AuthorityRow = {
+  domain: AuthorityDomain;
+  /** The table the row came from — what an install groups its statements by. */
+  table: string;
+  key: string;
+  revision: number | null;
+  digest: string;
+  values: readonly unknown[];
+};
 
 type AuthorityTable = {
   domain: AuthorityDomain;
@@ -379,8 +356,8 @@ type AuthorityTable = {
   key: (row: Record<string, unknown>) => string;
   /** The row's own authority revision column, when the table carries one. */
   revisionColumn?: string;
-  /** True when the table only exists once the catalog/execution migration applied. */
-  requires?: "catalog" | "execution";
+  /** True when the table only exists once its introducing migration applied. */
+  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "host";
 };
 
 function text(row: Record<string, unknown>, column: string): string {
@@ -398,7 +375,7 @@ function number(row: Record<string, unknown>, column: string): number {
 }
 
 /**
- * Every authority table of the three domains (§2 of the primary spec), in the
+ * Every authority table of the four domains (§2 of the primary spec), in the
  * order the inventory reports them. `projection_*` is deliberately absent:
  * contract §5 makes those tables a disposable published generation, so losing
  * one is not an authority loss.
@@ -435,6 +412,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
       "external_id",
       "url",
       "identity_key",
+      "milestone_id",
     ],
     orderBy: "id",
     key: (row) => `issue:${text(row, "id")}`,
@@ -588,7 +566,10 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "execution_sessions",
-    columns: ["workflow_id", "role", "session_id", "epoch", "revision", "state", "bound_at"],
+    // `plan_id` is listed here because the inventory describes the schema a
+    // restore may actually meet: migration 9 dropped it, and
+    // `inventoryColumns` removes it at that version or later.
+    columns: ["workflow_id", "role", "session_id", "plan_id", "epoch", "revision", "state", "bound_at"],
     orderBy: "workflow_id, role, session_id",
     key: (row) => `session:${text(row, "workflow_id")}/${text(row, "role")}/${text(row, "session_id")}`,
     revisionColumn: "revision",
@@ -623,19 +604,233 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "execution_migrations",
-    columns: ["manifest_id", "manifest_hash", "phase", "manifest_json", "activation_receipt_json", "retirement_json", "created_at", "updated_at"],
+    columns: [
+      "manifest_id",
+      "manifest_hash",
+      "phase",
+      "manifest_json",
+      "activation_receipt_json",
+      "retirement_json",
+      "created_at",
+      "updated_at",
+      "coverage_json",
+    ],
     orderBy: "manifest_id",
     key: (row) => `migration:${text(row, "manifest_id")}`,
     requires: "execution",
   },
+  {
+    domain: "catalog",
+    table: "project_roadmaps",
+    columns: ["project_id", "project_kind", "content_markdown", "content_hash", "revision", "updated_at"],
+    orderBy: "project_id",
+    key: (row) => `roadmap:${text(row, "project_id")}`,
+    revisionColumn: "revision",
+    requires: "roadmap",
+  },
+  {
+    domain: "catalog",
+    table: "project_milestones",
+    columns: ["milestone_id", "project_id", "project_kind", "name", "target", "status", "ordinal", "revision", "created_at", "updated_at"],
+    orderBy: "milestone_id",
+    key: (row) => `milestone:${text(row, "milestone_id")}`,
+    revisionColumn: "revision",
+    requires: "milestone",
+  },
+  {
+    domain: "host",
+    table: "dsh_ledger_events",
+    columns: ["seq_rowid", "workflow_id", "event_id", "event_json", "recorded_at", "legacy_source_digest", "legacy_line"],
+    orderBy: "seq_rowid",
+    key: (row) => `ledger-event:${text(row, "seq_rowid")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_accepted_identities",
+    columns: ["workflow_id", "event_id", "digest", "accepted_at"],
+    orderBy: "workflow_id, event_id",
+    key: (row) => `accepted:${text(row, "workflow_id")}/${text(row, "event_id")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_scan_bounds",
+    columns: ["workflow_id", "session_id", "next", "stream"],
+    orderBy: "workflow_id, session_id",
+    key: (row) => `scan-bound:${text(row, "workflow_id")}/${text(row, "session_id")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_session_bindings",
+    columns: ["session_id", "cwd", "selected_workflow_id", "execution_binding", "excluded_before_seq", "updated_at"],
+    orderBy: "session_id, cwd",
+    key: (row) => `binding:${text(row, "session_id")}/${text(row, "cwd")}`,
+    requires: "host",
+  },
+  {
+    domain: "host",
+    table: "dsh_status_emissions",
+    columns: ["session_id", "cwd", "turn", "emitted_at", "payload_json"],
+    orderBy: "session_id, cwd",
+    key: (row) => `emission:${text(row, "session_id")}/${text(row, "cwd")}`,
+    requires: "host",
+  },
 ];
 
-type TableAvailability = { catalog: boolean; execution: boolean; provenanceOrigin: boolean };
+/**
+ * The FK-safe replacement order: parents before children, so a whole-domain
+ * replacement never needs `foreign_keys=OFF` and never leaves the schema's own
+ * constraints half-satisfied. Deletion runs in the exact reverse.
+ *
+ * This is deliberately NOT the inventory's display order. `issues.milestone_id`
+ * references `project_milestones` and the milestone/roadmap tables reference
+ * `catalog_entities`, so the catalog parents are installed before the issue
+ * rows; a table added to `AUTHORITY_TABLES` without a position here is refused
+ * rather than silently left out of a replacement.
+ */
+const REPLACEMENT_ORDER: readonly string[] = [
+  "store_meta",
+  "issue_counter",
+  "catalog_entities",
+  "project_milestones",
+  "project_roadmaps",
+  "issues",
+  "occurrences",
+  "relations",
+  "provenance",
+  "issue_transitions",
+  "store_operations",
+  "migration_receipts",
+  "catalog_links",
+  "catalog_operations",
+  "catalog_execution_bindings",
+  "execution_meta",
+  "execution_workflows",
+  "execution_plans",
+  "execution_registry",
+  "execution_sessions",
+  "execution_integration_leases",
+  "execution_inputs",
+  "execution_operations",
+  "execution_migrations",
+  "dsh_ledger_events",
+  "dsh_accepted_identities",
+  "dsh_scan_bounds",
+  "dsh_session_bindings",
+  "dsh_status_emissions",
+];
+
+/** The available authority tables in FK-safe replacement order. */
+function replacementOrder(availability: TableAvailability): readonly AuthorityTable[] {
+  const position = new Map(REPLACEMENT_ORDER.map((name, index) => [name, index] as const));
+  // The order must cover exactly the inventory's tables: a table the order does
+  // not name cannot be positioned, and a name the inventory does not hold is a
+  // stale entry. Both are a build defect, refused rather than silently losing a
+  // domain from a replacement.
+  const missing = AUTHORITY_TABLES.filter((table) => !position.has(table.table)).map((table) => table.table);
+  const extra = REPLACEMENT_ORDER.filter((name) => !AUTHORITY_TABLES.some((table) => table.table === name));
+  if (missing.length > 0 || extra.length > 0) {
+    throw corrupt(
+      `the FK-safe replacement order does not cover this build's authority inventory` +
+        `${missing.length === 0 ? "" : ` (unnamed: ${missing.join(", ")})`}` +
+        `${extra.length === 0 ? "" : ` (unknown: ${extra.join(", ")})`}; a whole-domain restore cannot be ordered`,
+    );
+  }
+  // A store on an older schema only carries the tables its migrations created;
+  // the available subset keeps the same relative order.
+  return AUTHORITY_TABLES.filter((table) => available(table, availability))
+    .map((table) => ({ table, rank: position.get(table.table)! }))
+    .sort((a, b) => a.rank - b.rank)
+    .map((entry) => entry.table);
+}
+
+type TableAvailability = {
+  catalog: boolean;
+  execution: boolean;
+  executionCoverage: boolean;
+  roadmap: boolean;
+  milestone: boolean;
+  host: boolean;
+  provenanceOrigin: boolean;
+  dshLegacyProvenance: boolean;
+  /** False at or after the migration that made the session domain coordinator-only. */
+  legacySessionPlanColumn: boolean;
+};
+
+/**
+ * Which optional authority tables a store's own recorded schema version
+ * carries. Every reader derives this the same way, from the version the store
+ * records, so an older schema stays queryable and an unrecorded table is never
+ * read as empty authority.
+ */
+function availabilityOf(schemaVersion: number): TableAvailability {
+  return {
+    catalog: schemaVersion >= CATALOG_MIGRATION_VERSION,
+    execution: schemaVersion >= EXECUTION_MIGRATION_VERSION,
+    executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
+    roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
+    milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
+    host: schemaVersion >= DSH_MIGRATION_VERSION,
+    provenanceOrigin: schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
+    dshLegacyProvenance: schemaVersion >= DSH_LEGACY_PROVENANCE_MIGRATION_VERSION,
+    legacySessionPlanColumn: schemaVersion < EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION,
+  };
+}
 
 function available(table: AuthorityTable, availability: TableAvailability): boolean {
   if (table.requires === "catalog") return availability.catalog;
   if (table.requires === "execution") return availability.execution;
+  if (table.requires === "roadmap") return availability.roadmap;
+  if (table.requires === "milestone") return availability.milestone;
+  if (table.requires === "host") return availability.host;
   return true;
+}
+
+/** The columns of one inventory table this store's schema actually carries. */
+function inventoryColumns(table: AuthorityTable, availability: TableAvailability): readonly string[] {
+  let columns = table.columns;
+  if (table.table === "issues" && !availability.milestone) columns = columns.filter((column) => column !== "milestone_id");
+  if (table.table === "execution_migrations" && !availability.executionCoverage) {
+    columns = columns.filter((column) => column !== "coverage_json");
+  }
+  if (table.table === "execution_sessions" && !availability.legacySessionPlanColumn) {
+    columns = columns.filter((column) => column !== "plan_id");
+  }
+  if (!availability.provenanceOrigin) columns = columns.filter((column) => column !== "origin");
+  if (!availability.dshLegacyProvenance) {
+    columns = columns.filter((column) => column !== "legacy_source_digest" && column !== "legacy_line");
+  }
+  return columns;
+}
+
+/** The projected rows of ONE authority table, deterministic key order, duplicate keys refused. */
+function readTableRows(table: AuthorityTable, db: StoreDb, availability: TableAvailability): AuthorityRow[] {
+  const columns = inventoryColumns(table, availability);
+  const found = db.prepare(`select ${columns.join(", ")} from ${table.table} order by ${table.orderBy}`).all() as Array<
+    Record<string, unknown>
+  >;
+  const rows: AuthorityRow[] = [];
+  const seen = new Set<string>();
+  for (const raw of found) {
+    const projected: Record<string, unknown> = {};
+    for (const column of columns) projected[column] = raw[column];
+    const key = table.key(projected);
+    if (seen.has(key)) {
+      throw corrupt(`two ${table.table} rows share the inventory key ${JSON.stringify(key)}; the loss inventory cannot be trusted`);
+    }
+    seen.add(key);
+    rows.push({
+      domain: table.domain,
+      table: table.table,
+      key,
+      revision: table.revisionColumn === undefined ? 1 : number(projected, table.revisionColumn),
+      digest: sha256Of(serializeExecutionValue(projected)),
+      values: columns.map((column) => projected[column] ?? null),
+    });
+  }
+  return rows;
 }
 
 /** Enumerate every authority row of one store, deterministic key order, duplicate keys refused. */
@@ -644,26 +839,14 @@ function readAuthorityRows(db: StoreDb, availability: TableAvailability): Author
   const seen = new Set<string>();
   for (const table of AUTHORITY_TABLES) {
     if (!available(table, availability)) continue;
-    const columns = availability.provenanceOrigin
-      ? table.columns
-      : table.columns.filter((column) => column !== "origin");
-    const found = db.prepare(`select ${columns.join(", ")} from ${table.table} order by ${table.orderBy}`).all() as Array<
-      Record<string, unknown>
-    >;
-    for (const raw of found) {
-      const projected: Record<string, unknown> = {};
-      for (const column of columns) projected[column] = raw[column];
-      const key = table.key(projected);
-      if (seen.has(`${table.domain}\u0000${key}`)) {
-        throw corrupt(`two ${table.table} rows share the inventory key ${JSON.stringify(key)}; the loss inventory cannot be trusted`);
+    for (const row of readTableRows(table, db, availability)) {
+      if (seen.has(`${row.domain}\u0000${row.key}`)) {
+        throw corrupt(
+          `two ${table.table} rows share the inventory key ${JSON.stringify(row.key)}; the loss inventory cannot be trusted`,
+        );
       }
-      seen.add(`${table.domain}\u0000${key}`);
-      rows.push({
-        domain: table.domain,
-        key,
-        revision: table.revisionColumn === undefined ? 1 : number(projected, table.revisionColumn),
-        digest: sha256Of(serializeExecutionValue(projected)),
-      });
+      seen.add(`${row.domain}\u0000${row.key}`);
+      rows.push(row);
     }
   }
   return rows;
@@ -894,7 +1077,7 @@ async function openLiveReadSnapshot(context: StoreContext): Promise<LiveReadSnap
 }
 
 /**
- * §7 R4/§4.2: the populated coverage generation a store records for its ACTIVE
+ * §4.2: the populated coverage generation a store records for its ACTIVE
  * migration, `null` when the store records none (a staged pre-activation store,
  * or a schema that predates the execution authority). It is read from the
  * store's own `execution_migrations` row, never from a caller's assertion: the
@@ -983,40 +1166,11 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
     }
     handle.db.exec("begin");
     try {
-      const meta = handle.db
-        .prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1")
-        .get() as Record<string, unknown> | undefined;
-      if (
-        !meta ||
-        typeof meta.store_id !== "string" ||
-        (meta.authority_state !== "staged" && meta.authority_state !== "active") ||
-        typeof meta.authority_epoch !== "number" ||
-        typeof meta.revision !== "number" ||
-        typeof meta.catalog_revision !== "number"
-      ) {
-        throw corrupt("store_meta is missing or malformed; the live authority generation cannot be verified");
-      }
-      const availability: TableAvailability = {
-        catalog: handle.schemaVersion >= CATALOG_MIGRATION_VERSION,
-        execution: handle.schemaVersion >= EXECUTION_MIGRATION_VERSION,
-        provenanceOrigin: handle.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
-      };
       // Verified before the inventory is handed back: the capability path read an
       // image of a store with no `-wal`, and that image only IS the live store
       // while the live store kept the shape it was read in.
       if (walWithoutJournal !== null) assertWalStoreUnchanged(context, walWithoutJournal, what);
-      return {
-        storeId: meta.store_id,
-        epoch: meta.authority_epoch,
-        revision: meta.revision,
-        catalogRevision: meta.catalog_revision,
-        authorityState: meta.authority_state,
-        schemaVersion: handle.schemaVersion,
-        execution: handle.execution,
-        rows: readAuthorityRows(handle.db, availability),
-        operationIds: readCommittedOperationIds(handle.db, availability),
-        coverageDigest: recordedCoverageDigest(handle.db),
-      };
+      return readLiveSide(handle.db, handle.schemaVersion, handle.execution, what);
     } finally {
       handle.db.exec("commit");
     }
@@ -1029,6 +1183,43 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
   } finally {
     handle.close();
   }
+}
+
+/**
+ * The live authority generation, identity and rows read from ONE connection's
+ * own snapshot: the `store_meta` singleton, the four domains' authority rows
+ * and the committed operation receipts. The caller owns the snapshot — a read
+ * handle's read transaction, or the restore's write transaction — so the
+ * restore's admission facts come from the very snapshot it is about to replace,
+ * never from a second read taken beside it.
+ */
+function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecutionMeta | null, what: string): LiveRead {
+  const meta = db
+    .prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1")
+    .get() as Record<string, unknown> | undefined;
+  if (
+    !meta ||
+    typeof meta.store_id !== "string" ||
+    (meta.authority_state !== "staged" && meta.authority_state !== "active") ||
+    typeof meta.authority_epoch !== "number" ||
+    typeof meta.revision !== "number" ||
+    typeof meta.catalog_revision !== "number"
+  ) {
+    throw corrupt(`${what} found store_meta missing or malformed; the live authority generation cannot be verified`);
+  }
+  const availability = availabilityOf(schemaVersion);
+  return {
+    storeId: meta.store_id,
+    epoch: meta.authority_epoch,
+    revision: meta.revision,
+    catalogRevision: meta.catalog_revision,
+    authorityState: meta.authority_state,
+    schemaVersion,
+    execution,
+    rows: readAuthorityRows(db, availability),
+    operationIds: readCommittedOperationIds(db, availability),
+    coverageDigest: recordedCoverageDigest(db),
+  };
 }
 
 /**
@@ -1061,6 +1252,117 @@ async function readCopyRows(
     }
   } finally {
     db.close();
+  }
+}
+
+/**
+ * The staged, verified replacement image: the selected recovery point's own
+ * bytes, opened through the ordinary read-only boundary and re-verified against
+ * the same verdict `inspectBackupCopy` applies.
+ *
+ * The image is a private file under the control root, never the live store, so
+ * the destructive step can only ever install bytes that were already accepted
+ * as this store's recovery point on this build's schema. Every domain's rows are
+ * read from it in ONE read-only snapshot — the same enumeration rule the loss
+ * inventory uses, so a row that only one side holds is as visible as a changed
+ * one — and the store's own identity is read from the very same handle, which is
+ * what makes the install a description of those bytes rather than of a mixture.
+ */
+type StagedImage = {
+  path: string;
+  storeId: string;
+  epoch: number;
+  catalogRevision: number;
+  schemaVersion: number;
+  authorityState: "staged" | "active";
+  execution: BackupExecutionMeta | null;
+  rows: AuthorityRow[];
+  operationIds: string[];
+  coverageDigest: string | null;
+  sha256: string;
+};
+
+async function readStagedImage(path: string, pointLabel: string): Promise<StagedImage> {
+  let description: BackupInspection;
+  try {
+    description = await inspectBackupCopy(path);
+  } catch (error) {
+    if (error instanceof StoreActivationError) throw error;
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the recovery point at ${pointLabel} cannot be verified (${(error as Error).message}); it is not a recovery point for this store.`,
+    );
+  }
+  const availability = availabilityOf(description.schemaVersion);
+  const { DatabaseSync } = (await import("node:sqlite")) as {
+    DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
+  };
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec("pragma query_only=ON");
+    db.exec("begin");
+    try {
+      return {
+        path,
+        storeId: description.storeId,
+        epoch: description.epoch,
+        catalogRevision: description.catalogRevision,
+        schemaVersion: description.schemaVersion,
+        authorityState: description.authorityState,
+        execution: description.execution,
+        rows: readAuthorityRows(db, availability),
+        operationIds: readCommittedOperationIds(db, availability),
+        coverageDigest: recordedCoverageDigest(db),
+        sha256: await sha256OfFile(path),
+      };
+    } finally {
+      db.exec("commit");
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Replace every authority row of the staged image inside the caller's write
+ * transaction.
+ *
+ * Deletion runs in reverse FK order and insertion in FK order. Every row's OWN
+ * column values are installed, including the columns §2.2 keeps outside the
+ * authority revision model (`issues.milestone_id`, a migration row's complete
+ * `coverage_json`, rowids and sequence state), because the image's rows were
+ * enumerated with the same column projection the replacement writes back. No
+ * filesystem action, no `await` and no child process happens between BEGIN and
+ * COMMIT.
+ *
+ * Enforcement is deferred for the duration of the swap (`defer_foreign_keys`),
+ * because a replacement of PARENT tables cannot be made self-consistent by
+ * ordering alone when the store carries a legacy FK-bearing table this build's
+ * inventory does not own — an older schema's `execution_leases` rows reference
+ * `execution_plans`, and a restore must neither replace nor delete rows outside
+ * the authority inventory. Deferring moves the verdict to the one place that can
+ * decide it: the caller runs SQLite's own `foreign_key_check` on the fully
+ * installed generation immediately before COMMIT, so nothing can ever commit in
+ * an FK-violating state. The ordering is still the FK-safe order, so the
+ * deferred window is as narrow as the swap itself, and a store at the current
+ * schema — every table the swap touches — is consistent throughout.
+ */
+function replaceAuthorityRows(tx: StoreDb, image: StagedImage, availability: TableAvailability): void {
+  const tables = replacementOrder(availability);
+  for (const table of [...tables].reverse()) {
+    tx.prepare(`delete from ${table.table}`).run();
+  }
+  for (const table of tables) {
+    // The image's rows still carry their own table membership; grouping by
+    // table name keeps the insert statement built once per table.
+    const columns = inventoryColumns(table, availability);
+    const statement = tx.prepare(
+      `insert into ${table.table}(${columns.join(", ")}) values (${columns.map(() => "?").join(", ")})`,
+    );
+    for (const row of image.rows) {
+      if (row.table !== table.table) continue;
+      statement.run(...(row.values as Array<string | number | null>));
+    }
   }
 }
 
@@ -1112,92 +1414,10 @@ function lossDigestOf(input: {
       authorityDifferences: input.preview.authorityDifferences,
       lostOperationIds: input.preview.lostOperationIds,
       resurrectedOperationIds: input.resurrectedOperationIds,
-      retainedDigest: input.preview.retainedDigest,
-      retainedLiveDigest: input.preview.retainedLiveDigest,
-      retainedDifferences: input.preview.retainedDifferences,
       backupCoverageDigest: input.preview.backupCoverageDigest,
       liveCoverageDigest: input.preview.liveCoverageDigest,
     }),
   );
-}
-
-/**
- * §7 R4: compare the point's frozen retained accepted-body inventory with the
- * live bodies.
- *
- * The rule is exactly §7's: a live body whose accepted records still carry the
- * point's records, in order and by exact hash, is an append-only extension and
- * its extra records are PRESERVED (never deleted by a restore, never a loss).
- * A body that was replaced or deleted is a loss the operator has to approve.
- * An unterminated trailing record the point did not record cannot be reconciled
- * by any hash, so it refuses with both stores and every body retained and asks
- * for an explicit salvage scope instead of guessing an accepted identity.
- */
-function compareRetainedBodies(
-  point: string,
-  recorded: RetainedBodyInventory,
-  live: RetainedBodyInventory,
-): ExecutionRecoveryRetainedDifference[] {
-  const differences: ExecutionRecoveryRetainedDifference[] = [];
-  const atPoint = [...recorded.bodies].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const now = [...live.bodies].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  for (const bodies of [atPoint, now]) {
-    for (let index = 1; index < bodies.length; index += 1) {
-      if (bodies[index - 1]!.path === bodies[index]!.path) {
-        throw lossUnaccepted(
-          `the retained inventory records the path ${bodies[index]!.path} twice; a body appears exactly once in one frozen set, so ` +
-            `this inventory cannot describe the live bodies. Nothing was replaced and every body is retained.`,
-        );
-      }
-    }
-  }
-  const lost = (body: RetainedBodyCheckpoint, liveBody: RetainedBodyCheckpoint | undefined): ExecutionRecoveryRetainedDifference => {
-    if (liveBody === undefined) {
-      return {
-        path: body.path,
-        kind: body.selection ? "selection" : "deleted",
-        lostRecords: body.records.length,
-        preservedRecords: 0,
-        pointSha256: body.sha256,
-        liveSha256: null,
-      };
-    }
-    if (liveBody.partial !== body.partial) {
-      throw lossUnaccepted(
-        `the retained body ${body.path} ends with an unterminated record the recovery point at ${point} did not record (live ` +
-          `partial ${liveBody.partial === null ? "\u2014 none" : liveBody.partial.slice(0, 12)}, recorded ` +
-          `${body.partial === null ? "\u2014 none" : body.partial.slice(0, 12)}); an interrupted append has no accepted identity, ` +
-          `so no hash reconciles it. The live store and every retained body are left exactly as they are: name the explicit salvage ` +
-          `scope for ${body.path} (reconcile that ledger through its own lock and re-preview). Nothing was replaced.`,
-      );
-    }
-    let shared = 0;
-    while (shared < body.records.length && body.records[shared] === liveBody.records[shared]) shared += 1;
-    const lostRecords = body.records.length - shared;
-    return {
-      path: body.path,
-      kind: body.selection ? "selection" : lostRecords > 0 ? "replaced" : "preserved",
-      lostRecords,
-      preservedRecords: liveBody.records.length - shared,
-      pointSha256: body.sha256,
-      liveSha256: liveBody.sha256,
-    };
-  };
-  let left = 0;
-  let right = 0;
-  while (left < atPoint.length) {
-    const body = atPoint[left]!;
-    while (right < now.length && now[right]!.path < body.path) right += 1;
-    const liveBody = right < now.length && now[right]!.path === body.path ? now[right]! : undefined;
-    // A body the point froze that is gone is ALWAYS a difference, even an empty
-    // one; a body that is byte-identical is not one at all, while an append-only
-    // extension IS one, because §7 preserves it and the operator is told the
-    // restored state does not include it.
-    const difference = lost(body, liveBody);
-    if (liveBody === undefined || difference.lostRecords > 0 || difference.preservedRecords > 0) differences.push(difference);
-    left += 1;
-  }
-  return differences;
 }
 
 /** Validate the recovery point location before staging any private image. */
@@ -1231,16 +1451,71 @@ function recoveryPointPath(context: StoreContext, root: string, backupPath: stri
 }
 
 /**
+ * §8: the readable loss of one side against the other. The comparison is
+ * content-based — a row is a difference unless BOTH sides hold it with the same
+ * digest — because that is what makes a changed child or provenance row visible:
+ * the tables §2.2 keeps outside the authority (`occurrences`, `relations`,
+ * `provenance`, `issue_transitions`, `catalog_links`, `catalog_operations`,
+ * `catalog_execution_bindings`, `execution_registry`, `execution_operations`,
+ * `execution_migrations`, `migration_receipts`, `store_operations`,
+ * `issue_counter`) carry no authority revision of their own, so their presence
+ * marker `1` alone cannot disclose a content change. It decides only whether the
+ * row is LISTED in the readable inventory; it admits and refuses nothing.
+ */
+function diffSides(
+  live: LiveRead,
+  copy: { rows: AuthorityRow[]; operationIds: string[] },
+  backup: { catalogRevision: number },
+): { differences: ExecutionRecoveryAuthorityDifference[]; lostOperationIds: string[]; resurrectedOperationIds: string[] } {
+  const differences: ExecutionRecoveryAuthorityDifference[] = [];
+  const liveByKey = new Map(live.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
+  const copyByKey = new Map(copy.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
+  for (const key of [...new Set([...liveByKey.keys(), ...copyByKey.keys()])].sort()) {
+    const onLive = liveByKey.get(key);
+    const onCopy = copyByKey.get(key);
+    if (onLive !== undefined && onCopy !== undefined && onLive.digest === onCopy.digest) continue;
+    const [domain] = key.split("\u0000") as [AuthorityDomain];
+    differences.push({
+      domain,
+      key: (onLive ?? onCopy)!.key,
+      liveRevision: onLive?.revision ?? null,
+      backupRevision: onCopy?.revision ?? null,
+    });
+  }
+  // §3.1: the catalog domain's own root revision. It is a column of
+  // `store_meta`, so it is reported as its own entry rather than folded into
+  // the issue-domain row that also carries it.
+  const liveCatalogRow = live.rows.find((row) => row.domain === "issue" && row.key === "store_meta");
+  const copyCatalogRow = copy.rows.find((row) => row.domain === "issue" && row.key === "store_meta");
+  if (live.catalogRevision !== backup.catalogRevision && liveCatalogRow !== undefined && copyCatalogRow !== undefined) {
+    differences.push({
+      domain: "catalog",
+      key: "store_meta.catalog_revision",
+      liveRevision: live.catalogRevision,
+      backupRevision: backup.catalogRevision,
+    });
+    differences.sort((a, b) => (a.domain === b.domain ? (a.key < b.key ? -1 : 1) : a.domain < b.domain ? -1 : 1));
+  }
+  const liveOperationIds = new Set(live.operationIds);
+  const copyOperationIds = new Set(copy.operationIds);
+  return {
+    differences,
+    lostOperationIds: [...liveOperationIds].filter((id) => !copyOperationIds.has(id)).sort(),
+    resurrectedOperationIds: [...copyOperationIds].filter((id) => !liveOperationIds.has(id)).sort(),
+  };
+}
+
+/**
  * Verify the recovery point and inventory the whole store against it. Both
  * sides are read under the SAME rule, so a row that only one of them holds is
  * as visible as a row whose content changed.
  */
-async function buildLossInventory(context: StoreContext, backupPath: string, imagePath?: string): Promise<LossInventory> {
+async function buildLossInventory(context: StoreContext, backupPath: string): Promise<LossInventory> {
   const root = controlRootOf(context);
   const point = recoveryPointPath(context, root, backupPath);
   let description: BackupInspection;
   try {
-    description = await inspectBackupCopy(imagePath ?? point);
+    description = await inspectBackupCopy(point);
   } catch (error) {
     if (error instanceof StoreActivationError) throw error;
     throw new StoreActivationError(
@@ -1248,7 +1523,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
       `the recovery point at ${point} cannot be verified (${(error as Error).message}); it is not a recovery point for this store.`,
     );
   }
-  const backupSha256 = await sha256OfFile(imagePath ?? point);
+  const backupSha256 = await sha256OfFile(point);
 
   // §8: the point must describe THIS store, this schema and this generation.
   const live = await readLiveStore(context, "the restore preview");
@@ -1274,79 +1549,8 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
     );
   }
 
-  const availability: TableAvailability = {
-    catalog: live.schemaVersion >= CATALOG_MIGRATION_VERSION,
-    execution: live.schemaVersion >= EXECUTION_MIGRATION_VERSION,
-    provenanceOrigin: live.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
-  };
-  const copy = await readCopyRows(imagePath ?? point, availability);
-
-  const differences: ExecutionRecoveryAuthorityDifference[] = [];
-  const liveByKey = new Map(live.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
-  const copyByKey = new Map(copy.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
-  for (const key of [...new Set([...liveByKey.keys(), ...copyByKey.keys()])].sort()) {
-    const onLive = liveByKey.get(key);
-    const onCopy = copyByKey.get(key);
-    // §8: a row is a difference unless BOTH sides hold it with the same content.
-    // This comparison only decides whether the row is LISTED in the readable
-    // inventory; it admits and refuses nothing. It stays content-based because it
-    // is what makes a changed child or provenance row visible: the tables §2.2
-    // keeps outside the authority (`occurrences`, `relations`, `provenance`,
-    // `issue_transitions`, `catalog_links`, `catalog_operations`,
-    // `catalog_execution_bindings`, `execution_registry`, `execution_operations`,
-    // `execution_migrations`, `migration_receipts`, `store_operations`,
-    // `issue_counter`) carry no authority revision of their own, so their
-    // presence marker `1` alone cannot disclose a content change.
-    if (onLive !== undefined && onCopy !== undefined && onLive.digest === onCopy.digest) continue;
-    const [domain] = key.split("\u0000") as [AuthorityDomain];
-    differences.push({
-      domain,
-      key: (onLive ?? onCopy)!.key,
-      liveRevision: onLive?.revision ?? null,
-      backupRevision: onCopy?.revision ?? null,
-    });
-  }
-  // §3.1: the catalog domain's own root revision. It is a column of
-  // `store_meta`, so it is reported as its own entry rather than folded into
-  // the issue-domain row that also carries it.
-  const liveCatalogRow = live.rows.find((row) => row.domain === "issue" && row.key === "store_meta");
-  const copyCatalogRow = copy.rows.find((row) => row.domain === "issue" && row.key === "store_meta");
-  if (live.catalogRevision !== description.catalogRevision && liveCatalogRow !== undefined && copyCatalogRow !== undefined) {
-    differences.push({
-      domain: "catalog",
-      key: "store_meta.catalog_revision",
-      liveRevision: live.catalogRevision,
-      backupRevision: description.catalogRevision,
-    });
-    differences.sort((a, b) => (a.domain === b.domain ? (a.key < b.key ? -1 : 1) : a.domain < b.domain ? -1 : 1));
-  }
-
-  const liveOperationIds = new Set(live.operationIds);
-  const copyOperationIds = new Set(copy.operationIds);
-  const lostOperationIds = [...liveOperationIds].filter((id) => !copyOperationIds.has(id)).sort();
-  const resurrectedOperationIds = [...copyOperationIds].filter((id) => !liveOperationIds.has(id)).sort();
-
-  // §7 R4: the DB copy does not carry the retained accepted bodies, so the
-  // point's frozen inventory is read from beside the copy and compared with the
-  // live bodies. A missing, forged or other-generation inventory refuses: a
-  // restore that cannot describe the body loss it would neither disclose nor
-  // roll back is not a loss-aware restore.
-  const recordedRetained = await readRetainedBodyInventory(point);
-  if (
-    recordedRetained.storeId !== description.storeId ||
-    recordedRetained.epoch !== description.epoch ||
-    recordedRetained.revision !== description.revision
-  ) {
-    throw new StoreActivationError(
-      "store.activation-stale",
-      `the retained-body inventory recorded beside ${point} describes store ${recordedRetained.storeId} epoch ` +
-        `${recordedRetained.epoch} revision ${recordedRetained.revision}, not the point's ${description.storeId} epoch ` +
-        `${description.epoch} revision ${description.revision}. The recorded bodies are not this recovery point's, so the point ` +
-        `is not restored against them. Nothing was replaced.`,
-    );
-  }
-  const liveRetained = freezeRetainedBodies(context, { storeId: live.storeId, epoch: live.epoch, revision: live.revision });
-  const retainedDifferences = compareRetainedBodies(point, recordedRetained, liveRetained);
+  const copy = await readCopyRows(point, availabilityOf(live.schemaVersion));
+  const { differences, lostOperationIds, resurrectedOperationIds } = diffSides(live, copy, description);
 
   const withoutDigest: Omit<ExecutionRecoveryPreview, "lossDigest"> = {
     version: EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -1356,9 +1560,6 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
     liveEpoch: live.epoch,
     backupEpoch: description.epoch,
     lostOperationIds,
-    retainedDifferences,
-    retainedDigest: recordedRetained.digest,
-    retainedLiveDigest: liveRetained.digest,
     backupCoverageDigest: copy.coverageDigest,
     liveCoverageDigest: live.coverageDigest,
     authorityDifferences: differences,
@@ -1410,7 +1611,7 @@ type ResolvedRestoreInput = {
 function requireDifference(value: unknown, index: number): ExecutionRecoveryAuthorityDifference {
   if (!isPlainObject(value)) throw conflict(`the preview's difference ${index} is not an object`);
   const domain = value.domain;
-  if (domain !== "issue" && domain !== "catalog" && domain !== "execution") {
+  if (domain !== "issue" && domain !== "catalog" && domain !== "execution" && domain !== "host") {
     throw conflict(`the preview's difference ${index} names domain ${JSON.stringify(domain)}`);
   }
   if (!isNonEmptyString(value.key)) throw conflict(`the preview's difference ${index} carries no row key`);
@@ -1448,14 +1649,14 @@ function requireRestoreInput(input: {
   }
   const preview: unknown = raw.preview;
   if (!isPlainObject(preview)) throw conflict("a restore needs the preview object it was taken from");
-  // §7 R4: a loss payload of another generation is refused by NAME. A version-1
-  // preview cannot describe a retained accepted-body loss, and a restore that
-  // accepted it would silently ignore the bodies the point froze.
+  // A loss payload of another generation is refused by NAME: a restore that
+  // accepted a payload of an older inventory would silently approve a loss that
+  // is no longer the complete one.
   if (preview.version !== EXECUTION_RECOVERY_PROTOCOL_VERSION) {
     throw conflict(
       `the preview declares loss-payload version ${JSON.stringify(preview.version)}, not this protocol's ` +
-        `${EXECUTION_RECOVERY_PROTOCOL_VERSION}; a preview of an older generation cannot describe the retained accepted-body loss ` +
-        `a restore would leave in place. Take a fresh preview with \`previewExecutionRestore\`.`,
+        `${EXECUTION_RECOVERY_PROTOCOL_VERSION}; a preview of another generation does not carry this protocol's whole-store ` +
+        `loss inventory. Take a fresh preview with \`previewExecutionRestore\`.`,
     );
   }
   if (!isNonEmptyString(preview.backupPath) || !isNonEmptyString(preview.backupSha256)) {
@@ -1466,12 +1667,6 @@ function requireRestoreInput(input: {
   }
   if (!Array.isArray(preview.lostOperationIds) || !Array.isArray(preview.authorityDifferences)) {
     throw conflict("the preview carries no loss inventory; take one with `previewExecutionRestore`");
-  }
-  if (!isNonEmptyString(preview.retainedDigest) || !isNonEmptyString(preview.retainedLiveDigest) || !Array.isArray(preview.retainedDifferences)) {
-    throw conflict(
-      "the preview carries no retained accepted-body inventory; a restore under this protocol is told which bodies the point froze " +
-        "and which of them the live store no longer matches. Take a fresh preview with `previewExecutionRestore`.",
-    );
   }
   const positive = (value: unknown, field: string): number => {
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
@@ -1499,9 +1694,6 @@ function requireRestoreInput(input: {
       liveEpoch: positive(preview.liveEpoch, "liveEpoch"),
       backupEpoch: positive(preview.backupEpoch, "backupEpoch"),
       lostOperationIds,
-      retainedDifferences: preview.retainedDifferences.map(requireRetainedDifference),
-      retainedDigest: preview.retainedDigest,
-      retainedLiveDigest: preview.retainedLiveDigest,
       backupCoverageDigest: digestOrNull(preview.backupCoverageDigest, "backupCoverageDigest"),
       liveCoverageDigest: digestOrNull(preview.liveCoverageDigest, "liveCoverageDigest"),
       lossDigest: preview.lossDigest,
@@ -1512,46 +1704,17 @@ function requireRestoreInput(input: {
   };
 }
 
-/** §7 R4: one retained difference, validated field by field into the declared shape. */
-function requireRetainedDifference(value: unknown, index: number): ExecutionRecoveryRetainedDifference {
-  if (!isPlainObject(value)) throw conflict(`the preview's retained difference ${index} is not an object`);
-  const kind = value.kind;
-  if (kind !== "deleted" && kind !== "replaced" && kind !== "preserved" && kind !== "selection") {
-    throw conflict(`the preview's retained difference ${index} names kind ${JSON.stringify(kind)}`);
-  }
-  if (!isNonEmptyString(value.path)) throw conflict(`the preview's retained difference ${index} carries no body path`);
-  const count = (candidate: unknown, field: string): number => {
-    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 0) {
-      throw conflict(`the preview's retained difference ${index} carries ${field} ${JSON.stringify(candidate)}`);
-    }
-    return candidate;
-  };
-  if (!isNonEmptyString(value.pointSha256)) throw conflict(`the preview's retained difference ${index} carries no point digest`);
-  let liveSha256: string | null = null;
-  if (value.liveSha256 !== null) {
-    if (!isNonEmptyString(value.liveSha256)) {
-      throw conflict(`the preview's retained difference ${index} carries liveSha256 ${JSON.stringify(value.liveSha256)}`);
-    }
-    liveSha256 = value.liveSha256;
-  }
-  return {
-    path: value.path,
-    kind,
-    lostRecords: count(value.lostRecords, "lostRecords"),
-    preservedRecords: count(value.preservedRecords, "preservedRecords"),
-    pointSha256: value.pointSha256,
-    liveSha256,
-  };
-}
-
 /**
  * The durable receipt of one attempt (§8 "record an external recovery receipt
- * before/after the atomic replacement"). It is written before the rename and
- * rewritten after it, so a crash is decidable from the file alone.
+ * before/after the atomic replacement"). It is committed as a `store_operations`
+ * row in the SAME transaction as the authority it describes, and the
+ * operator-facing copy under `archived/store-migration/recovery/` is written
+ * afterwards, so it can only ever describe an outcome the store already holds.
  */
 type ExecutionRecoveryRecord = {
   recoveryVersion: number;
-  phase: "replacing" | "replaced";
+  /** The one terminal phase this protocol writes: the record is committed with the authority. */
+  phase: "replaced";
   storeId: string;
   operator: string;
   authorization: string;
@@ -1561,27 +1724,26 @@ type ExecutionRecoveryRecord = {
   liveEpoch: number;
   backupEpoch: number;
   newEpoch: number;
-  /** SHA-256 of the live database bytes after the quiescence checkpoint. */
+  /** SHA-256 of the live database bytes the replacement was decided on. */
   liveStoreSha256: string;
-  /** SHA-256 of the verified sibling image a completed replacement installs. */
+  /** SHA-256 of the verified staged image whose rows a completed replacement installs. */
   restoredCopySha256: string;
+  /**
+   * The verified staged image the attempt read its rows from. It is scratch, not
+   * evidence: it is removed on every exit path, and the row content the commit
+   * installed is the selected point's.
+   */
   restoredCopyPath: string;
   lossDigest: string;
-  /** §7 R4: the point's frozen retained accepted-body inventory digest. */
-  retainedDigest: string;
-  /** §7 R4: the live retained inventory digest this attempt verified. */
-  retainedLiveDigest: string;
-  /** §7 R4: the retained bodies/selection facts the restore does NOT roll back. */
-  retainedDifferences: ExecutionRecoveryRetainedDifference[];
-  /** §7 R4/§4.2: the coverage generation each side recorded for its active migration. */
+  /** §4.2: the coverage generation each side recorded for its active migration. */
   backupCoverageDigest: string | null;
   liveCoverageDigest: string | null;
   /** §8/§2.3: what the operator still owes before a consumer may read the store. */
   requiredRebind: string;
   preRestoreBackup: BackupReceipt;
   writtenAt: string;
-  verified?: { integrity: "ok"; foreignKeys: "ok"; schemaVersion: number; executionAuthorityState: string | null };
-  replacedAt?: string;
+  /** The in-transaction verdict over the authority this same commit publishes. */
+  verified: { integrity: "ok"; foreignKeys: "ok"; schemaVersion: number; executionAuthorityState: string | null };
 };
 
 /** §8/§2.3: the step a restored store owes before ordinary consumers may read it. */
@@ -1591,9 +1753,9 @@ function requiredRebind(): string {
     "the live store and the recovery point, so a pre-restore handle refuses `store.stale-epoch`, the restored session rows are " +
     "below the new epoch and authorize nothing, and any restored held lease keeps its old `owner_epoch`. Recover each " +
     "workflow's coordinator with `recoverExecutionCoordinator` (naming the recorded prior holder and attesting it stopped), " +
-    "rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. The retained " +
-    "accepted bodies are NOT rolled back (\u00A77 R4): a record appended after the point is preserved, and any replaced or deleted " +
-    "accepted body or selection fact the receipt lists is disclosed rather than resurrected."
+    "rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. A database image " +
+    "does not roll back the append-only logs and documents beside the store: notes, agent-flow history and the launch journal " +
+    "keep every byte they had, so their history is never resurrected or truncated by a restore."
   );
 }
 
@@ -1602,100 +1764,52 @@ function recoveryReceiptPathOf(root: string, attemptId: string): string {
 }
 
 /**
- * The scratch name shape a crashed attempt leaves at the control root, spelled
- * exactly as the replacement sequence stages it (`join(root,
- * \`.store-restore-${attemptId}.db\`)`) plus SQLite's own sidecars: the `-wal`
- * and `-shm` beside it, and the `-journal` a crash inside
- * `patchImageEpoch`'s transaction leaves.
+ * §8: reclaim the staged scratch of an attempt whose outcome the STORE has
+ * already recorded as committed.
+ *
+ * An attempt stages a verified private image at
+ * `<root>/.store-restore-<attemptId>.db` and removes it on every exit path, so a
+ * process that dies between its commit and that removal leaves a store-sized
+ * image at the control root. Every attempt draws a fresh `attemptId`, so nothing
+ * ever addressed the orphan again, and crash-and-retry is the designed flow.
+ *
+ * The reclamation condition is POSITIVE evidence, and the store is the only
+ * witness: `restoreReceiptOperationId` writes the complete recovery record into
+ * `store_operations` in the SAME commit as the authority it describes, so an
+ * attempt present in that ledger has provably already landed its outcome and its
+ * staging file is inert scratch. An attempt ABSENT from the ledger is ambiguous
+ * — it is either a live peer suspended somewhere between staging and its owning
+ * transaction (which the removed maintenance exclusion no longer serializes, so
+ * such a peer really can be concurrent) or a crash that never committed — and
+ * ambiguity preserves: nothing is deleted on it, so this sweep can never remove a
+ * live attempt's own input.
+ *
+ * `committed` is `null` when the ledger could not be read at all, and that skips
+ * the sweep entirely: inability to read evidence is not evidence of abandonment.
+ * The attempt running right now is skipped as well, and a store this run cannot
+ * write is left to the next run. Best-effort throughout: an image this run cannot
+ * remove never fails the restore that is about to run.
  */
-const RESTORE_SCRATCH_NAME = /^\.store-restore-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.db(?:-(?:wal|shm|journal))?$/;
-const RESTORE_SCRATCH_SIDECARS = ["-wal", "-shm", "-journal"] as const;
-
-/**
- * Does this attempt's durable record PROVE that it never installed its image?
- *
- * The record is the only evidence that survives a crash, and it is written
- * strictly BEFORE the rename — so an attempt with none never reached the
- * rename, and an attempt whose record still says `phase: "replacing"` while its
- * prepared copy still exists at the staging path that attempt OWNS
- * (`.store-restore-<attemptId>.db`) never got its bytes into place: the rename
- * MOVES that file onto the live store, so a copy that HAD been installed would
- * no longer exist under its staging name, and one that still does was never
- * renamed. Everything else — `phase: "replaced"` (a completed replacement whose
- * records and residues are the operator's), a phase this protocol does not
- * write, a receipt that cannot be read, a missing staging file — is not proof of
- * anything, and answers false. The proof is the staged file's own existence
- * under the name that attempt's scratch carries, never a content digest, and it
- * is read from the file the sweep is about to remove, never from the record's
- * own path field.
- */
-function attemptNeverInstalled(root: string, attemptId: string, imagePath: string): boolean {
-  const receiptDir = join(root, "archived", "store-migration", "recovery");
-  let names: string[];
-  try {
-    names = readdirSync(receiptDir);
-  } catch (error) {
-    // No receipt store at all: this control root has never recorded an attempt,
-    // so the scratch can only belong to one that never wrote its receipt. Any
-    // other failure is not evidence, and nothing is reclaimed on it.
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-  const name = names.find((candidate) => candidate.startsWith("restore-") && candidate.endsWith(`-${attemptId}.json`));
-  if (name === undefined) return true;
-  let record: Partial<ExecutionRecoveryRecord>;
-  try {
-    record = JSON.parse(readFileSync(join(receiptDir, name), "utf8")) as Partial<ExecutionRecoveryRecord>;
-  } catch {
-    return false;
-  }
-  if (record.phase !== "replacing") return false;
-  return existsSync(imagePath);
-}
-
-/**
- * §8: reclaim the scratch artifacts a CRASHED restore attempt left behind.
- *
- * `runRestore` stages the prepared store beside the live one and removes it on
- * the exception path only, so a process that dies inside an attempt (SIGKILL, a
- * machine that goes down) leaves a store-sized image — plus whatever sidecar a
- * crash mid-transaction stranded — at the control root. Every attempt draws a
- * fresh `attemptId`, so nothing ever addressed the orphan again, and
- * crash-and-retry is the designed flow: the leak would grow with every crash.
- *
- * An artifact is reclaimed only when `attemptNeverInstalled` proves the attempt
- * never installed it: its durable record still says `phase: "replacing"` AND
- * the copy that attempt staged still exists at the staging path the attempt
- * owns. The rename is what installs the copy, so a staged copy still present
- * under the attempt's own staging name is a copy the rename never consumed — the
- * installed store is never that file. A completed replacement (`phase:
- * "replaced"`), a record a crash never finished writing, and a record a crash
- * never wrote at all (the rename cannot run before the record does) are all left
- * alone. The durable receipts themselves stay in place throughout: this collects
- * scratch bytes, never evidence.
- *
- * Its one other premise is the §4.2 maintenance lock, which every restore takes
- * first: this sweep runs INSIDE it (`restoreExecutionBackup`), so the only
- * attempt that can be running while it sweeps is the one sweeping, and that
- * attempt has no durable replacement record yet. Best-effort throughout — a control
- * root this run cannot read, or a scratch file it cannot remove, never fails
- * the restore that is about to run.
- */
-function reclaimAbandonedRestoreScratch(root: string, currentAttemptId: string): void {
+function reclaimAbandonedRestoreScratch(
+  root: string,
+  currentAttemptId: string,
+  committed: ReadonlySet<string> | null,
+): void {
+  if (committed === null) return;
   let names: string[];
   try {
     names = readdirSync(root);
   } catch {
     return; // a control root this run cannot read holds nothing it can reclaim
   }
-  // One entry per attempt that left something behind — its image, or a sidecar
-  // of one. Attempt ids come off the directory, so this is a dynamic set.
   const attempts = new Set(names.map((name) => RESTORE_SCRATCH_NAME.exec(name)?.[1]).filter((attemptId) => attemptId !== undefined));
   if (attempts.size === 0) return;
   for (const attemptId of attempts) {
-    if (attemptId === currentAttemptId) continue;
+    // Only a committed attempt's own scratch, and never this attempt's: an
+    // attempt the ledger does not name is preserved.
+    if (attemptId === currentAttemptId || !committed.has(attemptId)) continue;
     try {
       const imagePath = join(root, `.store-restore-${attemptId}.db`);
-      if (!attemptNeverInstalled(root, attemptId, imagePath)) continue;
       for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${imagePath}${suffix}`, { force: true });
       rmSync(imagePath, { force: true });
     } catch {
@@ -1705,74 +1819,285 @@ function reclaimAbandonedRestoreScratch(root: string, currentAttemptId: string):
 }
 
 /**
- * Patch the epoch into the recovery IMAGE — the sibling copy on its way to
- * becoming the live store.
- *
- * The image is deliberately left in the journal mode `VACUUM INTO` produced
- * (a rollback-journal database, no sidecar of its own) rather than being put
- * into WAL here: a WAL-mode database that is renamed into place with no
- * `-shm` beside it cannot be opened read-only at all, so installing one would
- * trade a transient mode for an unreadable store. The installed store is
- * therefore the recovery point's own bytes plus one epoch, no read path is
- * weakened, and the next write access through `openStore` re-establishes WAL
- * exactly as it does for any other store.
- *
- * The specifier cannot be a static import: contract §2 requires lazy,
- * capability-checked SQLite acquisition at store access, and `openStore` owns
- * exactly `<root>/store.db`, never an image beside it.
+ * The scratch name shape a crashed attempt leaves at the control root, spelled
+ * exactly as the restore stages it (`join(root, \`.store-restore-${attemptId}.db\`)`)
+ * plus SQLite's own sidecars: the `-wal`/`-shm` a read or a verification leaves,
+ * and the `-journal` a crash inside a staging transaction leaves.
  */
-async function patchImageEpoch(imagePath: string, epoch: number): Promise<void> {
-  assertStoreRuntimeSupported();
-  const { DatabaseSync } = (await import("node:sqlite")) as { DatabaseSync: new (path: string) => StoreDb };
-  const db = new DatabaseSync(imagePath);
+const RESTORE_SCRATCH_NAME = /^\.store-restore-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.db(?:-(?:wal|shm|journal))?$/;
+const RESTORE_SCRATCH_SIDECARS = ["-wal", "-shm", "-journal"] as const;
+
+/**
+ * The one owning write transaction of a restore: open the live store for
+ * writing, `BEGIN IMMEDIATE`, re-read the store's own identity/epoch/revisions
+ * AND every fact that governs the approved loss on THIS snapshot, install the
+ * staged image's rows in FK-safe order, re-epoch the store above both
+ * generations, and commit the complete recovery record — all as ONE native
+ * transaction.
+ *
+ * The body performs no filesystem action, awaits nothing and launches no child
+ * process between BEGIN and COMMIT: the durable receipt ROW is part of the same
+ * commit as the authority it describes, so a committed restore and its record
+ * are observable together, and an interrupted attempt is decided from the
+ * store's own epoch and its own committed receipt row rather than from a file
+ * written beside it.
+ *
+ * A competitor that commits between the inventory and this transaction is
+ * visible in the re-read, so its work refuses as unapproved loss instead of
+ * being silently discarded; a competitor that commits after `BEGIN IMMEDIATE`
+ * either loses to SQLite's writer lock or is refused by `store.busy`, and either
+ * way this transaction replaces one committed generation with another.
+ */
+async function restoreInOneTransaction(
+  context: StoreContext,
+  root: string,
+  input: ResolvedRestoreInput,
+  image: StagedImage,
+  safetyReceipt: BackupReceipt,
+  liveStoreSha256: string,
+  attemptId: string,
+): Promise<ExecutionRestoreReceipt> {
+  const livePath = storeDbPath(context);
+  const receiptPath = recoveryReceiptPathOf(root, attemptId);
+  // The committed-attempt witness is read from the generation this restore is
+  // about to replace — the transaction below replaces `store_operations`
+  // wholesale, so reading it after the commit would answer about a ledger the
+  // replacement already rewrote.
+  const committedBefore = await readCommittedRestoreAttempts(context);
+
+  const handle = await openStore(context, "write");
+  let record: ExecutionRecoveryRecord;
   try {
-    db.exec("pragma synchronous=FULL");
-    db.exec("pragma foreign_keys=ON");
-    db.exec("begin immediate");
+    if (handle.execution === null) {
+      throw new StoreError(
+        "store.not-active",
+        `the live store at ${livePath} predates the execution schema (migration ${handle.schemaVersion} applied); there is no ` +
+          `execution authority to restore into. Nothing was replaced.`,
+      );
+    }
+    handle.db.exec("begin immediate");
+    // See `replaceAuthorityRows`: the FK verdict belongs to the in-transaction
+    // `foreign_key_check` below, not to the intermediate states a parent-table
+    // swap necessarily passes through.
+    handle.db.exec("pragma defer_foreign_keys=ON");
     try {
-      const changed = db.prepare("update store_meta set authority_epoch = ? where id = 1").run(epoch) as { changes?: unknown };
-      if (Number(changed?.changes) !== 1) {
-        throw corrupt(`the recovery image ${imagePath} holds no store_meta singleton to re-epoch`);
+      // §8: the destructive step re-reads the live authority AND re-derives the
+      // whole loss ON THIS transaction's own snapshot before it decides
+      // anything. The approved loss was inventoried from a read taken earlier,
+      // so this comparison is what makes "the loss you approved" a fact about
+      // the store being replaced rather than about a store that has since moved
+      // on: a competitor that committed in between is visible here and refuses
+      // as unapproved loss instead of being silently discarded.
+      //
+      // A live authority that cannot be inventoried at all reaches the SAME
+      // verdict as the preview's own normalizer: an inventory that cannot be
+      // built is never a safe rollback, so a malformed or unreadable live row
+      // refuses `execution.recovery-loss-unaccepted` with the real cause kept
+      // rather than escaping as a different-looking `store.corrupt`.
+      let before: LiveRead;
+      let currentDifferences: ExecutionRecoveryAuthorityDifference[];
+      let currentLost: string[];
+      try {
+        before = readLiveSide(handle.db, handle.schemaVersion, handle.execution, "the restore");
+        ({ differences: currentDifferences, lostOperationIds: currentLost } = diffSides(before, image, image));
+      } catch (error) {
+        if (error instanceof ExecutionRecoveryError && error.code === "execution.recovery-loss-unaccepted") throw error;
+        throw lossUnaccepted(
+          `the restore cannot inventory the live store at ${livePath}: ${(error as Error).message} An incomplete ` +
+            `inventory is never called a safe rollback, so nothing was replaced.`,
+        );
       }
-      db.exec("commit");
+      const approved = input.preview;
+      const approvedOperations = new Set(approved.lostOperationIds);
+      const approvedRows = new Map(approved.authorityDifferences.map((row) => [`${row.domain}\u0000${row.key}`, row]));
+      const unapprovedRow = currentDifferences.find((row) => {
+        const reviewed = approvedRows.get(`${row.domain}\u0000${row.key}`);
+        return (
+          reviewed === undefined || reviewed.liveRevision !== row.liveRevision || reviewed.backupRevision !== row.backupRevision
+        );
+      });
+      const unapprovedOperation = currentLost.find((id) => !approvedOperations.has(id));
+      if (
+        before.storeId !== approved.liveStoreId ||
+        before.epoch !== approved.liveEpoch ||
+        before.coverageDigest !== approved.liveCoverageDigest || // hash-gate: authorized — Bind the live database activation coverage generation to the operator-approved restore loss preview.
+        image.sha256 !== approved.backupSha256 || // hash-gate: authorized — Restore only the staged backup image whose bytes the operator approved in the loss preview.
+        image.storeId !== before.storeId ||
+        image.epoch !== approved.backupEpoch ||
+        image.coverageDigest !== approved.backupCoverageDigest || // hash-gate: authorized — Bind the restored database activation coverage generation to the approved backup loss preview.
+        unapprovedRow !== undefined ||
+        unapprovedOperation !== undefined
+      ) {
+        // The first fact that moved, so the refusal names the actual cause
+        // rather than only its consequence.
+        const moved =
+          before.storeId !== approved.liveStoreId
+            ? `store ${before.storeId}`
+            : before.epoch !== approved.liveEpoch
+              ? `authority epoch ${before.epoch}`
+              : `authority revision ${before.revision}`;
+        throw lossUnaccepted(
+          `the restore would discard work outside the authorized loss inventory` +
+            `${unapprovedRow === undefined ? "" : ` (${unapprovedRow.domain}:${unapprovedRow.key})`}` +
+            `${unapprovedOperation === undefined ? "" : ` (operation ${unapprovedOperation})`}. Nothing was replaced. ` +
+            `The live store is at ${moved}. Run store execution restore-preview again and authorize its current loss ` +
+            `before retrying restore.`,
+        );
+      }
+
+      const newEpoch = Math.max(before.epoch, image.epoch) + 1;
+
+      replaceAuthorityRows(handle.db, image, availabilityOf(before.schemaVersion));
+      const changed = handle.db.prepare("update store_meta set authority_epoch = ? where id = 1").run(newEpoch) as {
+        changes?: unknown;
+      };
+      if (Number(changed?.changes) !== 1) {
+        throw corrupt(`the live store at ${livePath} holds no store_meta singleton to re-epoch; nothing was replaced`);
+      }
+      // §8: the restored generation is verified INSIDE the transaction, on the
+      // same snapshot the commit will publish, so the verdict is about the
+      // authority that is actually committed rather than about a later read.
+      const integrity = probeIntegrity(handle.db);
+      if (integrity.length !== 1 || integrity[0] !== "ok") {
+        throw corrupt(
+          `the restored authority fails SQLite integrity_check (${integrity.slice(0, 3).join("; ") || "no result"}); ` +
+            `the replacement is refused and the previous generation is preserved.`,
+        );
+      }
+      const violations = probeForeignKeys(handle.db);
+      if (violations.length > 0) {
+        throw corrupt(
+          `the restored authority holds ${violations.length} row(s) violating the schema's foreign keys ` +
+            `(first: ${JSON.stringify(violations[0])}); the replacement is refused and the previous generation is preserved.`,
+        );
+      }
+      // The complete recovery record commits WITH the authority it describes, in
+      // the store's own operation/receipt ledger, so the record and the restored
+      // generation become visible together and no file decides the outcome.
+      // The full record is assembled only once the authority it describes has
+      // been verified on this same snapshot, so the receipt cannot claim a
+      // verdict the commit did not carry.
+      record = {
+        recoveryVersion: EXECUTION_RECOVERY_PROTOCOL_VERSION,
+        phase: "replaced",
+        storeId: before.storeId,
+        operator: input.operator,
+        authorization: input.authorization,
+        // The SELECTED recovery point the operator authorized, which is the only
+        // one that still exists afterwards. The staged image the rows were read
+        // from is this attempt's own scratch and is named by `restoredCopyPath`
+        // alone, so the record keeps a pathname a reader can actually follow.
+        backupPath: approved.backupPath,
+        backupSha256: approved.backupSha256,
+        liveStorePath: livePath,
+        liveEpoch: before.epoch,
+        backupEpoch: image.epoch,
+        newEpoch,
+        liveStoreSha256,
+        restoredCopySha256: image.sha256,
+        restoredCopyPath: image.path,
+        lossDigest: approved.lossDigest,
+        backupCoverageDigest: approved.backupCoverageDigest,
+        liveCoverageDigest: approved.liveCoverageDigest,
+        requiredRebind: requiredRebind(),
+        preRestoreBackup: safetyReceipt,
+        writtenAt: new Date().toISOString(),
+        verified: {
+          integrity: "ok",
+          foreignKeys: "ok",
+          schemaVersion: before.schemaVersion,
+          executionAuthorityState: image.execution?.authorityState ?? null,
+        },
+      };
+      handle.db
+        .prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)")
+        .run(restoreReceiptOperationId(attemptId), approved.lossDigest, JSON.stringify(record), record.writtenAt);
+      handle.db.exec("commit");
     } catch (error) {
       try {
-        db.exec("rollback");
+        handle.db.exec("rollback");
       } catch {
-        // the transaction already rolled back
+        // nothing committed either way
       }
       throw error;
     }
   } finally {
-    db.close();
+    handle.close();
   }
-  // The image must carry no half-written sidecar of its own before it is
-  // renamed into place.
-  rmSync(`${imagePath}-wal`, { force: true });
-  rmSync(`${imagePath}-shm`, { force: true });
-  rmSync(`${imagePath}-journal`, { force: true });
+  // The operator-facing durable copy of the committed record. It runs strictly
+  // AFTER the commit, so it can only ever describe an outcome the store already
+  // holds — never an intent that might not have landed. It is a convenience
+  // beside the store's own `store_operations` row, which IS the record and
+  // already committed with the authority it describes, so a filesystem failure
+  // here (an unwritable recovery directory, a full disk) is reported as a
+  // missing copy rather than as a refused restore: the destructive operation
+  // really did succeed and the operator must not be told otherwise.
+  let placedReceiptPath: string | null = null;
+  try {
+    writeJson(receiptPath, record);
+    placedReceiptPath = receiptPath;
+  } catch {
+    // best-effort: the committed record is durable in the store; only its copy
+    // beside the store is missing, and `recoveryReceiptPath: null` reports that.
+  }
+  // Scratch of a crashed attempt is reclaimed only now, once this attempt has
+  // committed: a REFUSED restore therefore leaves every prior attempt's bytes
+  // exactly as it found them, and the sweep is bounded by successful restores
+  // rather than growing with every crash.
+  reclaimAbandonedRestoreScratch(root, attemptId, committedBefore);
+  return {
+    storeId: record.storeId,
+    epoch: record.newEpoch,
+    restoredFromSha256: input.preview.backupSha256,
+    backupCoverageDigest: input.preview.backupCoverageDigest,
+    liveCoverageDigest: input.preview.liveCoverageDigest,
+    preRestoreBackup: record.preRestoreBackup,
+    recoveryReceiptPath: placedReceiptPath,
+  };
 }
 
-/** §8 "quick_checkpoint old WAL": fold the live WAL in, and prove quiescence while doing it. */
-async function checkpointLiveStore(context: StoreContext): Promise<void> {
-  const handle = await openStore(context, "write");
+/** The `store_operations` id one restore attempt's committed recovery record carries. */
+function restoreReceiptOperationId(attemptId: string): string {
+  return `restore-attempt:${attemptId}`;
+}
+
+/**
+ * The attempts whose recovery record the store has committed, or `null` when the
+ * store could not be read at all.
+ *
+ * `null` is the fail-closed answer: the caller uses this set to decide which
+ * scratch is provably inert, so an unreadable ledger must skip the sweep rather
+ * than present an empty set — an empty set would read as "no attempt ever
+ * committed", which would make every peer's staging image look reclaimable.
+ */
+async function readCommittedRestoreAttempts(context: StoreContext): Promise<ReadonlySet<string> | null> {
+  const handle = await openStore(context, "read").catch(() => null);
+  if (handle === null) return null;
   try {
-    const result = handle.db.prepare("pragma wal_checkpoint(TRUNCATE)").get() as { busy?: unknown; log?: unknown } | undefined;
-    if (result?.busy !== 0) {
-      throw new StoreError(
-        "store.busy",
-        `the live store at ${storeDbPath(context)} is not quiesced: a checkpoint could not complete because another connection ` +
-          `still holds it. A restore is a quiesced, whole-store replacement (contract \u00A78); nothing was replaced.`,
-      );
-    }
+    const rows = handle.db
+      .prepare("select operation_id from store_operations where operation_id like 'restore-attempt:%'")
+      .all() as Array<{ operation_id?: unknown }>;
+    return new Set(
+      rows
+        .map((row) => (typeof row.operation_id === "string" ? row.operation_id.slice("restore-attempt:".length) : null))
+        .filter((attemptId): attemptId is string => attemptId !== null),
+    );
+  } catch {
+    return null;
   } finally {
     handle.close();
   }
 }
 
-async function runRestore(context: StoreContext, root: string, input: ResolvedRestoreInput): Promise<ExecutionRestoreReceipt> {
-  // Inventory and install one private image; the selected path may be replaced
-  // by another process after this copy without changing this attempt.
+async function runRestore(
+  context: StoreContext,
+  root: string,
+  input: ResolvedRestoreInput,
+): Promise<ExecutionRestoreReceipt> {
+  // Stage and verify ONE private image of the selected point: the point's own
+  // path may be replaced by another process after this copy without changing
+  // this attempt, and the destructive transaction then installs rows already
+  // verified against this build's schema, identity, integrity and FK rules.
   const point = recoveryPointPath(context, root, input.preview.backupPath);
   const attemptId = randomUUID();
   const imagePath = join(root, `.store-restore-${attemptId}.db`);
@@ -1785,229 +2110,88 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
         `the selected recovery point could not be staged: ${error instanceof Error ? error.message : String(error)}. Select a readable recovery point and run store execution restore-preview before retrying restore.`,
       );
     }
-    return await runRestoreImage(context, root, input, imagePath, attemptId);
-  } finally {
-    rmSync(`${imagePath}-wal`, { force: true });
-    rmSync(`${imagePath}-shm`, { force: true });
-    rmSync(imagePath, { force: true });
-  }
-}
-
-async function runRestoreImage(
-  context: StoreContext,
-  root: string,
-  input: ResolvedRestoreInput,
-  imagePath: string,
-  attemptId: string,
-): Promise<ExecutionRestoreReceipt> {
-  const inventory = await buildLossInventory(context, input.preview.backupPath, imagePath);
-  const approved = input.preview;
-  const approvedOperations = new Set(approved.lostOperationIds);
-  const approvedRows = new Map(approved.authorityDifferences.map((row) => [`${row.domain}\u0000${row.key}`, row]));
-  const unapprovedRow = inventory.preview.authorityDifferences.find((row) => {
-    const reviewed = approvedRows.get(`${row.domain}\u0000${row.key}`);
-    return reviewed === undefined || reviewed.liveRevision !== row.liveRevision || reviewed.backupRevision !== row.backupRevision;
-  });
-  const unapprovedOperation = inventory.preview.lostOperationIds.find((id) => !approvedOperations.has(id));
-  if (
-    inventory.live.storeId !== approved.liveStoreId ||
-    inventory.live.epoch !== approved.liveEpoch ||
-    inventory.backup.epoch !== approved.backupEpoch ||
-    unapprovedRow !== undefined ||
-    unapprovedOperation !== undefined
-  ) {
-    throw lossUnaccepted(
-      `the restore would discard work outside the authorized loss inventory` +
-        `${unapprovedRow === undefined ? "" : ` (${unapprovedRow.domain}:${unapprovedRow.key})`}` +
-        `${unapprovedOperation === undefined ? "" : ` (operation ${unapprovedOperation})`}. Nothing was replaced. ` +
-        `Run store execution restore-preview again and authorize its current loss before retrying restore.`,
-    );
-  }
-
-  // Refused authorization leaves prior attempts and all authority untouched.
-  reclaimAbandonedRestoreScratch(root, attemptId);
-
-  // §8 quiescence, then the fresh pre-restore recovery point.
-  await checkpointLiveStore(context);
-  const livePath = storeDbPath(context);
-  const before = await readLiveStore(context, "the restore");
-  if (
-    before.storeId !== inventory.live.storeId ||
-    before.epoch !== inventory.live.epoch ||
-    before.revision !== inventory.live.revision ||
-    before.catalogRevision !== inventory.live.catalogRevision ||
-    before.authorityState !== inventory.live.authorityState
-  ) {
-    throw lossUnaccepted(
-      `the live store changed after its loss was inventoried (epoch/revision/authority moved); the approved loss is no longer ` +
-        `complete. Nothing was replaced.`,
-    );
-  }
-  // This restore already holds the §4.3 maintenance exclusion and this root's
-  // status write lock, so the safety point is taken through the unlocked form
-  // (a nested acquisition on the same lockdir is not reentrant).
-  const safety = await backupStoreUnderExclusion(context, {
-    out: join(root, "archived", "store-migration", "backups", `pre-restore-e${before.epoch}-r${before.revision}-${randomUUID()}.db`),
-  });
-
-  // The old database's own sidecars, recorded so only THOSE are removed later.
-  const sidecars = ["-wal", "-shm"].map((suffix) => ({ path: `${livePath}${suffix}`, identity: identityOf(`${livePath}${suffix}`) }));
-  const liveIdentity = identityOf(livePath);
-  const liveSha256 = await sha256OfFile(livePath);
-
-  // §8: restore into a verified sibling on the SAME filesystem, with the epoch
-  // already above both generations, so the rename is the whole cutover and no
-  // window exists in which the restored bytes carry a live reference generation.
-  // The private image was inventoried before the destructive phase.
-  const receiptPath = recoveryReceiptPathOf(root, attemptId);
-  const newEpoch = Math.max(before.epoch, inventory.backup.epoch) + 1;
-  try {
-    await patchImageEpoch(imagePath, newEpoch);
-    const image = await inspectBackupCopy(imagePath);
-    if (
-      image.storeId !== inventory.live.storeId ||
-      image.schemaVersion !== inventory.backup.schemaVersion ||
-      image.authorityState !== inventory.backup.authorityState
-    ) {
+    const image = await readStagedImage(imagePath, point);
+    if (image.storeId !== input.preview.liveStoreId) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the prepared image does not hold the selected recovery point's state (identity, schema, authority); ` +
-          `nothing was replaced.`,
+        `the recovery point at ${point} belongs to store ${image.storeId}, not to the live store ` +
+          `${input.preview.liveStoreId}; a point of another store is never restored over this one.`,
       );
     }
-    // §7 R4: the live retained accepted bodies are re-frozen here so the receipt
-    // records the set the replacement did not roll back. The recorded approved
-    // set is never re-compared — a body that moved since the preview is a
-    // description of some other set, not a refusal.
-    const liveRetained = freezeRetainedBodies(context, { storeId: before.storeId, epoch: before.epoch, revision: before.revision });
-    const imageSha256 = await sha256OfFile(imagePath);
-    const record: ExecutionRecoveryRecord = {
-      recoveryVersion: EXECUTION_RECOVERY_PROTOCOL_VERSION,
-      phase: "replacing",
-      storeId: before.storeId,
-      operator: input.operator,
-      authorization: input.authorization,
-      backupPath: inventory.preview.backupPath,
-      backupSha256: inventory.preview.backupSha256,
-      liveStorePath: livePath,
-      liveEpoch: before.epoch,
-      backupEpoch: inventory.backup.epoch,
-      newEpoch,
-      liveStoreSha256: liveSha256,
-      restoredCopySha256: imageSha256,
-      restoredCopyPath: imagePath,
-      lossDigest: inventory.preview.lossDigest,
-      retainedDigest: inventory.preview.retainedDigest,
-      retainedLiveDigest: liveRetained.digest,
-      retainedDifferences: inventory.preview.retainedDifferences,
-      backupCoverageDigest: inventory.preview.backupCoverageDigest,
-      liveCoverageDigest: inventory.preview.liveCoverageDigest,
-      requiredRebind: requiredRebind(),
-      preRestoreBackup: safety,
-      writtenAt: new Date().toISOString(),
-    };
-    writeJson(receiptPath, record);
-    recoveryFailureHook("before-replacement");
 
-    // The last gate, and synchronous from here to the rename: no `await`
-    // separates the live store's own state from the replacement, so no writer
-    // this process schedules can slip a WAL in between. Quiescence is proven by
-    // the live file's recorded (dev, ino) identity and by the sidecars below —
-    // never by re-deriving a content digest.
-    if (!sameIdentity(liveIdentity, identityOf(livePath))) {
-      throw lossUnaccepted(`the live store file at ${livePath} was replaced by another writer; nothing was replaced.`);
-    }
-    for (const sidecar of sidecars) {
-      const now = identityOf(sidecar.path);
-      // A sidecar that is still the file the checkpoint saw, or that is GONE, is
-      // quiescence: SQLite's own last clean close folds the journal into the
-      // database and removes it (and this runtime can land that removal just
-      // after the close), which is the store going quiet. A sidecar that is
-      // present and is not that file is a writer, and refuses.
-      if (now !== undefined && !sameIdentity(sidecar.identity, now)) {
-        throw lossUnaccepted(`a WAL/SHM sidecar of ${livePath} appeared after the checkpoint; the store is not quiesced. Nothing was replaced.`);
-      }
-    }
-    renameSync(imagePath, livePath);
-    for (const sidecar of sidecars) {
-      if (sidecar.identity !== undefined && sameIdentity(sidecar.identity, identityOf(sidecar.path))) {
-        unlinkSync(sidecar.path);
-      }
-    }
-    recoveryFailureHook("after-replacement");
-
-    // §8: reopen and verify integrity, identity and the selected whole-store
-    // state before the receipt is finalized. A verification failure here is
-    // reported with the receipt that identifies the installed bytes, so the
-    // operator resumes verification instead of assuming the original survived.
-    const installed = await inspectBackupCopy(livePath).catch((error: unknown) => {
-      throw corrupt(
-        `the store installed by this restore at ${livePath} cannot be verified (${(error as Error).message}). The durable ` +
-          `recovery receipt at ${receiptPath} names both hashes, so identify the installed store from it and resume ` +
-          `verification; do not assume the original bytes survived.`,
-      );
+    // The pre-restore safety point, taken OUTSIDE the mutation transaction:
+    // `VACUUM INTO` may not run inside one. It is the same lock-free verified
+    // copy the public `backupStore` verb takes, so it is a snapshot of the live
+    // generation the transaction is about to replace and the receipt reports
+    // what that image holds rather than claiming independently sampled live
+    // counts froze with it.
+    const safety = await backupStore(context, {
+      out: join(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID()}.db`),
     });
-    if (installed.storeId !== before.storeId || installed.epoch !== newEpoch) {
-      throw corrupt(
-        `the store installed by this restore at ${livePath} describes store ${installed.storeId} epoch ${installed.epoch}, not ` +
-          `store ${before.storeId} epoch ${newEpoch}. Identify the installed store from the durable recovery receipt at ` +
-          `${receiptPath} before doing anything else.`,
-      );
+    // Everything from here on is a fallible step that owns the point just taken:
+    // the awaited live-bytes read is OUTSIDE the mutation transaction for the same
+    // reason the point is (the record's audit facts must not be derived from
+    // filesystem work inside the owning transaction), so it needs the same
+    // boundary — a failure here is a positive pre-commit outcome too, and without
+    // this the point would leak with no transaction ever invoked.
+    try {
+      const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
+      return await restoreInOneTransaction(context, root, input, image, safety, liveStoreSha256, attemptId);
+    } catch (error) {
+      // A PROVEN pre-commit refusal abandons nothing: the safety point this
+      // attempt just took is referenced by no `store_operations` row and by no
+      // returned receipt, so leaving it would accumulate one full-store image per
+      // retry under the backups directory. The proof is the store's own GENERATION,
+      // not the ABSENCE of this attempt in a ledger: `restoreReceiptOperationId`
+      // writes this attempt's record in the SAME commit that advances the store
+      // above the point's epoch, and the epoch is monotonic (the restore sets it
+      // above both generations; activation only increments), so a live store still
+      // at THIS attempt's own store id and the point's own epoch has provably not
+      // committed this replacement. A store that moved — a different store id, or
+      // an epoch at or above the point's — is a changed generation in which a
+      // rewritten ledger can drop an intervening committed receipt, so its absence
+      // proves nothing and the point is PRESERVED; an unreadable store preserves
+      // as well. The commit path never reaches this catch. A crash before this
+      // line leaks its own point, exactly as it already leaks its own staging image;
+      // this reclamation owns neither, and the scratch sweep that runs after a
+      // later committed restore reclaims committed scratch only.
+      const live = await currentAuthorityHandle(context).catch(() => null);
+      if (live !== null && live.storeId === safety.storeId && live.epoch === safety.epoch) {
+        try {
+          for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${safety.backupPath}${suffix}`, { force: true });
+          rmSync(safety.backupPath, { force: true });
+        } catch {
+          // best-effort: a point this run cannot reclaim is left for the operator
+        }
+      }
+      throw error;
     }
-    writeJson(receiptPath, {
-      ...record,
-      phase: "replaced",
-      storeId: installed.storeId,
-      restoredCopySha256: await sha256OfFile(livePath),
-      verified: {
-        integrity: "ok",
-        foreignKeys: "ok",
-        schemaVersion: installed.schemaVersion,
-        executionAuthorityState: installed.execution?.authorityState ?? null,
-      },
-      replacedAt: new Date().toISOString(),
-    } satisfies ExecutionRecoveryRecord);
-    return {
-      storeId: installed.storeId,
-      epoch: installed.epoch,
-      restoredFromSha256: inventory.preview.backupSha256,
-      retainedDigest: inventory.preview.retainedDigest,
-      retainedLiveDigest: liveRetained.digest,
-      retainedDifferences: inventory.preview.retainedDifferences,
-      backupCoverageDigest: inventory.preview.backupCoverageDigest,
-      liveCoverageDigest: inventory.preview.liveCoverageDigest,
-      preRestoreBackup: safety,
-      recoveryReceiptPath: receiptPath,
-    };
-  } catch (error) {
+  } finally {
     // This attempt's own scratch image, and only while it is still that file:
-    // after a completed rename the path is gone and nothing here can touch the
-    // installed store.
-    rmSync(`${imagePath}-wal`, { force: true });
-    rmSync(`${imagePath}-shm`, { force: true });
+    // nothing here can touch the live store.
+    for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${imagePath}${suffix}`, { force: true });
     rmSync(imagePath, { force: true });
-    throw error;
   }
 }
 
 /**
  * `restoreExecutionBackup` — §8's whole-store replacement.
  *
- * Under the §4.2 maintenance → root lock ladder it recomputes the loss
- * inventory, takes a fresh pre-restore recovery point, checkpoints the live
- * WAL, installs a verified sibling whose epoch is above both generations, and
- * records the durable receipt before and after the atomic rename. It never
- * falls back to files and never converts DB state back into JSON. The operator
- * and authorization reference are the audit record of who performed the
- * replacement.
+ * It verifies the request, stages and verifies a private image of the selected
+ * recovery point, takes a fresh pre-restore safety point, and then installs the
+ * point's authority in ONE native write transaction on the live database. The
+ * live `store.db` keeps its pathname and inode: no rename, no WAL/SHM removal,
+ * no external lock or PID/TTL holder protocol, and no claim of consumer
+ * quiescence. It never falls back to files and never converts DB state back into
+ * JSON. The operator and authorization reference are the audit record of who
+ * accepted the loss.
  */
 export async function restoreExecutionBackup(
   context: StoreContext,
   input: { preview: ExecutionRecoveryPreview; operator: string; authorization: string },
 ): Promise<ExecutionRestoreReceipt> {
   const resolved = requireRestoreInput(input);
-  const root = controlRootOf(context);
-  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join(root, "status.json"), () => runRestore(context, root, resolved)));
+  return runRestore(context, controlRootOf(context), resolved);
 }
 
 // ---------------------------------------------------------------------------

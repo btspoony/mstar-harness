@@ -865,12 +865,11 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
 describe('dispatch gate — the carrying-session hint is derived ONLY where the gate reads it (D4 hot path)', () => {
   it('a tool the gate reads no hint for never touches the binding store', async () => {
     const app = booted = await bootApp()
-    // An unreadable store: every derivation of the session hint reports the
-    // degrade through the adapter's own sink, so the warn count IS the
-    // derivation count.
-    const snapshots = join(app.harnessDir, 'snapshots')
-    mkdirSync(snapshots, { recursive: true })
-    writeFileSync(join(snapshots, 'engine-status.json'), '{ "sv": 1, "entries": ')
+    // No ACTIVE store in this workspace: every derivation of the session hint
+    // reports the store's own degrade through the adapter's sink, so the warn
+    // count IS the derivation count (the binding read is a store read now, so
+    // the probe is the absent authority rather than a torn file).
+    mkdirSync(app.harnessDir, { recursive: true })
     const warns: string[] = []
     const config: Config = {}
     const resolver = new HarnessResolver(app.harnessDir)
@@ -890,6 +889,6 @@ describe('dispatch gate — the carrying-session hint is derived ONLY where the 
     // A dispatch-shaped call DOES carry the hint — derived once, reported once.
     await preExecuteListener(app.ctx, resolver, config, adapter, subagentExec(VALID_WRITABLE, agent), defaultAllow)
     expect(warns).toHaveLength(1)
-    expect(warns[0]).toContain('store-invalid-json')
+    expect(warns[0]).toContain('mstar store init')
   })
 })

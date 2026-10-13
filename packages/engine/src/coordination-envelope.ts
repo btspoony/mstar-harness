@@ -66,6 +66,15 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
       path: abs, cause: error instanceof Error ? error.message : String(error),
     });
   }
+  return parseSessionEnvelope(parsed, abs);
+}
+
+/** Validate bytes already decoded by a source reader without reopening its path. */
+export function parseSessionEnvelope(parsed: unknown, sessionPath: string): CoordinationSession {
+  if (!isNonEmptyString(sessionPath) || !isAbsolute(sessionPath)) {
+    throw new CoordinationError("coordination.invalid-input", "sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
+  }
+  const abs = resolve(sessionPath);
   if (!isPlainObject(parsed)) {
     throw new CoordinationError("coordination.store", "Session envelope must be an object. Inspect the harness authority with mstar status validate.", { path: abs });
   }

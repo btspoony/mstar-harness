@@ -4,13 +4,13 @@
 
 Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There is no file execution route. Root `status.json` and `{WORKFLOW_DIR}/<id>/snapshot.json` are **migration sources / retained history**, not authority.
 
-v1 的单文件 `status.json`（根 `plans[]` + 根级 `residual_findings` + `metadata`）由 `mstar migrate` 一次性迁到 v2 文件；v2 文件再由 `mstar store upgrade` 作为 byte-witness 来源导入 store。v1 字段形状/历史全文 → **`mstar-engine-legacy`** `references/status-field-history.md`（档案，不是执行路由）。本文件保留迁移源形状、ACTIVE 字段与 issue/residual 语义。
+`mstar store upgrade` directly reads recognized v1 roots (`plans[]`, `residual_findings`, `metadata`) and v2 root/snapshot inputs into the native execution authority, preserving original file bytes. Standalone `mstar migrate` staging is retired. v1 field history → **`mstar-engine-legacy`** `references/status-field-history.md` (archive, not an execution route). This reference retains import shapes, ACTIVE fields and issue/residual semantics.
 
 > **Authority:** ACTIVE execution state is the DB domain. Ordinary coordinator operations are store transactions with CAS receipts. Surviving `status.json` / snapshot files are migration sources / retained history, not live state. A harness with no ACTIVE store has no execution authority.
 
 - **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path). PM close caller: `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route → lifecycle contract amendment **File-route retirement**).
 - **ACTIVE workflow / plan state** — store `execution_*` tables, read through `mstar plan show` / `mstar status validate`. Rows hold source metadata, configuration, progress and completion. Workflow-wide integration merge exclusion is `execution_integration_leases`. Per-row execution leases are removed. `<id>` is the plan or iteration workflow id.
-- **Persist surface** — user-facing `mstar persist` accepts `review` and `json` only. Engine `ArtifactKind` retains `status` and `snapshot` as migration-scoped internal kinds written by the kept migration tooling (`mstar migrate` staging, then `mstar store upgrade`). The engine type is not two-member. `mstar harness scaffold` does not write `status.json`.
+- **Persist surface** — user-facing `mstar persist` and engine `ArtifactKind` accept `review` and `json` only. No internal status/snapshot writer remains. `mstar harness scaffold` does not write `status.json`.
 - **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层 legacy 文件：Markdown 是 reviewed import/export 的 transport/history，roadmap 内容权威在 `{HARNESS_DIR}/store.db` 的 `project_roadmaps`（读写规则 → `mstar-project-governance`）；residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义逐字保留）是迁移历史，open item 的 SSOT 是 store issue。无归属的流程落到 `_default` 项目。
 
 **Migration sources:** root `status.json` and the workflow snapshot are retained history. The DB execution domain is the SSOT. **open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture below）；project register 是**迁移历史**。
@@ -50,9 +50,9 @@ Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifec
 ```
 
 - `dir` is **harness-relative** (`workflows/<id>`), never absolute.
-- This shape is what `mstar migrate` stages and `mstar store upgrade` reads. Live registration and close do not write it.
+- This historical shape is read by `mstar store upgrade`; live registration and close do not write it.
 
-**`workflows/<id>/snapshot.json`** — migration source / retained history (`schema_version: 1`). Migration tooling validates it with `validateWorkflowSnapshot`. `writeWorkflowSnapshot`, where retained, is a migration-scoped internal writer, not a public execution route:
+**`workflows/<id>/snapshot.json`** — read-only import/history (`schema_version: 1`), validated with `validateWorkflowSnapshot`. There is no snapshot file writer:
 
 ```json
 {
@@ -108,7 +108,7 @@ Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifec
 - **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--session-ref <wire>] [--expect <full-execution-token>] [--operation <id>] [--reason <text>] [--harness <absolute-path>] [--json]`. It is one ACTIVE store transaction: terminal workflow state and root unregister together. It refuses a dangling integration exclusion or a non-`Done` row (fail-loud, store unchanged). An already-terminal `failed` / `stopped` workflow keeps its actual status (close never fabricates `completed`). The caller does not supply a terminal timestamp or a session path.
 - Active callers with an unambiguous acquired coordinator identity may omit `--session-ref`, `--expect`, and `--operation`; the current workflow token and a fresh operation id are resolved for that invocation. Any supplied reference/token remains a checked constraint, and the caller's own `coordinator` role is still required.
 - **Delivery-evidence consultation before the close (seam S3):** the registered delivery kind is consulted before a `completed` close (`failed`/`stopped` closes are never demanded delivery evidence, §5). An incomplete `development` delivery (no compound disposition / PR identity / PM-recorded verified-merge evidence, or a PR whose `head`/`target` are not the registered `branch.source`/`branch.target`), or an unfulfilled `verification/report-only` completion policy, refuses with the `PHASE6_DELIVERY_*` codes and leaves the workflow registered and resumable. Record the missing evidence with `mstar workflow evidence --workflow <id> --file <absolute-json>` under an acquired coordinator identity (`--session-ref` / `--expect` / `--operation` are optional checked constraints when identity is unambiguous). It is the same authority gate as the close, idempotent (identical evidence rewrites nothing) and stage-by-stage mergeable; the PR identity (§4d) is recorded **once** (a different pair is refused), the compound disposition and the merge record stay updatable. It refuses an already-terminal lifecycle. The read-only `mstar iteration gate --phase 6` shares this consultation, so gate and close never disagree.
-- **Delivery kind is declared at registration by every producer** (§1/§4a): `mstar workflow register`, `mstar audit promote --delivery-kind <kind>` (required flag) and `mstar migrate --delivery-kind <kind>` (a lift that would create an ACTIVE kind-less plan workflow is refused as usage, exit 2; the declaration is ONE delivery identity, so a tree whose lift creates 2+ ACTIVE standalone plans is refused the same way with the plan ids — migrate in batches of one declared plan) all declare it explicitly — never inferred, never defaulted — and one shared rule pairs `development` with `--branch-source`/`--branch-target` and `verification/report-only` with `--completion-policy`.
+- **Delivery kind is declared by live registration producers** (§1/§4a): `mstar workflow register` and `mstar audit promote --delivery-kind <kind>` declare it explicitly, never infer or default it. The shared rule pairs `development` with `--branch-source`/`--branch-target` and `verification/report-only` with `--completion-policy`. Direct legacy import uses `mstar store upgrade`, not the retired standalone `migrate` producer; unresolved legacy delivery facts are reported through that upgrade's supported recovery.
 - **Physical cleanup:** separate guarded worktree cleanup, after verified row integration or terminal merged delivery. Cleanup/close never clear merge exclusion to force eligibility; direct complete releases applicable exclusion in its verified transaction. Ownership comes from retained source metadata and actual merge evidence.
 - `execution_policy` keys are copied from v1 root `metadata` at migrate; values are accepted-but-opaque this iteration (no semantic gate).
 - `notes`: a plan row's `notes` array is the **legacy verbatim copy** preserved at migrate; the **runtime ledger is `notes.jsonl`** in the workflow dir (see `workflows/<id>/notes.jsonl` below). New notes append to the ledger only — never dual-write the row `notes`.
@@ -291,7 +291,7 @@ Any retained execution exclusion is engine-managed bookkeeping inside ordinary c
 ### Snapshot `notes` vs `{WORKFLOW_DIR}/<id>/notes.jsonl`
 
 - `plans[].notes`: per-plan timeline — **legacy verbatim copy** (read-only; preserved at migrate; never a dual-write target).
-- `{WORKFLOW_DIR}/<id>/notes.jsonl`: **runtime notes ledger** — append-only; new notes go here only (`kind` + `ts` + `text` JSON lines; `mstar migrate` seeds it from v1 arrays).
+- `{WORKFLOW_DIR}/<id>/notes.jsonl`: plain append-only runtime notes; new notes go here only. Direct execution import does not seed or rewrite note files from legacy arrays.
 
 ---
 
@@ -435,7 +435,7 @@ mstar status findings-cleanup <plan-id>       # mode gate over the plan's linked
 
 ## `{WORKFLOW_DIR}/<id>/notes.jsonl` (per-workflow notes ledger)
 
-Append-only JSON-lines log for merge closure, batch close, register refreshes, etc. Does not compete with store plan-row status (`execution_plans`) or the issue store's open-item SSOT.
+Plain append-only JSON-lines notes for merge closure, batch close and corrections. The file is not accepted-operation authority and does not compete with store plan-row status (`execution_plans`) or the issue store's open-item SSOT.
 
 ```jsonl
 {"kind": "note", "ts": "2026-04-08", "text": "Short milestone"}
@@ -443,6 +443,10 @@ Append-only JSON-lines log for merge closure, batch close, register refreshes, e
 
 - **`@project-manager`** maintains; do not rewrite past lines — add a correction as a new line.
 - **`plans[].notes`**: per-plan legacy verbatim array; **`notes.jsonl`**: runtime ledger — new notes append here only (no dual-write).
+- Repeated note IDs and repeated submissions append repeated records. A successful receipt returns `{id}` only; it promises neither deduplication nor accepted-operation replay.
+- Each append uses one complete, LF-framed `O_APPEND` write and fsync. Short writes report failure and leave the landed bytes untouched; they never truncate, repair or rewrite peers.
+- Readers tolerate blank, malformed, unrecognized and partial records and continue to later valid records. A partial tail does not prevent a later framed append.
+- Scope, provenance, trusted targets and current-session checks still apply. Native SQL operation receipts/CAS and real business integration exclusion retain their exact semantics; notes confer no authority.
 
 ---
 
@@ -486,4 +490,4 @@ mstar status validate                                     # ACTIVE authority + C
 mstar plan show <plan-id>                                 # ACTIVE plan row; scope/options from help
 mstar status tech-debt                                    # open-issue rollup
 ```
-v1 trees (root `plans[]` / `residual_findings`) are migrated first: `mstar migrate [--dry-run] [--path <root>]`.
+Import recognized v1/v2 execution sources directly with `mstar store upgrade --operator <name> [--harness <path>]`. Preserve original source bytes; standalone `mstar migrate` staging is retired.

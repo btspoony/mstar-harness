@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import {
+  appendDshLedgerRow,
   createExecutionWorkflow,
   initializeStore,
   openStore,
@@ -54,9 +55,19 @@ import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
 import { buildCatalogPayload, buildCatalogPayloadWithStore, catalogCacheKey } from '../src/gates/catalog.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
+import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
+function appendLiveEvent(harnessDir: string, workflowId: string, event: Record<string, unknown>): void {
+  const result = appendDshLedgerRow(
+    { harnessDir },
+    workflowId,
+    JSON.stringify(event),
+    undefined,
+    selectedGenerationFor(harnessDir),
+  )
+  if (result.kind !== 'written') throw new Error(`Native ledger write failed: ${result.reason}`)
+}
 
 afterEach(async () => {
   await booted?.dispose()
@@ -509,7 +520,15 @@ Implement the invalidation.
     // Final-state (Task 2 writer cutover): the record itself lands in the
     // ACTIVE workflow dir — the catalog reads the SAME file, so the
     // invalidation observable is the record's own line (no out-of-band write).
-    plugin.recordDispatch({ harnessDir, resolvedWorkflowDir: join(harnessDir, 'workflows/wf-1'), prompt: ASSIGNMENT, violations: [], hard: false })
+    plugin.recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: join(harnessDir, 'workflows/wf-1'),
+      selectedGeneration: selectedGenerationFor(harnessDir),
+      prompt: ASSIGNMENT,
+      violations: [],
+      hard: false,
+    })
 
     // Pre-step 2 — SAME turn (step 2): the digest gate suppresses an
     // UNCHANGED row, so this re-injection can only be the digest text change
@@ -565,17 +584,22 @@ Implement the invalidation.
     // `freezeMessage` → `structuredClone`), so cache-hit identity cannot be
     // asserted by reference equality through the message — the direct-write
     // invisibility is the equivalent (and stronger) cache-hit proof.
-    await writeFile(
-      join(wsB, '.mstar', 'workflows/wf-1', plugin.AGENT_FLOW_FILE),
-      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
-    )
+    appendLiveEvent(join(wsB, '.mstar'), 'wf-1', { v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })
 
     // A ledger record for workspace A ONLY — the apply-bound invalidator
     // fires with A's harness dir → deletes exactly A's cache entry.
     // Final-state (Task 2 writer cutover): the record itself lands in A's
     // ACTIVE workflow dir — the catalog reads the SAME file, so the rebuild
     // observable is the record's own line (no out-of-band write).
-    plugin.recordDispatch({ harnessDir: join(wsA, '.mstar'), resolvedWorkflowDir: join(wsA, '.mstar/workflows/wf-1'), prompt: ASSIGNMENT, violations: [], hard: false })
+    plugin.recordDispatch({
+      harnessDir: join(wsA, '.mstar'),
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: join(wsA, '.mstar/workflows/wf-1'),
+      selectedGeneration: selectedGenerationFor(join(wsA, '.mstar')),
+      prompt: ASSIGNMENT,
+      violations: [],
+      hard: false,
+    })
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
     // fresh source carrying the new workflow-dir dispatch event).
@@ -603,10 +627,7 @@ Implement the invalidation.
     // Write a ledger line DIRECTLY into the workflow dir (bypassing
     // recordDispatch → NO invalidation fires): the disk now differs from the
     // cached build.
-    await writeFile(
-      join(harnessDir, 'workflows/wf-1', plugin.AGENT_FLOW_FILE),
-      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })}\n`,
-    )
+    appendLiveEvent(harnessDir, 'wf-1', { v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })
 
     // Pre-step 2 (turn 2, within the REAL TTL): the cache entry was NOT
     // invalidated → the cached build is reused (stale) — the 60s TTL
@@ -745,10 +766,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       execution_policy: { push_policy: 'no-push', worktree_mode: 'feature-worktree' },
       integration_worktree_path: '/integration/worktree',
     }, SESSION_ID, root, GOLDEN_WORKFLOW)
-    await writeFile(
-      join(harnessDir, 'workflows', GOLDEN_WORKFLOW, plugin.AGENT_FLOW_FILE),
-      `${GOLDEN_FLOW_LINES.map((line) => JSON.stringify(line)).join('\n')}\n`,
-    )
+    for (const event of GOLDEN_FLOW_LINES) appendLiveEvent(harnessDir, GOLDEN_WORKFLOW, event)
     const app = booted = await bootApp({ root, harnessDir })
     const project = await registerCatalogEntity(
       { harnessDir },
@@ -1136,10 +1154,7 @@ Pick.
     expect(textOf(rowB1)).toContain('plan-b(Done)')
     expect(textOf(rowB1)).not.toContain('plan-a')
 
-    await writeFile(
-      join(harnessDir, 'workflows/wf-b', plugin.AGENT_FLOW_FILE),
-      `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'dispatch', role: 'architect', verdict: 'ok', hard: false })}\n`,
-    )
+    appendLiveEvent(harnessDir, 'wf-b', { v: 1, ts: Date.now(), kind: 'dispatch', role: 'architect', verdict: 'ok', hard: false })
     const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 2), defaultEnter([]))).row
     const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 2), defaultEnter([]))).row
     expect(textOf(rowA2)).not.toContain('agent flow:')
@@ -1147,11 +1162,12 @@ Pick.
 
     plugin.recordDispatch({
       harnessDir,
+      workflowId: 'wf-a',
       resolvedWorkflowDir: join(harnessDir, 'workflows/wf-a'),
+      selectedGeneration: selectedGenerationFor(harnessDir),
       prompt: ASSIGNMENT,
       violations: [],
       hard: false,
-      hint: { cwd: root, sessionId: 's-A', selectedWorkflowId: 'wf-a' },
     })
     const rowA3 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 3), defaultEnter([]))).row
     const rowB3 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 3), defaultEnter([]))).row

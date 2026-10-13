@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -84,8 +85,26 @@ function context(cwd: string, sessionId?: string): InvocationContext {
   };
 }
 
+function ledgerPathOf(harnessDir: string): string {
+  return path.join(harnessDir, "workflows", WORKFLOW, "notes.jsonl");
+}
+
+/**
+ * The coverage payload validated at this boundary before it is read: the asserted
+ * fields are checked and unknown keys are preserved, so a comparison below is
+ * against the actual envelope data rather than a fabricated partial shape.
+ */
+const coverageFactsSchema = z.object({
+  format: z.string(),
+  bytes: z.number(),
+  fileSha256: z.string().nullable(),
+  records: z.array(z.object({ id: z.string() }).passthrough()),
+  counts: z.object({ historical: z.number(), records: z.number(), unrecognized: z.number() }).passthrough(),
+  tail: z.object({ sha256: z.string(), bytes: z.number() }).passthrough().nullable(),
+}).passthrough();
+
 describe("workflow-note public routes", () => {
-  test("append writes the accepted record, replays the same id, and never echoes a foreign scope", async () => {
+  test("append writes the record, appends again on an identical retry, and never echoes a foreign scope", async () => {
     const fx = await activeFixture();
     const ctx = context(fx.root);
     // The real public route: shared admission composes the coordinator session
@@ -94,47 +113,23 @@ describe("workflow-note public routes", () => {
     const input = { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-1", text: "first note", ts: "2026-10-08T01:00:00.000Z", harness: fx.harnessDir, sessionId: COORDINATOR };
 
     const first = await executeCommand("workflow-note.append", input, ctx);
-    expect(first).toMatchObject({ status: "ok", data: { id: "note-1", replayed: false } });
-    const ledger = readFileSync(path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl"), "utf8");
+    expect(first).toMatchObject({ status: "ok", data: { id: "note-1" } });
+    // The receipt is the record id alone: the ledger never reports a replay.
+    expect(first.status === "ok" ? Object.keys(first.data as object).sort() : []).toEqual(["id"]);
+    const ledger = readFileSync(ledgerPathOf(fx.harnessDir), "utf8");
     expect(ledger).toContain('"id":"note-1"');
     expect(ledger).toContain('"text":"first note"');
 
-    // An identical retry replays the accepted record instead of duplicating it.
-    const replay = await executeCommand("workflow-note.append", input, ctx);
-    expect(replay).toMatchObject({ status: "ok", data: { id: "note-1", replayed: true } });
-    expect(readFileSync(path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl"), "utf8").match(/"id":"note-1"/g)).toHaveLength(1);
+    // An identical retry is an ordinary append: two records, not a replay.
+    const retried = await executeCommand("workflow-note.append", input, ctx);
+    expect(retried).toMatchObject({ status: "ok", data: { id: "note-1" } });
+    expect(readFileSync(ledgerPathOf(fx.harnessDir), "utf8").match(/"id":"note-1"/g)).toHaveLength(2);
 
     // A sessionRef addressing another workflow is a usage refusal naming the
     // seat, never a write into that other workflow.
     const foreign = encodeExecutionSessionRef({ storeId: "00000000-0000-4000-8000-000000000000", epoch: 1, workflowId: "wf-other", role: "coordinator", sessionId: "other" });
     const refused = await executeCommand("workflow-note.append", { ...input, sessionRef: foreign }, ctx);
     expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-  });
-
-  test("append without ts replays through the public route after a delay without changing ledger bytes", async () => {
-    const fx = await activeFixture();
-    const ctx = context(fx.root, COORDINATOR);
-    const input = {
-      workflow: WORKFLOW,
-      sessionRef: fx.sessionRef,
-      id: "note-generated-ts",
-      text: "retry the default timestamp",
-      harness: fx.harnessDir,
-    };
-    vi.useFakeTimers();
-    try {
-      const first = await executeCommand("workflow-note.append", input, ctx);
-      expect(first).toMatchObject({ status: "ok", data: { id: input.id, replayed: false } });
-      const ledgerPath = path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl");
-      const acceptedBytes = readFileSync(ledgerPath);
-      vi.advanceTimersByTime(1_000);
-
-      const replay = await executeCommand("workflow-note.append", input, ctx);
-      expect(replay).toMatchObject({ status: "ok", data: { id: input.id, replayed: true } });
-      expect(readFileSync(ledgerPath)).toEqual(acceptedBytes);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   test("append without an acquired identity refuses with its owner and supply, not a generic block", async () => {
@@ -149,46 +144,65 @@ describe("workflow-note public routes", () => {
       expect.objectContaining({ path: "sessionId", code: "required" }),
     ]));
   });
+
   test("public executeCommand accepts a resolved context identity without an explicit selector", async () => {
     const fx = await activeFixture();
     const input = { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-context", text: "context identity", harness: fx.harnessDir };
     const acquired = context(fx.root, COORDINATOR);
     const accepted = await executeCommand("workflow-note.append", input, acquired);
-    expect(accepted).toMatchObject({ status: "ok", data: { id: "note-context", replayed: false } });
+    expect(accepted).toMatchObject({ status: "ok", data: { id: "note-context" } });
 
-    const before = readFileSync(path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl"));
+    const before = readFileSync(ledgerPathOf(fx.harnessDir));
     const malformedExplicit = await executeCommand(
       "workflow-note.append", { ...input, id: "note-malformed", sessionId: "   " }, acquired,
     );
     expect(malformedExplicit).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(readFileSync(path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl"))).toEqual(before);
+    expect(readFileSync(ledgerPathOf(fx.harnessDir))).toEqual(before);
   });
 
-  test("coverage projects absent, then the accepted record, as distinct facts", async () => {
+  test("coverage projects absent, then the appended records, as distinct facts", async () => {
     const fx = await activeFixture();
     const ctx = context(fx.root);
 
     const absent = await executeCommand("workflow-note.coverage", { workflow: WORKFLOW, harness: fx.harnessDir }, ctx);
-    expect(absent).toMatchObject({ status: "ok", data: { format: "absent", bytes: 0, fileSha256: null, acceptedIds: [] } });
+    expect(absent.status).toBe("ok");
+    if (absent.status !== "ok") throw new Error("expected an ok coverage envelope");
+    const absentFacts = coverageFactsSchema.parse(absent.data);
+    expect(absentFacts).toMatchObject({ format: "absent", bytes: 0, fileSha256: null, records: [] });
 
-    await executeCommand(
-      "workflow-note.append",
-      { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-3", text: "coverage note", ts: "2026-10-08T02:00:00.000Z", harness: fx.harnessDir, sessionId: COORDINATOR },
-      ctx,
-    );
+    for (const id of ["note-3", "note-3"]) {
+      await executeCommand(
+        "workflow-note.append",
+        { workflow: WORKFLOW, sessionRef: fx.sessionRef, id, text: "coverage note", ts: "2026-10-08T02:00:00.000Z", harness: fx.harnessDir, sessionId: COORDINATOR },
+        ctx,
+      );
+    }
 
     const present = await executeCommand("workflow-note.coverage", { workflow: WORKFLOW, harness: fx.harnessDir }, ctx);
     expect(present.status).toBe("ok");
     if (present.status !== "ok") throw new Error("expected an ok coverage envelope");
-    const data = present.data;
-    if (data === null || typeof data !== "object" || !("format" in data) || !("acceptedIds" in data) || !("counts" in data) || !("fileSha256" in data)) {
-      throw new Error("coverage facts must be an object carrying format/acceptedIds/counts/fileSha256");
-    }
-    expect(data.format).toBe("versioned");
-    expect(data.acceptedIds).toEqual(["note-3"]);
-    expect(data.counts).toMatchObject({ accepted: 1 });
-    expect(typeof data.fileSha256 === "string" ? data.fileSha256 : "").toMatch(/^[0-9a-f]{64}$/);
+    const facts = coverageFactsSchema.parse(present.data);
+    expect(facts.format).toBe("versioned");
+    // The repeated id is reported as the two physical records a reader sees.
+    expect(facts.records.map((record) => record.id)).toEqual(["note-3", "note-3"]);
+    expect(facts.counts.records).toBe(2);
+    expect(facts.fileSha256 ?? "").toMatch(/^[0-9a-f]{64}$/);
   });
+
+  test("coverage continues past blank and partial lines to a later record", async () => {
+    const fx = await activeFixture();
+    const file = path.join(fx.root, "partial.jsonl");
+    const line = `${JSON.stringify({ version: 1, id: "note-real", workflowId: WORKFLOW, sessionId: COORDINATOR, kind: "note", ts: "2026-10-08T00:00:00.000Z", text: "real" })}\n`;
+    writeFileSync(file, `\n{"version":1,"id":"peer-par\n${line}`);
+    const result = await executeCommand("workflow-note.coverage", { workflow: WORKFLOW, file, harness: fx.harnessDir }, context(fx.root));
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected an ok coverage envelope");
+    const facts = coverageFactsSchema.parse(result.data);
+    expect(facts.records.map((record) => record.id)).toEqual(["note-real"]);
+    expect(facts.counts.unrecognized).toBe(1);
+    expect(facts.tail).toBeNull();
+  });
+
   test("invalid append input returns shared input-aware diagnostics", async () => {
     const fx = await activeFixture();
     const result = await executeCommand(
@@ -204,7 +218,7 @@ describe("workflow-note public routes", () => {
 
   test("same-workflow foreign invocation refuses without changing retained bytes", async () => {
     const fx = await activeFixture();
-    const ledgerPath = path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl");
+    const ledgerPath = ledgerPathOf(fx.harnessDir);
     const accepted = await executeCommand(
       "workflow-note.append",
       { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-owner", text: "retained", ts: "2026-10-08T03:00:00.000Z", harness: fx.harnessDir, sessionId: COORDINATOR },

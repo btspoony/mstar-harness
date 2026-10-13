@@ -614,7 +614,7 @@ async function worktreeL1Violations(
 async function writableFanOutUncovered(
   harnessDir: string | null,
   hint?: SessionHint,
-): Promise<{ uncoveredPlanId?: string; unreadable: boolean; workflowDir?: string }> {
+): Promise<{ uncoveredPlanId?: string; unreadable: boolean; workflowId?: string; workflowDir?: string; selectedGeneration?: { storeId: string; epoch: number } }> {
   if (harnessDir === null) return { unreadable: false }
   // §5 the ONE route decision precedes every read (plan S4): while the
   // execution authority is ACTIVE the root register and the workflow
@@ -645,9 +645,9 @@ async function writableFanOutUncovered(
     const scopeRecorded =
       typeof metadata?.worktree_path === 'string' && metadata.worktree_path !== '' &&
       typeof metadata?.working_branch === 'string' && metadata.working_branch !== ''
-    if (!scopeRecorded) return { uncoveredPlanId: planId, unreadable: false, workflowDir: join(harnessDir, source.dir) }
+    if (!scopeRecorded) return { uncoveredPlanId: planId, unreadable: false, workflowId: source.workflowId, workflowDir: join(harnessDir, source.dir), selectedGeneration: { storeId: source.storeId, epoch: source.epoch } }
   }
-  return { unreadable: false, workflowDir: join(harnessDir, source.dir) }
+  return { unreadable: false, workflowId: source.workflowId, workflowDir: join(harnessDir, source.dir), selectedGeneration: { storeId: source.storeId, epoch: source.epoch } }
 }
 
 /**
@@ -877,8 +877,10 @@ async function gateWorkflow(
     if (harnessDir === null) return
     const hintRead = hintReadOf()
     if (hintRead.kind === 'unavailable') return
+    if (pb.workflowId === undefined || pb.workflowDir === undefined || pb.selectedGeneration === undefined) return
     adapter.recordWorkflowVerdict({
       harnessDir,
+      workflowId: pb.workflowId,
       exec,
       tool: input.tool,
       ...(input.metaName !== undefined ? { workflow: input.metaName } : {}),
@@ -886,8 +888,8 @@ async function gateWorkflow(
       mode,
       verdict: v,
       ...(code !== undefined ? { code } : {}),
-      ...(hintRead.hint !== undefined ? { hint: hintRead.hint } : {}),
-      ...(pb.workflowDir !== undefined ? { resolvedWorkflowDir: pb.workflowDir } : {}),
+      resolvedWorkflowDir: pb.workflowDir,
+      selectedGeneration: pb.selectedGeneration,
     })
   }
   switch (verdict.decision) {

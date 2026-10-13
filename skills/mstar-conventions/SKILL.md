@@ -29,7 +29,7 @@ description: Morning Star (晨星) harness 计划目录约定 —— `{HARNESS_D
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认；`.mstarc` `knowledge_dir` 声明时用声明值） |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
-| `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/`（默认；`.mstarc` `workflow_dir` 声明时用声明值）——每 lifecycle 的 `notes.jsonl` 与其余 retained bodies 是 ACTIVE append-only 活写面；`snapshot.json` 仅迁移源/历史（保留的 `mstar` 迁移工具 engine-internally 写入，不构成执行权威） |
+| `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies and the plain append-only `notes.jsonl` log; `snapshot.json` is read-only import/history, never execution authority |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/roadmap/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
 
@@ -106,7 +106,7 @@ enforcement=hard
 
 ## Issue/catalog store 路径与权威分界
 
-Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; roadmap/milestone rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. `status.json` / workflow `snapshot.json` / session JSON are migration sources and retained history only — written engine-internally by the kept `mstar` migration tooling, never read or written as execution state by runtime consumers. Retained file artifacts remain with `ArtifactStore`; it neither becomes a general SQLite backend nor bypasses ACTIVE authority.
+Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; roadmap/milestone rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. `status.json` / workflow `snapshot.json` / legacy session JSON are read-only one-time import sources and retained history. `mstar store upgrade` reads recognized v1/v2 execution sources directly and preserves original bytes; no staging writer or runtime file-state fallback remains. Retained ordinary file artifacts stay with `ArtifactStore`; notes and docs never become transactional authority.
 
 ### Catalog 字段权威（contract §1）
 

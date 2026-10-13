@@ -16,11 +16,11 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createRequire } from "node:module";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 // Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
 // import of the activation validator must be loaded at call time (see
@@ -77,7 +77,15 @@ export type StoreErrorCode =
   // not a `coordination.*` scoped-writer refusal and not a payload error.
   | "execution.direct-write-refused"
   | "execution.consumer-not-ready"
-  | "execution.workflow-identity-mismatch";
+  | "execution.workflow-identity-mismatch"
+  | "store.stale-epoch"
+  | "store.not-active"
+  | "store.publication-failed"
+  | "store.publication-barrier-failed"
+  | "store.created-handle-failed"
+  | "store.upgrade-dsh-source-refused"
+  | "store.upgrade-dsh-ack-unmatched"
+  | "store.upgrade-dsh-failed";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -1378,6 +1386,57 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
     update.run(JSON.stringify(tombstone), workflowId);
   }
 }
+/** Five host-state tables for DSH-owned ledger facts. */
+export const MIGRATION_10_SQL = `
+create table dsh_ledger_events(
+  seq_rowid integer primary key autoincrement,
+  workflow_id text not null,
+  event_id text,
+  event_json text not null,
+  recorded_at text not null
+);
+create index dsh_ledger_events_workflow on dsh_ledger_events(workflow_id, seq_rowid);
+create table dsh_accepted_identities(
+  workflow_id text not null,
+  event_id text not null,
+  digest text not null,
+  accepted_at text not null,
+  primary key(workflow_id, event_id)
+);
+create table dsh_scan_bounds(
+  workflow_id text not null,
+  session_id text not null,
+  next integer not null,
+  stream text,
+  primary key(workflow_id, session_id)
+);
+create table dsh_session_bindings(
+  session_id text not null,
+  cwd text not null,
+  selected_workflow_id text,
+  execution_binding text,
+  excluded_before_seq integer not null default 0,
+  updated_at text not null,
+  primary key(session_id, cwd)
+);
+create table dsh_status_emissions(
+  session_id text not null,
+  cwd text not null,
+  turn integer not null,
+  emitted_at text not null,
+  payload_json text not null,
+  primary key(session_id, cwd)
+);
+`;
+
+
+export const MIGRATION_11_SQL = `
+alter table dsh_ledger_events add column legacy_source_digest text;
+alter table dsh_ledger_events add column legacy_line integer;
+create unique index dsh_ledger_events_legacy_line
+  on dsh_ledger_events(workflow_id, legacy_source_digest, legacy_line)
+  where legacy_source_digest is not null;
+`;
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
@@ -1390,7 +1449,10 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
   { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
   { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
+  { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
+  { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
 ];
+const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
 /**
  * Execution tables the migrated schema must carry — the executable form of
@@ -1519,11 +1581,13 @@ function applyPendingMigrations(
   options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"] } = {},
 ): number {
   const own = !options.alreadyInTransaction;
-  const prior = readAppliedMigrations(db, true);
-  const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
-  const pending = MIGRATIONS.filter((m) => m.version > priorMax);
   if (own) db.exec("begin immediate");
   try {
+    // The applied set belongs to the transaction snapshot: another upgrader
+    // may have completed while this connection waited for the writer slot.
+    const prior = readAppliedMigrations(db, true);
+    const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
+    const pending = MIGRATIONS.filter((m) => m.version > priorMax);
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
@@ -1907,12 +1971,15 @@ export function withExecutionReadGuard<T>(
   body: (db: StoreDb, authority: { storeId: string; epoch: number }) => T,
 ): T {
   const probe = probeExecutionAuthority(storeDbPath(context));
+  if (probe.kind === "absent") {
+    throw new StoreError("store.not-initialized", "No execution store exists. Run \"mstar harness scaffold\" then \"mstar store init\"; for legacy state run \"mstar store upgrade\".");
+  }
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.kind !== "active") {
-    throw new StoreError(
-      "execution.consumer-not-ready",
-      "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.",
-    );
+    const recovery = probe.state === "staged"
+      ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+      : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
+    throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
   }
   const db = probeConnectionFor(probe.dbPath);
   if (db === null) {
@@ -1933,6 +2000,96 @@ export function withExecutionReadGuard<T>(
     throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
   }
   return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
+}
+const dshTransactions = new Set<string>();
+export type DshSelectedGeneration = { storeId: string; epoch: number };
+export type DshWriteTransaction = { db: StoreDb; storeId: string; epoch: number; markChanged(): void };
+
+/** Engine-private synchronous transaction used only by typed host-state verbs. */
+export function withDshWriteTransaction<T>(
+  context: StoreContext,
+  body: (tx: DshWriteTransaction) => T,
+  selectedGeneration?: DshSelectedGeneration,
+): T {
+  const dbPath = storeDbPath(context);
+  if (dshTransactions.has(dbPath)) {
+    throw new StoreError("store.corrupt", "A nested host-state transaction is not permitted.");
+  }
+  assertStoreRuntimeSupported();
+  assertAbsentOrRegularStoreFile(dbPath);
+  if (!existsSync(dbPath)) {
+    throw new StoreError(
+      "store.not-initialized",
+      `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or ` +
+        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" ` +
+        "when legacy state must be imported; nothing was written.",
+    );
+  }
+  dshTransactions.add(dbPath);
+  let db: StoreDb | undefined;
+  try {
+    db = openConnection(dbPath, "write", loadSqliteDriverSync().DatabaseSync);
+    let schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+    const requiredVersion = DSH_HOST_STATE_MIGRATION?.version;
+    if (requiredVersion === undefined || schemaVersion < requiredVersion) {
+      throw new StoreError(
+        "store.schema-drift",
+        `The execution store predates dsh-host-ledgers. Run "mstar store upgrade" before host-state persistence; nothing was written.`,
+      );
+    }
+    const initial = readStoreMeta(db);
+    const execution = readExecutionMeta(db, schemaVersion);
+    if (!execution || execution.authorityState !== "active") {
+      const recovery = execution?.authorityState === "staged"
+        ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+        : `Run "mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+      throw new StoreError("store.not-active", `The execution authority is ${execution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
+    }
+    db.exec("begin immediate");
+    try {
+      schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+      if (schemaVersion < requiredVersion) {
+        throw new StoreError("store.schema-drift", "The execution store predates dsh-host-ledgers; run mstar store upgrade.");
+      }
+      const current = readStoreMeta(db);
+      const currentExecution = readExecutionMeta(db, schemaVersion);
+      if (!currentExecution || currentExecution.authorityState !== "active") {
+        const recovery = currentExecution?.authorityState === "staged"
+          ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.'
+          : `Run "mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+        throw new StoreError("store.not-active", `The execution authority is ${currentExecution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
+      }
+      if (
+        current.storeId !== initial.storeId ||
+        current.epoch !== initial.epoch ||
+        (selectedGeneration !== undefined &&
+          (current.storeId !== selectedGeneration.storeId || current.epoch !== selectedGeneration.epoch))
+      ) {
+        throw new StoreError("store.stale-epoch", "The selected store identity or epoch changed; resolve the current authority and retry.");
+      }
+      let changed = false;
+      const result = body({ db, storeId: current.storeId, epoch: current.epoch, markChanged: () => { changed = true; } });
+      if (typeof (result as { then?: unknown } | null)?.then === "function") {
+        throw new StoreError("store.corrupt", "A host-state transaction body must be synchronous.");
+      }
+      if (changed) db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+      db.exec("commit");
+      return result;
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // Transaction may already have been closed by the driver.
+      }
+      throw error;
+    }
+  } finally {
+    try {
+      db?.close();
+    } finally {
+      dshTransactions.delete(dbPath);
+    }
+  }
 }
 
 export type StoreHandle = {
@@ -2031,11 +2188,137 @@ async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<St
 }
 
 /**
- * Create-only initialization for a genuinely empty workspace (contract §2):
- * claims the path with an exclusive create, applies all migrations and flips
- * the fresh store to an ACTIVE EMPTY state (epoch 1) in one atomic unit. A
- * path this process did not create refuses `store.already-exists` and is not
- * touched; a failed init cleans up only the file this process created.
+ * Remove only the staging files one initialization attempt created for itself.
+ * The canonical store path is never in this list: a failed or interrupted
+ * create cannot unlink the store another process may already have published or
+ * be reading, and a stale staging file is inert scratch that no code reads.
+ */
+function removeStagingFiles(stagingPath: string): void {
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+    try {
+      unlinkSync(stagingPath + suffix);
+    } catch {
+      // best-effort cleanup of this attempt's own staging name
+    }
+  }
+}
+
+/** The operating system's own classification of a failed step, preserved
+ * verbatim so the operator diagnoses the filesystem, not a store. */
+function publicationCause(error: unknown): string {
+  const causeCode =
+    error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return causeCode === "" || message.includes(causeCode) ? message : `${causeCode}: ${message}`;
+}
+
+/**
+ * The refusal for a creation step that failed BEFORE any store existed at the
+ * canonical path: the real cause is preserved, the absence of a published
+ * store is stated (a canonical path is never called corrupt here — none was
+ * ever created), and the recovery is the same public entry once the filesystem
+ * condition is resolved, or a harness on a hard-link-capable filesystem
+ * selected through the existing `--harness` argument.
+ */
+function publicationRefusal(step: string, error: unknown, dbPath: string): StoreError {
+  const cause = publicationCause(error);
+  return new StoreError(
+    "store.publication-failed",
+    `The fresh store could not be ${step}: ${cause}. NO store was published at ${dbPath} \u2014 the canonical path ` +
+      `holds no store and nothing was written to it. Resolve the filesystem condition named above (permissions, ` +
+      `space, hard-link support) and rerun the same command, or select a harness on a filesystem that supports ` +
+      `atomic hard links with --harness.`,
+    { path: dbPath, cause },
+  );
+}
+
+/**
+ * Make the canonical store's own DIRECTORY ENTRY durable. SQLite fsyncs the
+ * bytes it writes, but the create-only hard link that PUBLISHES those bytes is
+ * an application-created directory entry that no transaction makes durable:
+ * until the containing directory is synchronized, a power loss can leave the
+ * control root with no `store.db` at all — and, once the only other name for
+ * that inode is gone, with no fallback name either. Atomicity is not
+ * durability. The same primitive the repo's other durable writers use
+ * (`execution-ledgers.ts` `fsyncDirectory`); nothing here is a new protocol.
+ *
+ * Where the platform refuses to open or synchronize a directory (Windows does,
+ * for one), the operating system's own error is preserved and disclosed as the
+ * failed barrier — never swallowed into a durable success claim.
+ */
+function syncDirectoryEntry(dir: string): void {
+  const fd = openSync(dir, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * The PARTIAL outcome of a creation or upgrade whose canonical store IS
+ * published and retained, but whose directory entry could not be made durable
+ * — or confirmed durable. It never reports a clean success, never calls the
+ * store corrupt and never removes it: the real barrier cause is preserved, only
+ * the facts this boundary actually established are stated, and the ordinary
+ * public `store upgrade` on that same published path is the supported retry for
+ * the barrier — `store init` stays create-only.
+ */
+function publicationBarrierRefusal(error: unknown, dbPath: string, phase: "creation" | "upgrade"): StoreError {
+  const cause = publicationCause(error);
+  // Creation reaches this boundary only after its own transaction committed the
+  // ACTIVE flip, so THAT phase may state it. An existing-store upgrade stops at
+  // its schema/verification boundary: the caller's import and activation have
+  // NOT run, so this diagnostic reports only what actually happened here and
+  // never claims an authority state or completed work it did not establish.
+  const state =
+    phase === "creation"
+      ? `The store at ${dbPath} is complete and ACTIVE and was neither rolled back nor removed; this attempt's own ` +
+        `staging name is retained beside it as a fallback reference to those same bytes. `
+      : `The canonical store at ${dbPath} is retained and readable with the schema state this call committed or ` +
+        `verified, and it was neither rolled back nor removed. This call performed no import or activation, so the ` +
+        `store's recorded authority state is unchanged. `;
+  return new StoreError(
+    "store.publication-barrier-failed",
+    state +
+      `The synchronization of its containing directory entry failed (${cause}), so that name is not CONFIRMED ` +
+      `durable: a power loss before the next successful barrier could lose it. Directory synchronization ` +
+      `(open + fsync) is a platform/filesystem capability, and this one refused with the cause above. Retry the ` +
+      `ordinary public upgrade on the same published path to re-attempt the barrier once the condition clears: ` +
+      `"mstar store upgrade --harness <control root> --operator <name>".`,
+    { path: dbPath, published: true, barrier: phase, cause },
+  );
+}
+
+/**
+ * Create-only initialization for a genuinely empty workspace (contract §2).
+ *
+ * The complete store — every migration, the shared metadata and the ACTIVE
+ * epoch-1 authority flip in ONE transaction — is built in a private staging
+ * file beside the canonical path and only then PUBLISHED there with a single
+ * create-only hard link. The canonical path therefore never names a
+ * half-built store: it is either absent, or a complete, committed,
+ * self-contained database. That removes the first-creator window an upgrade
+ * observer could previously read (`store.corrupt` on a claimed-but-unmigrated
+ * file) without a lock, a mutex or any polling — the publish itself is the
+ * one atomic step, and it is also the whole existence check: a competing
+ * initializer's store, a pre-existing file, a link or a directory all refuse
+ * `store.already-exists` there (EEXIST) and are not read or rewritten. Only
+ * this attempt's own staging name is ever removed, so a failed create cannot
+ * delete the store another process already published.
+ *
+ * Failure outcomes are named at their actual phase. Before publication,
+ * `store.publication-failed` preserves the operating system's own cause and
+ * states that NO store exists at the canonical path — which is never called
+ * corrupt, because none was created. After the link, a failed DIRECTORY
+ * SYNCHRONIZATION reports `store.publication-barrier-failed`: the store is
+ * published and complete but its name is not confirmed durable, so the
+ * attempt's staging name is RETAINED as the fallback reference to those bytes
+ * and the ordinary public upgrade on that same path re-attempts the barrier.
+ * After a successful barrier, a failed handle acquisition reports
+ * `store.created-handle-failed`: the PARTIAL outcome that it is — the store is
+ * created, activated and retained — with the real cause and the supported
+ * same-entry continuation.
  */
 export async function initializeStore(
   context: StoreContext,
@@ -2053,36 +2336,33 @@ export async function initializeStore(
       `An issue store already exists at ${dbPath}. "store init" is create-only and must not reuse ` +
         `store.not-initialized for an existing store; use the upgrade path for schema changes. Nothing was modified.`,
     );
-  // The exclusive create is the whole existence check: a competing
-  // initializer's store, a pre-existing file and the TOCTOU loser all refuse
-  // here, before any connect or pragma can rewrite those bytes — and only the
-  // process that won the create can ever unlink the file below.
+  // The driver is acquired before anything is created, so a runtime that
+  // cannot run SQLite refuses without leaving a file behind.
   await loadSqliteDriver();
+  // A fast pre-check only — the create-only decision itself is the publish
+  // below, where EEXIST is the atomic arbiter even when this observation has
+  // already gone stale.
+  if (existsSync(dbPath)) throw alreadyExists();
+  // Private staging name in the SAME directory (a hard link cannot cross a
+  // filesystem boundary), unique per attempt so two initializers never stage
+  // into one file. It never matches the store's own name, `*.db` or any of the
+  // retired lock names.
+  const stagingPath = join(dirname(dbPath), `.${basename(dbPath)}.init-${process.pid}-${randomUUID()}.tmp`);
   let claim: number;
   try {
-    claim = openSync(dbPath, "wx");
+    claim = openSync(stagingPath, "wx");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw alreadyExists();
-    refuseOpenFailure(error, dbPath);
+    throw publicationRefusal("created in the control root's own directory", error, dbPath);
   }
   closeSync(claim);
   let db: StoreDb | undefined;
   try {
-    db = await connect(dbPath, "write");
+    db = await connect(stagingPath, "write");
     if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_STORE_FAIL_INIT === "1") {
       throw new Error("induced init failure");
     }
     db.exec("begin immediate");
     try {
-      const schemaPresent = db
-        .prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'")
-        .get() as { n?: number } | undefined;
-      // Concurrent initializers that both created the file still refuse once
-      // the winner records schema_version inside this exclusive transaction.
-      if (schemaPresent?.n) {
-        db.exec("rollback");
-        throw alreadyExists();
-      }
       applyPendingMigrations(db, { alreadyInTransaction: true, attestation });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
@@ -2095,41 +2375,84 @@ export async function initializeStore(
       }
       throw error;
     }
-    const meta = readStoreMeta(db);
-    // Snapshot the opened connection: `close` runs after this function
-    // returns, and TS cannot narrow the outer `let` inside a closure.
-    const openDb = db;
-    return {
-      db: openDb,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      schemaVersion: MIGRATIONS.length,
-      // Init creates an active execution authority together with the schema.
-      execution: readExecutionMeta(openDb, MIGRATIONS.length),
-      close(): void {
-        openDb.close();
-      },
-    };
+    // The staged bytes are verified as this build's own complete store before
+    // they can be named.
+    readStoreMeta(db);
+    readExecutionMeta(db, MIGRATIONS.length);
+    // A hard link names one inode, not a journal: a WAL store's committed state
+    // lives in its `-wal` beside it, and the staging file is about to be read
+    // under a SECOND name. Fold the journal back into the database file and
+    // return to rollback-journal mode, so the published name carries every
+    // committed frame with no sidecar beside it — the first ordinary writer
+    // open converts the published store back to WAL through the usual pragma
+    // path, and a read-only open needs no journal at all.
+    const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
+    if (folded?.journal_mode !== "delete") {
+      throw new StoreError(
+        "store.publication-failed",
+        `The staged store could not be folded into one self-contained database file before publication ` +
+          `(journal mode is ${String(folded?.journal_mode ?? "unknown")}, not "delete"). NO store was published at ` +
+          `${dbPath} \u2014 the canonical path holds no store and nothing was written to it. Rerun the same command; if ` +
+          `it recurs, select a harness on a filesystem that supports atomic hard links with --harness.`,
+        { path: dbPath, cause: `journal mode ${String(folded?.journal_mode ?? "unknown")} after fold` },
+      );
+    }
+    db.close();
+    db = undefined;
   } catch (error) {
     if (db) {
       try {
         db.close();
       } catch {
-        // closed after a connection-level failure
+        // connection-level failure; the staging name is unlinked below
       }
     }
-    // Only the process that won the exclusive create reaches this cleanup, so
-    // these paths are this process's own failed create — never a store a
-    // competing initializer won (`store.busy`/`store.corrupt` on a foreign
-    // path refuses at the claim above, without unlinking anything).
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try {
-        unlinkSync(dbPath + suffix);
-      } catch {
-        // best-effort cleanup of our own failed create
-      }
-    }
+    removeStagingFiles(stagingPath);
     throw error;
+  }
+  // Publish: the atomic create-only step. EEXIST is a competing initializer's
+  // committed store (or a pre-existing file) — refuse it untouched. Any other
+  // failure is a filesystem/publication condition, never store corruption: no
+  // canonical store exists to be corrupted.
+  try {
+    linkSync(stagingPath, dbPath);
+  } catch (error) {
+    removeStagingFiles(stagingPath);
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      throw alreadyExists();
+    }
+    throw publicationRefusal("linked into place at its canonical path", error, dbPath);
+  }
+  // Publish the canonical DIRECTORY ENTRY before removing the only other name
+  // for this inode: if the barrier fails, the staging name is the fallback
+  // reference to the same bytes and stays, and the outcome is disclosed as the
+  // partial one it is — the store exists and is complete, so it is never removed
+  // and never called corrupt.
+  try {
+    syncDirectoryEntry(dirname(dbPath));
+  } catch (error) {
+    throw publicationBarrierRefusal(error, dbPath, "creation");
+  }
+  removeStagingFiles(stagingPath);
+  // The store is now committed, complete, ACTIVE and durable at the canonical
+  // path. If this attempt cannot acquire its returned handle, that is a PARTIAL
+  // outcome and must be disclosed as one: the published image is kept — never
+  // unlinked, never reported as if nothing was created — and the caller is
+  // pointed at the supported continuation for its entry.
+  try {
+    return await openStore(context, "write");
+  } catch (error) {
+    const cause = publicationCause(error);
+    const causeCode = error instanceof StoreError ? error.code : "";
+    throw new StoreError(
+      "store.created-handle-failed",
+      `The store was created, activated and published at ${dbPath}, but this attempt could not open its handle ` +
+        `afterwards (${cause}). The published store is complete and was NOT modified, rolled back or removed. ` +
+        `Rerunning "mstar store init" here refuses create-only. Retry this command once the condition clears, and ` +
+        `for an interrupted upgrade continue the import into the published store with ` +
+        `"mstar store upgrade --harness <control root> --operator <name>".`,
+      { path: dbPath, published: true, cause, causeCode },
+    );
   }
 }
 
@@ -2138,6 +2461,13 @@ export async function initializeStore(
  * for a SQLite-consistent backup and quiesced writers (contract §2/§7) —
  * this function itself is atomic: the whole pending batch commits or rolls
  * back together. Idempotent when the store is already current.
+ *
+ * Observer guarantee: creation publishes the canonical path in ONE atomic
+ * create-only step (`initializeStore`), so a path that exists here always
+ * names a complete, committed store. A store file that exists but records no
+ * migration history is therefore genuine corruption — never an in-flight
+ * first creation to wait out or reinterpret — and still refuses
+ * `store.corrupt` untouched.
  */
 export async function upgradeStore(
   context: StoreContext,
@@ -2162,16 +2492,28 @@ export async function upgradeStore(
   } catch (error) {
     refuseOpenFailure(error, dbPath);
   }
+  let schemaVersion: number;
   try {
-    const schemaVersion = applyPendingMigrations(db, { attestation });
+    schemaVersion = applyPendingMigrations(db, { attestation });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.
     readExecutionMeta(db, schemaVersion);
-    return { schemaVersion };
   } catch (error) {
     refuseOpenFailure(error, dbPath);
   } finally {
     db.close();
   }
+  // The same public entry is also the supported retry for the directory barrier
+  // a creation or an earlier upgrade could not complete: the published store
+  // already exists at this path, so this attempt re-synchronizes its containing
+  // directory entry. It runs on the CLOSED handle and strictly AFTER the content
+  // checks above, so an unverifiable store syncs nothing and the barrier's own
+  // failure is its own refusal — never `store.corrupt`, never a lost commit.
+  try {
+    syncDirectoryEntry(dirname(dbPath));
+  } catch (error) {
+    throw publicationBarrierRefusal(error, dbPath, "upgrade");
+  }
+  return { schemaVersion };
 }

@@ -14,8 +14,8 @@
  *    target and the operation, never a caller-supplied boolean.
  *    `FsStore.put/delete` reject everything else with
  *    `coordination.direct-write-refused`.
- *    `writeWorkflowSnapshot` is migration-only; runtime file-route
- *    replacement is no longer a public coordination operation.
+ *    The legacy snapshot writer is deleted with the file execution route;
+ *    these documents are read-only migration sources / retained history.
  * 3. The stored coordination shapes and their strict validators, shared by
  *    `workflow.ts` (which refuses to persist malformed coordination blocks)
  *    and the migration importer. The byte version (`sha256:<64 hex>`, missing

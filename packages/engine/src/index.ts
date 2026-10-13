@@ -5,9 +5,9 @@
  * OpenCode plugin consume it in-process. `core` is the shared type/version
  * base, `path` implements harness path resolution + scaffold + gitignore
  * checks, `status` implements the status.json schema, residual lifecycle,
- * findings-cleanup gate and the tech-debt rollup port, `lease` implements the
- * workflow integration merge mutex + same-host status write lock, `dispatch`
- * implements the Assignment field contract, default-branch
+ * findings-cleanup gate and the tech-debt rollup port, `workflow` implements
+ * the workflow snapshot schema and the integration merge mutex shape,
+ * `dispatch` implements the Assignment field contract, default-branch
  * gate, QC seat mapping and tri-identity/anti-recursion prechecks, `lint`
  * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks and
  * ephemeral/provenance citation discovery,
@@ -118,10 +118,9 @@ export {
   validateStatusV2,
   validateWorkflowEntry,
 } from "./status.js";
-export type { IntegrationMergeLease } from "./lease.js";
-export { validateIntegrationMergeLease, withStatusWriteLock } from "./lease.js";
 export type {
   DeliveryRegistrationEvidence,
+  IntegrationMergeLease,
   RegisterIterationWorkflowOptions,
   RegisterPlanWorkflowOptions,
   WorkflowCompoundOutcome,
@@ -139,6 +138,7 @@ export {
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
   normalizeIterationCompassRef,
+  validateIntegrationMergeLease,
   WORKFLOW_COMPOUND_OUTCOMES,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
@@ -325,22 +325,16 @@ export {
   landedPathOf,
 } from "./host-gate-paths.js";
 export type {
-  MigrateNotesFile,
-  MigrateOptions,
-  MigratePlan,
-  MigrateRegister,
-  MigrateResult,
-  MigrateRoadmap,
-  MigrateRootV2,
+  DeliveryLiftDeclaration,
+  DeliveryLiftDeclarations,
+  LegacyV1Conversion,
   MigrateSnapshot,
-  MigrateStep,
 } from "./migrate.js";
 export {
-  ARCHIVED_STATUS_V1_FILE,
+  DeliveryDeclarationError,
   MIGRATE_STATUS_FILE,
   NOTES_LEDGER_FILE,
-  applyMigratePlan,
-  migrateHarnessTree,
+  convertLegacyV1Tree,
 } from "./migrate.js";
 export type {
   CompletenessItem,
@@ -497,11 +491,20 @@ export type { QcVerdict } from "./qcreview.js";
 export { QC_VERDICTS, validateQcReport } from "./qcreview.js";
 export { MSTAR_REVIEW_V1_PAYLOAD_SCHEMA } from "./qcreview.js";
 
-/** `status` and `snapshot` are migration-internal engine kinds, not persist CLI kinds. */
+/** Artifact kinds are `review` and `json` only (the `status` / `snapshot` /
+ * `residuals` kinds are retired). */
 export type { ArtifactDoc, ArtifactKind, ArtifactRef, ArtifactStore } from "./store.js";
 export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordination.js";
 
-export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
+export {
+  createFsStore,
+  getArtifactStore,
+  guardInjectedStore,
+  legacyStatusDocPath,
+  loadStoreModule,
+  resolveArtifactPath,
+  setArtifactStore,
+} from "./store.js";
 
 export { activeLifecyclePlanId, collectActiveLifecycleBranches } from "./lifecycle-branches.js";
 export type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
@@ -568,6 +571,26 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+export type {
+  DshSessionBinding,
+  DshSessionBindingUpdate,
+  DshStatusEmission,
+  DshStatusEmissionRead,
+  DshWorkflowEventInput,
+  DshWriteResult,
+  DshSelectedGeneration,
+} from "./host-state-store.js";
+export {
+  advanceDshScanBound,
+  appendDshLedgerRow,
+  appendDshWorkflowEvent,
+  readDshLedgerWindow,
+  readDshScanBound,
+  readDshStatusEmission,
+  readDshSessionBinding,
+  recordDshStatusEmission,
+  writeDshSessionBinding,
+} from "./host-state-store.js";
 export { rowValidationRoute } from "./workflow.js";
 export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
 // Coordinator-only execution authority: version tokens, registration,
@@ -919,15 +942,15 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// §5 F1 the retained workflow-notes ledger: the append-only accepted-record
-// writer plus its pure coverage normalizer. ADDITIVE export — the accepted
-// record shape, its receipt and the coverage facts are the whole published
-// surface, and the write path stays behind the engine's own authorization.
+// §5 F1 the retained workflow-notes ledger: the append-only record writer plus
+// its pure coverage normalizer. The record shape, the receipt and the coverage
+// facts are the whole published surface, and the write path stays behind the
+// engine's own authorization.
 export type {
   WorkflowNote,
-  WorkflowNoteAcceptedRecord,
   WorkflowNoteAppendReceipt,
   WorkflowNoteHistoricalRecord,
+  WorkflowNoteRecord,
   WorkflowNotesCoverageFacts,
 } from "./execution-ledgers.js";
 export {

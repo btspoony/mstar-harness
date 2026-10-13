@@ -6,11 +6,14 @@
  * projection) are engine-supported agent operations with no CLI/MCP entry
  * until now. Both routes stay thin: they resolve the control harness, build the
  * caller/session facts the engine already requires, and call the ONE engine
- * implementation — no second ledger reader, no second dedup rule, no rewritten
- * message. The engine's own authorization decides: a stale epoch, a revoked
- * session, a foreign caller or a mismatched scope refuses with the store's or
- * the ledger module's own code, details and recovery, and the wrapper preserves
- * them verbatim.
+ * implementation — no second ledger reader, no rewritten message. The engine's
+ * own authorization decides: a stale epoch, a revoked session, a foreign caller
+ * or a mismatched scope refuses with the store's or the ledger module's own
+ * code, details and recovery, and the wrapper preserves them verbatim.
+ *
+ * The ledger is a plain append log, so these routes promise no replay: an
+ * identical retry appends a second record, and coverage reports the physical
+ * records a reader can see.
  *
  * ## Boundary rationale (why these routes exist and others do not)
  *
@@ -165,7 +168,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         options: [
           { key: "workflow", flags: "--workflow <id>", required: true },
           { key: "sessionRef", flags: "--session-ref <wire>", required: true, help: "The active coordinator session reference from the `plan bind --execution` receipt; wire format exec-session-v1:<base64url JSON>." },
-          { key: "id", flags: "--id <id>", required: true, help: "Stable record identity and dedup key; retry the same id with identical text to replay, not duplicate." },
+          { key: "id", flags: "--id <id>", required: true, help: "Record identity carried on the appended line for correlation; retrying the same id appends another record." },
           { key: "text", flags: "--text <text>", required: true },
           { key: "ts", flags: "--ts <rfc3339>", required: false, help: "RFC3339 timestamp; omitted timestamps default to current time." },
           { key: "harness", flags: "--harness <path>", required: false },
@@ -185,7 +188,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         { name: "sessionId", ownership: "caller", route: "cli", required: true, constraint: "acquired coordinator identity via flag or MSTAR_HOST_SESSION_ID" },
         { name: "sessionId", ownership: "caller", route: "mcp", required: true, constraint: "host-supplied acquired coordinator identity per call" },
       ],
-      description: "Append one note to the addressed workflow's retained notes ledger, or replay an already accepted record id. Requires acquired coordinator identity and a matching active coordinator session reference; the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written. The ledger is append-only and grows linearly with the notes recorded; each append scans the retained bytes to deduplicate on record id, so its cost is O(file).",
+      description: "Append one note to the addressed workflow's retained notes ledger. Requires acquired coordinator identity and a matching active coordinator session reference; the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written. The ledger is a plain append log, so a repeated id is a new record, not a replay.",
       async execute(raw, context) {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
           return usage(APPEND_ID, "appending a workflow note requires an acquired coordinator identity (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call).", "sessionId");
@@ -209,7 +212,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
           // Provenance is the BOUND session's own scope, never a caller-supplied
           // field: the note's workflowId/sessionId are taken from the addressed
           // scope and the decoded reference, not from separate inputs.
-          const receipt = await appendWorkflowNote(executionContextFor({ harnessDir: root }, identity), ref, {
+          return ok(APPEND_ID, await appendWorkflowNote(executionContextFor({ harnessDir: root }, identity), ref, {
             version: 1,
             id: input.id,
             workflowId: input.workflow,
@@ -217,8 +220,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
             kind: "note",
             ...(input.ts === undefined ? {} : { ts: input.ts }),
             text: input.text,
-          });
-          return ok(APPEND_ID, receipt);
+          }));
         } catch (error) {
           return engineRefusal(APPEND_ID, error);
         }
@@ -245,7 +247,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         { name: "file", ownership: "caller", route: "cli", required: false, constraint: "must be absolute when supplied; defaults to the workflow's canonical notes.jsonl" },
         { name: "file", ownership: "caller", route: "mcp", required: false, constraint: "must be absolute when supplied; defaults to the workflow's canonical notes.jsonl" },
       ],
-      description: "Project one workflow's retained notes ledger into normalized coverage facts (canonical path, format, file hash, ordered historical and accepted records, duplicate ids, unterminated tail, counts). Optional file must be absolute; omitted means workflow's canonical ledger path. Read-only; nothing is written. The ledger is append-only and grows linearly, and coverage hashes the whole retained file for its identity, so its cost is O(file).",
+      description: "Project one workflow's retained notes ledger into normalized coverage facts (canonical path, format, file hash, ordered historical and new-format records, partial tail, counts). Optional file must be absolute; omitted means workflow's canonical ledger path. Read-only; nothing is written.",
       async execute(raw, context) {
         const parsed = coverageInput.safeParse(raw);
         if (!parsed.success) return decodeUsage(COVERAGE_ID, parsed.error, raw);

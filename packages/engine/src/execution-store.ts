@@ -35,7 +35,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, type Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   ExecutionPinConflictError,
@@ -51,11 +51,6 @@ import {
   type RowCoordination,
 } from "./coordination-write.js";
 import { storedCoordinationViolations } from "./coordination-transitions.js";
-import {
-  validateIntegrationMergeLease,
-  withStatusWriteLock,
-  type IntegrationMergeLease,
-} from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
 import {
   unresolvedRecovery,
@@ -87,7 +82,10 @@ import {
 import {
   isTerminalSnapshot,
   rowValidationRoute,
+  validateIntegrationMergeLease,
   validateWorkflowSnapshot,
+  WORKFLOW_SNAPSHOT_FILE,
+  type IntegrationMergeLease,
   type WorkflowSnapshot,
 } from "./workflow.js";
 
@@ -118,6 +116,8 @@ export type ExecutionErrorCode =
   | "execution.adoption-refused"
   | "execution.header-revision-conflict"
   | "execution.adoption-invalid"
+  | "execution.delivery-declaration-required"
+  | "execution.workflow-skip-unmatched"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -1084,8 +1084,8 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
  * Transaction owners per canonical DB path and async context: a nested domain
  * operation on the same store refuses `execution.reentrant` instead of opening
  * a second transaction, while independent concurrent callers (separate async
- * chains) are not treated as nested. Same primitive and same reasoning as
- * `withStatusWriteLock`'s reentrancy detection (lease.ts).
+ * chains) are not treated as nested. This async-local ownership set is the
+ * store's only reentrancy primitive — there is no filesystem lock.
  */
 const ownedTransactions = new AsyncLocalStorage<ReadonlySet<string>>();
 
@@ -1351,33 +1351,80 @@ export function readExecutionStateGraph(tx: ExecutionTransaction): ExecutionRead
 
 /**
  * Live legacy execution sources of a control harness. The v2/v1 root register is
- * the file at the harness root; snapshots, `sessions/*.json` envelopes and
- * `notes.jsonl` ledgers all live under the workflow tree. Archived history under
- * `<harness>/archived/` is read-only provenance rather than a live source, so it
- * does not block an empty initialization.
+ * the file at the harness root; snapshots and `sessions/*.json` envelopes live
+ * under the workflow tree. Append-only notes are a separate history ledger, not
+ * execution authority. Archived history under `<harness>/archived/` is read-only
+ * provenance and does not block an empty initialization.
  */
 function assertNoLegacyExecutionSources(context: StoreContext): void {
   const harnessDir = dirname(storeDbPath(context));
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources: string[] = [];
   const statusPath = join(harnessDir, "status.json");
-  if (existsSync(statusPath)) sources.push(statusPath);
-  if (existsSync(workflowDir)) {
-    // Fail closed: a path that exists but cannot be listed is a source too.
-    let entries: string[];
+  try {
+    lstatSync(statusPath);
+    sources.push(statusPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${statusPath} (unreadable)`);
+  }
+  let workflowRootIsDirectory = false;
+  try {
+    const info = lstatSync(workflowDir);
+    workflowRootIsDirectory = info.isDirectory() && !info.isSymbolicLink();
+    if (!workflowRootIsDirectory) sources.push(workflowDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${workflowDir} (unreadable)`);
+  }
+  if (workflowRootIsDirectory) {
+    let entries: Dirent[];
     try {
-      entries = readdirSync(workflowDir);
+      entries = readdirSync(workflowDir, { withFileTypes: true });
     } catch {
-      entries = ["<unreadable>"];
+      entries = [];
+      sources.push(`${workflowDir} (unreadable)`);
     }
-    if (entries.length > 0) sources.push(`${workflowDir} (${entries.length} entr${entries.length === 1 ? "y" : "ies"})`);
+    for (const entry of entries) {
+      const dir = join(workflowDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        sources.push(dir);
+        continue;
+      }
+      if (!entry.isDirectory()) continue;
+      const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+      try {
+        lstatSync(path);
+        sources.push(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${path} (unreadable)`);
+      }
+      const sessionsDir = join(dir, "sessions");
+      try {
+        const info = lstatSync(sessionsDir);
+        if (info.isSymbolicLink() || !info.isDirectory()) {
+          sources.push(sessionsDir);
+        } else {
+          let sessions: Dirent[];
+          try {
+            sessions = readdirSync(sessionsDir, { withFileTypes: true });
+          } catch {
+            sessions = [];
+            sources.push(`${sessionsDir} (unreadable)`);
+          }
+          for (const session of sessions) {
+            if (session.name.endsWith(".json")) sources.push(join(sessionsDir, session.name));
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") sources.push(`${sessionsDir} (unreadable)`);
+      }
+    }
   }
   if (sources.length > 0) {
     throw new ExecutionError(
       "execution.not-empty",
       `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. ` +
-        `Execution authority is initialized only for an empty execution workspace \u2014 this workspace belongs on the ` +
-        `staged migration route. Nothing was created or modified.`,
+        `Import these sources with the supported \`mstar store upgrade --operator <name>\` operation; the retired ` +
+        `staged migration writer is unavailable. Nothing was created or modified.`,
     );
   }
 }
@@ -1445,33 +1492,31 @@ function assertExecutionDomainEmpty(db: StoreDb, meta: ExecutionMeta): void {
  * schema upgrade alone never activates execution. This is a real domain
  * initializer for a genuinely empty execution workspace, not a test flag, and it
  * is wired to no CLI.
+ *
+ * Serialization is the store's own: `withExecutionTransaction` opens
+ * `BEGIN IMMEDIATE`, so two concurrent initializers serialize on SQLite and the
+ * loser sees the winner's ACTIVE authority and refuses `execution.not-empty`.
+ * The filesystem witness is re-checked immediately before commit, so a rogue
+ * writer that lands a legacy source while this transaction is open still cannot
+ * produce an ACTIVE authority beside it.
  */
 export async function initializeExecutionAuthority(context: StoreContext): Promise<ExecutionRead<ExecutionState>> {
-  const harnessDir = dirname(storeDbPath(context));
-  const statusPath = join(harnessDir, "status.json");
-  // Same-host exclusive write lock used by status.json / snapshot writers
-  // (`withStatusWriteLock` in lease.ts). File lock first, then the SQLite
-  // transaction — never the other way around. Recheck the filesystem witness
-  // immediately before commit so a rogue writer that skipped the lock still
-  // cannot land an active authority beside a live legacy source.
-  return withStatusWriteLock(statusPath, async () => {
+  assertNoLegacyExecutionSources(context);
+  await withExecutionTransaction(context, (tx) => {
+    assertActiveStoreAuthority(tx.db);
+    assertExecutionDomainEmpty(tx.db, tx.execution);
+    const now = new Date().toISOString();
+    tx.db
+      .prepare(
+        "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
+          "activated_at = ? where id = 1",
+      )
+      .run(now, now);
+    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
     assertNoLegacyExecutionSources(context);
-    await withExecutionTransaction(context, (tx) => {
-      assertActiveStoreAuthority(tx.db);
-      assertExecutionDomainEmpty(tx.db, tx.execution);
-      const now = new Date().toISOString();
-      tx.db
-        .prepare(
-          "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
-            "activated_at = ? where id = 1",
-        )
-        .run(now, now);
-      tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
-      tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
-      assertNoLegacyExecutionSources(context);
-    });
-    return readExecutionState(context);
+    tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
   });
+  return readExecutionState(context);
 }
 
 // ---------------------------------------------------------------------------
@@ -1953,11 +1998,13 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
  * call. The attested stop is the trust boundary (the engine cannot observe a
  * dead process), so an unattested holder is never silently revoked, and an
  * explicitly supplied malformed proof refuses before any store access. A changed
- * proof under a committed operation id conflicts only while its receipt remains
- * (`execution.operation-conflict`). Adoption prunes all workflow receipts on
- * commit, so later retries reach the terminal header: stale explicit revisions
- * refuse `execution.header-revision-conflict`; omitted or current revisions
- * refuse `execution.adoption-refused` with read-back guidance.
+ * proof under this committed operation id conflicts while its receipt remains
+ * (`execution.operation-conflict`). Adoption prunes the workflow's OTHER receipts
+ * on commit and keeps its own terminal receipt as the current-epoch replay
+ * anchor, so an identical retry replays; a retry under a DIFFERENT operation id
+ * reaches the terminal header instead — a stale explicit revision refuses
+ * `execution.header-revision-conflict`, an omitted or current revision refuses
+ * `execution.adoption-refused` with read-back guidance.
  * The committed receipt records settled targets and approving provenance.
  */
 export async function adoptTerminalWorkflow(
@@ -2005,9 +2052,10 @@ export async function adoptTerminalWorkflow(
     intent: {
       expectedRevision: input.expectedRevision ?? "current",
       reason: input.reason,
-      // The attestation contributes to the fingerprint, so changed proof conflicts
-      // with a retained receipt. Once adoption prunes that receipt, retries are
-      // refused by stale explicit CAS or terminal-adoption read-back instead.
+      // The attestation contributes to the fingerprint, so a changed proof under
+      // this operation id conflicts while its retained terminal receipt remains;
+      // an identical retry replays that anchor, and another operation id is
+      // answered by the terminal header instead (stale CAS or read-back refusal).
       ...(attestation === undefined ? {} : { attestation }),
     },
   });

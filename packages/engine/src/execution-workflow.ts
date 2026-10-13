@@ -154,12 +154,12 @@ import {
   isTerminalSnapshot,
   validateWorkflowSnapshot,
   type WorkflowDeliveryEvidence,
+  type IntegrationMergeLease,
   type WorkflowExecutionPolicy,
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { assertBranchAlignment, isDistinctCheckout, readMainWorktree } from "./worktree.js";
 import type { PlanRow } from "./status.js";
-import type { IntegrationMergeLease } from "./lease.js";
 
 /* ------------------------------------------------------------------------ *
  * §3 the closed workflow-operation union
@@ -1039,8 +1039,10 @@ export async function mutateExecutionWorkflow(
         ];
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
     // while the receipt is retained and after CURRENT authority is revalidated.
-    // Terminal close prunes its workflow's receipts, so later retries fall
-    // through to the registry witness and receive actionable read-back guidance.
+    // A close that loses registry membership prunes the workflow's OTHER receipts
+    // and keeps this operation's current-epoch receipt as its replay anchor: the
+    // identical terminal retry replays here, and only a different operation id
+    // falls through to the registry witness for actionable read-back guidance.
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,

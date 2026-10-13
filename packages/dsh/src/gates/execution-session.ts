@@ -9,7 +9,7 @@ import {
 } from '@mstar-harness/engine'
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import { adoptExecutionBinding, clearExecutionBinding } from './workflow-selection.ts'
+import { adoptExecutionBinding, clearExecutionBinding, readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { HarnessResolver } from './_shared.ts'
 const SPOOF_KEYS = [
   'MSTAR_EXECUTION_IDENTITY',
@@ -106,7 +106,15 @@ async function handleExecutionCommand(invocation: CommandInvocation, resolver: H
   const harnessDir = resolver.forWorkspace(facts.cwd)
   if (harnessDir === null) throw new Error('execution harness is unavailable for this native session')
   if (request.operation === 'clear') {
-    if (!clearExecutionBinding(harnessDir, facts.sessionId, facts.cwd)) throw new Error('no clearable execution binding')
+    const source = await readExecutionWorkflowSource({ harnessDir }, { sessionId: facts.sessionId, cwd: facts.cwd })
+    if (!clearExecutionBinding(
+      harnessDir,
+      facts.sessionId,
+      facts.cwd,
+      source.kind === 'unavailable' || source.storeId === undefined || source.epoch === undefined
+        ? undefined
+        : { storeId: source.storeId, epoch: source.epoch },
+    )) throw new Error('no clearable execution binding')
     return { kind: 'success', text: 'execution binding cleared' }
   }
   if (request.operation === 'adopt') {
@@ -115,7 +123,7 @@ async function handleExecutionCommand(invocation: CommandInvocation, resolver: H
     const binding: ExecutionBinding = { version: 1, harnessRoot: harnessDir, session: ref }
     const resumed = await resumeExecutionSession(executionContextFor({ harnessDir }, { source: 'host', sessionId: ref.sessionId, workflowId: ref.workflowId, role: 'coordinator' }), ref)
     if (resumed.data.sessionId !== facts.sessionId || resumed.data.workflowId !== ref.workflowId) throw new Error('current execution session admission did not match the native session')
-    if (!adoptExecutionBinding(harnessDir, facts.sessionId, facts.cwd, binding)) throw new Error('execution binding adoption refused')
+    if (!adoptExecutionBinding(harnessDir, facts.sessionId, facts.cwd, binding, { storeId: resumed.storeId, epoch: resumed.epoch })) throw new Error('execution binding adoption refused')
     return { kind: 'success', text: `execution binding adopted for ${ref.workflowId}` }
   }
   const scope = { workflowId: request.workflowId, role: request.role }

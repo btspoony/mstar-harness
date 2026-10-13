@@ -1,18 +1,23 @@
 /**
  * Engine artifact store — type-only persist port (HostAdapter pattern).
- * JSON coordination docs
- * (status / snapshot / residuals / review) round-trip through an
- * `ArtifactStore`; the default `FsStore` keeps today's `.mstar/` paths
- * and atomic write semantics. No concrete non-FS adapter lives in this
- * package (roadmap §8.4 discipline), and an injected one stays a body store:
- * its data ports are guarded at the canonical control targets, never at a
- * root the injector claims.
+ * JSON coordination docs (review and unrelated `json`) round-trip through an
+ * `ArtifactStore`; the default `FsStore` keeps today's `.mstar/` paths and
+ * atomic write semantics. No concrete non-FS adapter lives in this package
+ * (roadmap §8.4 discipline), and an injected one stays a body store: its data
+ * ports are guarded at the canonical control targets, never at a root the
+ * injector claims.
+ *
+ * The former `status` / `snapshot` writer kinds are gone: the legacy root
+ * `status.json` and `workflows/<id>/snapshot.json` documents are migration
+ * sources / retained history that no store round-trip writes. Their exact
+ * paths survive only as the protected-target classification used by the
+ * `json` escape hatch, so an alias cannot dodge the coordination boundary.
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
-import { assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
+import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   assertSafePathComponent,
@@ -21,14 +26,20 @@ import {
   resolveWorkflowDir,
 } from "./path.js";
 
-/** Store artifact kinds. `status` and `snapshot` exist only for internal
- * migration staging; runtime persistence is `review` / `json`. The former
- * `residuals` kind is retired: `store.db` is the findings authority, and
- * `residuals.json` is migration history that must never be recreated. */
-export type ArtifactKind = "status" | "snapshot" | "review" | "json";
+/** Store artifact kinds: the governed `review` documents and the `json`
+ * escape hatch (a caller-supplied absolute path). The former `status` /
+ * `snapshot` migration-staging kinds and the `residuals` kind are retired:
+ * `store.db` is the findings/execution authority, and the legacy files are
+ * migration history that must never be recreated. */
+export type ArtifactKind = "review" | "json";
 
-/** Stable key inside the kind. Workflow id, project id, or review id;
- * `kind: "status"` always uses key `"root"`. */
+/** Legacy root status document path (`{HARNESS_DIR}/status.json`). Only
+ * reachable through the protected-target classification of a `json` alias. */
+export function legacyStatusDocPath(harnessRoot: string): string {
+  return join(harnessRoot, "status.json");
+}
+
+/** Stable key inside the kind. Review id or absolute `json` path. */
 export type ArtifactRef = {
   kind: ArtifactKind;
   key: string;
@@ -62,19 +73,32 @@ export interface ArtifactStore {
  * evaluated after the key passes `assertSafePathComponent`. */
 const PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
 
+/** The single kind-admission rule (one home for the retirement refusal). The
+ * type no longer admits the retired kinds, but a runtime caller — a JavaScript
+ * consumer or an already-compiled adapter — must be refused by kind alone,
+ * before any path mapping or delegation, rather than silently resolving or
+ * forwarding a legacy target. */
+function assertKindAdmitted(kind: string): void {
+  if (kind === "residuals") {
+    throw new Error(
+      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
+    );
+  }
+  if (kind === "status" || kind === "snapshot") {
+    throw new CoordinationError(
+      "coordination.direct-write-refused",
+      "ArtifactStore no longer admits status or snapshot kinds \u2014 root status.json and workflow snapshot.json are read-only legacy sources. Run mstar schema --help for the supported native workflow and plan mutation contracts.",
+      { kind },
+    );
+  }
+}
+
 /** Map an artifact ref to its file path under `harnessRoot` (the store contract — the single kind→path
  * mapping). Exported so host adapters import the contract instead of
  * re-deriving it textually. */
 export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
   const { kind, key } = ref;
-  // Retired kind guard (G2a): the type no longer admits `residuals`, but a
-  // runtime caller (JS consumer, stale adapter) must also be refused rather
-  // than silently resolving a legacy register path.
-  if ((kind as string) === "residuals") {
-    throw new Error(
-      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
-    );
-  }
+  assertKindAdmitted(kind as string);
   if (kind === "json") {
  // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
     if (!isAbsolute(key)) {
@@ -86,15 +110,6 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
     return key;
   }
   assertSafePathComponent(key, "ArtifactStore key");
-  if (kind === "status") {
-    if (key !== "root") {
-      throw new Error(`ArtifactStore status key must be "root" \u2014 got ${JSON.stringify(key)}`);
-    }
-    return join(harnessRoot, "status.json");
-  }
-  if (kind === "snapshot") {
-    return join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), key, "snapshot.json");
-  }
  // kind === "review" — product-locked table: plan-shaped
  // key → {HARNESS_DIR}/sdd/<key>/review/report.json; other keys →
  // {HARNESS_DIR}/sdd/_reviews/<key>.json. Never a key-less
@@ -136,17 +151,12 @@ function readDirEntries(dir: string): Dirent[] {
   }
 }
 
-/** Refuse every retired register write target (G2a): the `residuals` kind is
- * gone, and a `json` alias (`--json <abs path>`, symlink) whose CANONICAL
- * target is a `residuals.json` under the resolved project dir must not
- * recreate the legacy authority either — it refuses, it never falls through
- * to an ordinary write. */
+/** Refuse a `json` alias (`--json <abs path>`, symlink) whose CANONICAL
+ * target is a `residuals.json` under the resolved project dir — it must not
+ * recreate the legacy authority; it refuses, it never falls through to an
+ * ordinary write. The retired `residuals` KIND itself is refused by
+ * `assertKindAdmitted`, which every caller applies first. */
 function assertNotRetiredRegisterTarget(root: string, ref: ArtifactRef, filePath: string): void {
-  if ((ref.kind as string) === "residuals") {
-    throw new Error(
-      "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
-    );
-  }
   if (ref.kind === "json") {
     const canonical = canonicalTarget(filePath);
     if (basename(canonical) !== "residuals.json") return;
@@ -159,17 +169,17 @@ function assertNotRetiredRegisterTarget(root: string, ref: ArtifactRef, filePath
   }
 }
 
-/** Protected document class of a resolved target (spec §C4): the coordination
- * documents the scoped writers own. Kinds map directly; a `json` alias
- * (`--json <abs path>`, symlink) is classified by its CANONICAL target
- * against the resolved protected roots, so no alias can dodge the boundary.
- * `review` and unrelated `json` keep current behavior. */
+/**
+ * Protected document class of a resolved target (spec §C4): the legacy
+ * coordination documents. Only a `json` alias
+ * (`--json <abs path>`, symlink) can reach them, and it is classified by its
+ * CANONICAL target against the resolved protected roots, so no alias can dodge
+ * the boundary. `review` and unrelated `json` keep current behavior.
+ */
 function protectedKindOf(root: string, ref: ArtifactRef, filePath: string): ProtectedWriteKind | null {
-  if (ref.kind === "status") return "root";
-  if (ref.kind === "snapshot") return "snapshot";
   if (ref.kind !== "json") return null;
   const canonical = canonicalTarget(filePath);
-  if (canonical === canonicalTarget(resolveArtifactPath(root, { kind: "status", key: "root" }))) return "root";
+  if (canonical === canonicalTarget(legacyStatusDocPath(root))) return "root";
   const workflowDir = canonicalTarget(resolveWorkflowDir(root, { harnessDir: root }));
   if (basename(canonical) === "snapshot.json" && canonical.startsWith(`${workflowDir}${sep}`)) return "snapshot";
   return null;
@@ -199,12 +209,11 @@ const fsStoreInstances = new WeakSet<ArtifactStore>();
 
 /** Default local adapter: maps kinds to the existing `.mstar/` paths.
  * `put` uses the sync `writeJson` (atomic temp+rename unchanged) and
- * returns a resolved Promise; locks stay with callers (architect-locked
+ * returns a resolved Promise; no lock is taken anywhere (architect-locked
  * 2026-08-27). `get` mirrors `readJson`: missing file → `undefined`,
  * malformed JSON → throw with the path in the message. The returned store
- * also exposes its resolved `root` so the routed writers can fail loud
- * when a caller's explicit target path diverges from the store-resolved
- * path ; `root` is not part of the `ArtifactStore` contract.
+ * also exposes its resolved `root`; `root` is not part of the
+ * `ArtifactStore` contract.
  * `list` enumerates per the D4 table: report what exists — missing
  * backing dir/file → `[]`, `json` throws, keys sorted ascending. */
 export function createFsStore(harnessRoot: string): ArtifactStore & { root: string } {
@@ -224,8 +233,8 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       }
       const filePath = resolveArtifactPath(root, doc);
       assertNotRetiredRegisterTarget(root, doc, filePath);
-      // Protected coordination documents may be written only inside the
-      // authorization context opened by their locked migration writers.
+      // Legacy protected documents may be written only inside their own
+      // private authorization context (never through a raw store port).
       const protectedKind = protectedKindOf(root, doc, filePath);
       if (protectedKind !== null) {
         assertProtectedWriteAuthorized(filePath, "put", protectedKind);
@@ -254,45 +263,28 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
       if (kind === "json") {
         throw new Error("ArtifactStore json keys are absolute paths and cannot be listed");
       }
-      if ((kind as string) === "residuals") {
-        throw new Error(
-          "ArtifactStore no longer persists project registers \u2014 the issue store (store.db) is the only findings authority; a residuals.json is migration history",
-        );
-      }
+      // Retired kinds are refused by the single path table (one home for the
+      // refusal), before any enumeration.
+      resolveArtifactPath(root, { kind, key: "root" });
       const keys: string[] = [];
-      if (kind === "status") {
- // Exists-conditional (architect-amended D4): [root] iff the file
- // exists — never a key whose get would miss.
-        if (existsSync(resolveArtifactPath(root, { kind, key: "root" }))) keys.push("root");
-      } else if (kind === "snapshot") {
- // Same root resolution as the path table (.mstarc overrides apply).
-        const baseDir = resolveWorkflowDir(root, { harnessDir: root });
-        for (const name of listDirNames(baseDir)) {
- // Round-trip guard through the single path table: list the dir
- // only when its exact get-path (<dir>/<name>/<file>) exists.
+      // review — union enumeration (D4), single detector (PLAN_SHAPED_KEY_RE),
+      // same sdd root as the path table.
+      const sddDir = join(root, "sdd");
+      // (a) flat keys from _reviews/<key>.json. Plan-shaped names are excluded:
+      // get routes such a key to <key>/review/report.json, so listing the
+      // _reviews file would advertise an unreachable key.
+      for (const key of listJsonKeys(join(sddDir, "_reviews"))) {
+        if (!PLAN_SHAPED_KEY_RE.test(key) && tryResolveGetPath(root, kind, key) !== undefined) {
+          keys.push(key);
+        }
+      }
+      // (b) plan-shaped dirs carrying <dir>/review/report.json.
+      for (const name of listDirNames(sddDir)) {
+        if (PLAN_SHAPED_KEY_RE.test(name)) {
+          // PLAN_SHAPED_KEY_RE is a subset of the safe charset, so this probe
+          // never throws — same uniform guard as the other arms.
           const getPath = tryResolveGetPath(root, kind, name);
           if (getPath !== undefined && existsSync(getPath)) keys.push(name);
-        }
-      } else {
- // kind === "review" — union enumeration (D4), single detector
- // (PLAN_SHAPED_KEY_RE), same sdd root as the path table.
-        const sddDir = join(root, "sdd");
- // (a) flat keys from _reviews/<key>.json. Plan-shaped names are
- // excluded: get routes such a key to <key>/review/report.json, so
- // listing the _reviews file would advertise an unreachable key.
-        for (const key of listJsonKeys(join(sddDir, "_reviews"))) {
-          if (!PLAN_SHAPED_KEY_RE.test(key) && tryResolveGetPath(root, kind, key) !== undefined) {
-            keys.push(key);
-          }
-        }
- // (b) plan-shaped dirs carrying <dir>/review/report.json.
-        for (const name of listDirNames(sddDir)) {
-          if (PLAN_SHAPED_KEY_RE.test(name)) {
- // PLAN_SHAPED_KEY_RE is a subset of the safe charset, so this
- // probe never throws — same uniform guard as the other arms.
-            const getPath = tryResolveGetPath(root, kind, name);
-            if (getPath !== undefined && existsSync(getPath)) keys.push(name);
-          }
         }
       }
       return keys.sort().map((key) => ({ kind, key }));
@@ -318,15 +310,18 @@ function processControlRoot(): string {
 
 /**
  * Prevent custom stores from recreating or aliasing the retired project
- * register. Protected status/snapshot files are migration staging and their
- * writer callsites own authorization.
+ * register. The legacy status/snapshot documents stay unreachable except
+ * through their own authorization boundary.
  */
 function assertInjectedAccessAllowed(ref: ArtifactRef): void {
-  const retirableKind = (ref.kind as string) === "residuals";
-  const aliasKind = ref.kind === "json";
-  if (!retirableKind && !aliasKind) return;
-  const controlRoot = processControlRoot();
-  assertNotRetiredRegisterTarget(controlRoot, ref, aliasKind ? ref.key : "");
+  // The retired-kind refusal is the same rule the FsStore path table applies
+  // (`resolveArtifactPath` → `assertKindAdmitted`): an injected store must not
+  // forward a kind the engine no longer admits, whatever a caller's TypeScript
+  // union claims. Applied before the canonical target classification, so a
+  // status/snapshot request never reaches a delegated port.
+  assertKindAdmitted(ref.kind as string);
+  if (ref.kind !== "json") return;
+  assertNotRetiredRegisterTarget(processControlRoot(), ref, ref.key);
 }
 
 /**
@@ -335,8 +330,8 @@ function assertInjectedAccessAllowed(ref: ArtifactRef): void {
  * injected store declines them, and it deliberately exposes **no** `root`: a
  * custom adapter's `root` is a claim about a directory it may not write to at
  * all, while consumers read a string `root` as the FsStore capability that
- * authorizes path agreement (`assertFsStorePath`) and the direct byte/CAS and
- * `--versioned` routes. Dropping the claim makes an injected adapter a body
+ * authorizes the direct byte/CAS and `--versioned` routes. Dropping the claim
+ * makes an injected adapter a body
  * store by construction; the engine-created FsStore is served unwrapped and
  * keeps its own root.
  */
@@ -360,7 +355,12 @@ export function guardInjectedStore(store: ArtifactStore): ArtifactStore {
   }
   const list = store.list;
   if (list !== undefined) {
-    guarded.list = (kind: ArtifactKind) => list.call(store, kind);
+    // Async like every other port (and like FsStore.list), so a refused kind
+    // rejects rather than throwing through a caller's promise chain.
+    guarded.list = async (kind: ArtifactKind): Promise<ArtifactRef[]> => {
+      assertKindAdmitted(kind as string);
+      return list.call(store, kind);
+    };
   }
   return guarded;
 }
@@ -386,28 +386,6 @@ export function getArtifactStore(): ArtifactStore {
     );
   }
   return createFsStore(root);
-}
-
-/**
- * Fail-loud path-agreement guard for the routed writers : when
- * `store` is an FsStore, resolve the path the store would compute for
- * `ref` and require it to equal `expectedPath` (the caller's explicit
- * target). A divergence means the caller's path lives outside the active
- * store's root — the lockdir would serialize the parameter path while the
- * put lands at the store root (silent decoupling / split-brain window).
- * Custom (non-FS) stores own their mapping by design and are skipped.
- * Cheap: pure path resolution, no I/O.
- */
-export function assertFsStorePath(store: ArtifactStore, ref: ArtifactRef, expectedPath: string): void {
-  const root = (store as ArtifactStore & { root?: unknown }).root;
-  if (typeof root !== "string") return; // custom store — the caller's contract
-  const storePath = resolveArtifactPath(root, ref);
-  const expected = resolve(expectedPath);
-  if (storePath !== expected) {
-    throw new Error(
-      `routed writer path mismatch: the active FsStore resolves ${ref.kind}/${JSON.stringify(ref.key)} to ${JSON.stringify(storePath)} but the caller's target is ${JSON.stringify(expected)} \u2014 call setArtifactStore(createFsStore(<root>)) first when the write target differs from the active store's root`,
-    );
-  }
 }
 
 /** Trust boundary (architect-locked 2026-08-27): `loadStoreModule` accepts

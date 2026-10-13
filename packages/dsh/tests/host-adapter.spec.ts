@@ -29,9 +29,10 @@
  *   lease — the testable subset now; P3 wires the reservation).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { HostAdapter } from '@mstar-harness/engine'
+import { storeDbPath, type HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
 import type { IntegrationMergeLease } from '@mstar-harness/engine'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
@@ -533,8 +534,8 @@ describe('dispatchGate — D4 session hint derivation', () => {
 
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-b', app.root)))
 
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events.map((e) => e.kind)).toEqual(['dispatch'])
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'), 'wf-b')!.events.map((e) => e.kind)).toEqual(['dispatch'])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'), 'wf-a')!.events).toEqual([])
   })
 
   it('an UNBOUND session writes no ledger row (the gate verdict still returns) and reports the discovery state honestly', async () => {
@@ -552,30 +553,39 @@ describe('dispatchGate — D4 session hint derivation', () => {
 
     const result = await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-none', app.root)))
     expect(result.ok).toBe(false) // the assignment still gates (anti-recursion empty binding)
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'), 'wf-a')!.events).toEqual([])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'), 'wf-b')!.events).toEqual([])
   })
 
   it('an unreadable binding store is UNAVAILABLE — reported, no ledger row, never a fabricated empty hint', async () => {
     const app = booted = await bootApp()
     await seedTwoActives(app.harnessDir)
-    await seedHarness(app.harnessDir, { 'snapshots/engine-status.json': '{ not json' })
+    // A canonical store path that is not a readable regular store file: the
+    // binding read must report the store's own refusal instead of treating the
+    // untrustworthy authority as "no pick".
+    const storePath = storeDbPath({ harnessDir: app.harnessDir })
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${storePath}${suffix}`, { force: true })
+    mkdirSync(storePath, { recursive: true })
     const logged: string[] = []
     const adapter = makeAdapter({ log: (level, msg) => logged.push(`${level}: ${msg}`) })
 
     const hintRead = adapter.sessionHintFor(sessionAgent('sess-x', app.root))
-    expect(hintRead).toEqual({
-      kind: 'unavailable',
-      reason: 'store-invalid-json',
-      // The STRUCTURAL evidence survives (it is real), only the durable
-      // preference is unknown.
-      hint: { cwd: app.root, sessionId: 'sess-x' },
-    })
-    expect(logged.some((m) => m.startsWith('warn:') && m.includes('store-invalid-json'))).toBe(true)
+    expect(hintRead.kind).toBe('unavailable')
+    if (hintRead.kind !== 'unavailable') throw new Error('unreachable')
+    expect(hintRead.reason).toContain('store.corrupt')
+    // The STRUCTURAL evidence survives (it is real), only the durable
+    // preference is unknown.
+    expect(hintRead.hint).toEqual({ cwd: app.root, sessionId: 'sess-x' })
+    expect(logged.some((m) => m.startsWith('warn:') && m.includes('store.corrupt'))).toBe(true)
 
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-x', app.root)))
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-a'))!.events).toEqual([])
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-b'))!.events).toEqual([])
+    // The corrupt canonical store stays unavailable; no legacy ledger file is
+    // created as a fallback, and the DB-backed reader does not invent an empty view.
+    for (const workflowId of ['wf-a', 'wf-b']) {
+      const workflowDir = join(app.harnessDir, 'workflows', workflowId)
+      expect(existsSync(join(workflowDir, 'agent-flow.jsonl'))).toBe(false)
+      expect(readAgentFlow(workflowDir, workflowId)).toBeNull()
+    }
   })
 
   it('an exec-less dispatch in a UNIQUE active harness still records (the omitted hint is not a regression)', async () => {
@@ -584,6 +594,6 @@ describe('dispatchGate — D4 session hint derivation', () => {
 
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE))
 
-    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))!.events.map((e) => e.kind)).toEqual(['dispatch'])
+    expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')!.events.map((e) => e.kind)).toEqual(['dispatch'])
   })
 })

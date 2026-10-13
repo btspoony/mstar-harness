@@ -14,10 +14,9 @@
  * `workflow-selection.ts`): the session's scope/cwd/durable pick, else the
  * only active entry, else the latest terminal snapshot by mtime for an EMPTY
  * active registry; N>1 with no binding is the picker error, never first entry.
- * `state.plans[]` / row scopes come from the selected snapshot's `plans[]` rows
- * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, open issues
- * from the issue authority, and roadmap milestones from the store roadmap
- * authority — never a root v1 `plans[]` / root `agent-flow.jsonl` read.
+ * verbatim, `agentFlow` from the selected workflow's native event rows, open
+ * issues from the issue authority, and roadmap milestones from the store
+ * roadmap authority — never from retired root or workflow files.
  * The direction one-liner and the iteration gate come
  * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
  * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
@@ -49,6 +48,7 @@ import {
   withStoreRead,
   listRoadmapAuthority,
 } from '@mstar-harness/engine'
+import type { DshSelectedGeneration } from '@mstar-harness/engine'
 import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -203,6 +203,9 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
   }
 }
 
+
+// Keep generation metadata off the model-facing, JSON-serialized catalog payload.
+const authorityGenerationByPayload = new WeakMap<MstarEngineStatusPayload, DshSelectedGeneration>()
 /** One TTL cache entry: the unified payload plus the build timestamp. */
 export interface CatalogCacheEntry {
   payload: MstarEngineStatusPayload
@@ -384,7 +387,14 @@ export async function buildCatalogPayloadWithStore(
   harnessDir: string | null,
   hint?: SessionHint,
 ): Promise<MstarEngineStatusPayload> {
-  return buildCatalogPayload(ctx, harnessDir, hint, await readBuildFacts(harnessDir, hint))
+  const facts = await readBuildFacts(harnessDir, hint)
+  const payload = buildCatalogPayload(ctx, harnessDir, hint, facts)
+  const authority = facts?.authority
+  if (authority !== undefined && authority.kind !== 'unavailable' &&
+    authority.storeId !== undefined && authority.epoch !== undefined) {
+    authorityGenerationByPayload.set(payload, { storeId: authority.storeId, epoch: authority.epoch })
+  }
+  return payload
 }
 
 async function catalogPayloadFor(
@@ -555,12 +565,11 @@ function hhmm(ts: number): string {
  * ONCE by the caller (D4: the same selection the iteration gate consumes).
  * `state.plans[]` / `rowScopes` come from the selected snapshot's `plans[]` rows
  * verbatim (root action JSON stays the execution authority), `agentFlow` from
- * the workflow dir's `agent-flow.jsonl`, and the open-item facts from
- * `{HARNESS_DIR}/store.db` (the issue/catalog authority). Never a root v1
- * `plans[]` / root `agent-flow.jsonl` read, and never a project register: the
- * retired registers are not consulted anywhere on this path. The direction
- * one-liner and the branch fallbacks come from the SELECTED snapshot's own
- * `compass_ref` — never a directory-wide first-active compass scan.
+ * the selected workflow's native SQLite ledger window, and open-item facts
+ * from `{HARNESS_DIR}/store.db` (the issue/catalog authority). Never a root v1
+ * `plans[]` read, and never a project register: retired registers are not
+ * consulted here. Direction and branch fallbacks come from the selected
+ * snapshot's `compass_ref`.
  * @param harnessDir - the resolved `{HARNESS_DIR}` (null when none found).
  * @param selection - the ONE read-path selection for this build.
  * @param facts - the store-backed open-item facts (see {@link StoreFacts}).
@@ -655,17 +664,10 @@ function harnessStateSource(
       knowledge: facts.knowledge,
       storeFacts: facts.source,
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
-      // Actual subagent flow evidence — read on the same per-workspace cache
-      // cycle as the sibling state rows (one bounded ledger read per TTL
-      // refresh; spec §2.2). v3: the ledger lives in the SELECTED workflow
-      // dir (`workflows/<id>/agent-flow.jsonl`), never the root file.
-      // Fix-wave : a MISSING ledger reads as the EMPTY view
-      // (recording hasn't started — the panel shows the no-dispatches-yet
-      // empty state per the plan promise); only an UNREADABLE ledger → null
-      // (advisory — the agent-flow line is absent). The state section as a
-      // whole is still gated on status.json (missing status → state null →
-      // agentFlow absent too — documented).
-      agentFlow: readAgentFlow(join(harnessDir, selection.dir), 50),
+      // Read the selected workflow's native event window through the store.
+      // `null` means no authoritative window is available; it is not an empty
+      // success and no retired JSONL path is consulted.
+      agentFlow: readAgentFlow(join(harnessDir, selection.dir), selection.workflowId, 50, harnessDir),
     }
   } catch {
     return null // advisory degrade — the state section is absent, never hardening
@@ -1147,7 +1149,7 @@ export async function preStepCatalogListener(
       // log. Keyed by `session.header.id`: a stub without a real id has
       // nothing to key on, so the write is skipped (a reader then answers the
       // explicit unavailable state rather than another session's row).
-      persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent)
+      persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent, authorityGenerationByPayload.get(catalogPayload))
     }
     digests.set(digestKey, { turn: payload.turn, text })
     return { kind: 'enter', messages }
@@ -1201,13 +1203,18 @@ function agentDigestKey(agent: unknown, cwd: string | undefined): string {
 }
 
 /**
- * Persist the JUST-EMITTED catalog payload to the durable snapshot store
- * (`{HARNESS_DIR}/snapshots/engine-status.json`), keyed by the session id —
- * the edge-safe source a later host endpoint serves.
+ * Persist the JUST-EMITTED catalog payload as this session's newest durable
+ * emission row in the control-root store (`dsh_status_emissions`), keyed by
+ * the session id + its workspace — the edge-safe source a later host endpoint
+ * serves. Only the NEWEST emission per session is kept: the shared envelope's
+ * 50-entry mirror, its age rule and its byte ceiling were write-path
+ * containment of one file and have no reader.
  *
- * Contained: no session id, an unresolved `{HARNESS_DIR}` or an unwritable
- * store degrades to a debug/warn log — the advisory emission path never aborts
- * the step it observes (same containment rule as the append path above).
+ * Contained: no session id, an unresolved `{HARNESS_DIR}` or a store that
+ * cannot be written (no ACTIVE authority, a schema drift, a busy store)
+ * degrades to a warn log — the advisory emission path never aborts the step it
+ * observes (same containment rule as the append path above), and never
+ * fabricates a successful write.
  * @param ctx - registrant context (logger only).
  * @param harnessDir - the workspace's resolved `{HARNESS_DIR}` (null when none).
  * @param cwd - the session workspace the payload was resolved for.
@@ -1222,6 +1229,7 @@ function persistEngineStatusSnapshot(
   turn: number,
   catalogPayload: MstarEngineStatusPayload,
   agent: unknown,
+  selectedGeneration?: DshSelectedGeneration,
 ): void {
   const sessionId = sessionHeaderIdOf(agent)
   if (sessionId === undefined || cwd === undefined) return
@@ -1235,17 +1243,12 @@ function persistEngineStatusSnapshot(
     cwd,
     turn,
     payload: catalogPayload,
+    ...(selectedGeneration === undefined ? {} : { selectedGeneration }),
   })
   if (result.kind === 'degraded') {
     ctx.logger(CATALOG_LOGGER).warn(
       `engine-status snapshot not persisted for ${sessionId} (readers answer unavailable): ${result.reason}`,
     )
-    return
   }
-  // The store reports an oversize store ONCE (`warn` is present only on the
-  // first write that crosses its byte ceiling in this process), so this is the
-  // containment contract's "one warning per oversized store" — not a warning
-  // per turn. The row and the panel are unaffected either way.
-  if (result.warn !== undefined) ctx.logger(CATALOG_LOGGER).warn(result.warn)
 }
 

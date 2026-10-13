@@ -34,12 +34,10 @@
  * `mstar status tech-debt` computes from the issue store (`readIssueRollup`).
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
-import { withStatusWriteLock } from "./lease.js";
-import { CoordinationError, isNonEmptyString, isPlainObject, withProtectedWrite } from "./coordination-write.js";
-import { assertFsStorePath, getArtifactStore } from "./store.js";
+import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
@@ -150,14 +148,6 @@ const RESIDUAL_REQUIRED_FIELDS = ["id", "title", "severity", "source", "scope", 
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
-}
-
-/** Local calendar date `YYYY-MM-DD` (harness docs use local dates, e.g. `archived_at`). */
-function todayString(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
 }
 
 /**
@@ -457,8 +447,8 @@ export function validateWorkflowEntry(entry: unknown): GateResult {
  * `status.invalid-json` violation, never a throw). v1 or unknown-version
  * inputs — including v1-shaped documents carrying a root `plans[]` — fail
  * closed with an explicit `status.migration-required` violation carrying the
- * `mstar migrate` hint; there is no v1 read path anymore (v1 `validateStatus`
- * was deleted in the same task).
+ * supported store-upgrade recovery; there is no v1 read path anymore (v1
+ * `validateStatus` was deleted in the same task).
  *
  * Required: `version: 2`, `updated_at` (YYYY-MM-DD, same convention as the
  * v1 root), `workflows[]` of active entries (each validated by
@@ -496,6 +486,8 @@ export function validateStatusV2(
   if (!isPlainObject(doc)) {
     return { ok: false, violations: [violation("high", "status.invalid-doc", "status document must be an object")] };
   }
+  const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
+
 
  // Hard cutover (): a root file with `version !== 2` is the
  // migration-detection input — fail closed, never a silent pass or a dual
@@ -508,8 +500,8 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          `status.json schema version 2 required \u2014 got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`,
-          "run `mstar migrate`",
+          `status.json schema version 2 required \u2014 got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``,
+          `run \`${upgrade}\``,
         ),
       ],
     };
@@ -521,8 +513,8 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          "v1-shaped status.json (root plans[]) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
-          "run `mstar migrate`",
+          `v1-shaped status.json (root plans[]) is not a v2 document \u2014 import legacy state with \`${upgrade}\``,
+          `run \`${upgrade}\``,
         ),
       ],
     };
@@ -539,8 +531,8 @@ export function validateStatusV2(
         violation(
           "high",
           "status.migration-required",
-          "v1-shaped status.json (root residual_findings) is not a v2 document \u2014 run `mstar migrate` to convert the tree",
-          "run `mstar migrate`",
+          `v1-shaped status.json (root residual_findings) is not a v2 document \u2014 import legacy state with \`${upgrade}\``,
+          `run \`${upgrade}\``,
         ),
       ],
     };
@@ -674,54 +666,10 @@ export function validateStatusV2(
  * Relocated v2 root validator ( — hard cutover, no dual path):
  * the v1 `validateStatus` implementation was deleted in the same task that
  * introduced the v2 surface; the public export name survives so external
- * consumers (CLI, host hooks — cut over in P2) keep compiling and now fail
- * closed on v1 input with the `mstar migrate` hint.
+ * consumers (CLI, host hooks) keep compiling and now reject v1 input.
  */
 export const validateStatus = validateStatusV2;
 
-
-/**
- * Run `fn` with the registered entry's snapshot lock held, reading the
- * snapshot INSIDE that lock (spec §C3: root → snapshot acquisition order).
- * A binder holds the snapshot lock only, so re-taking the coordination
- * identification here — rather than trusting a bare read taken earlier in the
- * caller's root-locked section — closes the window in which a bind lands
- * between the read and the root replacement. `fn` runs while the lock is
- * still held, so the caller's root write cannot be raced by a concurrent bind
- * either.
- *
- * A missing snapshot carries no coordination block (a bind requires an
- * existing snapshot), so it is passed through as `undefined` without
- * creating a lockdir inside a directory that does not exist.
- */
-export async function withRegisteredSnapshotLock<T>(
-  harnessDir: string,
-  entry: WorkflowEntry,
-  fn: (snapshot: Record<string, unknown> | undefined) => Promise<T>,
-): Promise<T> {
-  if (typeof entry.dir !== "string") return fn(undefined);
-  const snapshotPath = join(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE);
-  if (!existsSync(snapshotPath)) return fn(undefined);
-  return withStatusWriteLock(snapshotPath, () => fn(readRegisteredSnapshot(snapshotPath)));
-}
-
-/**
- * Read a workflow snapshot for the coordination checks above. Callers reach
- * it under the snapshot's `withStatusWriteLock` whenever the snapshot exists
- * (`withRegisteredSnapshotLock`), so the value returned is the one the
- * guarded decision and the root write are made on. A missing or malformed
- * snapshot yields `undefined` — the tolerant read of the root writers is
- * preserved.
- */
-function readRegisteredSnapshot(snapshotPath: string): Record<string, unknown> | undefined {
-  if (!existsSync(snapshotPath)) return undefined;
-  try {
-    const parsed = JSON.parse(readFileSync(snapshotPath, "utf8")) as unknown;
-    return isPlainObject(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * The root-visible active entry for `id`, or `undefined` when the root file is
@@ -744,56 +692,6 @@ export function findRegisteredWorkflow(harnessDir: string, id: string): Workflow
   const workflows = Array.isArray(doc.workflows) ? doc.workflows : [];
   const entry = workflows.find((candidate) => isPlainObject(candidate) && candidate.id === id);
   return isPlainObject(entry) ? (entry as WorkflowEntry) : undefined;
-}
-
-
-
-/**
- * Hold the root and expected snapshot locks while a purge performs its journal
- * transaction and destructive filesystem work. The callback must call
- * `removeRoot` inside that transaction, before deleting snapshot bytes.
- */
-export async function withWorkflowPurgeLocks<T>(
-  root: string,
-  id: string,
-  expectedSnapshotPath: string,
-  fn: (snapshot: Record<string, unknown> | undefined, rootPresent: boolean, removeRoot: () => Promise<void>) => Promise<T>,
-  testHooks?: { beforeRootAbsentSnapshotLock?: () => void },
-): Promise<T> {
-  const statusPath = resolve(root);
-  const harnessDir = dirname(statusPath);
-  if (typeof id !== "string" || id.trim() === "") throw new Error("workflow id must be non-empty");
-  if (!isAbsolute(expectedSnapshotPath)) throw new Error("expected snapshot path must be absolute");
-  const store = getArtifactStore();
-  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
-  return withStatusWriteLock(statusPath, async () => {
-    const doc = existsSync(statusPath)
-      ? (readJson(statusPath) as StatusV2Doc)
-      : { version: 2 as const, updated_at: todayString(), workflows: [] };
-    if (!Array.isArray(doc.workflows)) throw new Error("status.json workflows must be an array");
-    const entry = doc.workflows.find((workflow) => workflow.id === id);
-    if (entry !== undefined && resolve(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE) !== resolve(expectedSnapshotPath)) {
-      throw Object.assign(new Error(`root entry snapshot path mismatch for workflow ${JSON.stringify(id)}`), {
-        code: "catalog.purge-root-entry-mismatch",
-      });
-    }
-    const removeRoot = async (): Promise<void> => {
-      if (entry === undefined) return;
-      doc.workflows = doc.workflows.filter((workflow) => workflow.id !== id);
-      doc.updated_at = todayString();
-      const gate = validateStatusV2(doc, { harnessDir });
-      if (!gate.ok) throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
-      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
-    };
-    if (entry !== undefined) {
-      return withRegisteredSnapshotLock(harnessDir, entry, (snapshot) => {
-        if (snapshot === undefined) throw new Error(`registered snapshot is missing for workflow ${JSON.stringify(id)}`);
-        return fn(snapshot, true, removeRoot);
-      });
-    }
-    testHooks?.beforeRootAbsentSnapshotLock?.();
-    return withStatusWriteLock(expectedSnapshotPath, () => fn(readRegisteredSnapshot(expectedSnapshotPath), false, removeRoot));
-  });
 }
 
 /**

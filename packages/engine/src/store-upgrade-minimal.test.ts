@@ -1,13 +1,14 @@
-import { afterAll, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import { execFileSync, spawn } from "node:child_process";
+import * as nodeFs from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
-import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
-import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
+import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
 import { mutateExecutionPlan } from "./execution-coordination.js";
@@ -15,12 +16,49 @@ import { executionInputHash, executionInputSelection, resolveProcessHarnessDir }
 import { previewExecutionRestore, restoreExecutionBackup } from "./execution-recovery.js";
 import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
+import { registerCatalogEntity } from "./catalog.js";
+import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.js";
+import type { DeliveryLiftDeclaration } from "./migrate.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
 afterAll(() => {
   setArtifactStore(undefined);
   rmSync(ROOT, { recursive: true, force: true });
 });
+
+/**
+ * Test-only instrumentation of the platform `node:fs` calls the importer
+ * resolves through, scoped to one callback and always restored. It replaces the
+ * functions on the shared namespace (exactly what the module's own `node:fs`
+ * import sees) and records every path argument, so a case can assert that a
+ * forbidden target or child path was NEVER probed by lstat/exists/realpath/read.
+ * Production exposes no hook, option, environment knob or test mode, and the
+ * recorded values are the real calls, not a mocked forwarding echo.
+ */
+async function withPathAccessLog<T>(run: () => Promise<T>): Promise<{ result: T; accessed: string[] }> {
+  const real = {
+    lstatSync: nodeFs.lstatSync,
+    statSync: nodeFs.statSync,
+    existsSync: nodeFs.existsSync,
+    realpathSync: nodeFs.realpathSync,
+    readFileSync: nodeFs.readFileSync,
+    readdirSync: nodeFs.readdirSync,
+  };
+  const accessed: string[] = [];
+  const spies: Array<{ mockRestore: () => void }> = [];
+  const record = (value: unknown) => { if (typeof value === "string") accessed.push(value); };
+  spies.push(spyOn(nodeFs, "lstatSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.lstatSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "statSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.statSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "existsSync").mockImplementation(((path: unknown) => { record(path); return real.existsSync(path as never); }) as never));
+  spies.push(spyOn(nodeFs, "realpathSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.realpathSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "readFileSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.readFileSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  spies.push(spyOn(nodeFs, "readdirSync").mockImplementation(((path: unknown, ...rest: unknown[]) => { record(path); return (real.readdirSync as (...args: unknown[]) => unknown)(path, ...rest); }) as never));
+  try {
+    return { result: await run(), accessed };
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+}
 
 function legacyWorkspace(name: string): { context: StoreContext; unknownBytes: Buffer } {
   const harnessDir = join(ROOT, name, ".mstar");
@@ -250,7 +288,11 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
   const changedSnapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
   changedSnapshot.updated_at = "2026-10-05";
   writeFileSync(snapshotPath, JSON.stringify(changedSnapshot));
-  expect(await upgradeStoreMinimal(input)).toEqual(result);
+  // The imported input is part of the request identity: the SAME operation over
+  // EDITED legacy bytes conflicts instead of answering with a receipt that
+  // describes bytes this run never imported. Only the unchanged replay above is
+  // answered by the retained receipt.
+  await expect(upgradeStoreMinimal(input)).rejects.toMatchObject({ code: "execution.operation-conflict" });
   const replayStore = await openStore(context, "read");
   try {
     expect(replayStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
@@ -498,7 +540,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
   const refused = await openStore(context, "read");
   try {
-    expect(refused.schemaVersion).toBe(MIGRATIONS.length - 1);
+    expect(refused.schemaVersion).toBe(8);
     // Every protected row is byte-identical: the batch rolled back whole.
     const afterPlan = JSON.parse(JSON.stringify(
       refused.db.prepare("select * from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId),
@@ -533,6 +575,10 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     operator: "operator",
     operationId: "op-active-schema8-normalize",
     attestation: retiredAttestation,
+    // The retained legacy source for this id collides with the native row the
+    // schema-8 store already holds: the normalization keeps the native row and
+    // skips only that legacy IMPORT.
+    acknowledgedWorkflowSkips: [workflowId],
   });
   const store = await openStore(context, "read");
   try {
@@ -784,7 +830,7 @@ test("an unattested retired plan-PM integration mutex refuses the upgrade and ke
   expect(await protectedStore(context)).toEqual(before);
   const store = await openStore(context, "read");
   try {
-    expect(store.schemaVersion).toBe(MIGRATIONS.length - 1);
+    expect(store.schemaVersion).toBe(8);
     expect(store.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 1 });
     expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 1 });
   } finally {
@@ -805,7 +851,7 @@ for (const invalid of [
     expect(existsSync(storeDbPath(empty))).toBe(false);
     const created = await initializeStore(empty, { attestation: stopDocument("retired") });
     try {
-      expect(created.schemaVersion).toBe(9);
+      expect(created.schemaVersion).toBe(MIGRATIONS.length);
     } finally {
       created.close();
     }
@@ -813,7 +859,7 @@ for (const invalid of [
     const before = await protectedStore(context);
     await expect(upgradeStore(context, { attestation: invalid.document })).rejects.toMatchObject({ code: invalid.code });
     expect(await protectedStore(context)).toEqual(before);
-    expect(await upgradeStore(context, { attestation: stopDocument(sessionId) })).toEqual({ schemaVersion: 9 });
+    expect(await upgradeStore(context, { attestation: stopDocument(sessionId) })).toEqual({ schemaVersion: MIGRATIONS.length });
   });
 }
 
@@ -842,7 +888,7 @@ for (const boundary of [
       expect(await protectedStore(context)).toEqual(before);
     }
     const accepted = boundary.accepted ? document : stopDocument(sessionId);
-    expect(await upgradeStore(context, { attestation: accepted })).toEqual({ schemaVersion: 9 });
+    expect(await upgradeStore(context, { attestation: accepted })).toEqual({ schemaVersion: MIGRATIONS.length });
     const upgraded = await openStore(context, "read");
     try {
       const row = upgraded.db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?")
@@ -995,22 +1041,44 @@ test("a logical missing-plan claim refuses unchanged and recovers from its genui
   expect(restored.epoch).toBe(Math.max(preview.liveEpoch, backup.epoch) + 1);
   expect(restored.restoredFromSha256).toBe(preview.backupSha256);
   expect(restored.preRestoreBackup.schemaVersion).toBe(8);
-  const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath, "utf8"));
+  expect(restored.recoveryReceiptPath).not.toBeNull();
+  const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath!, "utf8"));
   expect(recoveryRecord).toMatchObject({
     phase: "replaced", operator: "fixture-operator", authorization: "restore-pre-corruption-point",
+    // The record names the SELECTED recovery point, which is a pathname a reader
+    // can still follow afterwards. The staged image the rows were read from is
+    // this attempt's own scratch and is disclosed separately by
+    // `restoredCopyPath`, which is gone once the attempt finishes.
     backupPath: backup.backupPath, backupSha256: preview.backupSha256,
     verified: { integrity: "ok", foreignKeys: "ok", schemaVersion: 8, executionAuthorityState: "active" },
   });
+  expect(existsSync(recoveryRecord.backupPath)).toBe(true);
+  expect(existsSync(String(recoveryRecord.restoredCopyPath))).toBe(false);
   const recovered = await protectedStore(context);
   expect(recovered.schema).toEqual(before.schema);
   const originalMeta = JSON.parse(before.tables.store_meta![0]!);
   const restoredMeta = JSON.parse(recovered.tables.store_meta![0]!);
   expect(restoredMeta).toEqual({ ...originalMeta, authority_epoch: restored.epoch });
+  // Every authority row is the selected point's, with ONE intended addition:
+  // the restore commits its complete recovery record into the store's own
+  // operation ledger in the same transaction as the authority it describes, so
+  // the record and the restored generation are observable together.
+  const restoreReceipts = (rows: readonly string[] | undefined): string[] =>
+    (rows ?? []).filter((row) => row.includes('"operation_id":"restore-attempt:'));
+  expect(restoreReceipts(recovered.tables.store_operations)).toHaveLength(1);
   for (const table of Object.keys(before.tables).filter((table) => table !== "store_meta")) {
+    if (table === "store_operations") {
+      expect((recovered.tables[table] ?? []).filter((row) => !row.includes('"operation_id":"restore-attempt:')))
+        .toEqual(before.tables[table] ?? []);
+      continue;
+    }
     expect(recovered.tables[table]).toEqual(before.tables[table]);
   }
   await upgradeStoreMinimal({
     context, operator: "operator", operationId: "recovered-upgrade", attestation: stopDocument(sessionId),
+    // The restored generation holds the same native workflow the retained legacy
+    // source names, so this retry keeps the native row and skips only its IMPORT.
+    acknowledgedWorkflowSkips: [workflowId],
   });
   await continuePlan(context, workflowId, planId);
 });
@@ -1334,13 +1402,35 @@ test("no-store upgrade initializes execution schema and imports every populated 
     store.close();
   }
 
-  const replay = await upgradeStoreMinimal({ ...input, operationId: "op-no-store-populated-replay" });
-  expect(replay.imported).toBe(0);
-  const afterReplay = await openStore(context, "read");
+  // A LATER operation id is not a replay: the recognized legacy source now
+  // collides with the native row this store already holds, so it refuses
+  // instead of silently skipping the source or guessing a prior import from a
+  // matching id.
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-no-store-populated-replay" })
+    .then(() => { throw new Error("a repeated legacy import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain("--ack-skip-workflow wf-no-store-populated");
+  const afterRefusal = await openStore(context, "read");
   try {
-    expect(afterReplay.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+    expect(afterRefusal.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
   } finally {
-    afterReplay.close();
+    afterRefusal.close();
+  }
+  // The supported recovery is the ordinary acknowledgement on the same entry:
+  // the native row is kept and only the legacy IMPORT is skipped.
+  const recovered = await upgradeStoreMinimal({
+    ...input, operationId: "op-no-store-populated-ack",
+    acknowledgedWorkflowSkips: ["wf-no-store-populated"],
+  });
+  expect(recovered.imported).toBe(0);
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining("workflow wf-no-store-populated: skipped by --ack-skip-workflow"),
+  );
+  const afterRecovery = await openStore(context, "read");
+  try {
+    expect(afterRecovery.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+  } finally {
+    afterRecovery.close();
   }
 });
 
@@ -1470,6 +1560,14 @@ test("same operation replays and a reused operation id with a different operator
   const first = await upgradeStoreMinimal(input);
   expect(await upgradeStoreMinimal(input)).toEqual(first);
   await expect(upgradeStoreMinimal({ ...input, operator: "another" })).rejects.toMatchObject({ code: "execution.operation-conflict" });
+  // The imported input is part of the request identity: the SAME operator and
+  // operation id over changed legacy bytes is a conflict, never a receipt that
+  // describes bytes this run never imported.
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-replay-conflict", WORKFLOW_SNAPSHOT_FILE);
+  const edited = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  edited.updated_at = "2026-10-13";
+  writeFileSync(snapshotPath, JSON.stringify(edited));
+  await expect(upgradeStoreMinimal(input)).rejects.toMatchObject({ code: "execution.operation-conflict" });
 });
 
 test("minimal activation retains a manually constructed legacy registration recovery journal", async () => {
@@ -1499,3 +1597,1884 @@ test("minimal activation retains a manually constructed legacy registration reco
     expect.objectContaining({ operationId, workflowId, phase: "execution-written", rootVisible: true }),
   );
 });
+
+/* ------------------------------------------------------------------------ *
+ * Direct v1 root conversion
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The declaration `v1-standalone` (the fixture's one ACTIVE standalone lift)
+ * needs: a plan workflow fixes its delivery kind at registration, so the
+ * ordinary upgrade must declare it.
+ */
+const V1_STANDALONE_DECLARATION: DeliveryLiftDeclaration[] = [
+  { workflow: "v1-standalone", deliveryKind: "development", branchSource: "feature/v1-standalone", branchTarget: "main" },
+];
+
+/** Write a recognizable v1 root tree (version 1 + one standalone Done plan). */
+function legacyV1Workspace(name: string): { context: StoreContext; statusBytes: Buffer } {
+  const harnessDir = join(ROOT, name, ".mstar");
+  const workflowId = `wf-${name}`;
+  mkdirSync(join(harnessDir, "iterations", "iter-v1"), { recursive: true });
+  writeFileSync(join(harnessDir, "iterations", "iter-v1", "delivery-compass.md"), [
+    "---",
+    "iteration_id: iter-v1",
+    "start_date: 2026-10-01",
+    "status: active",
+    "plans:",
+    `  - ${workflowId}`,
+    "---",
+    "",
+  ].join("\n"));
+  const statusBytes = Buffer.from(`${JSON.stringify({
+    version: 1,
+    updated_at: "2026-10-04",
+    plans: [
+      { id: workflowId, title: "Legacy v1 plan", file: `${workflowId}.md`, status: "Done", done_at: "2026-10-02" },
+      { id: "v1-standalone", title: "Standalone v1 plan", file: "v1-standalone.md", status: "Todo" },
+    ],
+    metadata: {
+      iteration_base_branch: "integration/v1",
+      target_branch: "main",
+      harness_root: harnessDir,
+      program_roadmap: { title: "Retained program roadmap", milestones: [{ id: "m1", title: "Keep this fact" }] },
+      integration_merge_lease: {
+        holder: "legacy-coordinator",
+        claimed_at: "2026-10-04T00:00:00Z",
+        source_branch: "feature/legacy",
+        target_branch: "main",
+      },
+    },
+  }, null, 2)}\n`);
+  writeFileSync(join(harnessDir, "status.json"), statusBytes);
+  writeFileSync(join(harnessDir, "plain-doc.md"), "# unrelated document\n");
+  return { context: { harnessDir }, statusBytes };
+}
+
+test("a v1 public upgrade refuses a symlinked workflows tree instead of silently skipping it", async () => {
+  const { context } = legacyV1Workspace("v1-unsafe-workflows");
+  // A recognizable v1 root takes the in-memory conversion route, which never
+  // enumerates `workflows/`; the tree-safety precondition must still run before
+  // either route commits, exactly like the v2 route's own refusal.
+  const realTree = join(context.harnessDir, "elsewhere-v1-tree");
+  mkdirSync(join(realTree, "wf-linked"), { recursive: true });
+  writeFileSync(join(realTree, "wf-linked", "snapshot.json"), "{}\n");
+  symlinkSync(realTree, join(context.harnessDir, "workflows"));
+
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-unsafe-workflows",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  })).rejects.toMatchObject({
+    code: "execution.migration-conflict",
+    message: expect.stringContaining("is not a real directory"),
+  });
+
+  // Nothing committed: the store holds no execution rows from this run.
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
+  }
+});
+
+test("an acknowledged DSH-only symlinked workflows root drops that source through --ack-skip-dsh without following it", async () => {
+  const { context } = legacyWorkspace("symlinked-dsh-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const registeredDir = join(workflowsDir, "wf-symlinked-dsh-root");
+  // The whole `workflows/` tree is a symlink holding only legacy DSH host-state
+  // data; the registered workflow lives elsewhere so the root is NOT an
+  // execution source for it. The documented `dsh-workflows` acknowledgement
+  // must be able to drop exactly that source instead of the preflight aborting.
+  const outside = join(context.harnessDir, "outside-dsh-tree");
+  mkdirSync(join(outside, "wf-linked"), { recursive: true });
+  const linkedIds = '{"id":"wfe1:root-linked","d":"root-linked-digest"}\n';
+  writeFileSync(join(outside, "wf-linked", "agent-flow-ids.jsonl"), linkedIds);
+  // Relocate the registered workflow OUT of `workflows/` before linking the root
+  // over it, so the root is a DSH-only source rather than an execution source.
+  const snapshotBytes = readFileSync(join(registeredDir, WORKFLOW_SNAPSHOT_FILE));
+  const relocated = join(context.harnessDir, "relocated", "wf-symlinked-dsh-root");
+  mkdirSync(relocated, { recursive: true });
+  writeFileSync(join(relocated, WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(outside, workflowsDir);
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows[0]!.dir = "relocated/wf-symlinked-dsh-root";
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  // Refusal without the acknowledgement, and nothing committed: the recovery
+  // is discoverable from the refusal itself.
+  const refused = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-symlinked-dsh-root" })
+    .then(() => { throw new Error("an unacknowledged symlinked workflows root unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain("--ack-skip-dsh dsh-workflows");
+  const beforeStore = await openStore(context, "read");
+  try { expect(beforeStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { beforeStore.close(); }
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-symlinked-dsh-root-ack",
+    acknowledgedSkips: ["dsh-workflows"],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.dsh).toMatchObject({ verdict: "partially-imported" });
+  expect(recovered.dsh.findings).toContainEqual(
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-workflows", category: "workflows" }),
+  );
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: "wf-symlinked-dsh-root" }]);
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // Nothing was followed through the root link: it is still a symlink and its
+  // target bytes are untouched.
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(outside, "wf-linked", "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+});
+
+test("a symlinked workflows root that registers an execution workflow is never discarded by a DSH acknowledgement", async () => {
+  const { context } = legacyWorkspace("symlinked-registered-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const target = join(context.harnessDir, "outside-registered-tree");
+  mkdirSync(join(target, "wf-symlinked-registered-root"), { recursive: true });
+  const snapshotBytes = readFileSync(join(workflowsDir, "wf-symlinked-registered-root", WORKFLOW_SNAPSHOT_FILE));
+  writeFileSync(join(target, "wf-symlinked-registered-root", WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(target, workflowsDir);
+
+  // The register names a workflow directory under the linked root: that is an
+  // execution source, so no *Dsh* acknowledgement may drop or skip it. Only the
+  // execution-specific `--ack-skip-workflow` can, and only for the named id.
+  const defaults = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-registered-symlinked-root-default",
+  }).then(() => { throw new Error("a registered execution source was imported through a linked root"); }, (error: Error & { code?: string }) => error);
+  expect(defaults.code).toBe("execution.migration-conflict");
+  const refusal = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-registered-symlinked-root",
+    acknowledgedSkips: ["dsh-workflows"],
+  }).then(() => { throw new Error("a registered execution source was discarded by a Dsh acknowledgement"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("never discarded by a DSH acknowledgement");
+  expect(refusal.message).toContain("--ack-skip-workflow wf-symlinked-registered-root");
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+});
+
+test("an acknowledged DSH-only symlinked workflows root recovers a v1 tree too", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-symlinked-dsh-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const outside = join(context.harnessDir, "outside-v1-dsh-tree");
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, workflowsDir);
+
+  // A v1 root's conversion never enumerates `workflows/`; before the deferral
+  // the preflight aborted here and the only way forward was editing filesystem
+  // state by hand.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-symlinked-root-ack",
+    acknowledgedSkips: ["dsh-workflows"],
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(recovered.dsh.findings).toContainEqual(expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-workflows" }));
+  expect([...readFileSync(join(context.harnessDir, "status.json"))]).toEqual([...statusBytes]);
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+});
+
+test("an acknowledged DSH-only symlinked child recovers through --ack-skip-dsh without following the link", async () => {
+  const { context, unknownBytes } = legacyWorkspace("symlinked-dsh-child");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  // An UNREGISTERED symlinked child holding only legacy DSH ledger data: the
+  // execution preflight must leave it to the DSH importer's own documented
+  // acknowledgement instead of failing before that recovery can run.
+  const outside = join(context.harnessDir, "outside-dsh");
+  mkdirSync(outside, { recursive: true });
+  const linkedIds = '{"id":"wfe1:linked","d":"linked-digest"}\n';
+  writeFileSync(join(outside, "agent-flow-ids.jsonl"), linkedIds);
+  const linkPath = join(workflowsDir, "wf-link");
+  symlinkSync(outside, linkPath);
+
+  // Refusal without the explicit acknowledgement, and nothing committed.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-symlinked-dsh-child" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining("--ack-skip-dsh dsh-ledger:wf-link"),
+    });
+  const refused = await openStore(context, "read");
+  try {
+    expect(refused.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(refused.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { refused.close(); }
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-symlinked-dsh-child-ack",
+    acknowledgedSkips: ["dsh-ledger:wf-link"],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.dsh).toMatchObject({ verdict: "partially-imported" });
+  expect(recovered.dsh.findings).toContainEqual(
+    expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-link", category: "workflows" }),
+  );
+  // The registered in-root workflow still imported; the linked source did not.
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: "wf-symlinked-dsh-child" }]);
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // Nothing was followed through the link: it is still a symlink and its target
+  // bytes are untouched, as is the unrelated in-root file.
+  expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(outside, "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+  expect([...readFileSync(join(workflowsDir, "wf-symlinked-dsh-child", "unknown.bin"))]).toEqual([...unknownBytes]);
+});
+
+test("a DSH child acknowledgement cannot widen the skip to a registered symlinked workflow", async () => {
+  const { context } = legacyWorkspace("symlinked-registered");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  // The SAME child shape, but registered: the registration is an execution
+  // source, so the acknowledgement must not defer it. The in-root target keeps
+  // the containment guard out of the way so the per-entry no-follow guard is the
+  // one that answers.
+  const realInRoot = join(context.harnessDir, "real-in-root", "wf-symlinked-registered");
+  mkdirSync(realInRoot, { recursive: true });
+  const linkedIds = '{"id":"wfe1:registered","d":"registered-digest"}\n';
+  writeFileSync(join(realInRoot, "agent-flow-ids.jsonl"), linkedIds);
+  const linkPath = join(workflowsDir, "wf-symlinked-registered");
+  rmSync(linkPath, { recursive: true, force: true });
+  symlinkSync(realInRoot, linkPath);
+
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-symlinked-registered",
+    acknowledgedSkips: ["dsh-ledger:wf-symlinked-registered"],
+  })).rejects.toMatchObject({
+    code: "execution.migration-conflict",
+    message: expect.stringContaining("is not a real in-root directory"),
+  });
+  // The acknowledged selector discarded nothing: no execution row, no DSH row,
+  // and the link target was never followed or rewritten.
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(realInRoot, "agent-flow-ids.jsonl"), "utf8")).toBe(linkedIds);
+});
+
+test("an explicit execution acknowledgement skips exactly the named registered linked source and reports the loss", async () => {
+  const { context } = legacyWorkspace("acked-registered-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const target = join(context.harnessDir, "outside-acked-tree");
+  mkdirSync(join(target, "wf-acked-registered-root"), { recursive: true });
+  const snapshotBytes = readFileSync(join(workflowsDir, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE));
+  writeFileSync(join(target, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE), snapshotBytes);
+  // A second registered workflow that stays a real in-root directory, plus an
+  // unrelated linked source under the same root: the acknowledgement must skip
+  // exactly the named id and leave both of the others alone.
+  const keepId = "wf-acked-keep";
+  const keepDir = join(workflowsDir, keepId);
+  mkdirSync(keepDir, { recursive: true });
+  const keepSnapshot = JSON.parse(snapshotBytes.toString("utf8")) as Record<string, unknown>;
+  keepSnapshot.id = keepId;
+  keepSnapshot.plans = [];
+  keepSnapshot.status = "running";
+  keepSnapshot.branch = { source: `feature/${keepId}`, target: "main" };
+  writeFileSync(join(keepDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify(keepSnapshot));
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: keepId, type: "plan", started_at: "2026-10-04", dir: `workflows/${keepId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+  const linkedSnapshot = readFileSync(join(target, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE));
+  rmSync(workflowsDir, { recursive: true, force: true });
+  mkdirSync(workflowsDir);
+  mkdirSync(keepDir, { recursive: true });
+  writeFileSync(join(keepDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify(keepSnapshot));
+  symlinkSync(join(target, "wf-acked-registered-root"), join(workflowsDir, "wf-acked-registered-root"));
+  const untouchedId = "wf-acked-untouched";
+  const untouchedDir = join(workflowsDir, untouchedId);
+  mkdirSync(untouchedDir);
+  const untouchedSnapshot = JSON.stringify({ ...keepSnapshot, id: untouchedId, branch: { source: `feature/${untouchedId}`, target: "main" } });
+  writeFileSync(join(untouchedDir, WORKFLOW_SNAPSHOT_FILE), untouchedSnapshot);
+
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-acked-registered-root",
+    // The linked child is independently a DSH source, so completing the upgrade
+    // needs that domain's own acknowledgement too: the two domains stay separate.
+    acknowledgedSkips: ["dsh-ledger:wf-acked-registered-root"],
+    // A repeated id is a harmless caller slip: it means the same one skip.
+    acknowledgedWorkflowSkips: ["wf-acked-registered-root", "wf-acked-registered-root"],
+  });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.skipped).toContainEqual({
+    path: "workflows/wf-acked-registered-root",
+    reason: "registered workflow wf-acked-registered-root skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it",
+  });
+  expect(result.dispositions).toContainEqual(expect.stringContaining("workflow wf-acked-registered-root: skipped by --ack-skip-workflow"));
+  expect(result.dispositions).toContainEqual(expect.stringContaining("no resumption is fabricated"));
+  const store = await openStore(context, "read");
+  try {
+    // Only the trusted registered workflow and the unrelated unregistered one
+    // import; no row is fabricated for the skipped id or for the untracked
+    // symlink beside it.
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: keepId }, { workflow_id: untouchedId }]);
+  } finally { store.close(); }
+  // Nothing was followed through the link: it is still a symlink, its target
+  // bytes are untouched, and the unrelated sources keep their own bytes.
+  expect(lstatSync(join(workflowsDir, "wf-acked-registered-root")).isSymbolicLink()).toBe(true);
+  expect([...readFileSync(join(target, "wf-acked-registered-root", WORKFLOW_SNAPSHOT_FILE))]).toEqual([...linkedSnapshot]);
+  expect(readFileSync(join(untouchedDir, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(untouchedSnapshot);
+  // The skip is an import decision only: the same source retries as an ordinary
+  // refusal while it stays linked, and the registration is untouched.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-acked-registered-root-omit",
+  }).then(() => { throw new Error("an omitted acknowledgement silently skipped a registered source"); }, (error: Error & { code?: string }) => error);
+  expect(retried.code).toBe("execution.migration-conflict");
+  expect(JSON.parse(readFileSync(statusPath, "utf8"))).toMatchObject({ workflows: expect.arrayContaining([expect.objectContaining({ id: "wf-acked-registered-root" })]) });
+});
+
+test("an execution acknowledgement naming a trusted, unknown or v1 registration refuses before any row", async () => {
+  const trusted = legacyWorkspace("acked-trusted");
+  // `wf-acked-trusted` is a real in-root directory: this run would import it, so
+  // skipping it would silently drop a trusted source.
+  await expect(upgradeStoreMinimal({
+    context: trusted.context, operator: "operator", operationId: "op-acked-trusted",
+    acknowledgedWorkflowSkips: ["wf-acked-trusted"],
+  })).rejects.toMatchObject({
+    code: "execution.workflow-skip-unmatched",
+    message: expect.stringContaining("matched no workflow source this run refuses"),
+  });
+  const trustedStore = await openStore(trusted.context, "read");
+  try { expect(trustedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { trustedStore.close(); }
+
+  const unknown = legacyWorkspace("acked-unknown");
+  await expect(upgradeStoreMinimal({
+    context: unknown.context, operator: "operator", operationId: "op-acked-unknown",
+    acknowledgedWorkflowSkips: ["wf-never-registered"],
+  })).rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+
+  // A v1 root converts in memory and never reads `workflows/` (this fixture has
+  // no workflows tree at all), so its registrations are not skippable linked
+  // sources: the acknowledgement is refused rather than accepted and ignored.
+  const v1 = legacyV1Workspace("v1-acked-registration");
+  await expect(upgradeStoreMinimal({
+    context: v1.context, operator: "operator", operationId: "op-v1-acked-registration",
+    acknowledgedWorkflowSkips: ["wf-v1-acked-registration"],
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  })).rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+  const v1Store = await openStore(v1.context, "read");
+  try { expect(v1Store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { v1Store.close(); }
+});
+
+/* ------------------------------------------------------------------------ *
+ * Native/legacy ID collision
+ * ------------------------------------------------------------------------ */
+
+/**
+ * One store with a REAL native workflow+plan created through the public
+ * producers (not hand-written SQL), plus the control root's retained legacy v2
+ * source for the SAME id — the shape the silent-omission defect came from. The
+ * native branch differs from the legacy one, so the collision's preserved native
+ * row is distinguishable from what the legacy source would have imported.
+ */
+async function nativeCollisionWorkspace(name: string): Promise<{ context: StoreContext; workflowId: string; legacyBytes: Buffer }> {
+  const { context } = legacyWorkspace(name);
+  const workflowId = `wf-${name}`;
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const root = await readExecutionState(context);
+  await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId, role: "coordinator" })), {
+    entry: { id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-10-04",
+      updated_at: "2026-10-04",
+      delivery_kind: "development",
+      branch: { source: `feature/native-${workflowId}`, target: "main" },
+      plans: [{ id: `${workflowId}-plan`, title: "Native collision plan", file: `${workflowId}-plan.md`, status: "Todo" }],
+    } satisfies WorkflowSnapshot,
+    expected: root.token,
+    operationId: `create-${name}`,
+  });
+  // The legacy source the fixture's `legacyWorkspace` wrote stays exactly as it
+  // is on disk; this read is the byte witness the collision must not touch.
+  const legacyBytes = readFileSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
+  return { context, workflowId, legacyBytes };
+}
+
+test("a recognized legacy source whose id already exists natively refuses, then an explicit acknowledgement keeps the native authority and skips only its IMPORT", async () => {
+  const { context, workflowId, legacyBytes } = await nativeCollisionWorkspace("native-id-collision");
+  // An unrelated healthy legacy row in the SAME run, so a partial import is
+  // observable: the refusal must commit NOTHING, including that healthy row.
+  const healthyId = "wf-native-id-collision-healthy";
+  const healthyDir = join(context.harnessDir, "workflows", healthyId);
+  mkdirSync(healthyDir, { recursive: true });
+  writeFileSync(join(healthyDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: healthyId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" }, plans: [],
+  }));
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: healthyId, type: "plan", started_at: "2026-10-04", dir: `workflows/${healthyId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+  const before = await protectedStore(context);
+  // The exact native header content, so the preserved row is observed as
+  // content and not merely as a surviving id.
+  const native = await openStore(context, "read");
+  let nativeHeader: { state_json: string; revision: number };
+  try {
+    nativeHeader = native.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string; revision: number };
+  } finally { native.close(); }
+  expect(JSON.parse(nativeHeader.state_json)).toMatchObject({ branch: { source: `feature/native-${workflowId}` } });
+
+  // Default: the collision refuses before any execution row commits, names the
+  // exact original id and the runnable same-source recovery.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-native-id-collision" })
+    .then(() => { throw new Error("a native-id collision was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  // Nothing committed — not even the healthy row, so no partial import is real.
+  expect(await protectedStore(context)).toEqual(before);
+  const refusedStore = await openStore(context, "read");
+  try {
+    expect(refusedStore.db.prepare("select workflow_id from execution_workflows order by workflow_id").all()).toEqual([{ workflow_id: workflowId }]);
+  } finally { refusedStore.close(); }
+  // The legacy source bytes are untouched by the refusal.
+  expect([...readFileSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE))]).toEqual([...legacyBytes]);
+
+  // The explicit acknowledgement keeps the native row and imports ONLY the
+  // healthy row, reporting the colliding import loss with native progress
+  // intact.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-id-collision-ack",
+    acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.skipped).toContainEqual({
+    path: `workflows/${workflowId}`,
+    reason: `legacy source for workflow ${workflowId} skipped by --ack-skip-workflow; the native execution authority already holds that id, so its native rows were kept and its legacy IMPORT was skipped`,
+  });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow; the native execution authority already holds that id`),
+  );
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: workflowId }, { workflow_id: healthyId }]);
+    // The native header is byte-identical to the pre-run state: the legacy
+    // source was NOT imported over it.
+    expect(store.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId))
+      .toEqual(nativeHeader);
+    // The colliding legacy plan was never imported: the only plan row is the one
+    // the native creation wrote, and the healthy workflow carries none.
+    expect(store.db.prepare("select workflow_id, plan_id from execution_plans").all())
+      .toEqual([{ workflow_id: workflowId, plan_id: `${workflowId}-plan` }]);
+  } finally { store.close(); }
+  // The legacy bytes remain retryable and untouched.
+  expect([...readFileSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE))]).toEqual([...legacyBytes]);
+});
+
+test("a later new-operation import of the same legacy source requires explicit acknowledgement rather than heuristic replay, and native progress is not byte-frozen", async () => {
+  const { context, workflowId } = await nativeCollisionWorkspace("native-id-later-op");
+  const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+  const legacyBytes = Buffer.from(readFileSync(snapshotPath));
+  const readHeader = async (): Promise<{ state_json: string; revision: number }> => {
+    const handle = await openStore(context, "read");
+    try {
+      return handle.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string; revision: number };
+    } finally { handle.close(); }
+  };
+  const nativeHeader = await readHeader();
+
+  // A genuine first import under one operation: the colliding source's own
+  // retained receipt is the ONLY thing that may replay it.
+  const first = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-later-first", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(first.imported).toBe(0);
+  // Exact same-operation replay: the retained request/result receipt answers and
+  // the whole protected state (including that receipt) is unchanged.
+  const afterFirst = await protectedStore(context);
+  expect(await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-later-first", acknowledgedWorkflowSkips: [workflowId],
+  })).toEqual(first);
+  expect(await protectedStore(context)).toEqual(afterFirst);
+  expect(await readHeader()).toEqual(nativeHeader);
+
+  // The native source body is later EDITED: native progress, not the retained
+  // legacy body, is authoritative, so the native row is unchanged — and because
+  // the imported input is part of the request identity, a same-operation replay
+  // over the edited bytes is a conflict rather than a stale receipt.
+  const edited = JSON.parse(legacyBytes.toString("utf8")) as Record<string, unknown>;
+  edited.updated_at = "2026-10-09";
+  (edited.branch as Record<string, unknown>).source = `feature/edited-${workflowId}`;
+  writeFileSync(snapshotPath, JSON.stringify(edited));
+  // The EDITED bytes are what the next run reads as a source; the receipt and the
+  // native row stay the same because neither depends on that body.
+  expect(await protectedStore(context)).toEqual(afterFirst);
+
+  // A LATER operation id whose request omits the acknowledgement is NOT a
+  // replay — no id/type/date/header heuristic may fabricate one — so it
+  // refuses the collision again.
+  const laterRefusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-native-later-second" })
+    .then(() => { throw new Error("a heuristic replay served a later operation"); }, (error: Error & { code?: string }) => error);
+  expect(laterRefusal.code).toBe("execution.migration-conflict");
+  expect(laterRefusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  // The acknowledgement on the later operation skips the import for real: the
+  // native row (whose progress the operator owns) is untouched and the edited
+  // legacy body is NOT read as an authority or used as a byte gate.
+  const later = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-later-second-ack", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(later.imported).toBe(0);
+  expect(await readHeader()).toEqual(nativeHeader);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id, plan_id from execution_plans").all())
+      .toEqual([{ workflow_id: workflowId, plan_id: `${workflowId}-plan` }]);
+    // The two acknowledged operations each committed their OWN receipt.
+    expect(store.db.prepare("select count(*) as n from store_operations where operation_id in (?, ?)").get("op-native-later-second-ack", "op-native-later-first")).toEqual({ n: 2 });
+  } finally { store.close(); }
+  // The edited legacy bytes stay exactly as the operator left them.
+  expect(readFileSync(snapshotPath).toString("utf8")).toBe(JSON.stringify(edited));
+});
+
+test("a v1 root whose converted lifecycle id already exists natively refuses, then recovers through the same acknowledgement", async () => {
+  const { context } = legacyV1Workspace("v1-native-collision");
+  // One of the two converted v1 lifecycles is already a native row, so the v1
+  // route shares the same collision contract as the v2 route. `iter-v1` stays
+  // un-imported so the collision is the ONLY cause of the refusal.
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const root = await readExecutionState(context);
+  await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId: "v1-standalone", role: "coordinator" })), {
+    entry: { id: "v1-standalone", type: "plan", started_at: "2026-10-04", dir: "workflows/v1-standalone" },
+    snapshot: {
+      schema_version: 1, id: "v1-standalone", type: "plan", status: "paused", started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: "feature/native-v1-standalone", target: "main" },
+      plans: [{ id: "v1-standalone", title: "Native v1 plan", file: "v1-standalone.md", status: "Todo" }],
+    } satisfies WorkflowSnapshot,
+    expected: root.token,
+    operationId: "create-v1-native-collision",
+  });
+  // The exact native header bytes the acknowledgement must leave untouched.
+  const native = await openStore(context, "read");
+  let nativeHeader: { state_json: string };
+  try {
+    nativeHeader = native.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
+  } finally { native.close(); }
+  expect(JSON.parse(nativeHeader.state_json)).toMatchObject({ branch: { source: "feature/native-v1-standalone" } });
+
+  const refusal = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-native-collision",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("a v1 native-id collision was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("--ack-skip-workflow v1-standalone");
+  // The unrelated v1 lifecycle did not import either: no partial registration.
+  const refusedStore = await openStore(context, "read");
+  try { expect(refusedStore.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: "v1-standalone" }]); }
+  finally { refusedStore.close(); }
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-native-collision-ack",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedWorkflowSkips: ["v1-standalone"],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1 });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow; the native execution authority already holds that id"),
+  );
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: "iter-v1" }, { workflow_id: "v1-standalone" }]);
+    // The native row keeps ITS OWN branch/kind; the acknowledged v1 conversion
+    // (declared development anchors) did not import over it.
+    expect(store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone"))
+      .toEqual(nativeHeader);
+  } finally { store.close(); }
+});
+
+test("one unmatched acknowledgement in a mixed request refuses the whole run before any write, even when another acknowledgement is valid", async () => {
+  const { context, workflowId } = await nativeCollisionWorkspace("native-id-mixed-ack");
+  const before = await protectedStore(context);
+
+  // `workflowId` genuinely collides and is acknowledged, but
+  // `wf-never-anywhere` names nothing this run refuses: the whole request is
+  // caller input, so it refuses as usage before any execution row commits —
+  // the valid acknowledgement is not silently honoured on a rejected request.
+  const mixed = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-mixed-ack",
+    acknowledgedWorkflowSkips: [workflowId, "wf-never-anywhere"],
+  }).then(() => { throw new Error("a mixed acknowledgement silently skipped a source"); }, (error: Error & { code?: string }) => error);
+  expect(mixed.code).toBe("execution.workflow-skip-unmatched");
+  expect(mixed.message).toContain("wf-never-anywhere");
+  expect(await protectedStore(context)).toEqual(before);
+
+  // Dropping only the unmatched id is the same-entry retry: the colliding
+  // source is skipped and the native row is kept.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-mixed-ack-retry",
+    acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(recovered.imported).toBe(0);
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow; the native execution authority already holds that id`),
+  );
+  // The retained receipt of that accepted retry then answers its own replay.
+  expect(await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-mixed-ack-retry",
+    acknowledgedWorkflowSkips: [workflowId],
+  })).toEqual(recovered);
+});
+
+test("changed execution acknowledgements under one operation id conflict with the retained receipt", async () => {
+  const { context } = legacyWorkspace("acked-request-identity");
+  const harnessDir = context.harnessDir;
+  const workflowsDir = join(harnessDir, "workflows");
+  const statusPath = join(harnessDir, "status.json");
+  const firstId = "wf-acked-request-identity";
+  const secondId = "wf-acked-request-identity-second";
+  const operationId = "op-acked-request-identity";
+  const snapshotOf = (id: string) => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" }, plans: [],
+  });
+  // The whole `workflows/` root is ONE symlinked source, so the DSH domain
+  // refuses exactly one selector in BOTH rounds: `acknowledgedSkips` is held
+  // constant and only the execution acknowledgement set changes across rounds,
+  // making the changed request identity the sole cause of the conflict.
+  const target = join(harnessDir, "outside-identity-tree");
+  mkdirSync(join(target, firstId), { recursive: true });
+  writeFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), snapshotOf(firstId));
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(target, workflowsDir);
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows[0]!.dir = `workflows/${firstId}`;
+  writeFileSync(statusPath, JSON.stringify(status));
+  const common = { context, operator: "operator", operationId, acknowledgedSkips: ["dsh-workflows"] };
+
+  // Round 1: only `firstId` is a linked (unsafe) registration, and it is exactly
+  // the acknowledgement its discovery admits.
+  const first = await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId] });
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 0 });
+  // Full protected state AFTER the first success: schema, every table row and
+  // the retained operation receipt, not just row counts.
+  const afterFirst = await protectedStore(context);
+  // A repeated id is one request, so this repeats and replays exactly and the
+  // whole protected state (including the retained receipt) stays identical.
+  expect(await upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, firstId] })).toEqual(first);
+  expect(await protectedStore(context)).toEqual(afterFirst);
+
+  // Round 2: a SECOND registration under the linked root makes the valid
+  // acknowledgement set genuinely change while `--ack-skip-dsh` stays identical,
+  // so both requests stay discovery-valid and only the changed request identity
+  // can answer — it must not replay round 1.
+  mkdirSync(join(target, secondId), { recursive: true });
+  writeFileSync(join(target, secondId, WORKFLOW_SNAPSHOT_FILE), snapshotOf(secondId));
+  status.workflows.push({ id: secondId, type: "plan", started_at: "2026-10-04", dir: `workflows/${secondId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  await expect(upgradeStoreMinimal({ ...common, acknowledgedWorkflowSkips: [firstId, secondId] }))
+    .rejects.toMatchObject({ code: "execution.operation-conflict" });
+
+  // The retained receipt and native execution state are unchanged by the
+  // conflicting call: the whole protected snapshot (schema + every table row,
+  // including `store_operations`) equals the post-success snapshot, and the
+  // retained receipt's own content still names the round-1 result.
+  expect(await protectedStore(context)).toEqual(afterFirst);
+  const store = await openStore(context, "read");
+  try {
+    const receipt = store.db.prepare("select result_json from store_operations where operation_id = ?").get(operationId) as { result_json: string };
+    expect(JSON.parse(receipt.result_json)).toMatchObject({
+      verdict: "upgraded", imported: 0, skipped: first.skipped, dispositions: first.dispositions, sourceDigest: first.sourceDigest,
+    });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // The linked root and its target bytes were never rewritten.
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(snapshotOf(firstId));
+});
+
+for (const shape of ["symlink", "file"] as const) {
+  test(`an unmatched acknowledgement outranks a registered ${shape} root refusal without probing its children`, async () => {
+    const { context } = legacyWorkspace(`wrong-ack-${shape}-root`);
+    const workflowsDir = join(context.harnessDir, "workflows");
+    const target = join(ROOT, `wrong-ack-${shape}-target`);
+    mkdirSync(target);
+    rmSync(workflowsDir, { recursive: true, force: true });
+    if (shape === "symlink") symlinkSync(target, workflowsDir);
+    else writeFileSync(workflowsDir, "retained source");
+    const initialized = await initializeStore(context);
+    initialized.close();
+    const before = await protectedStore(context);
+    const { accessed } = await withPathAccessLog(async () => {
+      await expect(upgradeStoreMinimal({
+        context, operator: "operator", operationId: `op-wrong-ack-${shape}`,
+        acknowledgedWorkflowSkips: ["wf-not-a-source"],
+      })).rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+    });
+    expect(accessed.filter((path) => path.startsWith(`${workflowsDir}/`) || path === target || path.startsWith(`${target}/`))).toEqual([]);
+    expect(await protectedStore(context)).toEqual(before);
+    if (shape === "symlink") expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+    else expect(readFileSync(workflowsDir, "utf8")).toBe("retained source");
+  });
+}
+
+test("whole-root recovery classifies registered ids lexically: partial acknowledgement refuses, complete skips both, trusted sibling imports", async () => {
+  const { context } = legacyWorkspace("acked-two-id-root");
+  const workflowsDir = join(context.harnessDir, "workflows");
+  const statusPath = join(context.harnessDir, "status.json");
+  const firstId = "wf-acked-two-id-root";
+  const secondId = "wf-acked-two-id-second";
+  const trustedId = "wf-acked-two-id-trusted";
+  const snapshotOf = (id: string) => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" }, plans: [],
+  });
+  // The trusted sibling is registered OUTSIDE `workflows/`: lexical under-root
+  // classification must not treat it as a linked source, so it imports with no
+  // execution acknowledgement at all.
+  const trustedDir = join(context.harnessDir, "relocated", trustedId);
+  mkdirSync(trustedDir, { recursive: true });
+  writeFileSync(join(trustedDir, WORKFLOW_SNAPSHOT_FILE), snapshotOf(trustedId));
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: trustedId, type: "plan", started_at: "2026-10-04", dir: `relocated/${trustedId}` });
+
+  // `workflows/` becomes ONE symlink to an out-of-root tree. `firstId` has a
+  // readable target that must be preserved; `secondId`'s target is deliberately
+  // ABSENT, so a successful skip of it is an observable no-read boundary: any
+  // lstat/exists/read of its linked source would surface the missing target.
+  const target = join(context.harnessDir, "outside-two-id-tree");
+  const firstSnapshot = snapshotOf(firstId);
+  mkdirSync(join(target, firstId), { recursive: true });
+  writeFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), firstSnapshot);
+  rmSync(workflowsDir, { recursive: true, force: true });
+  symlinkSync(target, workflowsDir);
+  status.workflows.push({ id: secondId, type: "plan", started_at: "2026-10-04", dir: `workflows/${secondId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  // Partial acknowledgement of the TWO linked ids: the unacknowledged one keeps
+  // the whole execution transaction refused, with nothing committed and no
+  // linked target visited.
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-two-id-partial",
+    acknowledgedWorkflowSkips: [firstId],
+  })).rejects.toMatchObject({
+    code: "execution.migration-conflict",
+    message: expect.stringContaining(`--ack-skip-workflow ${secondId}`),
+  });
+  const afterPartial = await openStore(context, "read");
+  try {
+    expect(afterPartial.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(afterPartial.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+  } finally { afterPartial.close(); }
+
+  // Complete acknowledgement of BOTH linked ids: each is skipped with a named
+  // receipt, and the trusted sibling outside the linked root still imports.
+  // The platform fs calls are recorded so the forbidden linked targets can be
+  // asserted un-probed rather than inferred from absent bytes.
+  // Both the LINKED ALIAS a caller would use and the resolved TARGET child are
+  // forbidden: a probe reached through the linked root is recorded under the
+  // alias, so matching targets alone would miss it. The root itself is not
+  // forbidden — its own lstat is the preflight's legitimate check.
+  const forbidden = [firstId, secondId].flatMap((id) => [join(workflowsDir, id), join(target, id)]);
+  const { result, accessed } = await withPathAccessLog(() => upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-two-id-complete",
+    // The whole `workflows/` root is a symlink, so the DSH domain refuses it as
+    // its own source; that acknowledgement is separate from the two execution skips.
+    acknowledgedSkips: ["dsh-workflows"],
+    acknowledgedWorkflowSkips: [firstId, secondId],
+  }));
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(result.skipped.map(({ path }) => path)).toEqual([`workflows/${firstId}`, `workflows/${secondId}`]);
+  expect(result.dispositions).toEqual(expect.arrayContaining([
+    expect.stringContaining(`workflow ${firstId}: skipped by --ack-skip-workflow`),
+    expect.stringContaining(`workflow ${secondId}: skipped by --ack-skip-workflow`),
+  ]));
+  const store = await openStore(context, "read");
+  try {
+    // Only the trusted relocation imports; neither linked id is fabricated.
+    expect(store.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: trustedId }]);
+  } finally { store.close(); }
+  // No linked alias OR resolved target child was ever probed: the recorded
+  // lstat/stat/exists/realpath/read/readdir arguments named neither. This is the
+  // real no-read/no-traversal boundary — a probe through the linked root is
+  // recorded under the alias, and the absent second target alone could not prove
+  // it because a failed probe is swallowed.
+  const touchedForbidden = accessed.filter((path) => forbidden.some((f) => path === f || path.startsWith(`${f}/`) || path.startsWith(`${f}\\`)));
+  expect(touchedForbidden).toEqual([]);
+  expect(lstatSync(workflowsDir).isSymbolicLink()).toBe(true);
+  expect(readFileSync(join(target, firstId, WORKFLOW_SNAPSHOT_FILE), "utf8")).toBe(firstSnapshot);
+  expect(existsSync(join(target, secondId))).toBe(false);
+});
+
+test("an ordinary registered workflow reached through an out-of-root ancestor symlink is refused by physical containment", async () => {
+  const { context } = legacyWorkspace("containment-ancestor");
+  const harnessDir = context.harnessDir;
+  const workflowId = "wf-containment-ancestor";
+  const statusPath = join(harnessDir, "status.json");
+  // The registration names an IN-ROOT path (`relocated/<id>`), but `relocated`
+  // is a symlink to a directory OUTSIDE the control root: the leaf itself is a
+  // real directory with a real snapshot, so only PHYSICAL containment can catch
+  // it. This is the ordinary trusted-import path, not the acknowledged one.
+  const outsideTree = join(ROOT, "containment-ancestor", "outside-tree");
+  mkdirSync(join(outsideTree, workflowId), { recursive: true });
+  writeFileSync(join(outsideTree, workflowId, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" }, plans: [],
+  }));
+  rmSync(join(harnessDir, "workflows"), { recursive: true, force: true });
+  symlinkSync(outsideTree, join(harnessDir, "relocated"));
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows[0]!.dir = `relocated/${workflowId}`;
+  writeFileSync(statusPath, JSON.stringify(status));
+
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-containment-ancestor" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining("resolves outside control root"),
+    });
+  // The escaping registration is this workflow's own source failure, so the
+  // refusal names the acknowledgement and the id it addresses.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-containment-ancestor-again" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining(`--ack-skip-workflow ${workflowId}`),
+    });
+  const skipped = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-containment-ancestor-ack", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(skipped).toMatchObject({ verdict: "upgraded", imported: 0 });
+  const store = await openStore(context, "read");
+  try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { store.close(); }
+  // The escaping tree is untouched: nothing was imported through the ancestor link.
+  expect(lstatSync(join(harnessDir, "relocated")).isSymbolicLink()).toBe(true);
+  expect(existsSync(join(outsideTree, workflowId, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
+});
+
+test("a recognizable v1 root imports through the ordinary store upgrade and preserves every source byte", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-direct");
+  const compassBytes = readFileSync(join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md"));
+  const docBytes = readFileSync(join(context.harnessDir, "plain-doc.md"));
+
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-direct",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
+
+  const store = await openStore(context, "read");
+  try {
+    // Both lifecycles land in the native tables, with the v1 metadata lift.
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("iter-v1") as { state_json: string };
+    const iteration = JSON.parse(header.state_json) as Record<string, unknown>;
+    expect(iteration).toMatchObject({
+      type: "iteration",
+      status: "running",
+      branch: { base: "integration/v1", target: "main" },
+      legacy_metadata: { program_roadmap: { title: "Retained program roadmap", milestones: [{ id: "m1", title: "Keep this fact" }] } },
+    });
+    expect(iteration.integration_merge_lease).toBeUndefined();
+    expect(result.dispositions).toContain(
+      "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+    );
+    // The standalone Todo row imports paused, declared, and continuable: the
+    // declared kind and its anchors are registered, so a later close can
+    // consult them instead of dead-ending on an unregistered kind.
+    const standalone = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
+    expect(JSON.parse(standalone.state_json)).toMatchObject({
+      type: "plan",
+      status: "paused",
+      delivery_kind: "development",
+      branch: { source: "feature/v1-standalone", target: "main" },
+    });
+    const standaloneRow = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("v1-standalone", "v1-standalone") as { state_json: string };
+    expect(JSON.parse(standaloneRow.state_json)).toMatchObject({ id: "v1-standalone", status: "Todo" });
+    const row = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("iter-v1", "wf-v1-direct") as { state_json: string };
+    expect(JSON.parse(row.state_json)).toMatchObject({ id: "wf-v1-direct", status: "Done" });
+    // Registry membership is ACTIVE-lifecycle membership: the running
+    // iteration and the paused (non-terminal) standalone plan are both listed;
+    // a terminal lift would import unregistered.
+    expect(store.db.prepare("select count(*) as n from execution_registry").get()).toEqual({ n: 2 });
+  } finally {
+    store.close();
+  }
+
+  // No JSON authority was recreated: the legacy root, the compass and an
+  // unrelated document are byte-identical, and no snapshot tree appeared.
+  expect([...readFileSync(join(context.harnessDir, "status.json"))]).toEqual([...statusBytes]);
+  expect([...readFileSync(join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md"))]).toEqual([...compassBytes]);
+  expect([...readFileSync(join(context.harnessDir, "plain-doc.md"))]).toEqual([...docBytes]);
+  expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
+  expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
+
+  // A LATER operation id is not a replay, and the v1 source this run converts
+  // now collides with the native rows the first upgrade committed: it refuses
+  // and names the same-entry acknowledgement.
+  const refusedRetry = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-direct-2",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("a repeated v1 import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
+  expect(refusedRetry.code).toBe("execution.migration-conflict");
+  expect(refusedRetry.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
+  // The acknowledged retry keeps the native authority and skips only the legacy
+  // IMPORTs; the source bytes stay untouched.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-direct-3",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
+  });
+  expect(recovered.imported).toBe(0);
+  expect(recovered.dispositions).toEqual(expect.arrayContaining([
+    expect.stringContaining("workflow iter-v1: skipped by --ack-skip-workflow"),
+    expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow"),
+  ]));
+  const afterRecovery = await openStore(context, "read");
+  try {
+    expect(afterRecovery.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 2 });
+    expect(afterRecovery.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 2 });
+  } finally {
+    afterRecovery.close();
+  }
+  expect([...readFileSync(join(context.harnessDir, "status.json"))]).toEqual([...statusBytes]);
+});
+
+test("an active standalone v1 plan without a declared delivery kind refuses before any row registers, then a declared retry continues it", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-undeclared-refusal");
+  const statusPath = join(context.harnessDir, "status.json");
+
+  // No declaration: the ACTIVE standalone lift would register a plan workflow
+  // with no kind, which could never close. Nothing commits, and the refusal
+  // names the ids and the exact same-entry retry.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-undeclared" })
+    .then(() => { throw new Error("an undeclared active v1 lift unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.delivery-declaration-required");
+  expect(refusal.message).toContain("v1-standalone");
+  expect(refusal.message).toContain("--delivery");
+  expect(refusal.message).toContain("legacy source bytes are unchanged");
+  const refusedStore = await openStore(context, "read");
+  try {
+    expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(refusedStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 0 });
+  } finally { refusedStore.close(); }
+  expect([...readFileSync(statusPath)]).toEqual([...statusBytes]);
+
+  // The declared retry is the SAME public operation on the SAME source: it
+  // preserves ids, the verbatim row status and the source bytes, and the
+  // workflow's delivery consultation now names no unregistered kind, so the
+  // ordinary lifecycle continues/closes it instead of dead-ending.
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-undeclared-retry",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(retried.imported).toBe(2);
+  expect([...readFileSync(statusPath)]).toEqual([...statusBytes]);
+  const retriedStore = await openStore(context, "read");
+  try {
+    const header = JSON.parse((retriedStore.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string }).state_json) as Record<string, unknown>;
+    const row = JSON.parse((retriedStore.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("v1-standalone", "v1-standalone") as { state_json: string }).state_json) as Record<string, unknown>;
+    expect(header).toMatchObject({ delivery_kind: "development", branch: { source: "feature/v1-standalone", target: "main" } });
+    expect(row).toMatchObject({ id: "v1-standalone", status: "Todo" });
+    expect(consultDeliveryEvidence({ ...header, plans: [{ id: "p" }] } as never).map((entry) => entry.code))
+      .not.toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
+  } finally { retriedStore.close(); }
+});
+
+test("each active standalone v1 lift declares its own delivery kind and anchors", async () => {
+  const { context } = legacyV1Workspace("v1-multi-intent");
+  const statusPath = join(context.harnessDir, "status.json");
+  const doc = JSON.parse(readFileSync(statusPath, "utf8")) as { plans: Array<Record<string, unknown>> };
+  // One row per ACTIVE v1 status, as an operator would supply a tree that
+  // stopped mid-flight with several plans in different states.
+  doc.plans.push(
+    { id: "v1-inprogress", title: "In progress", file: "v1-inprogress.md", status: "InProgress" },
+    { id: "v1-blocked", title: "Blocked", file: "v1-blocked.md", status: "Blocked" },
+    { id: "v1-inreview", title: "In review", file: "v1-inreview.md", status: "InReview" },
+  );
+  writeFileSync(statusPath, `${JSON.stringify(doc, null, 2)}\n`);
+
+  // Two different kinds/anchors in one upgrade — not a batch-of-one limit.
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-multi-intent",
+    deliveryDeclarations: [
+      ...V1_STANDALONE_DECLARATION,
+      { workflow: "v1-inprogress", deliveryKind: "development", branchSource: "feature/v1-inprogress", branchTarget: "main" },
+      { workflow: "v1-blocked", deliveryKind: "verification/report-only", completionPolicy: "report at reports/v1-blocked.md" },
+      { workflow: "v1-inreview", deliveryKind: "verification/report-only", completionPolicy: "acceptance at qa/v1-inreview.md" },
+    ],
+  });
+  expect(result.imported).toBe(5);
+
+  const store = await openStore(context, "read");
+  try {
+    const header = (id: string): Record<string, unknown> => {
+      const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(id) as { state_json: string };
+      return JSON.parse(row.state_json) as Record<string, unknown>;
+    };
+    expect(header("v1-inprogress")).toMatchObject({
+      status: "running", delivery_kind: "development", branch: { source: "feature/v1-inprogress", target: "main" },
+    });
+    expect(header("v1-blocked")).toMatchObject({
+      status: "paused", delivery_kind: "verification/report-only", completion_policy: "report at reports/v1-blocked.md",
+    });
+    expect(header("v1-inreview")).toMatchObject({
+      status: "running", delivery_kind: "verification/report-only", completion_policy: "acceptance at qa/v1-inreview.md",
+    });
+    // Every declared lift consults a registered kind; none dead-ends on
+    // PHASE6_DELIVERY_KIND_UNREGISTERED. The completed v1 row (grouped into the
+    // fixture's iteration) stays undeclared, exactly as before this contract.
+    for (const id of ["v1-standalone", "v1-inprogress", "v1-blocked", "v1-inreview"]) {
+      expect(consultDeliveryEvidence({ ...header(id), plans: [{ id: "p" }] } as never).map((entry) => entry.code))
+        .not.toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
+    }
+    const completedRow = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("iter-v1", "wf-v1-multi-intent") as { state_json: string };
+    expect(JSON.parse(completedRow.state_json)).toMatchObject({ id: "wf-v1-multi-intent", status: "Done" });
+  } finally { store.close(); }
+});
+
+test("a delivery declaration that addresses no active standalone lift, or repeats one, is refused instead of ignored", async () => {
+  const { context } = legacyV1Workspace("v1-unmatched-declaration");
+  const unmatched = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-unmatched",
+    deliveryDeclarations: [{ workflow: "not-a-lift", deliveryKind: "development", branchSource: "a", branchTarget: "b" }],
+  }).then(() => { throw new Error("an unmatched declaration unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(unmatched.code).toBe("execution.delivery-declaration-required");
+  expect(unmatched.message).toContain("not-a-lift");
+  expect(unmatched.message).toContain("v1-standalone");
+  // The completed v1 row is not a lift that needs a declaration either.
+  const completedIsNotALift = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-completed-declared",
+    deliveryDeclarations: [
+      ...V1_STANDALONE_DECLARATION,
+      { workflow: "wf-v1-unmatched-declaration", deliveryKind: "development", branchSource: "a", branchTarget: "b" },
+    ],
+  }).then(() => { throw new Error("a declaration on a completed row unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(completedIsNotALift.message).toContain("wf-v1-unmatched-declaration");
+  const duplicated = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-duplicated",
+    deliveryDeclarations: [...V1_STANDALONE_DECLARATION, ...V1_STANDALONE_DECLARATION],
+  }).then(() => { throw new Error("a duplicated declaration unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(duplicated.message).toContain("twice");
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+});
+
+test("an incoherent delivery declaration is refused by the shared registration rule before any row registers", async () => {
+  const { context } = legacyV1Workspace("v1-incoherent-declaration");
+  const missingAnchors = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-missing-anchors",
+    deliveryDeclarations: [{ workflow: "v1-standalone", deliveryKind: "development" }],
+  }).then(() => { throw new Error("a development declaration without anchors unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(missingAnchors.code).toBe("execution.delivery-declaration-required");
+  expect(missingAnchors.message).toContain("requires its delivery source and target branches");
+  const missingPolicy = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-missing-policy",
+    deliveryDeclarations: [{ workflow: "v1-standalone", deliveryKind: "verification/report-only" }],
+  }).then(() => { throw new Error("a report-only declaration without a policy unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(missingPolicy.message).toContain("requires the completion policy");
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+});
+
+test.each([
+  ["an already-v2 root", "non-v1-declared-v2", legacyWorkspace("non-v1-declared-v2").context],
+  ["an empty root", "non-v1-declared-empty", (() => { const harnessDir = join(ROOT, "non-v1-declared-empty", ".mstar"); mkdirSync(harnessDir, { recursive: true }); return { harnessDir }; })()],
+])("a delivery declaration on %s is refused before any row registers, and the same source upgrades without it", async (_label, name, context) => {
+  const declarations = [{ workflow: "not-a-lift", deliveryKind: "development" as const, branchSource: "a", branchTarget: "b" }];
+
+  const refused = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: `op-${name}-declared`, deliveryDeclarations: declarations,
+  }).then(() => { throw new Error("a declaration on a non-v1 root unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.delivery-declaration-required");
+  expect(refused.message).toContain("not-a-lift");
+  const refusedStore = await openStore(context, "read");
+  try {
+    expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(refusedStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 0 });
+  } finally { refusedStore.close(); }
+
+  // Dropping the declaration is the same source's supported retry: the ordinary
+  // route runs and imports what that root actually holds.
+  const retried = await upgradeStoreMinimal({ context, operator: "operator", operationId: `op-${name}-undeclared` });
+  expect(retried.verdict).toBe("upgraded");
+});
+
+test("malformed v1 lease metadata is retired with an explicit operator disposition", async () => {
+  const { context } = legacyV1Workspace("v1-malformed-historical-lease");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { metadata: Record<string, unknown> };
+  status.metadata.integration_merge_lease = { holder: "legacy-coordinator" };
+  const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
+  writeFileSync(statusPath, sourceBytes);
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-malformed-lease", deliveryDeclarations: V1_STANDALONE_DECLARATION });
+  expect(result.imported).toBe(2);
+  expect(result.dispositions).toContain(
+    "workflow iter-v1: historical v1 integration merge lease for legacy-coordinator was not imported as a live lease; operator \"operator\" requested store upgrade, which retires the historical claim, and future integration ownership uses the ordinary serial lease operation",
+  );
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+  const store = await openStore(context, "read");
+  try {
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("iter-v1") as { state_json: string };
+    const iteration = JSON.parse(header.state_json) as Record<string, unknown>;
+    expect(iteration.integration_merge_lease).toBeUndefined();
+    expect(iteration.legacy_metadata).not.toHaveProperty("integration_merge_lease");
+  } finally {
+    store.close();
+  }
+});
+test("no-active-iteration metadata is recoverably disclosed while malformed leases do not block import", async () => {
+  const { context } = legacyV1Workspace("v1-no-active-iteration");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as {
+    metadata: Record<string, unknown>;
+  };
+  status.metadata.integration_merge_lease = { holder: "legacy-coordinator" };
+  const sourceBytes = Buffer.from(`${JSON.stringify(status, null, 2)}\n`);
+  writeFileSync(statusPath, sourceBytes);
+  rmSync(join(context.harnessDir, "iterations", "iter-v1"), { recursive: true, force: true });
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active", deliveryDeclarations: V1_STANDALONE_DECLARATION });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
+  expect(result.dispositions).toContain(
+    "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+  );
+  expect(result.dispositions).toContain(
+    "root metadata integration_merge_lease is historical data only and is not converted to a live store lease; the direct store-upgrade import leaves status.json unchanged, and future integration ownership uses the native serial lease operation",
+  );
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+
+  const project = await registerCatalogEntity(
+    context,
+    { kind: "project", id: "_default", title: "Default project", rootKind: "projects", relativePath: "_default/roadmap.md" },
+    { operationId: "op-register-default-roadmap", actor: "store-upgrade-minimal.test" },
+  );
+  expect(project.id).toBe("_default");
+  const current = await readRoadmapAuthority(context, "_default");
+  expect(current).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  const roadmap = [
+    "---",
+    "project_id: _default",
+    "title: Recovered legacy roadmap",
+    "status: active",
+    "created_at: 2026-10-04",
+    "---",
+    "",
+    "## Direction",
+    "",
+    "Recovered from the preserved program_roadmap source.",
+    "",
+    "## Goals",
+    "",
+    "- [ ] Keep the original roadmap goal",
+    "",
+  ].join("\n");
+  await replaceRoadmapAuthority(
+    context,
+    { projectId: "_default", expectedProjectRevision: current.projectRevision, expectedRoadmapRevision: "absent", contentMarkdown: roadmap },
+    { operationId: "op-recover-default-roadmap" },
+  );
+  expect((await readRoadmapAuthority(context, "_default")).roadmap?.contentMarkdown).toBe(roadmap);
+  expect(readFileSync(statusPath)).toEqual(sourceBytes);
+});
+
+test("a v1 root whose lift is unacceptable reports the committed schema and authority state", async () => {
+  const { context } = legacyV1Workspace("v1-refusal");
+  const statusPath = join(context.harnessDir, "status.json");
+  const doc = JSON.parse(readFileSync(statusPath, "utf8")) as { plans: Array<Record<string, unknown>> };
+  doc.plans.push({ id: "../escape", title: "unsafe", file: "x.md", status: "Todo" });
+  writeFileSync(statusPath, JSON.stringify(doc));
+  const before = readFileSync(statusPath);
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-refusal", deliveryDeclarations: V1_STANDALONE_DECLARATION })
+    .then(() => { throw new Error("unsafe v1 plan unexpectedly imported"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.message).toContain("Schema version");
+  expect(refusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(refusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(refusal.message).toContain("retry `mstar store upgrade --operator <name>`");
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect([...readFileSync(statusPath)]).toEqual([...before]);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
+  }
+  expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
+  expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
+});
+
+/* ------------------------------------------------------------------------ *
+ * Registered non-directory source: default refusal and explicit recovery
+ * ------------------------------------------------------------------------ */
+
+/**
+ * A real regular file where a registered workflow directory belongs. Both the
+ * whole-`workflows/` root and a single per-workflow registration can take this
+ * shape; the file's bytes are the witness the refusal and the acknowledged skip
+ * must leave untouched.
+ */
+const NON_DIRECTORY_BYTES = "NOT-A-WORKFLOW-SOURCE-BYTES\n";
+
+/**
+ * One REAL unrelated native workflow with a meaningful plan, frozen input row
+ * and committed domain receipt, created through the public producers. The
+ * non-directory recovery must leave every one of these rows byte-identical.
+ * Returns the exact native content a post-recovery comparison needs.
+ */
+async function seedUnrelatedNative(context: StoreContext, nativeId: string) {
+  const root = await readExecutionState(context);
+  await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId: nativeId, role: "coordinator" })), {
+    entry: { id: nativeId, type: "plan", started_at: "2026-10-04", dir: `workflows/${nativeId}` },
+    snapshot: {
+      schema_version: 1,
+      id: nativeId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-10-04",
+      updated_at: "2026-10-04",
+      delivery_kind: "development",
+      branch: { source: `feature/native-${nativeId}`, target: "main" },
+      plans: [{ id: `${nativeId}-plan`, title: "Native kept plan", file: `${nativeId}-plan.md`, status: "Todo" }],
+    } satisfies WorkflowSnapshot,
+    expected: root.token,
+    operationId: `create-${nativeId}`,
+  });
+  return readUnrelatedNative(context, nativeId);
+}
+
+/** Re-read the same unrelated native rows after a run, for a content comparison. */
+async function readUnrelatedNative(context: StoreContext, nativeId: string) {
+  const store = await openStore(context, "read");
+  try {
+    return {
+      workflow: store.db.prepare("select * from execution_workflows where workflow_id = ?").get(nativeId),
+      registry: store.db.prepare("select * from execution_registry where workflow_id = ?").get(nativeId),
+      plans: store.db.prepare("select * from execution_plans where workflow_id = ? order by ordinal, plan_id").all(nativeId),
+      inputs: store.db.prepare("select * from execution_inputs where workflow_id = ? order by plan_id").all(nativeId),
+      receipts: store.db.prepare("select * from execution_operations where workflow_id = ? order by epoch, operation_id").all(nativeId),
+    };
+  } finally { store.close(); }
+}
+
+test("a registered per-workflow path that is a regular file refuses by default, then an explicit acknowledgement imports only the healthy sibling with the loss named", async () => {
+  const { context } = legacyWorkspace("nondir-child");
+  const blockingId = "wf-nondir-child";
+  const blockingPath = join(context.harnessDir, "workflows", blockingId);
+  // A real regular file where the registered workflow directory belongs; the
+  // registration the fixture wrote still names it.
+  rmSync(blockingPath, { recursive: true, force: true });
+  writeFileSync(blockingPath, NON_DIRECTORY_BYTES);
+
+  // A healthy in-root sibling with a real plan, so the recovery's imported
+  // content — not only its ID — is observable.
+  const healthyId = "wf-nondir-child-healthy";
+  const healthyPlanId = `${healthyId}-plan`;
+  const healthyDir = join(context.harnessDir, "workflows", healthyId);
+  mkdirSync(join(healthyDir, "sessions"), { recursive: true });
+  writeFileSync(join(healthyDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: healthyId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" },
+    plans: [{ id: healthyPlanId, title: "Healthy sibling plan", file: `${healthyPlanId}.md`, status: "Todo" }],
+  }));
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: healthyId, type: "plan", started_at: "2026-10-04", dir: `workflows/${healthyId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+  // The store must already exist for a pre-run snapshot of the whole protected
+  // state; the refusal below must leave every byte of it identical.
+  const initialized = await initializeStore(context);
+  initialized.close();
+  // A real unrelated native workflow, plan, frozen input and committed receipt:
+  // the recovery must not disturb any of them.
+  const nativeId = "wf-nondir-child-native";
+  const nativeBefore = await seedUnrelatedNative(context, nativeId);
+  const before = await protectedStore(context);
+
+  // Default: the non-directory registered source is refused and nothing commits
+  // — not even the healthy sibling.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-child" })
+    .then(() => { throw new Error("a non-directory registered source was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("is not a real in-root directory");
+  expect(refusal.message).toContain("a non-directory path is not a workflow source");
+  expect(refusal.message).toContain(`--ack-skip-workflow ${blockingId}`);
+  expect(await protectedStore(context)).toEqual(before);
+  expect(readFileSync(blockingPath, "utf8")).toBe(NON_DIRECTORY_BYTES);
+
+  // Explicit recovery: only the healthy sibling imports; the regular file keeps
+  // its bytes and its lost import is named, with no fabricated resumption.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-nondir-child-ack",
+    acknowledgedWorkflowSkips: [blockingId],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.skipped).toContainEqual({
+    path: `workflows/${blockingId}`,
+    reason: `registered workflow ${blockingId} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`,
+  });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${blockingId}: skipped by --ack-skip-workflow`),
+  );
+  expect(recovered.dispositions).toContainEqual(expect.stringContaining("no resumption is fabricated"));
+  // The unrelated native workflow/plan/input/receipt content is byte-identical,
+  // compared row by row and never by count.
+  expect(await readUnrelatedNative(context, nativeId)).toEqual(nativeBefore);
+  const store = await openStore(context, "read");
+  try {
+    // Exactly the unrelated native row and the healthy sibling imported; the
+    // refused non-directory source fabricated nothing.
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: healthyId }, { workflow_id: nativeId }]);
+    // The healthy sibling's REAL imported header and plan content, not just its ID.
+    const healthyHeader = JSON.parse((store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(healthyId) as { state_json: string }).state_json) as Record<string, unknown>;
+    expect(healthyHeader).toMatchObject({
+      schema_version: 1, id: healthyId, type: "plan", status: "running",
+      delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" },
+    });
+    expect(healthyHeader).not.toHaveProperty("plans");
+    const healthyPlan = JSON.parse((store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(healthyId, healthyPlanId) as { state_json: string }).state_json) as Record<string, unknown>;
+    expect(healthyPlan).toMatchObject({ id: healthyPlanId, title: "Healthy sibling plan", file: `${healthyPlanId}.md`, status: "Todo" });
+    // The refused source contributed no plan row at all.
+    expect(store.db.prepare("select workflow_id, plan_id from execution_plans where workflow_id = ?").all(blockingId)).toEqual([]);
+  } finally { store.close(); }
+  expect(readFileSync(blockingPath, "utf8")).toBe(NON_DIRECTORY_BYTES);
+  // The refused source keeps its registered identity in the source register.
+  expect(JSON.parse(readFileSync(statusPath, "utf8"))).toMatchObject({
+    workflows: expect.arrayContaining([expect.objectContaining({ id: blockingId })]),
+  });
+});
+
+test("a whole workflows root that is a regular file refuses naming its original registered ids, then the same acknowledgement skips only those IMPORTs and leaves the native authority intact", async () => {
+  const { context } = legacyWorkspace("nondir-root");
+  const workflowId = "wf-nondir-root";
+  // A real unrelated native workflow/plan/input/receipt, created BEFORE the root
+  // becomes a regular file: the whole-root recovery must not disturb it.
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const nativeId = "wf-nondir-root-native";
+  const nativeBefore = await seedUnrelatedNative(context, nativeId);
+  const protectedBefore = await protectedStore(context);
+
+  const workflowsDir = join(context.harnessDir, "workflows");
+  rmSync(workflowsDir, { recursive: true, force: true });
+  writeFileSync(workflowsDir, NON_DIRECTORY_BYTES);
+
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-root" })
+    .then(() => { throw new Error("a non-directory workflows root that registers a workflow was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("is not a real directory");
+  expect(refusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  // The refusal left the whole protected state — including the native rows —
+  // and the root's bytes exactly as they were.
+  expect(await readUnrelatedNative(context, nativeId)).toEqual(nativeBefore);
+  expect(await protectedStore(context)).toEqual(protectedBefore);
+  expect(readFileSync(workflowsDir, "utf8")).toBe(NON_DIRECTORY_BYTES);
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-nondir-root-ack",
+    acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 0, authorityState: "active" });
+  expect(recovered.skipped).toContainEqual({
+    path: `workflows/${workflowId}`,
+    reason: `registered workflow ${workflowId} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`,
+  });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`),
+  );
+  // The native workflow/plan/input/receipt content survives the acknowledged
+  // whole-root recovery byte-for-byte.
+  expect(await readUnrelatedNative(context, nativeId)).toEqual(nativeBefore);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: nativeId }]);
+  } finally { store.close(); }
+  // The root keeps its bytes: the skip disposed an IMPORT, never the source.
+  expect(readFileSync(workflowsDir, "utf8")).toBe(NON_DIRECTORY_BYTES);
+});
+
+test("a registered workflow with a MISSING snapshot stays an ordinary reported skip and is not an ackable refusal", async () => {
+  const { context } = legacyWorkspace("nondir-missing");
+  const workflowId = "wf-nondir-missing";
+  // This is specifically the missing-SNAPSHOT shape: the registered directory
+  // stays a real in-root directory, only its snapshot file is gone. A wholly
+  // missing registered DIRECTORY is the separate physical-containment refusal
+  // (`resolves outside control root`), which already has its own regression and
+  // is deliberately not redefined here.
+  rmSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
+
+  // Missing snapshot is the existing reported skip: no refusal, and no
+  // acknowledgement of it is accepted, because the run never refused that source.
+  const skipped = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-missing" });
+  expect(skipped.imported).toBe(0);
+  expect(skipped.skipped).toContainEqual({
+    path: `workflows/${workflowId}/snapshot.json`,
+    reason: "registered workflow snapshot is missing; left in place",
+  });
+  const unmatched = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-nondir-missing-ack",
+    acknowledgedWorkflowSkips: [workflowId],
+  }).then(() => { throw new Error("a missing snapshot was accepted as an ackable refusal"); }, (error: Error & { code?: string }) => error);
+  expect(unmatched.code).toBe("execution.workflow-skip-unmatched");
+});
+
+test("concurrent importer processes serialize through SQLite, not a status directory", async () => {
+  const { context } = legacyV1Workspace("v1-concurrent");
+  const worker = join(ROOT, "upgrade-worker.mjs");
+  writeFileSync(worker, `
+import { upgradeStoreMinimal } from ${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))};
+const [harnessDir, operationId, declaration] = process.argv.slice(2);
+// Announce readiness, then block on the parent's release line: every child
+// begins its upgrade only once all of them are waiting, so they truly overlap.
+process.stdout.write("ready\\n");
+const reader = Bun.stdin.stream().getReader();
+await reader.read();
+reader.releaseLock();
+try {
+  const result = await upgradeStoreMinimal({ context: { harnessDir }, operator: "child", operationId, deliveryDeclarations: JSON.parse(declaration) });
+  process.stdout.write(JSON.stringify({ imported: result.imported }));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ refused: String(error?.code ?? error?.message ?? error) }));
+}
+`);
+  const children = Array.from({ length: 3 }, (_, index) => {
+    const child = spawn("bun", [worker, context.harnessDir, `op-concurrent-${index}`, JSON.stringify(V1_STANDALONE_DECLARATION)], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let announced: () => void = () => {};
+    const ready = new Promise<void>((resolve) => { announced = resolve; });
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+      if (stdout.includes("ready\n")) announced();
+    });
+    const closed = new Promise<number | null>((resolve) => child.on("close", resolve));
+    return { index, ready, release: () => child.stdin.write("go\n"), done: closed.then(() => ({ stdout })) };
+  });
+  await Promise.all(children.map((child) => child.ready));
+  for (const child of children) child.release();
+  const results = await Promise.all(children.map((child) => child.done));
+
+  const parsed = results.map(({ stdout }) => {
+    const payload = JSON.parse(stdout.slice("ready\n".length)) as { imported?: number; refused?: string };
+    return { imported: payload.imported ?? 0, refused: payload.refused };
+  });
+  // The importer creates one coherent store and commits the v1 lifecycles once;
+  // competing public attempts receive only the create-only store refusal.
+  expect(parsed.filter(({ imported }) => imported > 0)).toHaveLength(1);
+  expect(parsed.map(({ imported }) => imported).reduce((sum, value) => sum + value, 0)).toBe(2);
+  for (const { refused } of parsed) {
+    if (refused !== undefined) expect(refused).toBe("store.already-exists");
+  }
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 2 });
+    expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+  } finally {
+    store.close();
+  }
+  // A LATER operation id is not a replay: the v1 lifecycles this store already
+  // holds collide with the retained source, so it refuses and names the
+  // same-entry acknowledgement instead of silently skipping them.
+  const refusedRetry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry", deliveryDeclarations: V1_STANDALONE_DECLARATION })
+    .then(() => { throw new Error("a repeated v1 import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
+  expect(refusedRetry.code).toBe("execution.migration-conflict");
+  const ackedRetry = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-concurrent-retry-ack",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
+  });
+  expect(ackedRetry.imported).toBe(0);
+  // No filesystem mutex directory was created anywhere in the workspace.
+  expect(existsSync(join(context.harnessDir, ".status-write.lockdir"))).toBe(false);
+  expect(existsSync(join(context.harnessDir, ".execution-maintenance"))).toBe(false);
+}, 60_000);
+
+for (const shape of ["symlink", "directory"] as const) {
+  test(`an unsafe nested ${shape} snapshot has same-entry recovery preserving native authority`, async () => {
+    const { context, workflowId, legacyBytes } = await nativeCollisionWorkspace(`nested-${shape}`);
+    const snapshot = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    const target = join(ROOT, `nested-${shape}-target.json`);
+    writeFileSync(target, legacyBytes);
+    rmSync(snapshot);
+    if (shape === "symlink") symlinkSync(target, snapshot);
+    else mkdirSync(snapshot);
+    const before = await protectedStore(context);
+    await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: `nested-${shape}-refuse` }))
+      .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining(`--ack-skip-workflow ${workflowId}`) });
+    expect(await protectedStore(context)).toEqual(before);
+    await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: `nested-${shape}-wrong`, acknowledgedWorkflowSkips: ["wf-not-a-source"] }))
+      .rejects.toMatchObject({ code: "execution.workflow-skip-unmatched" });
+    const { result, accessed } = await withPathAccessLog(() => upgradeStoreMinimal({
+      context, operator: "operator", operationId: `nested-${shape}-ack`, acknowledgedWorkflowSkips: [workflowId],
+    }));
+    expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
+    expect(result.skipped).toContainEqual(expect.objectContaining({ path: `workflows/${workflowId}` }));
+    expect(result.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
+    // The containing directory IS a real in-root directory here, so the shared
+    // disposition must not blame it; only the per-item reason names the cause.
+    expect(result.dispositions.join("\n")).not.toContain("is not a real in-root directory");
+    expect(accessed.filter((path) => path === target || path.startsWith(`${snapshot}/`))).toEqual([]);
+    const after = await protectedStore(context);
+    for (const [name, rows] of Object.entries(before.tables)) {
+      if (name.startsWith("execution_") && name !== "execution_operations") expect(after.tables[name]).toEqual(rows);
+    }
+    expect(readFileSync(target).equals(legacyBytes)).toBe(true);
+    expect(shape === "symlink" ? lstatSync(snapshot).isSymbolicLink() : lstatSync(snapshot).isDirectory()).toBe(true);
+  });
+}
+
+for (const leaf of ["status", "snapshot", "session"] as const) {
+  test(`a ${leaf} execution source replaced at open never contributes target bytes`, async () => {
+    const name = `execution-leaf-${leaf}`;
+    const { context } = legacyWorkspace(name);
+    const workflowId = `wf-${name}`;
+    const dir = join(context.harnessDir, "workflows", workflowId);
+    const source = leaf === "status" ? join(context.harnessDir, "status.json")
+      : leaf === "snapshot" ? join(dir, WORKFLOW_SNAPSHOT_FILE) : join(dir, "sessions", "plan-pm.json");
+    const target = join(ROOT, `${name}-outside.json`);
+    const bytes = readFileSync(source);
+    writeFileSync(target, bytes);
+    const outside = nodeFs.statSync(target);
+    const initialized = await initializeStore(context); initialized.close();
+    const before = await protectedStore(context);
+    const realLstat = nodeFs.lstatSync, realRead = nodeFs.readFileSync, realStat = nodeFs.statSync, realFstat = nodeFs.fstatSync;
+    let swapped = false, targetReads = 0;
+    const probe = spyOn(nodeFs, "lstatSync").mockImplementation(((path: string) => {
+      const info = realLstat(path);
+      if (path === source && !swapped) { swapped = true; rmSync(source); symlinkSync(target, source); }
+      return info;
+    }) as never);
+    const reads = spyOn(nodeFs, "readFileSync").mockImplementation(((path: string | number, ...args: unknown[]) => {
+      const info = typeof path === "number" ? realFstat(path) : realStat(path);
+      if (info.dev === outside.dev && info.ino === outside.ino) targetReads++;
+      return (realRead as (...args: unknown[]) => unknown)(path, ...args);
+    }) as never);
+    try {
+      await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: name }))
+        .rejects.toMatchObject({ code: "execution.migration-conflict" });
+    } finally { probe.mockRestore(); reads.mockRestore(); }
+    expect(swapped).toBe(true);
+    expect(targetReads).toBe(0);
+    expect(await protectedStore(context)).toEqual(before);
+    if (leaf === "status") {
+      const fresh = { harnessDir: join(ROOT, `${name}-fresh-native`) };
+      mkdirSync(fresh.harnessDir);
+      const initialized = await initializeStore(fresh); initialized.close();
+      expect((await readExecutionState(fresh)).data.workflows).toEqual([]);
+      expect(await protectedStore(context)).toEqual(before);
+    }
+    expect(readFileSync(target)).toEqual(bytes);
+  });
+}
+
+test("a legacy root register replaced after its verified read still answers with the imported identity", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-replaced-register");
+  const statusPath = join(context.harnessDir, "status.json");
+  const realOpen = nodeFs.openSync;
+  let opens = 0;
+  // Deterministic injection: this path is opened ONCE by the verified read that
+  // produces the rows, so a later read must never redefine the receipt's
+  // identity. A build that re-opens it for the digest hits this replacement.
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, ...rest: unknown[]) => {
+    if (path === statusPath) {
+      opens += 1;
+      if (opens === 2) writeFileSync(statusPath, JSON.stringify({ version: 1, updated_at: "2026-10-09", metadata: {}, plans: [] }));
+    }
+    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
+  }) as never);
+  const input = { context, operator: "operator", operationId: "op-v1-replaced", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  let first: Awaited<ReturnType<typeof upgradeStoreMinimal>>;
+  try { first = await upgradeStoreMinimal(input); } finally { spy.mockRestore(); }
+  // The converted rows come from the bytes that were read, not from the path's
+  // later content.
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
+  expect([...readFileSync(statusPath)]).toEqual([...statusBytes]);
+  // The retained receipt still answers its own input: identity came from the
+  // imported bytes, so the same request replays instead of conflicting.
+  expect(await upgradeStoreMinimal(input)).toEqual(first);
+});
+
+for (const swap of ["fifo", "symlink"] as const) {
+  test(`a v1 compass swapped for a ${swap === "fifo" ? "special file" : "link"} at the open boundary refuses by name`, async () => {
+    const { context } = legacyV1Workspace(`v1-compass-${swap}`);
+    const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+    const outside = join(ROOT, `v1-compass-${swap}-outside.md`);
+    writeFileSync(outside, ["---", "iteration_id: iter-v1", "status: active", "---", ""].join("\n"));
+    // The swap happens INSIDE the descriptor window, after the type probe, so the
+    // new bounded read is what has to refuse it. A blocking open cannot be
+    // interrupted in-process, so the probe runs in a child with a real timeout.
+    const probe = (harnessDir: string, operationId: string): { status: string; code?: string; message?: string; imported?: number } =>
+      JSON.parse(execFileSync(process.execPath, ["-e", `
+        const { createRequire } = await import("node:module");
+        const fs = createRequire(import.meta.url)("node:fs");
+        const realOpen = fs.openSync;
+        let swapped = false;
+        fs.openSync = (target, ...rest) => {
+          if (target === ${JSON.stringify(compass)} && !swapped) {
+            swapped = true;
+            fs.rmSync(target);
+            ${swap === "fifo"
+              ? `createRequire(import.meta.url)("node:child_process").execFileSync("mkfifo", [target]);`
+              : `fs.symlinkSync(${JSON.stringify(outside)}, target);`}
+          }
+          return realOpen(target, ...rest);
+        };
+        const mod = await import(${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))});
+        try {
+          const result = await mod.upgradeStoreMinimal({
+            context: { harnessDir: ${JSON.stringify(harnessDir)} }, operator: "operator",
+            operationId: ${JSON.stringify(operationId)},
+            deliveryDeclarations: ${JSON.stringify(V1_STANDALONE_DECLARATION)},
+          });
+          console.log(JSON.stringify({ status: "ok", verdict: result.verdict, imported: result.imported }));
+        } catch (error) {
+          console.log(JSON.stringify({ status: "threw", code: error && error.code, message: String(error && error.message).slice(0, 1200) }));
+        }
+      `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
+    const refused = probe(context.harnessDir, `op-v1-compass-${swap}`);
+    expect(refused.status).toBe("threw");
+    expect(refused.code).toBe("execution.migration-conflict");
+    expect(refused.message).toContain("delivery-compass.md");
+    expect(refused.message).toContain("is not a regular in-root file");
+    expect(refused.message).toContain("store init --harness");
+    expect(swap === "fifo" ? lstatSync(compass).isFIFO() : lstatSync(compass).isSymbolicLink()).toBe(true);
+    // A decidable v1 root in the same run shape still imports its rows.
+    const { context: healthy } = legacyV1Workspace(`v1-compass-${swap}-control`);
+    expect(probe(healthy.harnessDir, `op-v1-compass-${swap}-control`)).toMatchObject({ status: "ok", imported: 2 });
+  }, 30_000);
+}
+
+test("a malformed v1 plan row is skippable instead of blocking every other lifecycle", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-malformed-row");
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(statusBytes.toString("utf8")) as { plans: Array<Record<string, unknown>> };
+  // An id-bearing row that cannot be converted: the lifecycle keeps its identity,
+  // so the acknowledgement can name it.
+  status.plans.find((plan) => plan.id === "v1-standalone")!.metadata = "not-an-object";
+  writeFileSync(statusPath, JSON.stringify(status));
+  const input = { context, operator: "operator", operationId: "op-v1-malformed", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  await expect(upgradeStoreMinimal(input))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow v1-standalone") });
+  const acked = await upgradeStoreMinimal({ ...input, operationId: "op-v1-malformed-ack", acknowledgedWorkflowSkips: ["v1-standalone"] });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["iter-v1"] });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow"));
+});
+
+test("a v1 compass that vanishes between the probe and its read refuses instead of looking absent", async () => {
+  const { context } = legacyV1Workspace("v1-compass-vanished");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const realOpen = nodeFs.openSync;
+  let removed = false;
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, ...rest: unknown[]) => {
+    if (typeof path === "string" && path === compass && !removed) { removed = true; rmSync(compass); }
+    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
+  }) as never);
+  const error = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-compass-vanished", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("a vanished compass was treated as absent"); }, (failure: Error & { code?: string }) => failure)
+    .finally(() => { spy.mockRestore(); });
+  expect(error).toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("changed between the probe and its read") });
+  expect(removed).toBe(true);
+});
+
+test("a v1 root's residual_findings are reported as not imported with their supported route", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-residual-findings");
+  const status = JSON.parse(statusBytes.toString("utf8")) as Record<string, unknown>;
+  status.residual_findings = { "wf-v1-residual-findings": [{ id: "R-1", title: "Legacy residual", severity: "high" }] };
+  writeFileSync(join(context.harnessDir, "status.json"), JSON.stringify(status));
+  const result = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-residual", deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  });
+  expect(result).toMatchObject({ verdict: "upgraded" });
+  const reported = result.dispositions.join("\n");
+  expect(reported).toContain("residual_findings");
+  expect(reported).toContain("projects/<id>/residuals.json");
+});
+
+test("a coordinator envelope outside the workflow sessions directory is skippable", async () => {
+  const root = join(ROOT, "binding-outside", ".mstar");
+  const healthy = join(root, "workflows", "wf-healthy-coordinator");
+  const broken = join(root, "workflows", "wf-broken-coordinator");
+  mkdirSync(join(healthy, "sessions"), { recursive: true });
+  mkdirSync(join(broken, "sessions"), { recursive: true });
+  const outside = join(ROOT, "binding-outside-envelope.json");
+  writeFileSync(outside, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "outside", workflow_id: "wf-broken-coordinator", harness_root: root }));
+  const snapshot = (id: string, coordinator?: Record<string, unknown>): string => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" },
+    ...(coordinator === undefined ? {} : { coordination: { coordinator } }),
+    plans: [{ id: `${id}-plan`, title: "row", status: "Todo", file: `${id}-plan.md` }],
+  });
+  writeFileSync(join(healthy, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-healthy-coordinator"));
+  // A shape-valid binding whose envelope lives outside this workflow's sessions dir.
+  writeFileSync(join(broken, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-broken-coordinator", {
+    session_id: "outside", session_file: outside, bound_at: "2026-10-04T00:00:00Z",
+  }));
+  writeFileSync(join(root, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04", workflows: [
+      { id: "wf-healthy-coordinator", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-healthy-coordinator" },
+      { id: "wf-broken-coordinator", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-broken-coordinator" },
+    ],
+  }));
+  const context = { harnessDir: root };
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-coordinator-outside" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-broken-coordinator") });
+  const acked = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-coordinator-outside-ack", acknowledgedWorkflowSkips: ["wf-broken-coordinator"],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-healthy-coordinator"] });
+});
+
+test("a workflow whose own identity disagrees is skippable, and a malformed binding is already a reported skip", async () => {
+  const root = join(ROOT, "malformed-binding", ".mstar");
+  const healthy = join(root, "workflows", "wf-healthy-binding");
+  const mismatched = join(root, "workflows", "wf-mismatched-binding");
+  const bindingBroken = join(root, "workflows", "wf-broken-binding");
+  for (const dir of [healthy, mismatched, bindingBroken]) mkdirSync(dir, { recursive: true });
+  const snapshot = (id: string, coordination?: Record<string, unknown>): string => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" },
+    ...(coordination === undefined ? {} : { coordination }),
+    plans: [{ id: `${id}-plan`, title: "row", status: "Todo", file: `${id}-plan.md` }],
+  });
+  writeFileSync(join(healthy, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-healthy-binding"));
+  // Its own snapshot carries another identity: this workflow's source is the
+  // refused unit, so the acknowledgement can dispose of exactly that import.
+  writeFileSync(join(mismatched, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-other-identity"));
+  // A binding the shared coordination validator rejects never reaches that
+  // comparison: the snapshot is already reported as an unrecognizable skip.
+  writeFileSync(join(bindingBroken, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-broken-binding", { coordinator: { session_id: "" } }));
+  writeFileSync(join(root, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04", workflows: [
+      { id: "wf-healthy-binding", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-healthy-binding" },
+      { id: "wf-mismatched-binding", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-mismatched-binding" },
+      { id: "wf-broken-binding", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-broken-binding" },
+    ],
+  }));
+  const context = { harnessDir: root };
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-mismatched-binding" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-mismatched-binding") });
+  const acked = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-mismatched-binding-ack", acknowledgedWorkflowSkips: ["wf-mismatched-binding"],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-healthy-binding"] });
+  expect(acked.skipped).toContainEqual(expect.objectContaining({
+    path: "workflows/wf-broken-binding/snapshot.json",
+    reason: expect.stringContaining("unrecognizable"),
+  }));
+});
+
+test("a malformed legacy plan row is skippable instead of blocking every other workflow", async () => {
+  const root = join(ROOT, "malformed-row", ".mstar");
+  const healthy = join(root, "workflows", "wf-healthy");
+  const broken = join(root, "workflows", "wf-broken");
+  mkdirSync(join(healthy, "sessions"), { recursive: true });
+  mkdirSync(broken, { recursive: true });
+  const snapshot = (id: string, plans: Array<Record<string, unknown>>): string => JSON.stringify({
+    schema_version: 1, id, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${id}`, target: "main" }, plans,
+  });
+  writeFileSync(join(healthy, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-healthy", [{ id: "wf-healthy-plan", title: "ok", status: "Todo", file: "wf-healthy-plan.md" }]));
+  writeFileSync(join(broken, WORKFLOW_SNAPSHOT_FILE), snapshot("wf-broken", [
+    { id: "dup-plan", title: "first", status: "Todo", file: "first.md" },
+    { id: "dup-plan", title: "second", status: "Todo", file: "second.md" },
+  ]));
+  writeFileSync(join(root, "wf-healthy-plan.md"), "# wf-healthy-plan\n");
+  writeFileSync(join(root, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04", workflows: [
+      { id: "wf-healthy", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-healthy" },
+      { id: "wf-broken", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-broken" },
+    ],
+  }));
+  const context = { harnessDir: root };
+  // One agent-authored mistake refuses as a SOURCE the acknowledgement can name,
+  // not as a whole-run conflict.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-malformed-row" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-broken") });
+  const acked = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-malformed-row-ack", acknowledgedWorkflowSkips: ["wf-broken"] });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-healthy"] });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("workflow wf-broken: skipped by --ack-skip-workflow"));
+  expect(readFileSync(join(broken, WORKFLOW_SNAPSHOT_FILE), "utf8")).toContain("dup-plan");
+});
+
+test("a workflows entry that sources nothing no longer aborts the upgrade", async () => {
+  const root = join(ROOT, "workflows-file", ".mstar");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-10-04", workflows: [] }));
+  writeFileSync(join(root, "workflows"), "not a directory");
+  const result = await upgradeStoreMinimal({ context: { harnessDir: root }, operator: "operator", operationId: "op-workflows-file" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(readFileSync(join(root, "workflows"), "utf8")).toBe("not a directory");
+  // A registration UNDER it keeps the existing per-source refusal.
+  const registered = join(ROOT, "workflows-file-registered", ".mstar");
+  mkdirSync(registered, { recursive: true });
+  writeFileSync(join(registered, "workflows"), "not a directory");
+  writeFileSync(join(registered, "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04",
+    workflows: [{ id: "wf-under-file", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-under-file" }],
+  }));
+  await expect(upgradeStoreMinimal({ context: { harnessDir: registered }, operator: "operator", operationId: "op-workflows-file-registered" }))
+    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("--ack-skip-workflow wf-under-file") });
+});
+
+test("a DSH refusal names every acknowledgement its advertised retry needs", async () => {
+  const { context } = legacyWorkspace("dsh-retry");
+  const workflowId = "wf-dsh-retry";
+  // Conflicting duplicate identities make the DSH phase refuse after the
+  // execution phase has already committed this workflow's rows.
+  writeFileSync(join(context.harnessDir, "workflows", workflowId, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const error = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-dsh-retry" })
+    .then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  expect(error.message).toContain("--ack-skip-dsh");
+  expect(error.message).toContain(`dsh-ledger:${workflowId}`);
+  // The committed ids are native collisions on the next invocation, so the same
+  // message must name the execution acknowledgement too.
+  expect(error.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  const retried = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-dsh-retry-2",
+    acknowledgedSkips: [`dsh-ledger:${workflowId}`], acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+});
+
+test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
+  // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
+  // so any digest difference comes from the ordering used to fold them.
+  const { context: source } = legacyWorkspace("digest-locale");
+  const copyRoot = join(ROOT, "digest-locale-copy", ".mstar");
+  mkdirSync(copyRoot, { recursive: true });
+  cpSync(source.harnessDir, copyRoot, { recursive: true });
+  const first = await upgradeStoreMinimal({ context: source, operator: "operator", operationId: "op-digest-reference" });
+  // A comparator that reverses string order: a locale-dependent sort would now
+  // order the digest keys differently and change the identity of the same bytes.
+  const realCompare = String.prototype.localeCompare;
+  const spy = spyOn(String.prototype, "localeCompare").mockImplementation(function (this: string, other: string) {
+    return this > other ? -1 : this < other ? 1 : (realCompare.call(this, other) as number);
+  } as never);
+  let second: typeof first;
+  try { second = await upgradeStoreMinimal({ context: { harnessDir: copyRoot }, operator: "operator", operationId: "op-digest-hostile" }); }
+  finally { spy.mockRestore(); }
+  expect(second.sourceDigest).toBe(first.sourceDigest);
+  expect(second).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-digest-locale"] });
+});
+

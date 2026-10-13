@@ -17,7 +17,8 @@
  * makes the upgrade refuse exactly as it would in a real workspace.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -115,39 +116,6 @@ function controlRoot(label: string): StoreContext {
 
 function storePath(context: StoreContext): string {
   return join(context.harnessDir, "store.db");
-}
-
-/**
- * Bounded turns the reported clean-close case may wait for the runtime's
- * collection-scheduled sidecar cleanup (#360). Only the WAIT is bounded: the
- * assertions after it are not, and whatever residue survives the bound still
- * fails their strict guards.
- */
-const QUIESCENCE_TURNS = 100;
-
-/**
- * Wait, within a bound of event-loop turns, for the runtime's
- * collection-scheduled SQLite cleanup to land. This runtime completes a closed
- * connection's cleanup — checkpoint every committed frame into the database
- * file, then remove the now-empty `-wal`/`-shm` pair — when the closed handle
- * is collected, not when `close()` returns (#360), so the post-close store
- * shape is the garbage collector's to schedule rather than the test's to
- * assume: a single forced collection is not a guarantee that the cleanup has
- * already completed. Each turn forces a collection and then yields one
- * event-loop turn before looking again (the yield is a turn, never a duration;
- * the sibling execution-recovery case yields the same way). This only waits:
- * it never relaxes the caller's guard, and a store that never reaches its
- * quiesced shape fails that guard exactly as it did before.
- */
-async function settleQuiescedSidecars(context: StoreContext): Promise<void> {
-  const wal = `${storePath(context)}-wal`;
-  const shm = `${storePath(context)}-shm`;
-  for (let turn = 0; turn < QUIESCENCE_TURNS; turn++) {
-    if (!existsSync(wal) && !existsSync(shm)) return;
-    Bun.gc(true);
-    if (!existsSync(wal) && !existsSync(shm)) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
 }
 
 /**
@@ -840,9 +808,18 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
       prep.close();
     }
     await upgradeStore(context);
+    const documentBytes = Buffer.from("# retained workspace notes\n");
+    const documentPath = join(context.harnessDir, "workflows", "ordinary", "README.md");
+    mkdirSync(join(context.harnessDir, "workflows", "empty-child"), { recursive: true });
+    mkdirSync(join(context.harnessDir, "workflows", "ordinary"), { recursive: true });
+    writeFileSync(documentPath, documentBytes);
+    writeFileSync(join(context.harnessDir, "workflows", "ordinary", "nested.txt"), "ordinary data");
     const initialized = await initializeExecutionAuthority(context);
     expect(initialized.epoch).toBe(2);
     expect(initialized.data.workflows).toEqual([]);
+    expect(readFileSync(documentPath)).toEqual(documentBytes);
+    expect(readFileSync(join(context.harnessDir, "workflows", "ordinary", "nested.txt"), "utf8")).toBe("ordinary data");
+    expect(existsSync(join(context.harnessDir, "workflows", "empty-child"))).toBe(true);
 
     const raw = rawDb(storePath(context));
     try {
@@ -857,43 +834,157 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
       raw.close();
     }
   });
-
-  test("refuses a live legacy execution source without touching the store", async () => {
-    // Disposition: the pre-activation file route is retired (§4.3), so a
-    // status.json / snapshot tree is no longer an authority source that
-    // initialization converts. A second initialization of the ACTIVE store
-    // created by `initializeStore` is refused create-only, and leftover file
-    // state changes nothing about that refusal.
-    const { context, epoch } = await freshStore("initialize-legacy-source");
-    writeFileSync(
-      join(context.harnessDir, "status.json"),
-      JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }),
-    );
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
-
-    // Snapshots, session envelopes and notes ledgers live under the workflow tree.
-    rmSync(join(context.harnessDir, "status.json"));
-    mkdirSync(join(context.harnessDir, "workflows", "wf-1"), { recursive: true });
-    writeFileSync(join(context.harnessDir, "workflows", "wf-1", "snapshot.json"), "{}");
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
-
-    // Neither refusal committed anything: the authority stays ACTIVE and at
-    // its activation revision.
-    const raw = rawDb(storePath(context));
+  test("fails closed on an unsafe workflow-root symlink", async () => {
+    const context = controlRoot("initialize-unsafe-workflow-root");
+    createV3Store(context);
+    const prep = rawDb(storePath(context));
     try {
-      expect(one(raw, "select authority_state, revision from execution_meta where id = 1")).toEqual({
-        authority_state: "active",
-        revision: 1,
-      });
-      expect(scalar(raw, "select authority_epoch from store_meta where id = 1")).toBe(epoch);
+      prep.exec("delete from catalog_execution_bindings");
     } finally {
-      raw.close();
+      prep.close();
     }
+    await upgradeStore(context);
+    const workflowDir = join(context.harnessDir, "workflows");
+    const outside = join(ROOT, "outside-workflow-documents");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, workflowDir, "dir");
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(workflowDir),
+    });
+  });
+  test("separate initializers serialize on SQLite after an empty store is upgraded", async () => {
+    const context = controlRoot("initialize-concurrent-upgraded");
+    createV3Store(context);
+    const prep = rawDb(storePath(context));
+    try {
+      prep.exec("delete from catalog_execution_bindings");
+    } finally {
+      prep.close();
+    }
+    await upgradeStore(context);
+    const beforeUpgradeInitialization = await openStore(context, "read");
+    let revisionBefore: number;
+    try {
+      const revision = scalar(beforeUpgradeInitialization.db, "select revision from execution_meta where id = 1");
+      if (typeof revision !== "number") throw new Error("execution revision is unavailable");
+      revisionBefore = revision;
+    } finally {
+      beforeUpgradeInitialization.close();
+    }
+    const worker = join(ROOT, "initialize-execution-worker.mjs");
+    writeFileSync(worker, `
+import { initializeExecutionAuthority } from ${JSON.stringify(join(import.meta.dir, "execution-store.ts"))};
+const context = { harnessDir: process.argv[2] };
+process.stdout.write("ready\\n");
+const reader = Bun.stdin.stream().getReader();
+await reader.read();
+reader.releaseLock();
+try {
+  const state = await initializeExecutionAuthority(context);
+  process.stdout.write(JSON.stringify({ initialized: true, epoch: state.epoch }));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ code: error?.code ?? error?.message ?? String(error) }));
+}
+`);
+    const workers = Array.from({ length: 2 }, () => {
+      const child = spawn(process.execPath, [worker, context.harnessDir], { stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      const ready = new Promise<void>((resolve) => {
+        child.stdout.on("data", (chunk) => {
+          stdout += String(chunk);
+          if (stdout.includes("ready\n")) resolve();
+        });
+      });
+      const done = new Promise<{ code: number | null; stdout: string }>((resolve) => {
+        child.on("close", (code) => resolve({ code, stdout }));
+      });
+      return { child, ready, done };
+    });
+    await Promise.all(workers.map(({ ready }) => ready));
+    for (const { child } of workers) child.stdin.write("go\n");
+    const results = await Promise.all(workers.map(({ done }) => done));
+    expect(results.map(({ code }) => code)).toEqual([0, 0]);
+    const outcomes = results.map(({ stdout }) => JSON.parse(stdout.slice("ready\n".length)) as { initialized?: boolean; code?: string });
+    expect(outcomes.filter(({ initialized }) => initialized)).toHaveLength(1);
+    expect(outcomes.filter(({ code }) => code === "execution.not-empty")).toHaveLength(1);
 
-    // Removing the leftover files does not re-open initialization either: the
-    // live ACTIVE authority is never reset.
-    rmSync(join(context.harnessDir, "workflows"), { recursive: true, force: true });
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/execution\.not-empty/);
+    const store = await openStore(context, "read");
+    try {
+      expect(one(store.db, "select authority_state, revision from execution_meta where id = 1")).toEqual({
+        authority_state: "active",
+        revision: revisionBefore + 1,
+      });
+      expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    } finally {
+      store.close();
+    }
+    expect(existsSync(join(context.harnessDir, "status.json"))).toBe(false);
+    expect(existsSync(join(context.harnessDir, ".status-write.lockdir"))).toBe(false);
+    expect(existsSync(join(context.harnessDir, ".execution-maintenance"))).toBe(false);
+  }, 60_000);
+
+  test("rejects only legacy execution authority before initialization and preserves the notes ledger", async () => {
+    const context = controlRoot("initialize-legacy-sources");
+    createV3Store(context);
+    const prep = rawDb(storePath(context));
+    try {
+      prep.exec("delete from catalog_execution_bindings");
+    } finally {
+      prep.close();
+    }
+    await upgradeStore(context);
+    const executionState = () => {
+      const db = rawDb(storePath(context));
+      try {
+        return one(db, "select authority_state, revision from execution_meta where id = 1");
+      } finally {
+        db.close();
+      }
+    };
+    const before = executionState();
+    if (typeof before.revision !== "number") throw new Error("execution revision is unavailable");
+
+    const statusPath = join(context.harnessDir, "status.json");
+    writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-01-02", workflows: [] }));
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(statusPath),
+    });
+    expect(executionState()).toEqual(before);
+    rmSync(statusPath);
+
+    const workflowDir = join(context.harnessDir, "workflows", "wf-1");
+    mkdirSync(workflowDir, { recursive: true });
+    const snapshotPath = join(workflowDir, "snapshot.json");
+    writeFileSync(snapshotPath, "{}");
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(snapshotPath),
+    });
+    expect(executionState()).toEqual(before);
+    rmSync(snapshotPath);
+
+    const sessionPath = join(workflowDir, "sessions", "session.json");
+    mkdirSync(join(workflowDir, "sessions"), { recursive: true });
+    writeFileSync(sessionPath, "{}");
+    await expect(initializeExecutionAuthority(context)).rejects.toMatchObject({
+      code: "execution.not-empty",
+      message: expect.stringContaining(sessionPath),
+    });
+    expect(executionState()).toEqual(before);
+    rmSync(sessionPath);
+
+    const notesPath = join(workflowDir, "notes.jsonl");
+    const notesBytes = Buffer.from('{"id":"note-1","text":"ordinary history"}\n');
+    writeFileSync(notesPath, notesBytes);
+    const initialized = await initializeExecutionAuthority(context);
+    expect(initialized.data.workflows).toEqual([]);
+    expect(executionState()).toEqual({
+      authority_state: "active",
+      revision: before.revision + 1,
+    });
+    expect(readFileSync(notesPath)).toEqual(notesBytes);
   });
 
   test("refuses a nonempty execution domain without clearing it", async () => {
@@ -2304,30 +2395,22 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     expect(() => assertExecutionSessionCurrent(domainContext(context, coordinator), bound.data)).toThrow();
   });
 
-  test("reads the committed authority after a clean close folded the journal into the store file", async () => {
-    // This runtime completes a closed connection's SQLite cleanup — checkpoint
-    // every committed frame into the database file, then remove the now-empty
-    // `-wal`/`-shm` pair — when the closed handle is collected rather than when
-    // `close()` returns. A read landing after that cleanup once refused
-    // `store.corrupt: unable to open database file`; the authority it folds in
-    // must still be served.
+  test("reads committed authority from a checkpointed store without journal sidecars", async () => {
     const shared = "host-quiesced";
     const fixture = await createdWorkflow("session-read-quiesced-wal", shared);
-    const { context, workflowToken, planTokens } = fixture;
+    const { context: original, workflowToken, planTokens } = fixture;
     const coordinator = sessionCaller("wf-1", shared);
-    const bound = await bindExecutionSession(domainContext(context, coordinator), sessionBind("wf-1", workflowToken, "bind-quiesced"));
-    const accepted = executionFootprint(context);
+    const bound = await bindExecutionSession(domainContext(original, coordinator), sessionBind("wf-1", workflowToken, "bind-quiesced"));
+    const accepted = executionFootprint(original);
 
-    // The precondition this case is about: SQLite's own quiesced shape — every
-    // committed frame in the database file, both sidecars gone — is really on
-    // disk. This runtime lands that cleanup at handle collection rather than at
-    // `close()` return (#360), so a single forced collection is not a guarantee
-    // that the scheduled cleanup has already completed: the case waits for the
-    // shape — within a bound of event-loop turns — before it asserts it. The
-    // wait is the only thing that is bounded: if the shape is still absent
-    // after it, these guards fail on the residual files, exactly as before, and
-    // the reads below never run for the wrong reason.
-    await settleQuiescedSidecars(context);
+    // A child exit closes every SQLite handle; never unlink a live WAL.
+    const context = controlRoot("checkpointed-authority");
+    const checkpoint = rawDb(storePath(original));
+    try { checkpoint.prepare("VACUUM INTO ?").run(storePath(context)); }
+    finally { checkpoint.close(); }
+    execFileSync(process.execPath, ["-e", `import { DatabaseSync } from "node:sqlite";
+      const db = new DatabaseSync(${JSON.stringify(storePath(context))});
+      db.exec("pragma journal_mode=WAL"); db.close();`]);
     expect(existsSync(`${storePath(context)}-wal`)).toBe(false);
     expect(existsSync(`${storePath(context)}-shm`)).toBe(false);
 
@@ -2339,48 +2422,6 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     expect(plan.data.plan).toMatchObject({ id: "p-1", status: "Todo" });
     expect((await readExecutionState(context)).token).toBe(root.token);
     expect(executionFootprint(context)).toEqual(accepted);
-  });
-
-  test("clean close leaves no wal sidecar", async () => {
-    // #360 classification case (Task 1). The reported observation is that CI
-    // run 36978948301 failed THIS file's other case because a `-wal` sidecar was
-    // still there after a clean close: `expect(existsSync(...+-wal")).toBe(false)`
-    // received `true` (1 fail / 2702 pass). This case is the same contract
-    // stated where the reported shape is produced, with the `-wal` byte length
-    // as its discriminator: a clean close either leaves no sidecar, or leaves
-    // one whose byte length is 0 — SQLite's own cleanup checkpointed every
-    // committed frame and has only to remove the now-empty file. A non-zero
-    // length means the checkpoint never ran or a handle is still open.
-    const shared = "host-shared";
-    const fixture = await createdWorkflow("session-read-clean-close-sidecar", shared);
-    const { context, workflowToken, planTokens } = fixture;
-    const coordinator = sessionCaller("wf-1", shared);
-    const coordinatorRef = await bindExecutionSession(
-      domainContext(context, coordinator),
-      sessionBind("wf-1", workflowToken, "bind-clean-close-coordinator"),
-    );
-    // Every handle the case opened is closed by now, but this runtime completes
-    // a closed connection's cleanup at collection (#360), so wait for it —
-    // within a bound of event-loop turns — before measuring the shape. The
-    // bound is the only bounded thing: the discriminator below still fails on
-    // any content-bearing residue the wait could not fold away.
-    await settleQuiescedSidecars(context);
-    const walPath = `${storePath(context)}-wal`;
-    const walBytes = existsSync(walPath) ? statSync(walPath).size : 0;
-    if (existsSync(walPath)) expect(walBytes).toBe(0);
-
-    // Whichever of the two clean shapes the runtime left, the authority it
-    // folded in (all bytes, when the sidecar is gone; no bytes, when it is
-    // empty) is served by both reads, and the store is never left needing a
-    // checkpoint with content still in flight.
-    const root = await readExecutionState(context);
-    expect(root.data.workflows.map((entry) => entry.state.id)).toEqual(["wf-1"]);
-    expect(root.data.workflows[0]?.coordinator).toEqual(coordinatorRef.data);
-    const plan = await readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-1");
-    expect(plan.token).toBe(planTokens["p-1"]);
-    expect(plan.data.plan).toMatchObject({ id: "p-1", status: "Todo" });
-    expect((await readExecutionState(context)).token).toBe(root.token);
-    expect(existsSync(walPath) ? statSync(walPath).size : 0).toBe(0);
   });
 
   test("refuses a malformed, foreign-role or caller-mismatched reference before an unavailable store answers", async () => {

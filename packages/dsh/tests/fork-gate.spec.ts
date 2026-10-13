@@ -43,7 +43,7 @@ import type { AgentFlowView } from '../src/index.ts'
 import type { SubagentStartRequest, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedActiveWorkflow, startViaNativeChannel, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedActiveWorkflow, selectedGenerationFor, startViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -120,7 +120,7 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
 function flowOf(app: BootResult): AgentFlowView {
   // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
   // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
-  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'))
+  const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')
   expect(view).not.toBeNull()
   return view!
 }
@@ -292,11 +292,13 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
       // the adapter's shared `dispatchGate` core).
       recordDispatch({
         harnessDir,
+        workflowId: 'wf-1',
         exec: forkDispatchExec('fork-c1', 'sess-1', VALID_FORK),
         prompt: VALID_FORK,
         violations: [],
         hard: false,
         resolvedWorkflowDir: workflowDir,
+        selectedGeneration: selectedGenerationFor(harnessDir),
         pairing,
       })
       expect(pairing.dispatchByCallId.get('sess-1\u0000fork-c1')).toBeDefined()
@@ -309,7 +311,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
         { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } },
       )
 
-      const view = readAgentFlow(workflowDir)!
+      const view = readAgentFlow(workflowDir, 'wf-1')!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
       expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
     } finally {

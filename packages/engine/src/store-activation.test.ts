@@ -14,13 +14,15 @@
  * Run with
  * `bun test packages/engine/src/store-activation.test.ts --test-name-pattern 'activation|retirement|backup'`.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
 import { registerCatalogEntity } from "./catalog.js";
 import { captureIssue } from "./issue.js";
+import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
 import {
   ACTIVATION_PROTOCOL_VERSION,
   activateStore,
@@ -29,10 +31,7 @@ import {
   assertAuthorityCurrent,
   backupStore,
   currentAuthorityHandle,
-  freezeRetainedBodies,
   inspectBackupCopy,
-  readRetainedBodyInventory,
-  retainedInventoryPath,
   retireStoreSources,
   StoreActivationError,
   type ActivationAttestation,
@@ -1171,6 +1170,32 @@ describe("store retirement", () => {
 // ---------------------------------------------------------------------------
 
 describe("store backup", () => {
+  /** One row per native host-state domain table, planted through the real producers. */
+  function plantHostRows(context: StoreContext, workflowId: string): void {
+    expect(appendDshLedgerRow(context, workflowId, '{"v":1,"kind":"row"}', "row-1")).toMatchObject({ kind: "written" });
+    expect(
+      appendDshWorkflowEvent(context, {
+        workflowId,
+        eventId: "evt-1",
+        digest: "a".repeat(64),
+        lineJson: '{"v":1,"kind":"dispatch"}',
+        source: { sessionId: "sess-host", streamId: "stream", seq: 2 },
+      }),
+    ).toMatchObject({ kind: "accepted" });
+    expect(advanceDshScanBound(context, workflowId, "sess-host", 3, "stream")).toBe(true);
+    expect(writeDshSessionBinding(context, "sess-host", context.harnessDir, { selectedWorkflowId: workflowId, excludedBeforeSeq: 0 })).toMatchObject({
+      kind: "written",
+    });
+    expect(recordDshStatusEmission(context, "sess-host", context.harnessDir, 1, '{"sv":1}')).toMatchObject({ kind: "written" });
+  }
+
+  /** One scalar count out of a fixture image; the SQL is this test's own. */
+  function scalarCount(db: DatabaseSync, sql: string): number {
+    // node:sqlite rows are untyped; the queried shape is the test's own SQL.
+    const row = db.prepare(sql).get() as { n: number };
+    return row.n;
+  }
+
   test("backup records identity and revision and contains committed WAL-visible issue and catalog data", async () => {
     const fixture = freshWorkspace("backup-wal-");
     // Hold a connection open for the whole case so the committed frames stay in
@@ -1204,6 +1229,7 @@ describe("store backup", () => {
         { kind: "document", id: "doc-guide", title: "Guide", rootKind: "harness", relativePath: "guide.md", documentKind: "guide" },
         { operationId: "op-wal-catalog", actor: "project-manager" },
       );
+      await plantHostRows(fixture.context, "wf-backup-host");
 
       const walPath = join(fixture.harness, "store.db-wal");
       expect(existsSync(walPath)).toBe(true);
@@ -1225,6 +1251,7 @@ describe("store backup", () => {
       expect(receipt.walPending).toBe(true);
       expect(receipt.bytes).toBeGreaterThan(0);
 
+      // The whole image is the backup: issue, catalog AND native host state.
       const copy = new DatabaseSync(target, { readOnly: true });
       try {
         const issue = copy.prepare("select id, title from issues").get() as { id: string; title: string };
@@ -1232,15 +1259,30 @@ describe("store backup", () => {
         expect((copy.prepare("select count(*) as n from occurrences").get() as { n: number }).n).toBe(1);
         const entity = copy.prepare("select id from catalog_entities where kind = 'document'").get() as { id: string };
         expect(entity.id).toBe("doc-guide");
-        const copiedMeta = copy
-          .prepare("select store_id, authority_epoch, revision from store_meta where id = 1")
-          .get() as { store_id: string; authority_epoch: number; revision: number };
+        expect(scalarCount(copy, "select count(*) as n from dsh_ledger_events")).toBe(2);
+        expect(scalarCount(copy, "select count(*) as n from dsh_accepted_identities")).toBe(1);
+        expect(scalarCount(copy, "select count(*) as n from dsh_scan_bounds")).toBe(1);
+        expect(scalarCount(copy, "select count(*) as n from dsh_session_bindings")).toBe(1);
+        expect(scalarCount(copy, "select count(*) as n from dsh_status_emissions")).toBe(1);
+        // node:sqlite rows are untyped; the queried shape is this store's own schema.
+        const copiedMeta = copy.prepare("select store_id, authority_epoch as epoch, revision from store_meta where id = 1").get() as {
+          store_id: string;
+          epoch: number;
+          revision: number;
+        };
         expect(copiedMeta.store_id).toBe(sourceMeta.store_id);
-        expect(copiedMeta.authority_epoch).toBe(sourceMeta.authority_epoch);
+        expect(copiedMeta.epoch).toBe(sourceMeta.authority_epoch);
         expect(copiedMeta.revision).toBe(sourceMeta.revision);
       } finally {
         copy.close();
       }
+
+      // The image re-verifies as its own recovery point: integrity, foreign keys
+      // and this build's migration prefix all read from the copy.
+      const verified = await inspectBackupCopy(target);
+      expect(verified.storeId).toBe(receipt.storeId);
+      expect(verified.epoch).toBe(receipt.epoch);
+      expect(verified.counts).toEqual(receipt.counts);
 
       const error = await refusalOf("store.activation-stale", () => backupStore(fixture.context, { out: target }));
       expect(error.message).toContain("instead of overwriting a recorded recovery point");
@@ -1250,115 +1292,169 @@ describe("store backup", () => {
     }
   });
 
+  test("backup is one coherent committed generation while a real concurrent writer commits", async () => {
+    const fixture = freshWorkspace("backup-concurrent-");
+    const held = await initializeStore(fixture.context);
+    try {
+      const before = await metaOf(fixture.context);
+      // A REAL second process commits issue+receipt rows continuously. The
+      // backup must neither refuse the coherent copy nor describe a generation
+      // the bytes do not hold — no frozen window, no filesystem mutex.
+      const issueModule = new URL("./issue.js", import.meta.url).href;
+      const stopPath = join(fixture.root, "writer-stop");
+      const writerSource = `
+        import { captureIssue } from ${JSON.stringify(issueModule)};
+        import { existsSync } from 'node:fs';
+        let commits = 0;
+        for (let index = 0; index < 60 && !existsSync(process.env.WRITER_STOP!); index += 1) {
+          await captureIssue({ harnessDir: process.env.HARNESS_DIR! }, {
+            projectId: "_default",
+            title: "Concurrent writer finding " + index,
+            kind: "bug",
+            severity: "low",
+            impact: "a commit racing the backup",
+            acceptance: "the copy carries a whole generation",
+            sourceIdentity: "writer/" + index,
+            rootCauseKey: "concurrent-writer",
+            acceptanceKey: "committed",
+            occurrenceKey: "writer-" + index,
+            sourceKind: "review",
+            location: "fixture",
+            observedBehavior: "committed",
+            evidence: [],
+            discoveredAt: "2026-10-12T00:00:00.000Z",
+          }, { operationId: "op-writer-" + index, actor: "project-manager" });
+          commits += 1;
+          if (commits === 3) console.log("first-commits-landed");
+        }
+        console.log(JSON.stringify({ commits }));
+      `;
+      const writer = spawn(process.execPath, ["-e", writerSource], {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, HARNESS_DIR: fixture.harness, WRITER_STOP: stopPath },
+      });
+      let writerOutput = "";
+      const { promise: writerDone, resolve: markWriterDone, reject: failWriter } = Promise.withResolvers<string>();
+      const { promise: firstCommits, resolve: markFirstCommits } = Promise.withResolvers<void>();
+      writer.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+        writerOutput += chunk;
+        if (writerOutput.includes("first-commits-landed")) markFirstCommits();
+      });
+      writer.stderr.setEncoding("utf8").on("data", (chunk: string) => (writerOutput += chunk));
+      writer.on("error", failWriter);
+      writer.on("close", (code) =>
+        code === 0 ? markWriterDone(writerOutput.trim().split("\n").at(-1)!) : failWriter(new Error(`writer exit ${code}: ${writerOutput}`)),
+      );
+      // The event is the child's own stdout line: three commits have landed
+      // before the copy starts, so the copy has a deterministic lower bound and
+      // the rest of the loop races it.
+      await Promise.race([
+        firstCommits,
+        writerDone.then(() => {
+          throw new Error(`writer exited before its first commits: ${writerOutput}`);
+        }),
+      ]);
+
+      const target = join(fixture.root, "concurrent.db");
+      const receipt = await backupStore(fixture.context, { out: target });
+      writeFileSync(stopPath, "stop");
+      const summary: unknown = JSON.parse(await writerDone);
+      if (typeof summary !== "object" || summary === null || !("commits" in summary) || typeof summary.commits !== "number") {
+        throw new Error(`writer summary not understood: ${writerOutput}`);
+      }
+      expect(summary.commits).toBeGreaterThanOrEqual(3);
+
+      // The live store after the writer stops is the upper bound of anything a
+      // mid-writer copy can contain.
+      const live = await openStore(fixture.context, "read");
+      let liveIssues = 0;
+      let liveRevision = 0;
+      try {
+        liveIssues = (live.db.prepare("select count(*) as n from issues").get() as { n: number }).n;
+        liveRevision = (live.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+      } finally {
+        live.close();
+      }
+
+      // The receipt describes the image: every reported count equals the rows
+      // actually inside the copied file.
+      const image = new DatabaseSync(target, { readOnly: true });
+      try {
+        const imageIssues = scalarCount(image, "select count(*) as n from issues");
+        expect(receipt.counts.issues).toBe(imageIssues);
+        expect(receipt.counts.occurrences).toBe(scalarCount(image, "select count(*) as n from occurrences"));
+        expect(receipt.counts.migrationReceipts).toBe(scalarCount(image, "select count(*) as n from migration_receipts"));
+        // A whole committed generation: every copied issue's capture provenance
+        // row is present with it (issue + operation + occurrence + provenance
+        // commit in one transaction), so the copy is not a torn mix.
+        expect(scalarCount(image, "select count(*) as n from provenance")).toBe(imageIssues);
+        // Three writer commits landed before the copy started; the rest race it.
+        expect(imageIssues).toBeGreaterThanOrEqual(3);
+        expect(imageIssues).toBeLessThanOrEqual(liveIssues);
+        expect(receipt.revision).toBeGreaterThanOrEqual(before.revision);
+        expect(receipt.revision).toBeLessThanOrEqual(liveRevision);
+        const firstWriterFinding = image
+          .prepare("select id from issues where title = ?")
+          .get("Concurrent writer finding 0") as { id: string } | undefined;
+        expect(firstWriterFinding?.id).toBeTruthy();
+      } finally {
+        image.close();
+      }
+      // The copy is self-consistent SQLite of THIS store, verified from the
+      // image: integrity, foreign keys and the migration prefix.
+      const verified = await inspectBackupCopy(target);
+      expect(verified.storeId).toBe(receipt.storeId);
+      expect(verified.epoch).toBeGreaterThanOrEqual(before.authority_epoch);
+    } finally {
+      held.close();
+    }
+  });
+
+  test("a retired mutex marker or compaction journal never blocks a backup and is never deleted", async () => {
+    const fixture = freshWorkspace("backup-markers-");
+    const held = await initializeStore(fixture.context);
+    try {
+      // A pre-cutover harness, exactly as an old checkout leaves it: the
+      // homemade lockdirs, the transient compaction journal, the notes ledger
+      // and an authored document. Backup must not inspect, require or delete
+      // any of them — marker presence is never permission to delete.
+      const notes = join(fixture.harness, "workflows", "wf-old", "notes.jsonl");
+      const compaction = join(fixture.harness, "workflows", "wf-old", "agent-flow-compaction.json");
+      const ledgerLockdir = join(fixture.harness, "workflows", "wf-old", ".ledger-write.lockdir");
+      const statusLockdir = join(fixture.harness, ".status-write.lockdir");
+      const maintenanceLockdir = join(fixture.harness, ".execution-maintenance", ".status-write.lockdir");
+      write(fixture.harness, join("workflows", "wf-old", "notes.jsonl"), '{"kind":"note","ts":"2026-09-01","text":"retained"}');
+      write(fixture.harness, join("workflows", "wf-old", "agent-flow-compaction.json"), '{"version":1}');
+      write(fixture.harness, join("workflows", "wf-old", ".ledger-write.lockdir", "holder.pid"), String(process.pid));
+      write(fixture.harness, join(".status-write.lockdir", "holder.pid"), String(process.pid));
+      write(fixture.harness, join(".execution-maintenance", ".status-write.lockdir", "holder.pid"), String(process.pid));
+      write(fixture.harness, "guide.md", "# Guide\n");
+
+      const target = join(fixture.harness, "archived", "backups", "markers.db");
+      const receipt = await backupStore(fixture.context, { out: target });
+      expect(receipt.storeId).toBe((await metaOf(fixture.context)).store_id);
+      expect(existsSync(target)).toBe(true);
+
+      // Nothing was frozen, admitted or removed: every marker and body keeps
+      // its exact bytes, and no file-body inventory document was written.
+      expect(readFileSync(notes, "utf8")).toBe('{"kind":"note","ts":"2026-09-01","text":"retained"}\n');
+      expect(readFileSync(compaction, "utf8")).toBe('{"version":1}\n');
+      for (const marker of [ledgerLockdir, statusLockdir, maintenanceLockdir]) expect(existsSync(marker)).toBe(true);
+      expect(readFileSync(join(fixture.harness, "guide.md"), "utf8")).toBe("# Guide\n");
+      expect(existsSync(`${target}.retained.json`)).toBe(false);
+      // Every lockdir still carries the holder file the old writer left: the
+      // backup neither acquired nor cleared any of them, and wrote no inventory
+      // document beside its own image.
+      expect(readFileSync(join(fixture.harness, ".status-write.lockdir", "holder.pid"), "utf8")).toBe(`${process.pid}\n`);
+      expect(readFileSync(join(maintenanceLockdir, "holder.pid"), "utf8")).toBe(`${process.pid}\n`);
+    } finally {
+      held.close();
+    }
+  });
 });
 
-describe("retained bodies", () => {
-  /** One workflow's accepted bodies, in the released shapes. */
-  function plantBodies(harness: string): { notes: string; chunk: string; selection: string } {
-    const notes = join(harness, "workflows", "wf-retained", "notes.jsonl");
-    const chunk = join(harness, "workflows", "wf-retained", "agent-flow-history", "chunk-000001.jsonl");
-    const selection = join(harness, "snapshots", "engine-status.json");
-    write(harness, join("workflows", "wf-retained", "notes.jsonl"), '{"kind":"note","ts":"2026-09-01","text":"retained"}');
-    write(harness, join("workflows", "wf-retained", "agent-flow.jsonl"), '{"v":1,"ts":1,"kind":"dispatch"}');
-    write(harness, join("workflows", "wf-retained", "agent-flow-ids.jsonl"), '{"id":"evt-1","d":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}');
-    write(harness, join("workflows", "wf-retained", "workflow-ledger-cursors.json"), '{"v":2,"cursors":{"s-1":{"next":2}}}');
-    write(harness, join("workflows", "wf-retained", "omp-launches.json"), '{"version":1,"workflow_id":"wf-retained","intents":[]}');
-    write(harness, join("workflows", "wf-retained", "agent-flow-history", "chunk-000001.jsonl"), '{"v":1,"ts":0,"kind":"chunk"}');
-    write(harness, join("snapshots", "engine-status.json"), '{"sv":1,"entries":{},"bindings":{}}');
-    return { notes, chunk, selection };
-  }
-
-  test("retained bodies: a recovery point freezes the accepted ledgers with their record checkpoints", async () => {
-    const fixture = await stagedFixture("retained-bodies-freeze-");
-    const bodies = plantBodies(fixture.harness);
-
-    const receipt = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "retained.db") });
-    const retained = receipt.retained!;
-    expect(retained.version).toBe(1);
-    expect(retained.protocol).toBe("retained-body-inventory-v1");
-    expect(retained.storeId).toBe(receipt.storeId);
-    expect(retained.epoch).toBe(receipt.epoch);
-    expect(retained.revision).toBe(receipt.revision);
-    expect(retained.bodies.map((body) => body.path)).toEqual([
-      "snapshots/engine-status.json",
-      "workflows/wf-retained/agent-flow-history/chunk-000001.jsonl",
-      "workflows/wf-retained/agent-flow-ids.jsonl",
-      "workflows/wf-retained/agent-flow.jsonl",
-      "workflows/wf-retained/notes.jsonl",
-      "workflows/wf-retained/omp-launches.json",
-      "workflows/wf-retained/workflow-ledger-cursors.json",
-    ]);
-    const notes = retained.bodies.find((body) => body.path.endsWith("notes.jsonl"))!;
-    expect(notes.partial).toBeNull();
-    expect(notes.selection).toBe(false);
-    expect(retained.bodies.find((body) => body.path === "snapshots/engine-status.json")!.selection).toBe(true);
-    expect(existsSync(retainedInventoryPath(receipt.backupPath))).toBe(true);
-    expect(JSON.parse(readFileSync(bodies.notes, "utf8"))).toMatchObject({
-      kind: "note", ts: "2026-09-01", text: "retained",
-    });
-  });
-
-  test("retained bodies: an unfinished compaction journal refuses the freeze before any byte is written", async () => {
-    const fixture = await stagedFixture("retained-bodies-compaction-");
-    plantBodies(fixture.harness);
-    write(fixture.harness, join("workflows", "wf-retained", "agent-flow-compaction.json"), '{"version":1,"lines":1}');
-    const target = join(fixture.harness, "archived", "backups", "compaction.db");
-
-    const refusal = await refusalOf("store.activation-stale", () => backupStore(fixture.context, { out: target }));
-    expect(refusal.message).toContain("agent-flow-compaction.json");
-    expect(refusal.message).toContain("IN FLIGHT");
-    // Nothing was written: no image, no inventory document, and no body moved.
-    expect(existsSync(target)).toBe(false);
-    expect(existsSync(retainedInventoryPath(target))).toBe(false);
-  });
-
-  test("retained bodies: a forged inventory and a non-regular body each refuse", async () => {
-    const fixture = await stagedFixture("retained-bodies-forged-");
-    const bodies = plantBodies(fixture.harness);
-    const receipt = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "forged.db") });
-
-    // A document missing a declared field is refused by the field it lacks —
-    // the validator reads every fact before it trusts any of them.
-    writeFileSync(retainedInventoryPath(receipt.backupPath), '{"version":1,"protocol":"retained-body-inventory-v1","storeId":"other"}\n');
-    const incomplete = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
-    expect(incomplete.message).toContain("carries no digest");
-    // A recorded digest is provenance and is never re-checked: a well-formed
-    // document reads back with whatever digest it records.
-    writeFileSync(
-      retainedInventoryPath(receipt.backupPath),
-      `${JSON.stringify({ ...receipt.retained!, digest: "f".repeat(64) })}\n`,
-    );
-    const recorded = await readRetainedBodyInventory(receipt.backupPath);
-    expect(recorded.bodies.length).toBe(receipt.retained!.bodies.length);
-    // A document of another generation is refused by name.
-    writeFileSync(retainedInventoryPath(receipt.backupPath), `${JSON.stringify({ ...receipt.retained!, version: 2 })}\n`);
-    const generation = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
-    expect(generation.message).toContain("version 2");
-    // …and a missing one is not a recovery record at all.
-    rmSync(retainedInventoryPath(receipt.backupPath), { force: true });
-    const missing = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
-    expect(missing.message).toContain("records no retained-body inventory");
-
-    // A body that is a symlink is not a retained accepted body: the freeze
-    // refuses rather than following the link out of the root.
-    rmSync(bodies.notes, { force: true });
-    const elsewhere = join(fixture.harness, "elsewhere.jsonl");
-    write(fixture.harness, "elsewhere.jsonl", '{"kind":"note","ts":"2026-09-01","text":"elsewhere"}');
-    mkdirSync(dirname(bodies.notes), { recursive: true });
-    symlinkSync(elsewhere, bodies.notes);
-    const symlinked = await refusalOf("store.activation-stale", async () =>
-      freezeRetainedBodies(fixture.context, { storeId: receipt.storeId, epoch: receipt.epoch, revision: receipt.revision }),
-    );
-    expect(symlinked.message).toContain("not a regular file");
-
-    // A workflow dir that is itself a symlink refuses too: the retained set
-    // cannot be enumerated through a link.
-    rmSync(bodies.notes, { force: true });
-    mkdirSync(join(fixture.harness, "elsewhere-dir"), { recursive: true });
-    symlinkSync(join(fixture.harness, "elsewhere-dir"), join(fixture.harness, "workflows", "wf-linked"));
-    const linked = await refusalOf("store.activation-stale", async () =>
-      freezeRetainedBodies(fixture.context, { storeId: receipt.storeId, epoch: receipt.epoch, revision: receipt.revision }),
-    );
-    expect(linked.message).toContain("symlink");
-  });
-});
+// The file-native retained-body protocol is gone: notes, agent-flow ledgers,
+// cursors, the launch journal and the selection snapshot are ordinary retained
+// files, and a recovery point neither freezes nor requires them. Their
+// non-blocking, untouched-by-backup behavior is proven in the marker case of
+// the "store backup" describe above.

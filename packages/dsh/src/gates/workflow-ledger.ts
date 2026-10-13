@@ -1,133 +1,40 @@
 /**
- * Workflow-ledger session-event consumer. *
- * Source of record: the durable `tool-workflow/*` session events appended
- * into the CALLING PARENT session's log (top-level runs only — nested
- * transport calls record nothing upstream; Task 1 seam notes §4). The
- * consumer has THREE halves (the architect-verified seam):
- *  1. COLD SCAN at apply — iterate `ctx.get('sessions').list()`, walk each
- *     session's log through the installed `seq` + `eventAt(seq)` surface
- *     (never a whole-log copy), and record any `tool-workflow/*` rows
- *     already present. Constructor-seeded events (replay/resume/fork) NEVER
- *     publish on the `session/event` firehose (`firstLiveSeq`), so without
- *     the cold scan pre-restart runs would be invisible. A forked
- *     conversation's INHERITED prefix (`Session.inheritedEventCount`) is
- *     never part of that walk: those envelopes are the fork PARENT's rows,
- *     so a child records only its own events (never a second copy of the
- *     parent's rows, attributed to the child, in the same workflow dir).
- *  2. LIVE FIREHOSE — `ctx.events.on('session/event', …)`: the post-commit
- *     append feed, delivered to ALL sessions for a root-context listener
- *     (scope-null event, untagged listeners admitted).
- *  3. SESSION-CREATED BACKFILL — `ctx.events.on('session/created', …)`: a
- *     session created AFTER apply with a constructor-seeded log (resumed /
- *     forked conversation — `session/created` fires after the seed enters
- *     the log, upstream `session/src/index.ts:961-995`) gets its snapshot
- *     cold-scanned ONCE on the creation announcement, closing the
- *     late-seeded-session gap. *
- * DEDUPE + RECORD IDENTITY : ONE DURABLE per-session cursor —
- * the next expected envelope `seq` (session-log position) — persisted to
- * `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` (a small
- * bounded sidecar next to the workflow-dir `agent-flow.jsonl`; the retired
- * harness-root cursor file is NOT read — no fallback). The cursor is only the
- * SCAN BOUND: the DEDUP AUTHORITY is the row's stable `eventId`
- * (`wfe1:<kind>:<sessionId>:<streamId>:<seq>`, where `streamId` is the
- * VERIFIED native log incarnation — the durable session header's creation
- * stamp paired with the session id, never the store epoch) recorded in the
- * durable accepted-identity index
- * (`agent-flow-ids.jsonl`), which survives tail compaction and cursor
- * eviction. The cursor entry stores the incarnation it belongs to, so a
- * rebuilt log is scanned from its own floor instead of being skipped by a
- * stale session bound, and a session whose head is unreadable records nothing
- * rather than inventing an incarnation. The append, the index entry and the
- * cursor move in one critical section owned by `recordWorkflowEvent` (see
- * `agent-flow.ts`); an unreadable cursor or index is an advisory refusal,
- * never accepted success.
+ * Consume verified `tool-workflow/*` native session events into the Dsh
+ * workflow ledger. The consumer combines one cold scan per existing session,
+ * the live `session/event` feed, and one backfill for sessions created after
+ * apply. It reads only through the session service's `seq` and `eventAt`
+ * surface; inherited fork prefixes are excluded.
  *
- * EXPLICIT TARGETS (resolver route) : when the host adapter supplies a
- * {@link ResolveWorkflowLedgerTarget}, the consumer AWAITS it at each event
- * boundary and uses ONLY the returned explicit target — a `null` or
- * inconsistent target records nothing and never falls back to the
- * file-based active set (an absent resolver serves only the pre-activation
- * route; the consumer cannot infer an active writer). Rows are processed
- * strictly in order per source stream, so a delayed lookup can never let a
- * later row advance another stream's cursor.
+ * Every row resolves its carrying session's canonical native workflow target.
+ * The resolver returns the workflow identity, canonical directory, store id,
+ * and epoch together. The event writer receives that exact generation; it
+ * does not re-probe at commit. Native SQLite event acceptance atomically
+ * appends the display row, accepts the stable `{kind, session, stream, seq}`
+ * identity with its digest, and advances that stream's scan bound. The
+ * bounded read skips rows already covered by the same incarnation; a rebuilt
+ * stream is walked independently. Store CAS and transaction failures retain
+ * their actual refusal reasons.
  *
- * INTER-PROCESS SERIALIZATION : the whole append + cursor
- * read-modify-write runs inside the per-workflow write lock
- * (`withWorkflowDirLock` from agent-flow.ts — the same lockdir pattern as
- * the engine's `withStatusWriteLock`). Steady state is ONE writer per
- * workflow dir; under multi-session shared lifecycle (compass ruling 3)
- * the lock makes the append/cursor sequence atomic across processes — a
- * whole-map cursor save can no longer silently clobber another
- * process's just-advanced cursor (the duplicate-row regression mode). The
- * lock is held only around that bounded critical section, never across
- * scans.
+ * `run-start` maps to `workflow-run`, `agent-start` to `workflow-agent`, and
+ * `run-end` to `workflow-run-end`; `agent-end` is upstream bookkeeping and is
+ * not persisted. A successful first run-start also records the actual
+ * approval result only when the current apply had previously asked about that
+ * name. Unbound events are excluded via the durable session binding floor;
+ * unreadable bindings pause attribution rather than implying no selection.
  *
- * Mapping: `tool-workflow/run-start` → `workflow-run`
- * (`agent` = the carrying parent session id), `tool-workflow/agent-start` →
- * `workflow-agent` (`childId` preserved), `tool-workflow/run-end` →
- * `workflow-run-end`. `tool-workflow/agent-end` is upstream MEMBER
- * bookkeeping with no ledger kind (the
- * member `outcome` is intentionally not persisted) and is filtered out.
- * `ts` takes the envelope's `time`.
+ * This consumer is observe-only: no event gates workflow execution. Missing
+ * session service disables it, and contained logger/cache failures never
+ * alter a workflow run.
  *
- * P-c answer observation : the workflow GATE cannot observe the ask
- * outcome — the tool registry's `serviceAsk` consumes the approval result
- * internally, and the gate invents no answerer. The run-start observation
- * IS the answer seam: when the approval waterfall ALLOWS a workflow call,
- * the call executes and the durable `tool-workflow/run-start` session event
- * (name carried) lands in the parent session log — the consumer maps it to
- * the `workflow-run` row AND records `allow` for the run name into the
- * apply-scoped {@link WorkflowAskCache} (`registerWorkflowLedger`'s third
- * parameter — the host adapter's instance). the record
- * fires ONLY for names the policy marked asked in this apply
- * (`WorkflowAskCache.markAsked` on every ask verdict; the observation
- * promotes via `wasAsked`) — a run observed without a prior ask (P-b
- * advisory under `ask` mode, `warn`/`off`-mode runs) is not an approval
- * resolution and never pre-authorizes the name. A DENIED answer produces no
- * run → no observation → the next same-name call under `ask` re-asks
- * (fail-closed — no grant evidence, never an invented allow). The hook is
- * bounded and contained: it fires only on the FIRST successful recording of
- * a run-start (the watermark gate above), keyed on the UNCAPPED run name
- * (`row.runName` — it must match the gate's `meta.name`, which is never
- * truncated AND is normalized through the SAME `normalizeWorkflowName` the
- * gate composes with — the Task 5 congruence fold-in), and a throwing cache
- * record degrades the observation with one warn — the ledger row is already
- * appended, the run is never affected.
- *
- * D4 session binding: every row is attributed to the lifecycle the CARRYING
- * session is bound to — its durable picker record (`session.header.id` +
- * exact cwd) folded into the structural hint the shared write resolver
- * consumes — and the record's durable `excludedBeforeSeq` is an intentional
- * EXCLUSION floor: rows the session observed while unbound (below a pick) are
- * never replayed, including after a restart. Rows observed while unbound are
- * not written anywhere; their next seq is persisted as the floor (with zero
- * workflow-dir writes) so the later pick cannot backfill them. An unreadable
- * binding record pauses attribution for that session (no write, no floor,
- * row re-evaluated next scan) — an unverifiable record is never treated as
- * "no pick".
- *
- * Observe-only (plan Global Constraints: W3 / N5): ZERO gating — every read
- * and append is try/catch-contained; a throwing session read logs one warn
- * and the run is unaffected; all appends go through `recordWorkflowEvent`
- * (itself fully contained — a failing ledger write never crashes or alters
- * a workflow run). The `sessions` service is read STRUCTURALLY via
- * `ctx.get('sessions')` — an absent service (composition without
- * dsh-session) → one debug log + consumer disabled. No runtime dependency
- * on `@deepseek-ai/dsh-session` (same pattern as the agents/loader seams).
- * The `session/created` listener NEVER throws synchronously — upstream
- * vetoes a session publication on a throwing creation listener.
- *
- * Depth advisory (P-e / N5): on `agent-start`, resolve the child session
- * via `sessions.get(childId)` and warn when its `header.delegationDepth`
- * is >= 2 — ONCE per run (bounded by a per-runId latch). Observe-time only,
- * NEVER a refusal path.
+ * On `agent-start`, the child session's delegation depth is inspected and a
+ * depth advisory is emitted once per run; it never refuses an event.
  */
-import type { Context } from '@deepseek-ai/cordis'
 import { createHash } from 'node:crypto'
+import type { Context } from '@deepseek-ai/cordis'
+import type { DshSelectedGeneration } from '@mstar-harness/engine'
+import { advanceDshScanBound, readDshScanBound } from '@mstar-harness/engine'
 import {
-  loadWatermark,
   recordWorkflowEvent,
-  resolveAgentFlowWriteTarget,
   truncateLedgerField,
   WORKFLOW_LEDGER_MAX_ID_LENGTH,
   WORKFLOW_LEDGER_MAX_LABEL_LENGTH,
@@ -135,14 +42,11 @@ import {
   WORKFLOW_LEDGER_MAX_SEQ,
 } from './agent-flow.ts'
 import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
-// The durable picker record (D4): the ledger reads the carrying session's
-// binding at THIS composition edge and hands the resolver a plain hint, so
-// `agent-flow.ts` never imports the store (the store imports its lock).
-import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
+// Session bindings may retain an imported exclusion floor. Unresolved native
+// targets remain eligible and never produce a cursor or binding mutation.
+import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
-// Type-only (erased at runtime): the carrying-session hint shape.
-import type { SessionHint } from './workflow-selection.ts'
 // The SHARED P-c cache-key normalization : the run-start
 // observation MUST key the ask cache through the SAME function the gate
 // composes `metaName` with (dispatch.ts `workflowGateInputOf`), or a
@@ -237,7 +141,7 @@ interface SessionView {
 
 /** One mapped ledger row: the envelope's session-log seq + the fully-shaped v1 event. */
 interface WorkflowLedgerRow {
-  /** The envelope's session-log seq — the durable-watermark position (dedupe key member). */
+  /** The envelope's native-session seq, the ordered source position. */
   seq: number
   /** The fully-shaped v1 workflow ledger event. */
   event: AgentFlowWorkflowEvent
@@ -331,46 +235,28 @@ function sessionStreamIdOf(session: unknown, sessionId: string): string | undefi
 /* ---------------------------------- explicit ledger target ---------------------------------- */
 
 /**
- * One EXPLICIT ledger target for a carrying session — the selection a
- * native host boundary resolves (F3's `resolveExecutionLedgerTarget`) and F2
- * consumes at its event boundaries. `workflowDir` is the absolute ACTIVE
- * workflow dir the rows belong in; `source` says whether that selection came
- * from the active execution authority (`execution`) or the pre-activation
- * route (`legacy`), and `epoch` is the execution epoch (`null` for a legacy
- * target). The epoch is provenance ONLY — it is never part of a record
- * identity, so an epoch change cannot duplicate history.
+ * One execution target selected by the native workflow/session resolver. The
+ * store identity and epoch are a single selection and travel unchanged to
+ * every event write.
  */
 export type WorkflowLedgerTarget = Readonly<{
   workflowId: string
   workflowDir: string
   sessionId: string
-  source: 'execution' | 'legacy'
-  epoch: number | null
+  storeId: string
+  epoch: number
 }>
 
-/**
- * The awaited target resolver supplied by the host adapter (H3 wires F3's
- * `resolveExecutionLedgerTarget`). It may only report a selection the
- * authority actually holds: a `null` result means "no active writer", and
- * the consumer then records NOTHING for that session — it never falls back
- * to the file-based active set to infer one.
- */
+/** The resolver returns null when this session has no authorized writer. */
 export type ResolveWorkflowLedgerTarget = (sessionId: string, cwd: string) => Promise<WorkflowLedgerTarget | null>
 
-/** A target is usable only when it is internally consistent and names THIS session. */
+/** A target is usable only when it is internally consistent and names this session. */
 function targetRefusal(target: WorkflowLedgerTarget, sessionId: string): string | undefined {
   if (target.sessionId !== sessionId) return `target session ${target.sessionId} does not match the carrying session`
   if (typeof target.workflowDir !== 'string' || target.workflowDir === '') return 'target carries no workflow dir'
   if (typeof target.workflowId !== 'string' || target.workflowId === '') return 'target carries no workflow id'
-  if (target.source === 'execution') {
-    if (typeof target.epoch !== 'number' || !Number.isInteger(target.epoch) || target.epoch < 1) {
-      return 'execution target carries no valid epoch'
-    }
-  } else if (target.source !== 'legacy') {
-    return `unknown target source ${String(target.source)}`
-  } else if (target.epoch !== null) {
-    return 'legacy target carries an epoch'
-  }
+  if (typeof target.storeId !== 'string' || target.storeId === '') return 'target carries no store identity'
+  if (!Number.isInteger(target.epoch) || target.epoch < 1) return 'target carries no valid epoch'
   return undefined
 }
 
@@ -438,16 +324,12 @@ function enqueueStreamTask(key: string, task: () => Promise<void>): void {
  * `tool-workflow/agent-end` (upstream member bookkeeping — no ledger kind).
  * Skipped events never abort the pass.
  *
- * Sequence + length bounds (/ W-3 : the envelope `seq`
- * must be an integer in [0, 2^31) (a fractional seq would corrupt the
- * durable watermark's cursor math and silently drop later integer
- * envelopes); the member `seq` (`data.seq`, 1-based) must be an integer in
- * [1, 2^31) (upstream `memberSeq` positive safe integer). ID-sized fields
- * (`runId`, `childId`) SKIP the row when oversized — truncating them could
- * forge collisions; display fields (`name`, `label`, `phase`) are capped
- * deterministically with a suffix marker AND stripped of ASCII control
- * characters (a newline/tab/CR in a model-controlled display field
- * must never reach the depth-advisory warn or a JSONL line).
+ * Sequence + length bounds: the envelope `seq` must be an integer in
+ * `[0, 2^31)` (fractional positions corrupt the native scan-bound math); the
+ * member `seq` (`data.seq`, 1-based) must be an integer in `[1, 2^31)`.
+ * ID-sized fields (`runId`, `childId`) skip oversized rows rather than
+ * truncating into collisions; display fields (`name`, `label`, `phase`) are
+ * capped and stripped of ASCII controls before persistence or advisory output.
  */
 function rowOf(session: unknown, envelope: unknown): WorkflowLedgerRow | undefined {
   const record = asRecord(envelope)
@@ -560,17 +442,13 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  * `tool-workflow/*` rows (covers pre-restart runs — constructor-seeded
  * events never hit the firehose, `firstLiveSeq`); (3) a live
  * `ctx.events.on('session/event', …)` listener filtering the four types.
- * One DURABLE cursor per session id (session-log `seq` position, persisted to
- * `{HARNESS_DIR}/workflows/<id>/workflow-ledger-cursors.json` — the ACTIVE
- * workflow dir, never the root) — re-applies never duplicate; no other cache.
- * The append + cursor advance is ONE critical section inside
- * `recordWorkflowEvent` (see its doc), so this consumer never advances a
- * cursor separately. Every read/append is try/catch-contained — including
- * `sessions.list()` itself (one warn, the cold scan skipped, the consumer
- * stays live); the `sessions` service absent → one debug log + consumer
- * disabled (composition without dsh-session). All appends go through
- * `recordWorkflowEvent` (itself fully contained — a failing ledger write
- * never crashes or alters a workflow run).
+ * The native store keeps one per-workflow/session bound keyed by the verified
+ * stream incarnation. `recordWorkflowEvent` atomically accepts identity,
+ * appends its display row, and advances that bound; the consumer reads it to
+ * skip already-covered positions of the same stream. No cursor or identity
+ * sidecar is read or written. Every source operation is contained: failures
+ * leave the row eligible and never alter a workflow run. Missing sessions
+ * service disables this observe-only consumer.
  *
  * @param ctx - the plugin's registrant context (the app composition root).
  * @param resolver - the shared per-workspace `{HARNESS_DIR}` resolver
@@ -580,17 +458,14 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
  *   instance; see the module doc "P-c answer observation"). Absent → the
  *   observation hook is disabled (W-B2 tests / compositions without the
  *   workflow gate).
- * @param resolveTarget - the OPTIONAL awaited explicit-target resolver
- *   (H3 supplies F3's `resolveExecutionLedgerTarget`). Present → every event
- *   boundary awaits it and uses ONLY the returned target; absent → the
- *   pre-activation file-based active set is the only route (this consumer
- *   never infers an active writer when a resolver IS supplied).
+ * @param resolveTarget - the required native execution-target resolver. Every
+ *   event uses only the returned selected workflow and original store generation.
  */
 export function registerWorkflowLedger(
   ctx: Context,
   resolver: HarnessResolver,
-  workflowAskCache?: WorkflowAskCache,
-  resolveTarget?: ResolveWorkflowLedgerTarget,
+  workflowAskCache: WorkflowAskCache | undefined,
+  resolveTarget: ResolveWorkflowLedgerTarget,
 ): void {
   // The `sessions` service is absent in compositions without dsh-session —
   // skip + one debug log (documented degrade), never crash.
@@ -601,19 +476,12 @@ export function registerWorkflowLedger(
   }
   // Depth advisory latch: per runId — ONE bounded warn at depth >= 2. Kept
   // per-apply (reset on re-registration), so it never grows across applies
-    // depth-warn latch (reset per apply).
+  // The source-event warnings are scoped to this apply.
   const depthWarned = new Set<string>()
   /** Sessions whose missing verified incarnation was already reported (ONE warn per apply). */
   const identityWarned = new Set<string>()
-  /**
-   * The last target epoch observed per session. A mid-session change is exactly
-   * the window this build cannot close locally: a target resolved BEFORE the
-   * change can still be committed, because revalidating the bound store/session
-   * while the maintenance exclusion is held needs §4.3's synchronous read helper
-   * (C1-owned, not part of §5 here). The change is therefore reported, never
-   * silently absorbed — and never claimed as closed.
-   */
-  const observedEpoch = new Map<string, number | null>()
+  /** The last selected store generation per session; diagnostics only. */
+  const observedGeneration = new Map<string, DshSelectedGeneration>()
 
   /** Report (once per session) that a row's identity could not be verified. */
   const noteUnverifiedIdentity = (sid: string): void => {
@@ -622,43 +490,6 @@ export function registerWorkflowLedger(
     log('warn', `workflow-ledger identity unavailable for session ${sid} — the native log head is not readable, so its rows are not recorded (no fabricated log incarnation)`)
   }
 
-  // The exclusion floor is a per-SCAN durable fact, not a per-row one. A cold
-  // scan / created-backfill walks EVERY row of a session log, and an unbound
-  // row would otherwise reload and rewrite the whole snapshot store under its
-  // lock — N rows costing N lock/read-modify-write cycles at plugin boot on
-  // the common unbound path. Rows queue `seq + 1` here and ONE write per
-  // session per scan persists the maximum; that is the same value the per-row
-  // writes converged to (the store merges by max), at one lock cycle.
-  const pendingFloors = new Map<string, { harnessDir: string; sessionId: string; cwd: string; floor: number }>()
-  let scanDepth = 0
-
-  /** Write one session's exclusion floor (the max a scan queued for it). */
-  const persistExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
-    const written = updateWorkflowSessionBinding(harnessDir, sessionId, cwd, { excludedBeforeSeq: floor })
-    if (written.kind === 'degraded') {
-      log('warn', `workflow-ledger exclusion floor not persisted for session ${sessionId} (${written.reason}) — attribution stays paused, the row is re-evaluated at the next scan`)
-    }
-  }
-
-  /** Flush the scan's queued floors: at most one write per session. */
-  const flushExclusionFloors = (): void => {
-    for (const pending of pendingFloors.values()) {
-      persistExclusionFloor(pending.harnessDir, pending.sessionId, pending.cwd, pending.floor)
-    }
-    pendingFloors.clear()
-  }
-
-  /** One unbound observation: queue it while a scan is running, else persist it (the live firehose sees one row per event). */
-  const observeExclusionFloor = (harnessDir: string, sessionId: string, cwd: string, floor: number): void => {
-    if (scanDepth === 0) {
-      persistExclusionFloor(harnessDir, sessionId, cwd, floor)
-      return
-    }
-    const key = `${harnessDir}\u0000${sessionId}`
-    const pending = pendingFloors.get(key)
-    if (pending === undefined) pendingFloors.set(key, { harnessDir, sessionId, cwd, floor })
-    else if (floor > pending.floor) pending.floor = floor
-  }
 
   
   /**
@@ -668,7 +499,7 @@ export function registerWorkflowLedger(
    * position is the row's own envelope seq + the session's log incarnation —
    * the record identity a replay can recognize.
    */
-  const recordRow = (session: unknown, sid: string, harnessDir: string, row: WorkflowLedgerRow, workflowDir: string): void => {
+  const recordRow = (session: unknown, sid: string, harnessDir: string, row: WorkflowLedgerRow, workflowId: string, workflowDir: string, selectedGeneration: DshSelectedGeneration): void => {
     // The row's identity needs the VERIFIED native log incarnation: without a
     // readable immutable head there is no stable stream, so the association is
     // refused (advisory, one warn per session) instead of fabricating one.
@@ -677,17 +508,18 @@ export function registerWorkflowLedger(
       noteUnverifiedIdentity(sid)
       return
     }
-    // Record-then-advance is INTERNAL to recordWorkflowEvent: the row, its
-    // durable identity and its scan bound move in one shared-lock critical
-    // section, so a crash between them replays into a found id and only
-    // advances the bound.
+    const cursor = readDshScanBound({ harnessDir }, workflowId, sid)
+    if (cursor?.stream === streamId && row.seq < cursor.next) return
+    // recordWorkflowEvent owns the transaction that accepts the identity,
+    // appends the row and advances the native stream bound.
     if (
       recordWorkflowEvent({
         harnessDir,
+        workflowId,
         workflowDir,
         event: row.event,
         source: { sessionId: sid, streamId, seq: row.seq },
-        isEvictable: (candidate) => sessions.get(candidate) === undefined,
+        selectedGeneration,
       })
     ) {
       // P-c answer observation : a
@@ -754,7 +586,7 @@ export function registerWorkflowLedger(
   ): Promise<void> => {
     let target: WorkflowLedgerTarget | null
     try {
-      target = await resolveTarget!(sid, workspace)
+      target = await resolveTarget(sid, workspace)
     } catch (error) {
       log('warn', `workflow-ledger target resolution failed for session ${sid} (contained — no ledger write, the row stays eligible): ${errorMessage(error)}`)
       return
@@ -765,85 +597,86 @@ export function registerWorkflowLedger(
       log('warn', `workflow-ledger target refused for session ${sid} — ${refusal} (no ledger write, no file-based fallback)`)
       return
     }
-    if (observedEpoch.has(sid) && observedEpoch.get(sid) !== target.epoch) {
-      log('warn', `workflow-ledger target epoch changed for session ${sid} (${String(observedEpoch.get(sid))} → ${String(target.epoch)}) — a target resolved before this change can be stale and is NOT revalidated in-window by this build (see the §4.3 revalidation residual)`)
+    const selectedGeneration = { storeId: target.storeId, epoch: target.epoch }
+    const previousGeneration = observedGeneration.get(sid)
+    if (previousGeneration !== undefined &&
+      (previousGeneration.storeId !== selectedGeneration.storeId || previousGeneration.epoch !== selectedGeneration.epoch)) {
+      log('debug', `workflow-ledger selected generation changed for session ${sid}; each event commits with the generation resolved for that event`)
     }
-    observedEpoch.set(sid, target.epoch)
-    recordRow(session, sid, harnessDir, row, target.workflowDir)
+    observedGeneration.set(sid, selectedGeneration)
+    recordRow(session, sid, harnessDir, row, target.workflowId, target.workflowDir, selectedGeneration)
+  }
+
+  const advanceSkippedAgentEnd = async (
+    session: unknown,
+    sid: string,
+    harnessDir: string,
+    workspace: string,
+    seq: number,
+  ): Promise<void> => {
+    const streamId = sessionStreamIdOf(session, sid)
+    if (streamId === undefined) {
+      noteUnverifiedIdentity(sid)
+      return
+    }
+    let target: WorkflowLedgerTarget | null
+    try {
+      target = await resolveTarget(sid, workspace)
+    } catch (error) {
+      log('warn', `workflow-ledger scan-bound target resolution failed for session ${sid} (contained — the row stays eligible): ${errorMessage(error)}`)
+      return
+    }
+    if (target === null) return
+    const refusal = targetRefusal(target, sid)
+    if (refusal !== undefined) {
+      log('warn', `workflow-ledger scan-bound target refused for session ${sid} — ${refusal}`)
+      return
+    }
+    const bound = readDshScanBound({ harnessDir }, target.workflowId, sid)
+    if (bound?.stream === streamId && seq < bound.next) return
+    const selectedGeneration = { storeId: target.storeId, epoch: target.epoch }
+    if (!advanceDshScanBound({ harnessDir }, target.workflowId, sid, seq + 1, streamId, selectedGeneration)) {
+      log('warn', `workflow-ledger native scan bound not advanced for skipped agent-end event at ${seq}; it remains eligible for replay`)
+    }
   }
 
   const consume = (session: unknown, envelope: unknown): void | Promise<void> => {
     const sid = sessionIdOf(session)
     if (sid === undefined) return
     const row = rowOf(session, envelope)
-    if (row === undefined) return
-    // harnessDir attribution: the carrying (parent) session's workspace
-    // (`header.cwd` structural read). Unresolved workspace (no explicit
-    // config, no session cwd) → no row (consistent with the gates' silent
-    // no-op for unresolvable harness) and the cursor is NOT advanced — the
-    // row is re-evaluated at the next scan, so it records once a workspace
-    // resolves (strictly better than a permanently-lost row).
+    const record = asRecord(envelope)
+    const data = record === undefined ? undefined : asRecord(record.data)
+    const skippedAgentEnd = row === undefined &&
+      record?.type === TOOL_WORKFLOW_AGENT_END &&
+      typeof record.seq === 'number' && Number.isInteger(record.seq) && record.seq >= 0 && record.seq < WORKFLOW_LEDGER_MAX_SEQ &&
+      typeof record.time === 'number' && Number.isFinite(record.time) &&
+      data !== undefined &&
+      typeof data.runId === 'string' && data.runId !== '' && data.runId.length <= WORKFLOW_LEDGER_MAX_ID_LENGTH &&
+      typeof data.seq === 'number' && Number.isInteger(data.seq) && data.seq >= 1 && data.seq < WORKFLOW_LEDGER_MAX_SEQ &&
+      (data.outcome === 'completed' || data.outcome === 'failed' || data.outcome === 'cancelled')
+    if (row === undefined && !skippedAgentEnd) return
+    const sourceSeq = row?.seq ?? (typeof record?.seq === 'number' ? record.seq : -1)
     const workspace = sessionCwdOf(session)
+    if (workspace === undefined) return
     const harnessDir = resolver.forWorkspace(workspace)
     if (harnessDir === null) return
-    // D4 binding: this session's durable pick + no-backfill floor. An
-    // UNREADABLE record is not "no pick": the
-    // row is left alone (no workflow-dir write, no floor write) and
-    // re-evaluated at the next scan rather than attributed to whichever
-    // lifecycle happens to resolve.
-    const identity: SessionHint = {
-      sessionId: sid,
-      ...(workspace === undefined ? {} : { cwd: workspace }),
-    }
-    let hint = identity
-    let floor = 0
-    if (workspace !== undefined) {
-      const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
-      if (binding.kind === 'unavailable') {
-        log('warn', `workflow-ledger attribution paused for session ${sid} — binding store ${binding.reason} (no ledger write, row stays eligible)`)
-        return
-      }
-      floor = binding.binding?.excludedBeforeSeq ?? 0
-      const selected = binding.binding?.selectedWorkflowId
-      if (selected !== undefined) hint = { ...identity, selectedWorkflowId: selected }
-    }
-    // The exclusion floor: rows the session observed while UNBOUND (below its
-    // pick, or below the floor a former unbound observation persisted) are
-    // intentionally excluded — never replayed, even after a pick/restart.
-    if (row.seq < floor) return
-    // The explicit ACTIVE target is mandatory; omission is a caller error,
-    // never permission to select a write directory from the file route.
-    if (resolveTarget === undefined || workspace === undefined) {
-      log('warn', 'workflow-ledger attribution refused — the ACTIVE workflow target was omitted; resolve it with resolveExecutionLedgerTarget before recording')
+    const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
+    if (binding.kind === 'unavailable') {
+      log('warn', `workflow-ledger attribution paused for session ${sid} — binding store ${binding.reason} (no ledger write, row stays eligible)`)
       return
     }
+    const floor = binding.binding?.excludedBeforeSeq ?? 0
+    // The exclusion floor omits events observed while the session was unbound.
+    if (sourceSeq < floor) return
+    if (row === undefined) return advanceSkippedAgentEnd(session, sid, harnessDir, workspace, sourceSeq)
     return consumeWithTarget(session, sid, harnessDir, workspace, row)
   }
 
   /**
-   * The scan's EFFECTIVE START for one session: `max(success cursor, D4
-   * exclusion floor, fork-lineage cut)` over the workflow dir the session
-   * resolves to. Rows below the first two were already recorded (cursor) or
-   * intentionally excluded by the operator's pick (floor) — the walk never
-   * even reads them.
-   *
-   * The FORK cut ({@link sessionForkCutOf}) bounds the walk from below on
-   * EVERY branch — including the ones whose workflow dir is not known yet: a
-   * forked conversation copies its parent's log prefix into the child, and
-   * those envelopes are the PARENT's rows — a child walking from 0 re-appends
-   * them (attributed to the child) into the same workflow dir, duplicating one
-   * (runId, kind, envelope seq) the parent already recorded and inflating the
-   * run's member count. With the cut a child contributes only its OWN events;
-   * a cut at or past the captured end leaves no row to walk. The cut is a fact
-   * about this session ALONE (its own copy of the parent's log), so it holds
-   * even when the workspace is unknown — a cwd-less child still records via
-   * `consume` under an explicitly configured `{HARNESS_DIR}`, and returning `0`
-   * there would re-record exactly the prefix the cut exists to exclude.
-   *
-   * The durable cursor is NOT part of the bound on the explicit route: there
-   * the workflow dir is known only from an AWAITED target, so the walk starts
-   * from the floor/cut and the record identity (`eventId`) dedupes the rows
-   * that were already recorded.
+   * The scan begins after the durable exclusion floor and fork-inherited
+   * prefix. The selected workflow is resolved per event, so its native scan
+   * bound is read only after that event's exact target is known; matching
+   * stream positions are skipped in `recordRow`.
    */
   const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
     const cut = sessionForkCutOf(session)
@@ -859,35 +692,7 @@ export function registerWorkflowLedger(
       return endSeq
     }
     const bounded = Math.max(floor, cut)
-    if (resolveTarget !== undefined) return bounded
-    const selected = binding.binding?.selectedWorkflowId
-    // The SAME hint `consume` builds for this session (identity + pick), or
-    // the scan would start from a different workflow dir
-    // than the rows belong in.
-    const hint: SessionHint = {
-      sessionId: sid,
-      cwd: workspace,
-      ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
-    }
-    const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir
-    if (workflowDir === null) return bounded
-    const cursorRead = loadWatermark(workflowDir)
-    if (cursorRead.kind === 'unreadable') {
-      // Fail closed: an unreadable bound is NOT "no bound". Scanning from the
-      // floor is always safe — the durable identity index dedupes the re-walk.
-      log('warn', `workflow-ledger scan bound unreadable for ${workflowDir} (${cursorRead.reason}) — scanning from the floor (the identity index still dedupes)`)
-      return bounded
-    }
-    // The bound is usable only for the incarnation it was WRITTEN for: a
-    // rebuilt log starts at its own floor instead of being skipped by a stale
-    // session bound.
-    const streamId = sessionStreamIdOf(session, sid)
-    const entry = cursorRead.cursors.get(sid)
-    // A LEGACY v1 entry (no recorded incarnation) is not a verified checkpoint
-    // either: it is ignored and the durable identity index dedupes the re-walk,
-    // so a stale bound can never skip a rebuilt log's rows.
-    const verified = streamId !== undefined && entry !== undefined && entry.stream === streamId ? entry.next : 0
-    return Math.max(bounded, verified > endSeq ? 0 : verified)
+    return bounded
   }
 
   /**
@@ -901,8 +706,15 @@ export function registerWorkflowLedger(
     let seq = startSeq
     const next = (): void | Promise<void> => {
       while (seq < endSeq) {
-        const outcome = consume(session, eventAt(seq))
-        seq += 1
+        const position = seq++
+        let envelope: unknown
+        try {
+          envelope = eventAt(position)
+        } catch (error) {
+          log('warn', `workflow-ledger source read failed for session ${sessionIdOf(session) ?? 'unknown'} at seq ${position} (contained — later rows continue): ${errorMessage(error)}`)
+          continue
+        }
+        const outcome = consume(session, envelope)
         if (outcome !== undefined) return outcome.then(next)
       }
       return undefined
@@ -947,38 +759,10 @@ export function registerWorkflowLedger(
       noteUnverifiedIdentity(sid)
       return
     }
-    scanDepth += 1
-    const settle = (): void => {
-      scanDepth -= 1
-      if (scanDepth === 0) flushExclusionFloors()
-    }
-    if (resolveTarget !== undefined) {
-      // Explicit route: walk the CAPTURED window on the session's chain.
-      // The chain contains throwing walks (one warn, later rows continue).
-      enqueueStreamTask(sid, async () => {
-        try {
-          await runWalk(session, startSeq, endSeq, eventAt)
-        } finally {
-          settle()
-        }
-      })
-      return
-    }
-    let outcome: void | Promise<void>
-    try {
-      outcome = runWalk(session, startSeq, endSeq, eventAt)
-    } catch (error) {
-      settle()
-      throw error
-    }
-    if (outcome === undefined) {
-      settle()
-      return
-    }
-    return outcome.then(settle, (error) => {
-      settle()
-      throw error
-    })
+    // Every captured window is serialized against the same session's live
+    // events; each row resolves its native target before its cursor check.
+    enqueueStreamTask(sid, async () => { await runWalk(session, startSeq, endSeq, eventAt) })
+    return
   }
 
   // SESSION-CREATED BACKFILL — registered BEFORE the cold scan :
@@ -1034,10 +818,6 @@ export function registerWorkflowLedger(
   // per-listener containment: a throwing consume never surfaces.
   ctx.events.on('session/event', (session: unknown, envelope: unknown) => {
     try {
-      if (resolveTarget === undefined) {
-        consume(session, envelope)
-        return
-      }
       const sid = sessionIdOf(session)
       if (sid === undefined) return
       enqueueStreamTask(sid, async () => {

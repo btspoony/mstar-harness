@@ -600,7 +600,7 @@ describe('agent-flow — real settle pairing (real call through the composed reg
     // pairing store hit → the foreground result ('subagent result') settles
     // `ok` carrying the dispatch identity (role from the Assignment). v3
     // layout: the ledger lives in the ACTIVE workflow dir.
-    const view = readAgentFlow(join(booted.harnessDir, 'workflows/wf-1'))
+    const view = readAgentFlow(join(booted.harnessDir, 'workflows/wf-1'), 'wf-1')
     expect(view).not.toBeNull()
     expect(view!.events).toHaveLength(2)
     expect(view!.events[0]).toMatchObject({

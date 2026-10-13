@@ -131,10 +131,10 @@ import {
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
   rowValidationRoute,
+  type IntegrationMergeLease,
   type WorkflowSnapshot,
 } from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
-import type { IntegrationMergeLease } from "./lease.js";
 import { normalizeSeverity, type PlanRow } from "./status.js";
 
 /** The same closed direct-coordinator operation union is used on both routes. */

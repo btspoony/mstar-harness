@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   SddScriptError,
   StoreError,
+  WORKFLOW_DELIVERY_KINDS,
   activateStore,
   activationReceiptFor,
   appliedReceiptFor,
@@ -24,6 +25,21 @@ import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationConte
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 
+/**
+ * One per-lift delivery declaration for `store upgrade --delivery <json>...`
+ * (the former `migrate` declaration contract). Transport shape only — the
+ * per-kind coherence rule stays with the engine's shared registration rule, so
+ * the CLI never maintains a second copy. The kind is the declared enum so an
+ * off-enum value is a nested usage diagnostic naming the accepted values.
+ */
+const deliveryDeclarationSchema = z.object({
+  workflow: z.string().min(1),
+  deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS),
+  branchSource: z.string().min(1).optional(),
+  branchTarget: z.string().min(1).optional(),
+  completionPolicy: z.string().min(1).optional(),
+}).strict();
+
 const inputSchema = z.object({
   harness: z.string().optional(),
   apply: z.boolean().optional(),
@@ -31,6 +47,9 @@ const inputSchema = z.object({
   attestation: z.string().optional(),
   out: z.string().optional(),
   operator: z.string().optional(),
+  ackSkipDsh: z.array(z.string()).optional(),
+  ackSkipWorkflow: z.array(z.string()).optional(),
+  delivery: z.array(deliveryDeclarationSchema).optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
@@ -43,6 +62,9 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.internal-error`;
+  if (id === "store.upgrade" && (code === "store.upgrade-dsh-ack-unmatched" || code === "execution.delivery-declaration-required" || code === "execution.workflow-skip-unmatched")) {
+    return refusalEnvelope({ command: id, status: "usage", code, exitCode: 2, message });
+  }
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
     : refusalEnvelope({
@@ -51,46 +73,63 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       code,
       exitCode: 1,
       message,
-      recovery: id === "store.init" && message.includes("legacy execution state exists at ")
-        ? 'For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical file state, run mstar store upgrade.'
-        : id === "store.init"
-          ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
-          : id === "store.upgrade"
-            ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
-            : id === "store.migrate"
-              ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
-              : id === "store.backup"
-                ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
-                : id === "store.activate"
-                  ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
-                  : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire.",
+      recovery: id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
+        ? "For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical files, run mstar store upgrade --operator <name> --harness <control-root>."
+        : code === "store.already-exists"
+          ? id === "store.upgrade"
+            // An upgrade that loses the create-only publication race did not
+            // finish its import: the supported continuation is the same command,
+            // not the "do not migrate" instruction meant for init.
+            ? "Another process already published this control root's store, so nothing was created here and its legacy import may be unfinished. Rerun mstar store upgrade --harness <same-control-root> --operator <name> to continue it, then inspect the result with mstar status validate; initialization is create-only."
+            : "Inspect the existing execution authority with mstar status validate; do not initialize or migrate an existing store."
+          : code === "store.created-handle-failed"
+            ? "The named store is created, active and retained. Once the named condition clears, inspect it with mstar status validate; initialization is create-only. For an interrupted upgrade, run mstar store upgrade --harness <same-control-root> --operator <name>."
+            : code === "store.publication-barrier-failed"
+              ? "The named store is published and retained, but this call could not synchronize its directory entry. Resolve the named platform/filesystem condition, then rerun mstar store upgrade --harness <same-control-root> --operator <name> to retry the barrier and finish any remaining import or activation; initialization is create-only."
+            : code === "store.publication-failed"
+              ? "No store was created at the named path. Resolve the named filesystem condition (permissions, space or hard-link support). For a fresh harness, run mstar store init --harness <control-root>; for existing legacy sources, run mstar store upgrade --operator <name> --harness <control-root>. Select a hard-link-capable filesystem before either attempt."
+              : id === "store.init"
+                ? "Choose an empty harness root and run mstar store init."
+                : code === "store.upgrade-dsh-source-refused"
+                  ? "Rerun mstar store upgrade --operator <name> --ack-skip-dsh <selector> for every listed selector to drop only the refused facts in that run; when the message also reports execution workflows that this invocation already committed, pass --ack-skip-workflow <id> for each of them in the same retry, because the next invocation sees those ids as native collisions. Ordinary retry remains available."
+                  : id === "store.upgrade"
+                    ? "Correct the operator input and legacy-store state named by the upgrade diagnostic, then run mstar store upgrade --operator <name>."
+                    : id === "store.migrate"
+                      ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
+                      : id === "store.backup"
+                        ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
+                        : id === "store.activate"
+                          ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
+                          : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire.",
     });
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {
   const storePath = path.join(harnessDir, "store.db");
-  if (existsSync(storePath)) return `a store already exists at ${storePath} — migrate or activate instead of initializing`;
+  if (existsSync(storePath)) return `a store already exists at ${storePath} — inspect it with mstar status validate instead of initializing`;
   const projectsDir = path.join(harnessDir, "projects");
   if (existsSync(projectsDir)) {
     for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (entry.isDirectory() && !entry.isSymbolicLink() && existsSync(path.join(projectsDir, entry.name, "residuals.json"))) {
-        return "legacy project residual registers require the staged catalog migration; use the staged migration, not store init";
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        const residualsPath = path.join(projectsDir, entry.name, "residuals.json");
+        if (existsSync(residualsPath)) return `legacy catalog data exists at ${residualsPath} and prevents store initialization`;
       }
     }
   }
   const statusPath = path.join(harnessDir, "status.json");
-  if (existsSync(statusPath)) return `legacy execution state exists at ${statusPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade"`;
+  if (existsSync(statusPath)) return `legacy execution state exists at ${statusPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade --operator <name> --harness <control-root>"`;
   const workflowsDir = path.join(harnessDir, "workflows");
   if (existsSync(workflowsDir)) {
     for (const entry of readdirSync(workflowsDir, { withFileTypes: true })) {
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         const snapshotPath = path.join(workflowsDir, entry.name, "snapshot.json");
-        if (existsSync(snapshotPath)) return `legacy execution state exists at ${snapshotPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade"`;
+        if (existsSync(snapshotPath)) return `legacy execution state exists at ${snapshotPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade --operator <name> --harness <control-root>"`;
       }
     }
   }
-  if (existsSync(path.join(harnessDir, "iterations", "README.md"))) {
-    return "the maintained iterations catalog index requires the staged catalog migration; use the staged migration, not store init";
+  const iterationsIndex = path.join(harnessDir, "iterations", "README.md");
+  if (existsSync(iterationsIndex)) {
+    return `legacy catalog data exists at ${iterationsIndex} and prevents store initialization`;
   }
   return null;
 }
@@ -154,11 +193,24 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         const attestation = input.attestation === undefined
           ? undefined
           : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
+        const invalidAck = input.ackSkipDsh?.filter((selector) => {
+          if (selector === "dsh-status" || selector === "dsh-workflows") return false;
+          const match = /^dsh-(?:ledger|bounds):(.+)$/.exec(selector);
+          return !match || match[1] === "." || match[1] === ".." || match[1]!.includes("/");
+        }) ?? [];
+        if (invalidAck.length) {
+          throw Object.assign(new SddScriptError(`invalid --ack-skip-dsh selector: ${invalidAck.join(", ")}`, 2), {
+            code: "store.upgrade-dsh-ack-unmatched",
+          });
+        }
         return ok(id, await upgradeStoreMinimal({
           context,
           operator: required(input.operator, "--operator"),
           operationId: randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
+          ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
+          ...(input.ackSkipWorkflow === undefined ? {} : { acknowledgedWorkflowSkips: input.ackSkipWorkflow }),
+          ...(input.delivery === undefined ? {} : { deliveryDeclarations: input.delivery }),
         }));
       }
       case "store.backup": {
@@ -223,33 +275,42 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const optionFlags: Record<keyof StoreInput, string> = {
     harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
     operator: "--operator <name>",
+    ackSkipDsh: "--ack-skip-dsh <selector...>",
+    ackSkipWorkflow: "--ack-skip-workflow <id...>",
+    delivery: "--delivery <json...>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator", "attestation"],
-    migrate: ["harness", "apply", "manifest", "out"],
+    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "delivery"],
     backup: ["harness", "out"],
+    migrate: ["harness", "apply", "manifest", "out"],
     activate: ["harness", "manifest", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
+  const optionKeys = optionsByVerb[verb]!;
   const attestationHelp = activationAttestationDocumentConstraints.map(({ path, rule }) => `${path}: ${rule}`).join(" ");
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
+    ackSkipDsh: "Explicitly drop legacy DSH host-state facts this run refused. Selectors: dsh-ledger:<workflowId>, dsh-bounds:<workflowId>, dsh-status, or dsh-workflows (a symlinked workflows tree). The refusal lists exact facts; importable facts still import. The commit report states the exact loss. Default never skips. Source bytes remain unchanged and ordinary upgrade remains retryable.",
+    ackSkipWorkflow: "Explicitly skip IMPORTING the named registered workflows whose legacy execution source this run refuses. A registered source is refused when its whole `workflows/` root or per-workflow path is not a real in-root directory \u2014 a symlink (never followed) or a non-directory path \u2014 or when a recognized legacy source's id already exists in the native execution authority (an upgrade never overwrites, deletes or silently omits an existing native workflow). Pass the exact original workflow ids (repeat or space-separate; a repeated id is harmless). Either way the native rows and the source bytes stay in place, no execution row is imported or fabricated for the named id, and the report records the skipped import with its loss. Skipping a source this run does NOT refuse is rejected, because that would silently drop a trusted source. Separate from --ack-skip-dsh, which can never discard a registered execution source. Default never skips.",
+    delivery: `Declare the delivery kind of one active standalone v1 plan this upgrade lifts; repeat once per such lift (an active standalone v1 plan fixes its delivery kind at registration and cannot be closed without one, so the upgrade refuses before registering any of them until each is declared). Each value is one JSON object {"workflow": <lifted id>, "deliveryKind": "${WORKFLOW_DELIVERY_KINDS.join('" | "')}", plus "branchSource"/"branchTarget" for development or "completionPolicy" for verification/report-only}. Completed v1 rows, already-declared v2 snapshots and iterations need none; an entry addressing no active standalone lift is refused, never ignored.`,
   };
-  const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
   const options = optionKeys.map((key) => ({
     key,
     flags: optionFlags[key],
     required: false,
+    variadic: key === "ackSkipDsh" || key === "ackSkipWorkflow" || key === "delivery",
     ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
   }));
   return {
     id,
     cli: { path: ["store", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    ...(verb === "upgrade" ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema } } } : {}),
+    ...(verb === "upgrade"
+      ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema }, delivery: { schema: z.array(deliveryDeclarationSchema), help: optionHelp.delivery } } }
+      : {}),
     output: commandEnvelopeSchema,
     effects: ({
       init: ["read", "write"],
@@ -260,7 +321,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
       retire: ["read", "write"],
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
     description: `${verb === "upgrade"
-      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items."
+      ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses: a registered source that is not a real in-root directory (a linked or non-directory path), a registered source whose nested bytes cannot be read as a workflow (a linked entry, a non-regular snapshot, a session path that is not a real directory, a plan row that is missing, duplicated or unconvertible), a converted v1 lifecycle whose converted plan rows cannot be imported, or a recognized legacy id the native authority already holds. Every skip is reported with its loss."
       : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };

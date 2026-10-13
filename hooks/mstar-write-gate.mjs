@@ -4,62 +4,62 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync, statSync as statSync5, writeSync } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute3, join as join6, relative as relative5, resolve as resolve5 } from "node:path";
+import { readFileSync, statSync as statSync4, writeSync } from "node:fs";
+import { dirname as dirname11, isAbsolute as isAbsolute4, join as join6, relative as relative4, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { mkdirSync, readFileSync as readFileSync2, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { dirname as dirname3, join as join3, sep } from "node:path";
-import { readFileSync as readFileSync3, statSync as statSync2 } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync4, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join2, sep } from "node:path";
+import { readFileSync as readFileSync2, statSync } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename as basename2, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
-import { existsSync as existsSync5, readFileSync as readFileSync5, readdirSync as readdirSync2, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname6, isAbsolute as isAbsolute4, join as join7, resolve as resolve6, sep as sep3 } from "node:path";
+import { basename as basename2, dirname as dirname4, join as join4, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname5, join as join5, resolve as resolve4, sep as sep2 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 import {
   copyFileSync,
-  existsSync as existsSync8,
+  existsSync as existsSync7,
   lstatSync as lstatSync3,
-  mkdirSync as mkdirSync4,
-  readFileSync as readFileSync9,
-  readdirSync as readdirSync6,
+  mkdirSync as mkdirSync3,
+  readFileSync as readFileSync8,
+  readdirSync as readdirSync5,
   realpathSync as realpathSync4,
   renameSync as renameSync2,
   rmSync,
-  statSync as statSync3,
-  unlinkSync as unlinkSync4,
-  writeFileSync as writeFileSync4
+  statSync as statSync2,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync3
 } from "node:fs";
-import { basename as basename6, dirname as dirname7, join as join11, relative as relative2, resolve as resolve9, sep as sep6 } from "node:path";
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+import { basename as basename5, dirname as dirname6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { createHash as createHash5 } from "node:crypto";
+import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
+import { dirname as dirname7, join as join10 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync10, mkdirSync as mkdirSync5, readdirSync as readdirSync9, readFileSync as readFileSync11, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve10 } from "node:path";
-import { basename as basename8, isAbsolute as isAbsolute7, join as join16, relative as relative4, resolve as resolve11, sep as sep8 } from "node:path";
+import { basename as basename6, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
+import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep7 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync14, realpathSync as realpathSync6 } from "node:fs";
-import { existsSync as existsSync15, readFileSync as readFileSync15, readdirSync as readdirSync10, statSync as statSync6 } from "node:fs";
-import { dirname as dirname10, isAbsolute as isAbsolute10, join as join19, resolve as resolve14, sep as sep10 } from "node:path";
+import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
+import { createHash as createHash8 } from "node:crypto";
+import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep9 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
-import { setTimeout as sleep2 } from "node:timers/promises";
-import { closeSync, existsSync as existsSync16, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync5 } from "node:fs";
-import { join as join20, resolve as resolve15 } from "node:path";
-import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
-import { basename as basename12, dirname as dirname14, join as join22, relative as relative7, resolve as resolve17 } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
+import { basename as basename9, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
+import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
+import { basename as basename12, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve18 } from "node:path";
-import { createHash as createHash14 } from "node:crypto";
-import { readFileSync as readFileSync22 } from "node:fs";
-import { join as join29 } from "node:path";
+import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
+import { createHash as createHash16 } from "node:crypto";
+import { readFileSync as readFileSync21 } from "node:fs";
+import { join as join28 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -379,146 +379,14 @@ var init_coordination_write = __esm(() => {
   GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   HASH_RE = /^sha256:[0-9a-f]{64}$/;
 });
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function violation(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
-}
-function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function isValidClaimedAt(value) {
-  return typeof value === "string" && (RFC3339_Z_RE.test(value) || DATE_ONLY_RE.test(value));
-}
-function validateIntegrationMergeLease(lease) {
-  const violations = [];
-  if (!isPlainObject2(lease)) {
-    return {
-      ok: false,
-      violations: [
-        violation("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
-      ]
-    };
-  }
-  validateNonEmptyString(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
-  if (lease.claimed_at === undefined) {
-    violations.push(violation("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
-  } else if (!isValidClaimedAt(lease.claimed_at)) {
-    violations.push(violation("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
-  }
-  validateNonEmptyString(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
-  validateNonEmptyString(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
-  validateNonEmptyString(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
-  if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
-    violations.push(violation("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
-  }
-  return { ok: violations.length === 0, violations };
-}
-function readHolderPid(lockDir) {
-  try {
-    const value = Number(readFileSync2(join2(lockDir, LOCKDIR_HOLDER_PID), "utf8").trim());
-    return Number.isFinite(value) && value > 0 ? value : null;
-  } catch {
-    return null;
-  }
-}
-function probeHolderPid(lockDir) {
-  const pid = readHolderPid(lockDir);
-  if (pid === null)
-    return null;
-  try {
-    process.kill(pid, 0);
-    return { pid, dead: false };
-  } catch (error) {
-    return { pid, dead: error.code === "ESRCH" };
-  }
-}
-function lockBlockedMessage(lockDir, probe, ageMs) {
-  const header = `${lockDir} already exists — Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock): `;
-  if (probe === null) {
-    return header + `the lockdir records no holder.pid (crash between mkdir and pid write). After verifying no mstar writer is running (pgrep -fl mstar), removing ${lockDir} is safe. It is not removed automatically.`;
-  }
-  if (probe.dead) {
-    return header + `holder pid ${probe.pid} no longer exists — the lockdir is stale. After confirming no mstar writer process is running (pgrep -fl mstar), removing ${lockDir} is safe and unblocks writers. It is not removed automatically.`;
-  }
-  return header + `holder pid ${probe.pid} is alive, lock age ${ageMs === null ? "unknown" : `${Math.round(ageMs)}ms`} — wait for it or stop that holder (kill ${probe.pid})`;
-}
-async function withStatusWriteLock(statusPath, fn, opts = {}) {
-  const lockDir = join2(dirname2(resolve2(statusPath)), STATUS_WRITE_LOCKDIR);
-  const held = heldLockDirs.getStore();
-  if (held !== undefined && held.has(lockDir)) {
-    throw new Error(`${lockDir} is already held by this process in this async context — withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`);
-  }
-  const timeoutMs = opts.timeoutMs ?? 30000;
-  const pollMs = opts.pollMs ?? 25;
-  const deadline = Date.now() + timeoutMs;
-  let acquired = null;
-  for (;; ) {
-    try {
-      mkdirSync(lockDir);
-      const st = statSync(lockDir);
-      acquired = { dev: st.dev, ino: st.ino };
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST")
-        throw error;
-      if (Date.now() >= deadline) {
-        let ageMs = null;
-        try {
-          ageMs = Date.now() - statSync(lockDir).mtimeMs;
-        } catch {
-          ageMs = null;
-        }
-        throw new Error(lockBlockedMessage(lockDir, probeHolderPid(lockDir), ageMs));
-      }
-      await sleep(pollMs);
-    }
-  }
-  try {
-    writeFileSync(join2(lockDir, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
-  } catch {}
-  const owns = held ?? new Set;
-  owns.add(lockDir);
-  try {
-    return await heldLockDirs.run(owns, fn);
-  } finally {
-    owns.delete(lockDir);
-    try {
-      const current = statSync(lockDir);
-      if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
-        try {
-          unlinkSync(join2(lockDir, LOCKDIR_HOLDER_PID));
-        } catch {}
-        rmdirSync(lockDir);
-      }
-    } catch {}
-  }
-}
-var DATE_PART;
-var RFC3339_Z_RE;
-var DATE_ONLY_RE;
-var STATUS_WRITE_LOCKDIR = ".status-write.lockdir";
-var LOCKDIR_HOLDER_PID = "holder.pid";
-var heldLockDirs;
-var init_lease = __esm(() => {
-  DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
-  RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
-  DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
-  heldLockDirs = new AsyncLocalStorage2;
-});
 function catalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
   }
-  const harness = dirname3(storeDbPath(context));
+  const harness = dirname2(storeDbPath(context));
   switch (rootKind) {
     case "repository":
-      return dirname3(harness);
+      return dirname2(harness);
     case "harness":
       return harness;
     case "plans":
@@ -623,23 +491,23 @@ function parseMstarc(text) {
 }
 function isFile(file) {
   try {
-    return statSync2(file).isFile();
+    return statSync(file).isFile();
   } catch {
     return false;
   }
 }
 function findMstarc(startDir, boundary) {
-  let dir = resolve3(startDir);
-  const bound = resolve3(boundary);
+  let dir = resolve2(startDir);
+  const bound = resolve2(boundary);
   for (;; ) {
     if (!isAtOrBelow(dir, bound))
       return null;
-    const candidate = join4(dir, MSTARC_FILE);
+    const candidate = join3(dir, MSTARC_FILE);
     if (isFile(candidate))
       return candidate;
     if (dir === bound)
       return null;
-    const parent = dirname4(dir);
+    const parent = dirname3(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -649,7 +517,7 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
+  return { file, dir: dirname3(file), config: parseMstarc(readFileSync2(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
@@ -3702,10 +3570,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve42 = constructs2[index].resolveAll;
-    if (resolve42 && !called.includes(resolve42)) {
-      events = resolve42(events, context);
-      called.push(resolve42);
+    const resolve32 = constructs2[index].resolveAll;
+    if (resolve32 && !called.includes(resolve32)) {
+      events = resolve32(events, context);
+      called.push(resolve32);
     }
   }
   return events;
@@ -10721,7 +10589,7 @@ var init_micromark_extension_gfm = __esm(() => {
 function readJson(filePath) {
   if (!existsSync3(filePath))
     return {};
-  const content3 = readFileSync4(filePath, "utf8").trim();
+  const content3 = readFileSync3(filePath, "utf8").trim();
   if (!content3)
     return {};
   try {
@@ -10731,16 +10599,16 @@ function readJson(filePath) {
   }
 }
 function writeJson(filePath, value) {
-  const parent = dirname5(filePath);
-  mkdirSync2(parent, { recursive: true });
-  const tmp = join5(parent, `.${basename2(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  const parent = dirname4(filePath);
+  mkdirSync(parent, { recursive: true });
+  const tmp = join4(parent, `.${basename2(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   try {
-    writeFileSync2(tmp, `${JSON.stringify(value, null, 2)}
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
 `, "utf8");
     renameSync(tmp, filePath);
   } catch (error) {
     try {
-      unlinkSync2(tmp);
+      unlinkSync(tmp);
     } catch {}
     throw error;
   }
@@ -10748,18 +10616,6 @@ function writeJson(filePath, value) {
 var SEVERITY_ORDER;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
-});
-var PLAN_SHAPED_KEY_RE;
-var fsStoreInstances;
-var URI_SCHEME_RE;
-var init_store = __esm(() => {
-  init_core();
-  init_coordination_write();
-  init_coordination();
-  init_path();
-  PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
-  fsStoreInstances = new WeakSet;
-  URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 });
 function enforcementValue(raw) {
   const value = raw.trim();
@@ -10839,95 +10695,95 @@ function rowPlanIds(row) {
 function rowPlanId(row) {
   return rowPlanIds(row)[0];
 }
-function violation3(severity, code2, message, fix) {
+function violation2(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
-function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation2("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation2("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validatePlanRow(row) {
   const violations = [];
   if (!isPlainObject(row)) {
-    return { ok: false, violations: [violation3("high", "status.plan-row.invalid", "plan row must be an object")] };
+    return { ok: false, violations: [violation2("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
   const { id, plan_id: planId, title, file, status, metadata } = row;
   if (id === undefined && planId === undefined) {
-    violations.push(violation3("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+    violations.push(violation2("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
     if (id !== undefined) {
-      validateNonEmptyString2(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
+      validateNonEmptyString(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
     }
     if (planId !== undefined) {
-      validateNonEmptyString2(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
+      validateNonEmptyString(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
     }
     if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation3("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+      violations.push(violation2("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
     }
   }
-  validateNonEmptyString2(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
-  validateNonEmptyString2(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
+  validateNonEmptyString(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
+  validateNonEmptyString(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
   if (status === undefined) {
-    violations.push(violation3("high", "status.plan-row.missing-status", "missing required field: status"));
+    violations.push(violation2("high", "status.plan-row.missing-status", "missing required field: status"));
   } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation3("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+    violations.push(violation2("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
   }
   if (metadata !== undefined && !isPlainObject(metadata)) {
-    violations.push(violation3("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+    violations.push(violation2("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
   }
   return { ok: violations.length === 0, violations };
 }
 function validateResidual(entry) {
   const violations = [];
   if (!isPlainObject(entry)) {
-    return { ok: false, violations: [violation3("high", "status.residual.invalid", "residual entry must be an object")] };
+    return { ok: false, violations: [violation2("high", "status.residual.invalid", "residual entry must be an object")] };
   }
   const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
-  validateNonEmptyString2(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
-  validateNonEmptyString2(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
-  validateNonEmptyString2(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
-  validateNonEmptyString2(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
-  validateNonEmptyString2(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
+  validateNonEmptyString(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
+  validateNonEmptyString(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
+  validateNonEmptyString(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
+  validateNonEmptyString(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
+  validateNonEmptyString(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
   if (severity === undefined) {
-    violations.push(violation3("high", "status.residual.missing-severity", "missing required field: severity"));
+    violations.push(violation2("high", "status.residual.missing-severity", "missing required field: severity"));
   } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
-    violations.push(violation3("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
+    violations.push(violation2("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
   } else if (severity === "warning") {
-    violations.push(violation3("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
+    violations.push(violation2("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
   }
   if (decision === undefined) {
-    violations.push(violation3("high", "status.residual.missing-decision", "missing required field: decision"));
+    violations.push(violation2("high", "status.residual.missing-decision", "missing required field: decision"));
   } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
-    violations.push(violation3("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
+    violations.push(violation2("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
   }
   if (target === undefined) {
-    violations.push(violation3("high", "status.residual.missing-target", "missing required field: target"));
+    violations.push(violation2("high", "status.residual.missing-target", "missing required field: target"));
   } else if (typeof target !== "string" && target !== null) {
-    violations.push(violation3("medium", "status.residual.invalid-target", "target must be a string or null"));
+    violations.push(violation2("medium", "status.residual.invalid-target", "target must be a string or null"));
   }
   if (tracking === undefined) {
-    violations.push(violation3("high", "status.residual.missing-tracking", "missing required field: tracking"));
+    violations.push(violation2("high", "status.residual.missing-tracking", "missing required field: tracking"));
   } else if (typeof tracking !== "string" && tracking !== null) {
-    violations.push(violation3("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
+    violations.push(violation2("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
   }
   if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
-    violations.push(violation3("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
+    violations.push(violation2("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
   }
   if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
-    violations.push(violation3("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+    violations.push(violation2("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
   }
   if (lifecycle !== undefined) {
     if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
-      violations.push(violation3("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
+      violations.push(violation2("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
     } else if (lifecycle !== "open") {
       if (closed_at === undefined) {
-        violations.push(violation3("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
+        violations.push(violation2("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
       }
       if (entry.closure_note === undefined) {
-        violations.push(violation3("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
+        violations.push(violation2("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
       }
     }
   }
@@ -10945,22 +10801,22 @@ function validateWorkflowEntry(entry) {
   if (!isPlainObject(entry)) {
     return {
       ok: false,
-      violations: [violation3("high", "status.workflow.invalid", "workflow entry must be an object")]
+      violations: [violation2("high", "status.workflow.invalid", "workflow entry must be an object")]
     };
   }
-  validateNonEmptyString2(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
+  validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
   if (entry.type === undefined) {
-    violations.push(violation3("high", "status.workflow.missing-type", "missing required field: type"));
+    violations.push(violation2("high", "status.workflow.missing-type", "missing required field: type"));
   } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation3("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+    violations.push(violation2("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
   }
-  validateNonEmptyString2(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
+  validateNonEmptyString(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
   if (entry.dir === undefined) {
-    violations.push(violation3("high", "status.workflow.missing-dir", "missing required field: dir"));
+    violations.push(violation2("high", "status.workflow.missing-dir", "missing required field: dir"));
   } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation3("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+    violations.push(violation2("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
   } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation3("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+    violations.push(violation2("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -10970,24 +10826,25 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname6(resolve6(docOrPath));
+      harnessDir = dirname5(resolve4(docOrPath));
     } catch (error) {
       return {
         ok: false,
-        violations: [violation3("high", "status.invalid-json", error.message)]
+        violations: [violation2("high", "status.invalid-json", error.message)]
       };
     }
   } else {
     doc = docOrPath;
   }
   if (!isPlainObject(doc)) {
-    return { ok: false, violations: [violation3("high", "status.invalid-doc", "status document must be an object")] };
+    return { ok: false, violations: [violation2("high", "status.invalid-doc", "status document must be an object")] };
   }
+  const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
   if (doc.version !== 2) {
     return {
       ok: false,
       violations: [
-        violation3("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); run \`mstar migrate\` to convert the tree`, "run `mstar migrate`")
+        violation2("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -10995,7 +10852,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation3("high", "status.migration-required", "v1-shaped status.json (root plans[]) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation2("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -11003,27 +10860,27 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation3("high", "status.migration-required", "v1-shaped status.json (root residual_findings) is not a v2 document — run `mstar migrate` to convert the tree", "run `mstar migrate`")
+        violation2("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
   const violations = [];
   if (doc.updated_at === undefined) {
-    violations.push(violation3("high", "status.missing-updated-at", "missing required field: updated_at"));
+    violations.push(violation2("high", "status.missing-updated-at", "missing required field: updated_at"));
   } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
-    violations.push(violation3("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+    violations.push(violation2("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
   if (doc.workflows === undefined) {
-    violations.push(violation3("high", "status.missing-workflows", "missing required field: workflows"));
+    violations.push(violation2("high", "status.missing-workflows", "missing required field: workflows"));
   } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation3("high", "status.invalid-workflows", "workflows must be an array"));
+    violations.push(violation2("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
     const seen = new Set;
     for (const entry of doc.workflows) {
       violations.push(...validateWorkflowEntry(entry).violations);
       if (isPlainObject(entry) && typeof entry.id === "string") {
         if (seen.has(entry.id)) {
-          violations.push(violation3("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+          violations.push(violation2("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
         }
         seen.add(entry.id);
       }
@@ -11037,35 +10894,35 @@ function validateStatusV2(docOrPath, opts = {}) {
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join7(harnessDir, relSnapshot);
+      const relSnapshot = join5(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join5(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
         physical = realpathSync3(snapshotPath);
       } catch {
-        violations.push(violation3("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        violations.push(violation2("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
-        violations.push(violation3("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep2}`)) {
+        violations.push(violation2("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
       let snapshot;
       try {
         snapshot = readJson(snapshotPath);
       } catch (error) {
-        violations.push(violation3("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        violations.push(violation2("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
         continue;
       }
       if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation3("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+        violations.push(violation2("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
       }
       if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation3("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+        violations.push(violation2("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
       }
       if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation3("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+        violations.push(violation2("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
       }
     }
   }
@@ -11073,23 +10930,23 @@ function validateStatusV2(docOrPath, opts = {}) {
 }
 function resolveCompassEnforcement(harnessDir) {
   const iterationsDir = resolveIterationDir(harnessDir);
-  if (!existsSync5(iterationsDir))
+  if (!existsSync4(iterationsDir))
     return { hard: false, source: "none" };
   let entries;
   try {
-    entries = readdirSync2(iterationsDir, { withFileTypes: true });
+    entries = readdirSync(iterationsDir, { withFileTypes: true });
   } catch {
     return { hard: false, source: "none" };
   }
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
-    if (!existsSync5(compassPath))
+    const compassPath = join5(iterationsDir, entry.name, "delivery-compass.md");
+    if (!existsSync4(compassPath))
       continue;
     let content3;
     try {
-      content3 = readFileSync5(compassPath, "utf8");
+      content3 = readFileSync4(compassPath, "utf8");
     } catch {
       continue;
     }
@@ -11104,8 +10961,8 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve6(harnessDir);
-  const rc = loadMstarc(dir, dirname6(dir));
+  const dir = resolve4(harnessDir);
+  const rc = loadMstarc(dir, dirname5(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -11127,9 +10984,7 @@ var validateStatus;
 var init_status = __esm(() => {
   init_core();
   init_path();
-  init_lease();
   init_coordination_write();
-  init_store();
   init_dispatch();
   init_mstarc();
   init_workflow();
@@ -11211,18 +11066,18 @@ function validateCompassShape(doc) {
     }
   };
 }
-function violation4(severity, code2, message, fix) {
+function violation3(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
-function isPlainObject3(value) {
+function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function validateCompassFrontmatter(doc) {
-  if (!isPlainObject3(doc)) {
+  if (!isPlainObject2(doc)) {
     return {
       ok: false,
       violations: [
-        violation4("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
+        violation3("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
       ]
     };
   }
@@ -11232,17 +11087,17 @@ function validateCompassFrontmatter(doc) {
       ok: false,
       violations: parsed.issues.map((issue) => {
         const field = issue.path.join(".") || "(root)";
-        return violation4("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
+        return violation3("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
       })
     };
   }
   const violations = [];
   const { status, end_date } = parsed.data;
   if (status === "completed" && end_date === undefined) {
-    violations.push(violation4("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
+    violations.push(violation3("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
   }
   if (status !== "completed" && end_date !== undefined) {
-    violations.push(violation4("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
+    violations.push(violation3("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -11327,14 +11182,14 @@ var init_iteration = __esm(() => {
     document: "catalog.discovery.missing-document"
   };
 });
-function violation5(severity, code2, message) {
+function violation4(severity, code2, message) {
   return { ok: false, severity, code: code2, message };
 }
-function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation5("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation5("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function frontmatterEnd(content3) {
@@ -11376,38 +11231,38 @@ function validateRoadmapContent(content3, sourceLabel) {
     doc = parseCompassFrontmatterText(content3, sourceLabel);
   } catch (err) {
     const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
-    return { ok: false, violations: [violation5("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
+    return { ok: false, violations: [violation4("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
   }
-  validateNonEmptyString3(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
-  validateNonEmptyString3(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
+  validateNonEmptyString2(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
+  validateNonEmptyString2(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
   if (doc.status === undefined) {
-    violations.push(violation5("high", "project.roadmap.missing-status", "missing required field: status"));
+    violations.push(violation4("high", "project.roadmap.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
-    violations.push(violation5("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation4("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
   if (doc.created_at === undefined) {
-    violations.push(violation5("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
+    violations.push(violation4("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
   } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
-    violations.push(violation5("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
+    violations.push(violation4("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
   }
   if (doc.milestones !== undefined && doc.milestones !== null) {
     if (!Array.isArray(doc.milestones)) {
-      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
+      violations.push(violation4("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
     } else if (doc.milestones.some((item) => typeof item !== "string" || item.trim() === "")) {
-      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
+      violations.push(violation4("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
     }
   }
   if (doc.residuals_ref !== undefined && doc.residuals_ref !== null && (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "")) {
-    violations.push(violation5("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
+    violations.push(violation4("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
   }
   const warnings = [];
   const end = frontmatterEnd(content3);
   const body = content3.slice(end);
   if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(violation5("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
+    warnings.push(violation4("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
   }
   if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(violation5("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
+    warnings.push(violation4("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
   }
   return { ok: violations.length === 0, violations, warnings };
 }
@@ -11764,11 +11619,9 @@ var init_catalog_import = __esm(() => {
 var exports_store_activation = {};
 __export(exports_store_activation, {
   ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
-  AGENT_FLOW_COMPACTION_JOURNAL: () => AGENT_FLOW_COMPACTION_JOURNAL,
   BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
   CONSUMER_KINDS: () => CONSUMER_KINDS,
   DISPOSITIONS: () => DISPOSITIONS,
-  RETAINED_BODY_PROTOCOL_VERSION: () => RETAINED_BODY_PROTOCOL_VERSION,
   SESSION_STATES: () => SESSION_STATES,
   StoreActivationError: () => StoreActivationError,
   activateStore: () => activateStore,
@@ -11777,25 +11630,19 @@ __export(exports_store_activation, {
   assertAuthorityCurrent: () => assertAuthorityCurrent,
   assertBackupDescribesStore: () => assertBackupDescribesStore,
   backupStore: () => backupStore,
-  backupStoreUnderExclusion: () => backupStoreUnderExclusion,
   canonicalPath: () => canonicalPath,
   currentAuthorityHandle: () => currentAuthorityHandle,
-  executionMaintenanceLockWaitMs: () => executionMaintenanceLockWaitMs,
-  freezeRetainedBodies: () => freezeRetainedBodies,
   inspectBackupCopy: () => inspectBackupCopy,
   isPathWithin: () => isPathWithin,
-  readRetainedBodyInventory: () => readRetainedBodyInventory,
-  retainedInventoryPath: () => retainedInventoryPath,
   retireStoreSources: () => retireStoreSources,
-  validateActivationAttestation: () => validateActivationAttestation,
-  withExecutionMaintenanceLock: () => withExecutionMaintenanceLock
+  validateActivationAttestation: () => validateActivationAttestation
 });
 function sha256Bytes2(bytes) {
   return createHash4("sha256").update(bytes).digest("hex");
 }
 function readIfExists(path2) {
   try {
-    return readFileSync9(path2);
+    return readFileSync8(path2);
   } catch {
     return;
   }
@@ -11805,10 +11652,10 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync4(dirname7(path2), { recursive: true });
-  const tmp = join11(dirname7(path2), `.${basename6(path2)}.${process.pid}.tmp`);
+  mkdirSync3(dirname6(path2), { recursive: true });
+  const tmp = join9(dirname6(path2), `.${basename5(path2)}.${process.pid}.tmp`);
   try {
-    writeFileSync4(tmp, text4, "utf8");
+    writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
   } finally {
     rmSync(tmp, { force: true });
@@ -11852,9 +11699,9 @@ function countsOf(db) {
 function readExecutionMetaOfCopy(db, schemaVersion) {
   if (schemaVersion < EXECUTION_MIGRATION_VERSION)
     return null;
-  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at " + "from execution_meta where id = 1").get();
   if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw new StoreActivationError("store.activation-stale", `the copy records migration ${EXECUTION_MIGRATION_VERSION} (execution-authority) but its execution metadata is missing or malformed; the copy cannot be verified as an execution-bearing recovery point.`);
+    throw new StoreActivationError("store.activation-stale", `the copy records migration ${EXECUTION_MIGRATION_VERSION} (execution-authority) but its execution metadata is ` + `missing or malformed; the copy cannot be verified as an execution-bearing recovery point.`);
   }
   return {
     protocolVersion: row.protocol_version,
@@ -11883,16 +11730,16 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve9(value);
+  let current = resolve7(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join11(realpathSync4(current), ...[...trailing].reverse());
+      return join9(realpathSync4(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname7(current);
+      const parent = dirname6(current);
       if (parent === current)
-        return resolve9(value);
-      trailing.push(basename6(current));
+        return resolve7(value);
+      trailing.push(basename5(current));
       current = parent;
     }
   }
@@ -11902,14 +11749,14 @@ function isPathWithin(root, candidate) {
   const child = canonicalPath(candidate);
   if (child === parent)
     return true;
-  return child.startsWith(parent.endsWith(sep6) ? parent : `${parent}${sep6}`);
+  return child.startsWith(parent.endsWith(sep5) ? parent : `${parent}${sep5}`);
 }
 function refuseUnlessSameGeneration(live, expected, what) {
   if (live.storeId !== expected.storeId) {
-    throw new StoreActivationError("store.activation-stale", `${what} belongs to store_id ${expected.storeId}, but the live store is ${live.storeId}; re-resolve the control root and re-attest. Nothing was changed.`);
+    throw new StoreActivationError("store.activation-stale", `${what} belongs to store_id ${expected.storeId}, but the live store is ${live.storeId}; ` + `re-resolve the control root and re-attest. Nothing was changed.`);
   }
   if (live.epoch !== expected.epoch) {
-    throw new StoreActivationError("store.stale-epoch", `${what} belongs to authority epoch ${expected.epoch}, but the live store is epoch ${live.epoch}; the generation it was admitted under has been superseded. Resume with the current activation receipt. Nothing was changed.`);
+    throw new StoreActivationError("store.stale-epoch", `${what} belongs to authority epoch ${expected.epoch}, but the live store is epoch ${live.epoch}; the generation it ` + `was admitted under has been superseded. Resume with the current activation receipt. Nothing was changed.`);
   }
 }
 async function currentAuthorityHandle(context) {
@@ -11924,229 +11771,14 @@ async function currentAuthorityHandle(context) {
 async function assertAuthorityCurrent(context, handle) {
   refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
 }
-async function withExecutionMaintenanceLock(context, fn) {
-  const key = join11(canonicalPath(dirname7(storeDbPath(context))), ".execution-maintenance", "execution-migration");
-  mkdirSync4(dirname7(key), { recursive: true });
-  return withStatusWriteLock(key, fn, { timeoutMs: executionMaintenanceLockWaitMs() });
-}
-function executionMaintenanceLockWaitMs() {
-  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
-    const parsed = Number.parseInt(process.env.MSTAR_EXECUTION_MIGRATION_LOCK_WAIT_MS ?? "", 10);
-    if (Number.isFinite(parsed) && parsed > 0)
-      return parsed;
-  }
-  return 30000;
-}
-function retainedInventoryDigest(inventory) {
-  return sha256Bytes2(Buffer.from(JSON.stringify({
-    version: inventory.version,
-    protocol: inventory.protocol,
-    storeId: inventory.storeId,
-    epoch: inventory.epoch,
-    revision: inventory.revision,
-    bodies: inventory.bodies.map((body) => ({
-      path: body.path,
-      sha256: body.sha256,
-      records: [...body.records],
-      partial: body.partial,
-      selection: body.selection
-    }))
-  }), "utf8"));
-}
-function retainedBodyPath(root, absolute, what) {
-  const segments = relative2(root, absolute).split(sep6).filter((segment) => segment !== "");
-  if (segments.length === 0 || segments.includes("..")) {
-    throw new StoreActivationError("store.activation-stale", `${what} lives at ${absolute}, outside the control root ${root}; a recovery point freezes exactly the retained bodies it protects, so a body outside the root refuses the freeze instead of being copied by guesswork.`);
-  }
-  return segments.join("/");
-}
-function checkpointRetainedBody(root, relativeBodyPath, selection) {
-  const absolute = join11(root, ...relativeBodyPath.split("/"));
-  let info;
-  try {
-    info = lstatSync3(absolute);
-  } catch (error) {
-    throw new StoreActivationError("store.activation-stale", `the retained body ${relativeBodyPath} disappeared while the inventory was being frozen (${error.message}); the set is not the set that was discovered. Nothing was written.`);
-  }
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw new StoreActivationError("store.activation-stale", `the retained body ${relativeBodyPath} is not a regular file (a symlink or a non-file is not a retained accepted body); the inventory cannot be frozen over it.`);
-  }
-  const bytes = readFileSync9(absolute);
-  const records = [];
-  let start = 0;
-  for (let index2 = 0;index2 < bytes.length; index2 += 1) {
-    if (bytes[index2] !== 10)
-      continue;
-    records.push(sha256Bytes2(bytes.subarray(start, index2)));
-    start = index2 + 1;
-  }
-  return {
-    path: relativeBodyPath,
-    sha256: sha256Bytes2(bytes),
-    records,
-    partial: start < bytes.length ? sha256Bytes2(bytes.subarray(start)) : null,
-    selection
-  };
-}
-function readRetainedBodyCheckpoints(context) {
-  const root = canonicalPath(dirname7(storeDbPath(context)));
-  const paths = [];
-  if (existsSync8(join11(root, ...ENGINE_STATUS_BODY.split("/")))) {
-    paths.push({ path: ENGINE_STATUS_BODY, selection: true });
-  }
-  const workflowsDir = resolveWorkflowDir(root, { harnessDir: root });
-  let entries = [];
-  try {
-    entries = readdirSync6(workflowsDir, { withFileTypes: true });
-  } catch {
-    entries = [];
-  }
-  const unfinished = [];
-  const workflowEntries = entries.filter((candidate) => {
-    if (candidate.isSymbolicLink()) {
-      throw new StoreActivationError("store.activation-stale", `${join11(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so the live retained set cannot be enumerated through it. Nothing was frozen.`);
-    }
-    return candidate.isDirectory();
-  });
-  for (const entry of workflowEntries.sort((a, b) => a.name < b.name ? -1 : 1)) {
-    const dir = join11(workflowsDir, entry.name);
-    const prefix = retainedBodyPath(root, dir, `the workflow body dir of ${entry.name}`);
-    if (existsSync8(join11(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
-      unfinished.push(`${prefix}/${AGENT_FLOW_COMPACTION_JOURNAL}`);
-      continue;
-    }
-    for (const file of RETAINED_WORKFLOW_BODIES) {
-      const absolute = join11(dir, file);
-      if (existsSync8(absolute))
-        paths.push({ path: retainedBodyPath(root, absolute, `the retained body ${file}`), selection: false });
-    }
-    const historyDir = join11(dir, AGENT_FLOW_HISTORY_DIR);
-    let chunks = [];
-    try {
-      chunks = readdirSync6(historyDir, { withFileTypes: true });
-    } catch {
-      chunks = [];
-    }
-    for (const chunk of chunks.filter((candidate) => AGENT_FLOW_HISTORY_CHUNK.test(candidate.name)).sort((a, b) => a.name < b.name ? -1 : 1)) {
-      const absolute = join11(historyDir, chunk.name);
-      if (existsSync8(absolute))
-        paths.push({ path: retainedBodyPath(root, absolute, `the history chunk ${chunk.name}`), selection: false });
-    }
-  }
-  if (unfinished.length > 0) {
-    throw new StoreActivationError("store.activation-stale", `the workflow ${unfinished.length === 1 ? "body dir" : "body dirs"} ${unfinished.sort().join(", ")} hold ${AGENT_FLOW_COMPACTION_JOURNAL}: §5's transient ledger compaction journal pins the exact before/after tail bytes and the ` + `removed archive range, so this retained set is IN FLIGHT. A recovery point that captured or restored it would be a ` + `partial copy of an unfinished transaction — corruption, not an accepted duplicate-history residual. Nothing was ` + `frozen; resolve the compaction through the ledger lock and retry.`);
-  }
-  return paths.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map((entry) => checkpointRetainedBody(root, entry.path, entry.selection));
-}
-function stampRetainedInventory(identity, bodies) {
-  const withoutDigest = {
-    version: RETAINED_BODY_PROTOCOL_VERSION,
-    protocol: "retained-body-inventory-v1",
-    storeId: identity.storeId,
-    epoch: identity.epoch,
-    revision: identity.revision,
-    bodies
-  };
-  return { ...withoutDigest, digest: retainedInventoryDigest(withoutDigest) };
-}
-function freezeRetainedBodies(context, identity) {
-  return stampRetainedInventory(identity, readRetainedBodyCheckpoints(context));
-}
-function retainedInventoryPath(backupPath) {
-  return `${backupPath}.retained.json`;
-}
-function writeRetainedInventory(backupPath, inventory) {
-  writeTextAtomic(retainedInventoryPath(backupPath), `${JSON.stringify(inventory)}
-`);
-}
-function requireRetainedInventory(value, what) {
-  const invalid3 = (detail) => new StoreActivationError("store.activation-stale", `${what} ${detail}`);
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw invalid3("is not an object");
-  const raw = value;
-  if (raw.version !== RETAINED_BODY_PROTOCOL_VERSION) {
-    throw invalid3(`declares version ${JSON.stringify(raw.version)}, not this protocol's ${RETAINED_BODY_PROTOCOL_VERSION}; a retained-body inventory of another generation is refused by name rather than decoded as if it described this one`);
-  }
-  if (raw.protocol !== "retained-body-inventory-v1")
-    throw invalid3(`declares protocol ${JSON.stringify(raw.protocol)}`);
-  const storeId = raw.storeId;
-  if (typeof storeId !== "string" || storeId.trim() === "")
-    throw invalid3("carries no storeId");
-  const digest = raw.digest;
-  if (typeof digest !== "string" || digest.trim() === "")
-    throw invalid3("carries no digest");
-  const epoch = raw.epoch;
-  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch))
-    throw invalid3(`carries epoch ${JSON.stringify(epoch)}`);
-  const revision = raw.revision;
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision))
-    throw invalid3(`carries revision ${JSON.stringify(revision)}`);
-  if (!Array.isArray(raw.bodies))
-    throw invalid3("carries no bodies array");
-  const recorded = raw.bodies;
-  const bodies = [];
-  for (const [index2, candidate] of recorded.entries()) {
-    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate))
-      throw invalid3(`body ${index2} is not an object`);
-    const body = candidate;
-    const path2 = body.path;
-    if (typeof path2 !== "string" || path2.trim() === "")
-      throw invalid3(`body ${index2} carries no path`);
-    const sha2562 = body.sha256;
-    if (typeof sha2562 !== "string" || !/^[0-9a-f]{64}$/.test(sha2562))
-      throw invalid3(`body ${index2} carries no byte digest`);
-    if (!Array.isArray(body.records))
-      throw invalid3(`body ${index2} carries a malformed accepted-record list`);
-    const records = [];
-    for (const record of body.records) {
-      if (typeof record !== "string" || !/^[0-9a-f]{64}$/.test(record))
-        throw invalid3(`body ${index2} carries a malformed accepted-record list`);
-      records.push(record);
-    }
-    let partial = null;
-    if (body.partial !== null) {
-      const value2 = body.partial;
-      if (typeof value2 !== "string" || !/^[0-9a-f]{64}$/.test(value2))
-        throw invalid3(`body ${index2} carries a malformed partial-record digest`);
-      partial = value2;
-    }
-    const selection = body.selection;
-    if (typeof selection !== "boolean")
-      throw invalid3(`body ${index2} carries no selection flag`);
-    bodies.push({ path: path2, sha256: sha2562, records, partial, selection });
-  }
-  const inventory = {
-    version: RETAINED_BODY_PROTOCOL_VERSION,
-    protocol: "retained-body-inventory-v1",
-    storeId,
-    epoch,
-    revision,
-    bodies
-  };
-  return { ...inventory, digest };
-}
-async function readRetainedBodyInventory(backupPath) {
-  const path2 = retainedInventoryPath(backupPath);
-  const bytes = readIfExists(path2);
-  if (bytes === undefined) {
-    throw new StoreActivationError("store.activation-stale", `the recovery point at ${backupPath} records no retained-body inventory (${path2} is absent); a whole-store SQLite copy alone does not back up the file-native ledgers, so this point cannot describe the body loss a restore would cause. Take the point with \`backupStore\`, which freezes and records that inventory. Nothing was replaced.`);
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(bytes.toString("utf8"));
-  } catch (error) {
-    throw new StoreActivationError("store.activation-stale", `the retained-body inventory at ${path2} is not readable JSON (${error.message}); the point cannot be restored without it. Nothing was replaced.`);
-  }
-  return requireRetainedInventory(parsed, `the retained-body inventory at ${path2}`);
-}
 function assertCopyIsConsistent(db, backupPath) {
   const integrity = db.prepare("pragma integrity_check").all().map((row) => String(Object.values(row)[0] ?? ""));
   if (integrity.length !== 1 || integrity[0] !== "ok") {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} fails SQLite integrity_check (${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`);
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} fails SQLite integrity_check ` + `(${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`);
   }
   const violations = db.prepare("pragma foreign_key_check").all();
   if (violations.length > 0) {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys (first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`);
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys ` + `(first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`);
   }
 }
 function assertCopySchemaIsThisBuild(db, backupPath) {
@@ -12155,12 +11787,12 @@ function assertCopySchemaIsThisBuild(db, backupPath) {
     throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records no applied migration; it is not a store this build can verify.`);
   }
   if (rows.length > MIGRATIONS.length) {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`);
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not ` + `have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`);
   }
   for (const [index2, row] of rows.entries()) {
     const migration = MIGRATIONS[index2];
     if (row.version !== migration.version) {
-      throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(row.version)} at position ${index2 + 1}, not this build's ${migration.version}; the copy is not this build's store.`);
+      throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(row.version)} at position ${index2 + 1}, not this build's ` + `${migration.version}; the copy is not this build's store.`);
     }
   }
 }
@@ -12189,91 +11821,64 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join11(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join9(dirname6(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
-  const retainedBodies = readRetainedBodyCheckpoints(context);
   const handle = await openStore(context, "write");
   try {
     const meta = readMetaRow(handle.db);
-    const retained = stampRetainedInventory({ storeId: meta.storeId, epoch: meta.epoch, revision: meta.revision }, retainedBodies);
-    const schemaVersion = schemaVersionOf(handle.db);
-    const counts = countsOf(handle.db);
-    const execution = liveExecutionMeta(handle.execution);
     let walPending = false;
     try {
-      walPending = statSync3(`${dbPath}-wal`).size > 0;
+      walPending = statSync2(`${dbPath}-wal`).size > 0;
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve9(options.out);
-    if (existsSync8(targetPath)) {
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve7(options.out);
+    if (existsSync7(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a recorded recovery point.`);
       }
-      let existing;
-      try {
-        existing = await inspectBackupCopy(targetPath);
-      } catch (error) {
+      const existing = await inspectBackupCopy(targetPath).catch((error) => {
         throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} cannot be verified (${error.message}). Refusing to overwrite a recorded recovery point.`);
-      }
-      if (existing.storeId !== meta.storeId || existing.epoch !== meta.epoch || existing.revision !== meta.revision || existing.catalogRevision !== meta.catalogRevision || existing.authorityState !== meta.authorityState || existing.schemaVersion !== schemaVersion || !sameExecution(existing.execution, execution)) {
+      });
+      const execution = liveExecutionMeta(handle.execution);
+      if (existing.storeId !== meta.storeId || existing.epoch !== meta.epoch || existing.revision !== meta.revision || existing.catalogRevision !== meta.catalogRevision || existing.authorityState !== meta.authorityState || existing.schemaVersion !== schemaVersionOf(handle.db) || !sameExecution(existing.execution, execution)) {
         throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} does not describe this store (identity/epoch/revision/schema/execution mismatch). Refusing to overwrite a recorded recovery point.`);
-      }
-      const sidecarBytes = readIfExists(retainedInventoryPath(targetPath));
-      let recorded = retained;
-      if (sidecarBytes !== undefined) {
-        recorded = requireRetainedInventory(JSON.parse(sidecarBytes.toString("utf8")), `the retained-body inventory at ${retainedInventoryPath(targetPath)}`);
-        if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
-          throw new StoreActivationError("store.activation-stale", `the retained-body inventory at ${retainedInventoryPath(targetPath)} describes store ${recorded.storeId} epoch ${recorded.epoch}, not this point's ${meta.storeId} epoch ${meta.epoch}; the recorded bodies are not this authority generation's. Refusing to re-bind one recovery point to another generation's bodies.`);
-        }
-      } else {
-        writeRetainedInventory(targetPath, retained);
       }
       return {
         receiptVersion: BACKUP_RECEIPT_VERSION,
         backupPath: targetPath,
         ...existing,
         walPending,
-        bytes: statSync3(targetPath).size,
-        takenAt: new Date().toISOString(),
-        retained: recorded
+        bytes: statSync2(targetPath).size,
+        takenAt: new Date().toISOString()
       };
     }
-    mkdirSync4(dirname7(targetPath), { recursive: true });
+    mkdirSync3(dirname6(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
-    let verified;
-    try {
-      verified = await inspectBackupCopy(targetPath);
-    } catch (error) {
+    const verified = await inspectBackupCopy(targetPath).catch((error) => {
       rmSync(targetPath, { force: true });
       throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} could not be reopened for verification (${error.message}); the unverified copy was removed. Nothing was activated.`);
-    }
-    if (verified.storeId !== meta.storeId || verified.epoch !== meta.epoch || verified.revision !== meta.revision || verified.catalogRevision !== meta.catalogRevision || verified.authorityState !== meta.authorityState || verified.schemaVersion !== schemaVersion || !sameExecution(verified.execution, execution) || !sameCounts(verified.counts, counts)) {
+    });
+    if (verified.storeId !== meta.storeId) {
       rmSync(targetPath, { force: true });
-      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} does not match the source store (identity, schema or row counts); the unverified copy was removed. Nothing was activated.`);
+      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} describes store ${verified.storeId}, not the live store ${meta.storeId}; the unverified copy was removed. Nothing was activated.`);
     }
-    writeRetainedInventory(targetPath, retained);
     return {
       receiptVersion: BACKUP_RECEIPT_VERSION,
       backupPath: targetPath,
       ...verified,
       walPending,
-      bytes: statSync3(targetPath).size,
-      takenAt: new Date().toISOString(),
-      retained
+      bytes: statSync2(targetPath).size,
+      takenAt: new Date().toISOString()
     };
   } finally {
     handle.close();
   }
 }
-async function backupStoreUnderExclusion(context, options = {}) {
-  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
-}
 async function backupStore(context, options = {}) {
-  const root = canonicalPath(dirname7(storeDbPath(context)));
-  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join11(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
+  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
 }
 async function assertBackupDescribesStore(context, receipt, reviewed) {
   const stale = (detail) => {
@@ -12282,7 +11887,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and apply the manifest that names it.");
   }
-  const controlRoot = dirname7(storeDbPath(context));
+  const controlRoot = dirname6(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration recovery point must live inside the root it protects.`);
   }
@@ -12421,7 +12026,7 @@ function currentRegisterSources(context) {
   const projectsRoot = catalogRootDir(context, "projects");
   let entries;
   try {
-    entries = readdirSync6(projectsRoot, { withFileTypes: true });
+    entries = readdirSync5(projectsRoot, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -12429,7 +12034,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join11(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join9(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -12454,7 +12059,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join11(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join9(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -12467,7 +12072,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve9(manifest.controlRoot) !== resolve9(context.harnessDir)) {
+    if (resolve7(manifest.controlRoot) !== resolve7(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -12616,7 +12221,7 @@ async function activateStore(context, receipt, attestation) {
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve9(manifest.controlRoot) !== resolve9(context.harnessDir)) {
+    if (resolve7(manifest.controlRoot) !== resolve7(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -12719,7 +12324,7 @@ function markerText(ledger, receipt) {
     "",
     "These archived bytes are historical migration input, not a post-activation rollback path: they were the",
     "pre-activation authority and are superseded history, and restoring them would recreate a second authority.",
-    "Recovery after activation uses the quiesced SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
+    "Recovery after activation uses the verified SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
     "",
     "The per-item retirement ledger (`ledger.json`, same directory) is the resumable record of exactly which",
     "bytes and sections were moved and verified.",
@@ -12733,18 +12338,18 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join11(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join9(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join11(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join9(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync4(dirname7(item.archivePath), { recursive: true });
+    mkdirSync3(dirname6(item.archivePath), { recursive: true });
     rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
     writeLedger(ledgerPath, ledger);
-    unlinkSync4(livePath);
+    unlinkSync2(livePath);
   } else if (readIfExists(item.archivePath) === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `register ${item.relativePath} is gone and no archive copy exists; the reviewed source cannot be retired truthfully. Nothing was retired.`);
   }
@@ -12785,7 +12390,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item) {
-  const livePath = join11(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join9(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. Nothing was retired.`);
@@ -12811,7 +12416,7 @@ function retireSection(context, ledgerPath, ledger, item) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync4(dirname7(item.archivePath), { recursive: true });
+  mkdirSync3(dirname6(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
@@ -12862,8 +12467,8 @@ async function retireStoreSources(context, activationReceipt) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join11(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join11(archiveDir, "ledger.json");
+    const archiveDir = join9(dirname6(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join9(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
@@ -12908,7 +12513,7 @@ async function retireStoreSources(context, activationReceipt) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join11(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join9(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -12923,7 +12528,7 @@ async function retireStoreSources(context, activationReceipt) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join11(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join9(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -12935,7 +12540,7 @@ async function retireStoreSources(context, activationReceipt) {
       item.family = section.family;
       item.reviewedRows = section.rows;
     }
-    mkdirSync4(archiveDir, { recursive: true });
+    mkdirSync3(archiveDir, { recursive: true });
     writeLedger(ledgerPath, ledger);
     let completed = 0;
     for (const item of ledger.registers) {
@@ -12957,7 +12562,7 @@ async function retireStoreSources(context, activationReceipt) {
       project: item.project,
       relativePath: item.relativePath,
       sha256: item.sha256,
-      bytes: statSync3(item.archivePath).size,
+      bytes: statSync2(item.archivePath).size,
       archivedPath: item.archivePath
     }));
     const retiredSections = ledger.sections.map((item) => ({
@@ -12984,7 +12589,7 @@ async function retireStoreSources(context, activationReceipt) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join11(archiveDir, "MARKER.md"),
+        markerPath: join9(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -13015,7 +12620,7 @@ async function retireStoreSources(context, activationReceipt) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join11(archiveDir, "MARKER.md"),
+      markerPath: join9(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -13028,15 +12633,9 @@ async function retireStoreSources(context, activationReceipt) {
   }
 }
 var ACTIVATION_PROTOCOL_VERSION = 1;
-var RETAINED_BODY_PROTOCOL_VERSION = 1;
 var BACKUP_RECEIPT_VERSION = 2;
 var StoreActivationError;
 var EXECUTION_MIGRATION_VERSION;
-var RETAINED_WORKFLOW_BODIES;
-var AGENT_FLOW_HISTORY_DIR = "agent-flow-history";
-var AGENT_FLOW_HISTORY_CHUNK;
-var AGENT_FLOW_COMPACTION_JOURNAL = "agent-flow-compaction.json";
-var ENGINE_STATUS_BODY = "snapshots/engine-status.json";
 var CONSUMER_KINDS;
 var DISPOSITIONS;
 var SESSION_STATES;
@@ -13045,8 +12644,6 @@ var init_store_activation = __esm(() => {
   init_catalog();
   init_catalog_import();
   init_core();
-  init_lease();
-  init_path();
   init_store_db();
   StoreActivationError = class StoreActivationError2 extends Error {
     code;
@@ -13057,14 +12654,6 @@ var init_store_activation = __esm(() => {
     }
   };
   EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
-  RETAINED_WORKFLOW_BODIES = [
-    "notes.jsonl",
-    "agent-flow.jsonl",
-    "agent-flow-ids.jsonl",
-    "workflow-ledger-cursors.json",
-    "omp-launches.json"
-  ];
-  AGENT_FLOW_HISTORY_CHUNK = /^chunk-\d{6}\.jsonl$/;
   CONSUMER_KINDS = { cli: true, "host-plugin": true, hook: true, coordinator: true };
   DISPOSITIONS = {
     reloaded: true,
@@ -13074,6 +12663,60 @@ var init_store_activation = __esm(() => {
     "excluded:superseded-binary": true
   };
   SESSION_STATES = { stopped: true, reloaded: true };
+});
+var exports_execution_store = {};
+__export(exports_execution_store, {
+  ExecutionError: () => ExecutionError,
+  adoptTerminalWorkflow: () => adoptTerminalWorkflow,
+  advancePlanOperationRevisions: () => advancePlanOperationRevisions,
+  advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
+  assertAuthorityGeneration: () => assertAuthorityGeneration,
+  assertExecutionToken: () => assertExecutionToken,
+  assertOperationId: () => assertOperationId,
+  bindExecutionSession: () => bindExecutionSession,
+  bindRecoveredSession: () => bindRecoveredSession,
+  claimIntegrationMergeLease: () => claimIntegrationMergeLease,
+  createExecutionWorkflow: () => createExecutionWorkflow,
+  executionRootTokenOf: () => executionRootTokenOf,
+  executionToken: () => executionToken,
+  initializeExecutionAuthority: () => initializeExecutionAuthority,
+  parseExecutionToken: () => parseExecutionToken,
+  pruneWorkflowOperationReceipts: () => pruneWorkflowOperationReceipts,
+  readExecutionCleanupSnapshots: () => readExecutionCleanupSnapshots,
+  readExecutionPlan: () => readExecutionPlan,
+  readExecutionPlanAdmission: () => readExecutionPlanAdmission,
+  readExecutionPlanWitness: () => readExecutionPlanWitness,
+  readExecutionSealedInput: () => readExecutionSealedInput,
+  readExecutionSession: () => readExecutionSession,
+  readExecutionState: () => readExecutionState,
+  readExecutionStateGraph: () => readExecutionStateGraph,
+  readExecutionWorkflowWitness: () => readExecutionWorkflowWitness,
+  readLiveSessionIdentities: () => readLiveSessionIdentities,
+  readOperationReplay: () => readOperationReplay,
+  readOwnExecutionSession: () => readOwnExecutionSession,
+  readPlanOperationReplay: () => readPlanOperationReplay,
+  readPlanOperationReplayBeforeProof: () => readPlanOperationReplayBeforeProof,
+  readWorkflowSessionRows: () => readWorkflowSessionRows,
+  recordRootMembershipLoss: () => recordRootMembershipLoss,
+  releaseIntegrationMergeLease: () => releaseIntegrationMergeLease,
+  requireWorkflowState: () => requireWorkflowState,
+  resolveCreateWorkflow: () => resolveCreateWorkflow,
+  resolvePlanRead: () => resolvePlanRead,
+  resolveTokenFreshness: () => resolveTokenFreshness,
+  resolveWorkflowSession: () => resolveWorkflowSession,
+  resolveWorkflowWrite: () => resolveWorkflowWrite,
+  revokeSessionRow: () => revokeSessionRow,
+  semanticRequestHash: () => semanticRequestHash,
+  serializeExecutionValue: () => serializeExecutionValue,
+  suppliedCatalogPin: () => suppliedCatalogPin,
+  withExecutionTransaction: () => withExecutionTransaction,
+  withRecoveryDetails: () => withRecoveryDetails,
+  writeExecutionCreation: () => writeExecutionCreation,
+  writeExecutionInputPin: () => writeExecutionInputPin,
+  writeOperationReceipt: () => writeOperationReceipt,
+  writePlanCoordinationRow: () => writePlanCoordinationRow,
+  writePlanOperationReceipt: () => writePlanOperationReceipt,
+  writeWorkflowState: () => writeWorkflowState
 });
 function canonicalRefusal(detail) {
   return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
@@ -13157,6 +12800,18 @@ function canonicalIntegerText(value, what) {
   }
   return String(value);
 }
+function positiveDecimal(text4, what) {
+  if (!DECIMAL_RE.test(text4)) {
+    throw tokenRefusal(`${what} must be a plain decimal without sign, whitespace or leading zeros — got ${JSON.stringify(text4)}`);
+  }
+  const value = Number(text4);
+  if (value === 0)
+    throw tokenRefusal(`${what} must be greater than 0 — got ${JSON.stringify(text4)}`);
+  if (value > Number.MAX_SAFE_INTEGER) {
+    throw tokenRefusal(`${what} exceeds Number.MAX_SAFE_INTEGER — got ${JSON.stringify(text4)}`);
+  }
+  return value;
+}
 function assertKeyShape(kind, key) {
   const expected = KIND_KEY_LENGTHS[kind];
   if (key.length !== expected) {
@@ -13173,6 +12828,22 @@ function assertKeyShape(kind, key) {
 function encodeTokenKey(key) {
   return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
 }
+function decodeTokenKey(key64, kind) {
+  if (!BASE64URL_RE.test(key64))
+    throw tokenRefusal("a token key must be unpadded base64url");
+  let decoded;
+  try {
+    decoded = JSON.parse(TOKEN_KEY_DECODER.decode(Buffer.from(key64, "base64url")));
+  } catch {
+    throw tokenRefusal("a token key must be base64url-wrapped UTF-8 JSON");
+  }
+  if (!Array.isArray(decoded) || decoded.some((part) => typeof part !== "string")) {
+    throw tokenRefusal("a token key must decode to a JSON array of strings");
+  }
+  const key = decoded;
+  assertKeyShape(kind, key);
+  return key;
+}
 function executionToken(kind, storeId, epoch, key, revision) {
   if (!isExecutionKind(kind))
     throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
@@ -13182,6 +12853,67 @@ function executionToken(kind, storeId, epoch, key, revision) {
   const epochText = canonicalIntegerText(epoch, "the epoch");
   const revisionText = canonicalIntegerText(revision, "the revision");
   return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
+}
+function parseExecutionToken(value) {
+  if (typeof value !== "string")
+    throw tokenRefusal(`an execution token must be a string — got ${typeof value}`);
+  const parts = value.split(":");
+  if (parts.length !== 6)
+    throw tokenRefusal(`an execution token has 6 colon-separated parts — got ${parts.length}`);
+  const [prefix, kindText, storeId, epochText, key64, revisionText] = parts;
+  if (prefix !== TOKEN_PREFIX)
+    throw tokenRefusal(`an execution token starts with ${TOKEN_PREFIX} — got ${JSON.stringify(prefix)}`);
+  if (!isExecutionKind(kindText))
+    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kindText)}`);
+  const kind = kindText;
+  if (!STORE_UUID_RE.test(storeId))
+    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  const epoch = positiveDecimal(epochText, "the epoch");
+  const revision = positiveDecimal(revisionText, "the revision");
+  return { kind, storeId, epoch, key: decodeTokenKey(key64, kind), revision };
+}
+function assertExecutionToken(value, expected) {
+  const parsed = parseTokenForAddress(value, expected);
+  if (parsed.epoch !== expected.epoch) {
+    throw authorityEpochRefusal({
+      source: "the token",
+      presentedEpoch: parsed.epoch,
+      currentEpoch: expected.epoch,
+      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${expected.epoch}. Reopen the store and re-read before retrying.`
+    });
+  }
+  if (expected.revision !== undefined && parsed.revision !== expected.revision) {
+    throw new ExecutionError("execution.stale-token", `the token carries revision ${parsed.revision}; the current revision is ${expected.revision}. Re-read and retry with the current token.`, {
+      component: "revision",
+      path: "expected",
+      current_revision: expected.revision,
+      presented_revision: parsed.revision
+    });
+  }
+  return parsed;
+}
+function tokenKindReadPointer(expected) {
+  if (expected.kind === "root") {
+    return " Read the current root token with `mstar status validate` (output field data.token).";
+  }
+  if (expected.kind === "workflow") {
+    return ` Read the current workflow token with \`mstar status validate\` (the data.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} → token).`;
+  }
+  if (expected.kind === "plan") {
+    return ` Read the current plan token with \`mstar status validate\` (the data.authority.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} → planTokens[${JSON.stringify(expected.key[1] ?? "")}]).`;
+  }
+  return "";
+}
+function parseTokenForAddress(value, expected) {
+  const parsed = parseExecutionToken(value);
+  if (parsed.kind !== expected.kind) {
+    throw new ExecutionError("execution.token-kind", `expected a ${expected.kind} token — got a ${parsed.kind} token. The address kind is never inferred from a supplied token.${tokenKindReadPointer(expected)}`);
+  }
+  const sameKey = parsed.key.length === expected.key.length && parsed.key.every((part, index2) => part === expected.key[index2]);
+  if (parsed.storeId !== expected.storeId || !sameKey) {
+    throw new ExecutionError("execution.scope-mismatch", parsed.storeId !== expected.storeId ? `the token belongs to store ${parsed.storeId}, not to ${expected.storeId}` : `the token addresses ${JSON.stringify(parsed.key)}, not ${JSON.stringify(expected.key)}`, { expected: expected.key, actual: parsed.key });
+  }
+  return parsed;
 }
 function authorityEpochRefusal(input) {
   const problem = {
@@ -13230,6 +12962,42 @@ function assertAuthorityGeneration(tx, input) {
       detail: `the session reference carries epoch ${input.referenceEpoch}; the current epoch is ${tx.epoch}. Rebind the session and retry.`
     });
   }
+}
+function resolveTokenFreshness(value, current, options = {}) {
+  const parsed = parseTokenForAddress(value, current);
+  if (parsed.epoch !== current.epoch) {
+    throw authorityEpochRefusal({
+      source: "the comparison token",
+      presentedEpoch: parsed.epoch,
+      currentEpoch: current.epoch,
+      target: options.target,
+      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${current.epoch}. Reopen the store and re-read before retrying.`
+    });
+  }
+  return {
+    readRevision: parsed.revision,
+    currentRevision: current.revision,
+    current: parsed.revision === current.revision
+  };
+}
+function semanticRequestHash(input) {
+  return createHash5("sha256").update(serializeExecutionValue({
+    operation: input.operation,
+    address: input.address,
+    caller: {
+      session_id: input.caller.sessionId,
+      role: input.caller.role,
+      workflow_id: input.caller.workflowId
+    },
+    intent: input.intent
+  }), "utf8").digest("hex");
+}
+function withRecoveryDetails(error, details) {
+  if (!(error instanceof Error))
+    return error;
+  const target = error;
+  target.details = { ...target.details ?? {}, ...details };
+  return error;
 }
 function corrupt(detail) {
   return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
@@ -13468,6 +13236,44 @@ function readExecutionGraph(db, store, meta) {
     ...terminalAdoptions.length === 0 ? {} : { terminalAdoptions }
   };
 }
+function withExecutionTransaction(context, transition) {
+  const dbPath = storeDbPath(context);
+  const held = ownedTransactions.getStore();
+  if (held?.has(dbPath)) {
+    throw new ExecutionError("execution.reentrant", `this async context already owns a transaction on ${dbPath}. A domain operation opens exactly one transaction; a nested call would commit or roll back the outer one's work and is refused before anything runs.`);
+  }
+  return ownedTransactions.run(new Set([...held ?? [], dbPath]), async () => {
+    const handle = await openStore(context, "write");
+    try {
+      if (handle.execution === null) {
+        throw new ExecutionError("execution.not-active", `the store at ${dbPath} predates the execution schema (migration ${handle.schemaVersion} applied). There is no execution authority to transact against; nothing was written.`);
+      }
+      handle.db.exec("begin immediate");
+      const execution = readExecutionMetaRow(handle.db);
+      const identity = readStoreIdentity(handle.db);
+      try {
+        const result = transition({
+          db: handle.db,
+          storeId: identity.storeId,
+          epoch: identity.epoch,
+          execution
+        });
+        if (typeof result?.then === "function") {
+          throw new ExecutionError("execution.reentrant", "the transition body returned a promise. An execution transaction body is synchronous: nothing awaits, launches or reads outside the transaction between BEGIN and COMMIT.");
+        }
+        handle.db.exec("commit");
+        return result;
+      } catch (error) {
+        try {
+          handle.db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    } finally {
+      handle.close();
+    }
+  });
+}
 async function withExecutionReadTransaction(context, body) {
   const handle = await openStore(context, "read");
   try {
@@ -13503,8 +13309,577 @@ async function readExecutionState(context) {
     epoch: tx.epoch
   }));
 }
+async function readExecutionPlanAdmission(context, planId) {
+  return withExecutionReadTransaction(context, (tx) => {
+    const graph = readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution);
+    const matches = [];
+    for (const workflow of graph.workflows) {
+      for (const view of workflow.plans) {
+        if (rowPlanIds(view.plan).includes(planId)) {
+          matches.push({ workflowId: workflow.state.id, row: view.plan, state: workflow.state });
+          break;
+        }
+      }
+    }
+    if (matches.length === 0)
+      return { kind: "absent", graph };
+    if (matches.length > 1) {
+      return { kind: "ambiguous", graph, workflowIds: matches.map((match) => match.workflowId) };
+    }
+    return { kind: "row", graph, ...matches[0] };
+  });
+}
+async function readExecutionCleanupSnapshots(context, workflowId) {
+  if (!isNonEmptyString(workflowId))
+    throw new CoordinationError("coordination.invalid-input", "Invalid workflowId: provide a non-empty value. Inspect registered workflows with mstar status validate.");
+  return withExecutionReadTransaction(context, (tx) => {
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const registered = readExecutionGraph(tx.db, store, tx.execution);
+    const byId = new Map;
+    for (const workflow of registered.workflows)
+      byId.set(workflow.state.id, cleanupSnapshot(workflow));
+    const retained = tx.db.prepare("select workflow_id from execution_workflows order by rowid").all();
+    for (const row of retained) {
+      const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+      if (!byId.has(id))
+        byId.set(id, cleanupSnapshot(readWorkflowView(tx.db, store, id)));
+    }
+    const selected = byId.get(workflowId);
+    if (selected === undefined) {
+      throw new CoordinationError("coordination.workflow-not-found", "The requested workflow is not registered in this execution authority. Inspect registered workflows with mstar status validate; if none remain, no workflow-scoped cleanup can be selected.", { workflow_id: workflowId });
+    }
+    return { selected, workflows: [...byId.values()] };
+  });
+}
+function cleanupSnapshot(workflow) {
+  return {
+    ...workflow.state,
+    ...workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease },
+    plans: workflow.plans.map(({ plan, coordination }) => ({
+      ...plan,
+      ...coordination === null ? {} : { coordination }
+    }))
+  };
+}
+function readExecutionStateGraph(tx) {
+  const meta = readExecutionMetaRow(tx.db);
+  return {
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, meta),
+    token: executionToken("root", tx.storeId, tx.epoch, [], meta.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch
+  };
+}
+function assertNoLegacyExecutionSources(context) {
+  const harnessDir = dirname7(storeDbPath(context));
+  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  const sources = [];
+  const statusPath = join10(harnessDir, "status.json");
+  try {
+    lstatSync4(statusPath);
+    sources.push(statusPath);
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      sources.push(`${statusPath} (unreadable)`);
+  }
+  let workflowRootIsDirectory = false;
+  try {
+    const info = lstatSync4(workflowDir);
+    workflowRootIsDirectory = info.isDirectory() && !info.isSymbolicLink();
+    if (!workflowRootIsDirectory)
+      sources.push(workflowDir);
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      sources.push(`${workflowDir} (unreadable)`);
+  }
+  if (workflowRootIsDirectory) {
+    let entries;
+    try {
+      entries = readdirSync6(workflowDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+      sources.push(`${workflowDir} (unreadable)`);
+    }
+    for (const entry of entries) {
+      const dir = join10(workflowDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        sources.push(dir);
+        continue;
+      }
+      if (!entry.isDirectory())
+        continue;
+      const path2 = join10(dir, WORKFLOW_SNAPSHOT_FILE);
+      try {
+        lstatSync4(path2);
+        sources.push(path2);
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          sources.push(`${path2} (unreadable)`);
+      }
+      const sessionsDir = join10(dir, "sessions");
+      try {
+        const info = lstatSync4(sessionsDir);
+        if (info.isSymbolicLink() || !info.isDirectory()) {
+          sources.push(sessionsDir);
+        } else {
+          let sessions;
+          try {
+            sessions = readdirSync6(sessionsDir, { withFileTypes: true });
+          } catch {
+            sessions = [];
+            sources.push(`${sessionsDir} (unreadable)`);
+          }
+          for (const session of sessions) {
+            if (session.name.endsWith(".json"))
+              sources.push(join10(sessionsDir, session.name));
+          }
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          sources.push(`${sessionsDir} (unreadable)`);
+      }
+    }
+  }
+  if (sources.length > 0) {
+    throw new ExecutionError("execution.not-empty", `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. Import these sources with the supported \`mstar store upgrade --operator <name>\` operation; the retired staged migration writer is unavailable. Nothing was created or modified.`);
+  }
+}
+function assertActiveStoreAuthority(db) {
+  const row = db.prepare("select authority_state from store_meta where id = 1").get();
+  if (!row || typeof row.authority_state !== "string")
+    throw corrupt("store_meta is missing");
+  if (row.authority_state !== "active") {
+    throw new ExecutionError("store.not-active", `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy workspace rows and activate both authorities; nothing was modified.`);
+  }
+}
+function assertExecutionDomainEmpty(db, meta) {
+  if (meta.authorityState === "staged") {
+    throw new ExecutionError("execution.not-active", "the execution authority is staged. Run `mstar store upgrade --operator <name>` to import workspace records and complete the minimal cutover; nothing was modified.");
+  }
+  if (meta.authorityState === "active") {
+    throw new ExecutionError("execution.not-empty", "the execution authority is already active. Initialization is create-only and never resets a live execution domain; nothing was modified.");
+  }
+  const tables = [
+    "execution_workflows",
+    "execution_registry",
+    "execution_plans",
+    "execution_sessions",
+    "execution_integration_leases",
+    "execution_inputs",
+    "execution_operations",
+    "execution_migrations",
+    "catalog_execution_bindings"
+  ];
+  for (const table of tables) {
+    const row = db.prepare(`select count(*) as n from ${table}`).get();
+    const count = typeof row?.n === "number" ? row.n : 0;
+    if (count > 0) {
+      throw new ExecutionError("execution.not-empty", `${table} already holds ${count} row(s). Initialization creates an empty execution authority and never clears or adopts existing records; nothing was modified.`);
+    }
+  }
+}
+async function initializeExecutionAuthority(context) {
+  assertNoLegacyExecutionSources(context);
+  await withExecutionTransaction(context, (tx) => {
+    assertActiveStoreAuthority(tx.db);
+    assertExecutionDomainEmpty(tx.db, tx.execution);
+    const now = new Date().toISOString();
+    tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1").run(now, now);
+    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+    assertNoLegacyExecutionSources(context);
+    tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
+  });
+  return readExecutionState(context);
+}
+function assertOperationId(value) {
+  if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
+    throw new CoordinationError("coordination.invalid-input", "Invalid operation id: provide 1-128 ASCII characters from [A-Za-z0-9._:-]. Inspect workflow authority with mstar status validate.", { rejectedValue: value });
+  }
+  return value;
+}
 function invalidInput(detail) {
   return new CoordinationError("coordination.invalid-input", detail);
+}
+function notNewLifecycle(detail) {
+  return new ExecutionError("execution.not-empty", detail);
+}
+function suppliedCatalogPin(row, workflowId, planId) {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : null;
+  const raw = metadata === null ? undefined : metadata.catalog_pin;
+  if (raw === undefined || raw === null)
+    return null;
+  const what = `plan ${planId}'s metadata.catalog_pin`;
+  const details = { workflow_id: workflowId, plan_id: planId };
+  if (!isPlainObject(raw) || Object.keys(raw).length !== 4) {
+    throw new ExecutionPinConflictError(`${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash); a malformed selection is never sealed as authority`, details);
+  }
+  if (!isNonEmptyString(raw.store_id) || !STORE_UUID_RE.test(raw.store_id) || typeof raw.entity_revision !== "number" || !Number.isSafeInteger(raw.entity_revision) || raw.entity_revision <= 0 || !isNonEmptyString(raw.document_hash) || !isNonEmptyString(raw.relation_hash)) {
+    throw new ExecutionPinConflictError(`${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash) ` + `— got ${JSON.stringify(raw)}`, details);
+  }
+  return {
+    store_id: raw.store_id,
+    entity_revision: raw.entity_revision,
+    document_hash: raw.document_hash,
+    relation_hash: raw.relation_hash
+  };
+}
+function resolveCreateWorkflow(caller, entry, snapshot, operationId) {
+  if (!isPlainObject(caller)) {
+    throw invalidInput("Invalid execution caller: provide a coordinator caller object. Inspect workflow authority with mstar status validate.");
+  }
+  assertOperationId(operationId);
+  const entryGate = validateWorkflowEntry(entry);
+  const snapshotGate = validateWorkflowSnapshot(snapshot);
+  const violations = [...entryGate.violations, ...snapshotGate.violations];
+  if (violations.length > 0) {
+    throw new CoordinationError("coordination.invalid-input", "Workflow entry/snapshot is invalid. Inspect registered workflow state with mstar status validate.", { violations: violations.map(({ code: code2, message }) => ({ code: code2, message })) });
+  }
+  const workflow = entry;
+  const doc = snapshot;
+  const workflowId = workflow.id;
+  if (caller.role !== "coordinator") {
+    throw new ExecutionError("execution.scope-mismatch", "creating a workflow is a coordinator operation");
+  }
+  if (caller.workflowId !== workflowId) {
+    throw new ExecutionError("execution.scope-mismatch", `the caller belongs to workflow ${caller.workflowId}, not to the workflow ${workflowId} this request creates`);
+  }
+  for (const field of ["id", "type", "started_at"]) {
+    if (workflow[field] !== doc[field]) {
+      throw invalidInput(`the workflow entry and its snapshot disagree on ${field}: entry ${JSON.stringify(workflow[field])}, snapshot ${JSON.stringify(doc[field])}. Registration fixes the identity anchors; creation never reconciles them.`);
+    }
+  }
+  if (doc.coordination !== undefined || doc.integration_merge_lease !== undefined || doc.delivery !== undefined) {
+    throw notNewLifecycle(`snapshot ${workflowId} already carries a coordinator binding, an integration merge lease or delivery evidence. Creation writes a NEW, unbound, unleased lifecycle that owns no accepted evidence; an existing lifecycle belongs on the staged migration route. Nothing was created.`);
+  }
+  if (isTerminalSnapshot(doc)) {
+    throw notNewLifecycle(`snapshot ${workflowId} is ${doc.status}. Registry membership selects an ACTIVE lifecycle, so a terminal snapshot is never created into the root register; nothing was created.`);
+  }
+  const plans = [];
+  const seen = new Set;
+  for (const row of doc.plans) {
+    const planId = rowPlanId(row);
+    if (seen.has(planId)) {
+      throw new CoordinationError("coordination.invalid-input", "Snapshot contains a duplicate plan identity. Inspect workflow rows with mstar status validate.", { workflow_id: workflowId, plan_id: planId });
+    }
+    seen.add(planId);
+    if (row.execution_lease !== undefined || row.coordination !== undefined) {
+      throw notNewLifecycle(`plan ${planId} of snapshot ${workflowId} already carries a coordination block or an execution lease. Creation writes unbound, unleased rows that own no accepted evidence; nothing was created.`);
+    }
+    plans.push({ planId, row, pin: suppliedCatalogPin(row, workflowId, planId) });
+  }
+  return { workflowId, entry: workflow, snapshot: doc, plans };
+}
+function createWorkflowRequestHash(caller, creation, expected) {
+  return createHash5("sha256").update(serializeExecutionValue({
+    operation: CREATE_WORKFLOW_OPERATION,
+    workflow_id: creation.workflowId,
+    expected,
+    caller: {
+      session_id: caller.sessionId,
+      role: caller.role,
+      workflow_id: caller.workflowId
+    },
+    entry: creation.entry,
+    snapshot: creation.snapshot
+  }), "utf8").digest("hex");
+}
+function readCommittedOperation(db, epoch, operationId) {
+  const row = db.prepare("select request_hash, store_id, workflow_id, result_json from execution_operations where epoch = ? and operation_id = ?").get(epoch, operationId);
+  if (!row)
+    return null;
+  const what = `execution_operations(${epoch},${operationId})`;
+  return {
+    requestHash: storedText(row.request_hash, `${what}.request_hash`),
+    storeId: storedText(row.store_id, `${what}.store_id`),
+    workflowId: storedText(row.workflow_id, `${what}.workflow_id`),
+    resultJson: storedText(row.result_json, `${what}.result_json`)
+  };
+}
+function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
+  const what = `execution_operations(${tx.epoch},${operationId})`;
+  if (recorded.storeId !== tx.storeId || recorded.workflowId !== workflowId) {
+    throw corrupt(`${what} records store ${JSON.stringify(recorded.storeId)} and workflow ${JSON.stringify(recorded.workflowId)}, which is not the workflow ${workflowId} this request addresses`);
+  }
+  const receipt = storedJsonObject(recorded.resultJson, `${what}.result_json`);
+  const recordedToken = receipt.token;
+  const parsed = parseExecutionToken(recordedToken);
+  const sameKey = parsed.key.length === token.key.length && parsed.key.every((part, index2) => part === token.key[index2]);
+  if (parsed.kind !== token.kind || parsed.storeId !== tx.storeId || parsed.epoch !== tx.epoch || !sameKey) {
+    throw corrupt(`${what}.result_json carries a token that does not address ${token.kind} ${JSON.stringify(token.key)} of this store in this epoch`);
+  }
+  if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
+    throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
+  }
+  if (receipt.slim !== true && !isPlainObject(receipt.data))
+    throw corrupt(`${what}.result_json carries no execution state`);
+  const recovery = receipt.operationRecovery;
+  if (recovery !== undefined) {
+    if (!isPlainObject(recovery) || !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) || !["none", "committed", "partial", "unknown"].includes(String(recovery.commitState)) || !isPlainObject(recovery.target) || !Array.isArray(recovery.applied) || !Array.isArray(recovery.unresolved) || !Array.isArray(recovery.resolvedFrom) || !Array.isArray(recovery.warnings)) {
+      throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
+    }
+  }
+  const storedRecovery = recovery;
+  if (receipt.slim === true) {
+    const live = readExecutionStateGraph(tx);
+    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery } };
+  }
+  return {
+    data: receipt.data,
+    token: recordedToken,
+    storeId: receipt.storeId,
+    epoch: receipt.epoch,
+    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }
+  };
+}
+function assertWorkflowIdentityIsNew(db, workflowId) {
+  const row = db.prepare("select revision from execution_workflows where workflow_id = ?").get(workflowId);
+  if (!row)
+    return;
+  throw notNewLifecycle(`execution_workflows already holds workflow ${workflowId} (revision ${String(row.revision)}). A workflow identity is create-only: re-creating it never restores registry membership, resets revisions or rewrites its rows. Nothing was created.`);
+}
+function assertSelectedCatalogEntities(db, storeId, workflowId, plans) {
+  const entity = db.prepare("select revision from catalog_entities where kind = 'plan' and id = ?");
+  for (const plan of plans) {
+    const { pin } = plan;
+    if (pin === null)
+      continue;
+    const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
+    if (pin.store_id !== storeId) {
+      throw new ExecutionPinConflictError(`plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) — a foreign ` + `selection is never sealed as this store's frozen input`, details);
+    }
+    if (entity.get(plan.planId) === undefined) {
+      throw new ExecutionPinConflictError(`plan ${plan.planId} is pinned to catalog plan entity ${plan.planId} at revision ${pin.entity_revision}, but the catalog does not hold that entity. Creation binds existing catalog identities and never fabricates one; register the plan or drop the pin`, details);
+    }
+  }
+}
+function writeCreatedWorkflow(db, input) {
+  const { workflowId, entry, snapshot, plans, creatorSessionId, now } = input;
+  const header = { ...snapshot };
+  delete header.plans;
+  db.prepare("insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, ?, ?, ?, ?)").run(workflowId, creatorSessionId, JSON.stringify(header), now, now);
+  db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
+  const insertPlan = db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, ?, ?, '{}')");
+  const insertInput = db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) values (?, ?, 1, ?, ?, ?)");
+  plans.forEach((plan, ordinal) => {
+    const state = { ...plan.row, id: plan.planId };
+    delete state.coordination;
+    delete state.execution_lease;
+    insertPlan.run(workflowId, plan.planId, ordinal, JSON.stringify(state));
+    insertInput.run(workflowId, plan.planId, JSON.stringify(executionInputSelection(plan.row, plan.planId)), executionInputHash(plan.row, plan.planId), plan.pin === null ? null : JSON.stringify(plan.pin));
+  });
+}
+function writeExecutionCreation(tx, input) {
+  assertWorkflowIdentityIsNew(tx.db, input.creation.workflowId);
+  assertSelectedCatalogEntities(tx.db, tx.storeId, input.creation.workflowId, input.creation.plans);
+  writeCreatedWorkflow(tx.db, {
+    workflowId: input.creation.workflowId,
+    entry: input.creation.entry,
+    snapshot: input.creation.snapshot,
+    plans: input.creation.plans,
+    creatorSessionId: isNonEmptyString(input.caller.sessionId) ? input.caller.sessionId : null,
+    now: input.now
+  });
+  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+function executionRootTokenOf(tx) {
+  return executionToken("root", tx.storeId, tx.epoch, [], readExecutionMetaRow(tx.db).revision);
+}
+async function adoptTerminalWorkflow(context, input) {
+  const caller = context.caller;
+  if (caller.role !== "coordinator" || caller.workflowId !== input.workflowId || !isNonEmptyString(caller.sessionId)) {
+    throw new ExecutionError("execution.scope-mismatch", "terminal adoption requires an acquired coordinator identity addressing the selected workflow");
+  }
+  if (!isNonEmptyString(input.workflowId) || input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) || !isNonEmptyString(input.reason) || !isNonEmptyString(input.operationId)) {
+    throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
+  }
+  const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
+  if (attestation !== undefined && attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+    throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; terminal adoption settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come from a distinct operator identity. Rerun from a session id other than the one this document names stopped, with a stop list covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
+  }
+  const requestHash2 = semanticRequestHash({
+    operation: "workflow.adopt-terminal",
+    address: { workflowId: input.workflowId },
+    caller,
+    intent: {
+      expectedRevision: input.expectedRevision ?? "current",
+      reason: input.reason,
+      ...attestation === undefined ? {} : { attestation }
+    }
+  });
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
+    }
+    const replay = readOperationReplay(tx, {
+      operationId: input.operationId,
+      requestHash: requestHash2,
+      workflowId: input.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] }
+    });
+    if (replay !== null) {
+      const { operationRecovery: operationRecovery2, ...recorded } = replay;
+      return { ...recorded, ...operationRecovery2 === undefined ? {} : { recovery: operationRecovery2 } };
+    }
+    const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(input.workflowId);
+    if (row === undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no terminal header to adopt; register the workflow through the supported workflow registration route`);
+    }
+    const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
+    if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
+      throw new ExecutionError("execution.header-revision-conflict", `workflow ${input.workflowId} header revision is ${revision}, not expected revision ${input.expectedRevision}; re-read status validate and retry with its listed revision`);
+    }
+    const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(input.workflowId);
+    if (registered !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is already registered; finish its lifecycle through mstar status workflow-close`);
+    }
+    const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; no supported exit exists for a non-terminal header without registry membership`);
+    }
+    if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.stop_reason)) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason`);
+    }
+    if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
+    }
+    const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator").filter((row2) => row2.state === "active" && row2.ref.epoch === tx.epoch).map((row2) => row2.ref.sessionId).sort();
+    if (activeHolders.length > 0) {
+      const holders = activeHolders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
+      if (attestation === undefined) {
+        throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} holds ACTIVE coordinator session(s) ${holders} at epoch ${tx.epoch}; terminal adoption settles them only against the operator's stop attestation, because it would otherwise revoke a holder nobody has attested stopped. Supply --attestation <absolute-json> with the full ActivationAttestation whose stoppedSessions name ${holders} as stopped/reloaded, then retry.`, {
+          workflow_id: input.workflowId,
+          epoch: tx.epoch,
+          active_holder_sessions: activeHolders,
+          adoption_refusal: "active-session-proof-required"
+        });
+      }
+      const attested = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
+      const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
+      if (unattested.length > 0) {
+        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead process itself. Add each listed session to the attestation's stoppedSessions and retry.`, {
+          workflow_id: input.workflowId,
+          epoch: tx.epoch,
+          active_holder_sessions: activeHolders,
+          unattested_sessions: unattested,
+          adoption_refusal: "active-session-proof-incomplete"
+        });
+      }
+      for (const sessionId of activeHolders) {
+        revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
+      }
+    }
+    const now = new Date().toISOString();
+    const nextState = {
+      ...state,
+      lifecycle_adopted_at: now,
+      adopt_reason: input.reason,
+      adoption_actor_session_id: caller.sessionId,
+      adoption_operation_id: input.operationId
+    };
+    const expectedRevision = input.expectedRevision ?? revision;
+    tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?").run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
+    tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
+    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    const settlement = attestation === undefined ? undefined : {
+      outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
+      target: { workflowId: input.workflowId },
+      applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
+      unresolved: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${attestation.operator.actor} (${attestation.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: attestation.attestedAt }
+      ],
+      warnings: activeHolders.length === 0 ? [{
+        code: "execution.adoption.nothing-to-settle",
+        message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`
+      }] : [],
+      commitState: "committed"
+    };
+    const receipt = {
+      data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, readExecutionMetaRow(tx.db)),
+      token: executionRootTokenOf(tx),
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      ...settlement === undefined ? {} : { operationRecovery: settlement }
+    };
+    writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now, slim: true });
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
+    const { operationRecovery, ...publicReceipt } = receipt;
+    return {
+      ...publicReceipt,
+      operationId: input.operationId,
+      replayed: false,
+      ...operationRecovery === undefined ? {} : { recovery: operationRecovery }
+    };
+  });
+}
+async function createExecutionWorkflow(context, input) {
+  const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
+  const operationId = input.operationId;
+  const requestHash2 = createWorkflowRequestHash(context.caller, creation, input.expected);
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. A staged store is inspectable only through migration diagnostics.`);
+    }
+    const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
+    if (recorded !== null) {
+      if (recorded.requestHash !== requestHash2) {
+        throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request (kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` + `slot — retry the committed request unchanged or use a new id. Nothing was created.`);
+      }
+      return {
+        ...readCommittedReceipt(recorded, tx, operationId, creation.workflowId, { kind: "root", key: [] }),
+        operationId,
+        replayed: true
+      };
+    }
+    assertExecutionToken(input.expected, {
+      kind: "root",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [],
+      revision: tx.execution.revision
+    });
+    const now = new Date().toISOString();
+    writeExecutionCreation(tx, { caller: context.caller, creation, now });
+    const meta = readExecutionMetaRow(tx.db);
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const receipt = {
+      data: readExecutionGraph(tx.db, store, meta),
+      token: executionToken("root", store.storeId, store.epoch, [], meta.revision),
+      storeId: store.storeId,
+      epoch: store.epoch
+    };
+    writeOperationReceipt(tx, { operationId, requestHash: requestHash2, workflowId: creation.workflowId, planId: null, receipt, now, slim: true });
+    return { ...receipt, operationId, replayed: false };
+  });
+}
+function resolveBindRequest(caller, input) {
+  if (!isPlainObject(input))
+    throw invalidInput("Invalid session bind: provide a request object. Inspect workflow authority with mstar status validate.");
+  if (!isNonEmptyString(caller?.sessionId))
+    throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
+  const { workflowId } = input;
+  const operationId = assertOperationId(input.operationId);
+  if (!isNonEmptyString(workflowId))
+    throw invalidInput("Invalid session bind: provide a non-empty workflowId. Inspect registered workflows with mstar status validate.");
+  if (caller.role !== "coordinator" || caller.workflowId !== workflowId) {
+    throw new ExecutionError("execution.scope-mismatch", "the session bind must address the trusted caller's coordinator workflow");
+  }
+  return { role: "coordinator", workflowId, sessionId: caller.sessionId, operationId };
+}
+function bindFreshnessIntent(expected) {
+  return expected === undefined ? { freshness: "omitted" } : { freshness: "supplied", token: expected };
+}
+function bindSessionRequestHash(caller, bind, expected) {
+  return createHash5("sha256").update(serializeExecutionValue({
+    operation: BIND_SESSION_OPERATION,
+    workflow_id: bind.workflowId,
+    role: bind.role,
+    expected: bindFreshnessIntent(expected),
+    caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId }
+  }), "utf8").digest("hex");
 }
 function storedSessionState(value, what) {
   if (!EXECUTION_SESSION_STATES.includes(value)) {
@@ -13522,6 +13897,19 @@ function readSessionRows(db, store, workflowId) {
       state: storedSessionState(row.state, `execution_sessions(${workflowId},${ref.sessionId}).state`)
     };
   });
+}
+function readWorkflowHeaderRow(db, workflowId) {
+  const row = db.prepare("select revision, creator_session_id from execution_workflows where workflow_id = ?").get(workflowId);
+  if (row === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow ${workflowId} is not in the execution authority. A session binds only to a registered lifecycle; nothing was bound.`, { workflow_id: workflowId });
+  }
+  if (row.creator_session_id !== null && row.creator_session_id !== undefined && !isNonEmptyString(row.creator_session_id)) {
+    throw corrupt(`execution_workflows(${workflowId}).creator_session_id is not a session identity`);
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
+    creatorSessionId: isNonEmptyString(row.creator_session_id) ? row.creator_session_id : null
+  };
 }
 function sessionRefusalDetails(input) {
   return {
@@ -13590,6 +13978,420 @@ function liveSession(tx, address) {
 }
 function assertReferenceAuthority(tx, referenceStoreId, referenceEpoch, target) {
   assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...target === undefined ? {} : { target } });
+}
+function writeExecutionSession(db, input) {
+  db.prepare("insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) values (?, 'coordinator', ?, ?, 1, 'active', ?)").run(input.workflowId, input.address.sessionId, input.epoch, input.now);
+}
+function writePlanCoordinationRow(tx, input) {
+  tx.db.prepare("update execution_plans set state_json = ?, coordination_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(input.state), JSON.stringify(input.coordination), input.revision, input.workflowId, input.planId);
+}
+function readExecutionSealedInput(tx, workflowId, planId) {
+  const row = tx.db.prepare("select revision, input_hash, catalog_pin_json from execution_inputs where workflow_id = ? and plan_id = ?").get(workflowId, planId);
+  if (row === undefined) {
+    throw corrupt(`plan ${planId} has no sealed execution input in workflow ${workflowId}`);
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_inputs(${workflowId},${planId}).revision`),
+    inputHash: storedText(row.input_hash, `execution_inputs(${workflowId},${planId}).input_hash`),
+    pin: readFrozenInput(row.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`)
+  };
+}
+function writeExecutionInputPin(tx, input) {
+  const sealed = readExecutionSealedInput(tx, input.workflowId, input.planId);
+  const storedPinJson = sealed.pin === null ? null : serializeExecutionValue(sealed.pin);
+  const nextPinJson = input.pin === null ? null : serializeExecutionValue(input.pin);
+  if (storedPinJson === nextPinJson)
+    return;
+  tx.db.prepare("update execution_inputs set catalog_pin_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(nextPinJson, sealed.revision + 1, input.workflowId, input.planId);
+}
+function advancePlanOperationRevisions(tx, input) {
+  tx.db.prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?").run(input.now, input.workflowId);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+function advanceWorkflowHeaderRevision(tx, input) {
+  tx.db.prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?").run(input.now, input.workflowId);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+function recordRootMembershipLoss(tx, input) {
+  tx.db.prepare("delete from execution_registry where workflow_id = ?").run(input.workflowId);
+  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
+}
+function requireWorkflowState(tx, workflowId) {
+  const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (row === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", "Workflow is not in the execution authority. Inspect registered workflows with mstar status validate.", { workflow_id: workflowId });
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
+    state: storedJsonObject(row.state_json, `execution_workflows(${workflowId}).state_json`)
+  };
+}
+function writeWorkflowState(tx, input) {
+  tx.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(input.state), input.workflowId);
+}
+function readLiveSessionIdentities(tx, workflowId) {
+  const rows = tx.db.prepare("select session_id from execution_sessions where workflow_id = ? and state = 'active' and epoch = ?").all(workflowId, tx.epoch);
+  return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
+}
+function readWorkflowSessionRows(tx, workflowId, role) {
+  if (role !== "coordinator") {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution authority supports coordinator session rows only. Inspect registered workflow authority with mstar status validate.", {
+      role
+    });
+  }
+  return readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, workflowId);
+}
+function revokeSessionRow(tx, input) {
+  if (input.role !== "coordinator") {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution authority can revoke coordinator session rows only. Inspect registered workflow authority with mstar status validate.", { role: input.role });
+  }
+  tx.db.prepare("update execution_sessions set state = 'revoked', revision = revision + 1 where workflow_id = ? and role = 'coordinator' and session_id = ? and state <> 'revoked'").run(input.workflowId, input.sessionId);
+}
+function bindRecoveredSession(tx, input) {
+  const existing = tx.db.prepare("select revision from execution_sessions where workflow_id=? and role='coordinator' and session_id=?").get(input.workflowId, input.sessionId);
+  if (existing === undefined) {
+    writeExecutionSession(tx.db, {
+      workflowId: input.workflowId,
+      address: { workflowId: input.workflowId, role: "coordinator", sessionId: input.sessionId },
+      epoch: input.epoch,
+      now: input.now
+    });
+    return 1;
+  }
+  const revision = storedRevision(existing.revision, `execution_sessions(${input.workflowId},${input.sessionId}).revision`) + 1;
+  tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?").run(input.epoch, revision, input.now, input.workflowId, input.sessionId);
+  return revision;
+}
+function claimIntegrationMergeLease(tx, input) {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  tx.db.prepare("insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)").run(input.workflowId, existing === null ? 1 : existing.revision + 1, tx.epoch, JSON.stringify({ ...input.lease, status: "held" }));
+}
+function releaseIntegrationMergeLease(tx, input) {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  if (existing === null || existing.status === "released")
+    return;
+  const tombstone = {
+    ...input.claim,
+    status: "released",
+    prior_holder: input.claim.holder,
+    released_by: input.releasedBy,
+    released_at: input.now,
+    release_reason: input.reason
+  };
+  tx.db.prepare("update execution_integration_leases set revision = ?, lease_json = ? where workflow_id = ?").run(existing.revision + 1, JSON.stringify(tombstone), input.workflowId);
+}
+function readPlanOperationReplay(tx, input) {
+  const replay = readOperationReplay(tx, {
+    ...input,
+    token: { kind: "plan", key: [input.workflowId, input.planId] }
+  });
+  if (replay === null)
+    return null;
+  const { operationRecovery, ...receipt } = replay;
+  return { ...receipt, ...operationRecovery === undefined ? {} : { recovery: operationRecovery } };
+}
+async function readPlanOperationReplayBeforeProof(context, read, input) {
+  const caller = context.caller;
+  if (caller.role !== "coordinator" || caller.sessionId !== read.sessionId || caller.workflowId !== read.workflowId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not match the coordinator session resolved for this plan address. Inspect workflow authority with mstar status validate.", { session_id: read.sessionId, workflow_id: read.workflowId });
+  }
+  return withExecutionReadTransaction(context, (tx) => {
+    assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+    liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId });
+    return readPlanOperationReplay(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: read.planId
+    });
+  });
+}
+function readOperationReplay(tx, input) {
+  const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
+  if (recorded === null)
+    return null;
+  if (recorded.requestHash !== input.requestHash) {
+    const problem = {
+      component: "operation",
+      path: "operationId",
+      code: "execution.operation-conflict",
+      sourcesTried: [
+        `execution_operations(epoch ${tx.epoch}, ${JSON.stringify(input.operationId)})`,
+        "the requested operation's semantic selection"
+      ],
+      currentFacts: [
+        `operation id ${JSON.stringify(input.operationId)} is committed for workflow ${recorded.workflowId} with request fingerprint ${recorded.requestHash}`,
+        `the requested operation's fingerprint is ${input.requestHash}`
+      ],
+      needed: "retry the committed request unchanged (an operation id is an idempotency key, not a reusable slot), or use a new operation id for the new effect",
+      withheldEffect: "the requested effect, exactly as sent: no state was restored from the committed receipt either",
+      availableWork: [
+        `read the current state of workflow ${recorded.workflowId}`,
+        "retry the committed request unchanged under its own operation id",
+        "express the new effect under a new operation id"
+      ]
+    };
+    throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different semantic request (its addressed record, caller or business payload). An operation id is an idempotency key, not a reusable ` + `slot — retry the committed request unchanged or use a new id. Nothing was written.`, {
+      component: problem.component,
+      path: problem.path,
+      operation_id: input.operationId,
+      recorded_fingerprint: recorded.requestHash,
+      requested_fingerprint: input.requestHash,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recoveryFacts: unresolvedRecovery({
+        target: { workflowId: input.workflowId, ...input.planId === null ? {} : { planId: input.planId } },
+        unresolved: [problem]
+      })
+    });
+  }
+  const receipt = readCommittedReceipt(recorded, tx, input.operationId, input.workflowId, input.token);
+  return { ...receipt, operationId: input.operationId, replayed: true };
+}
+function writePlanOperationReceipt(tx, input) {
+  writeOperationReceipt(tx, input);
+}
+function writeOperationReceipt(tx, input) {
+  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? {
+    slim: true,
+    token: input.receipt.token,
+    storeId: tx.storeId,
+    epoch: tx.epoch,
+    ...input.receipt.operationRecovery === undefined ? {} : { operationRecovery: input.receipt.operationRecovery }
+  } : input.receipt), input.now);
+}
+function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
+  tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
+}
+function resolvePlanRead(caller, session, planId) {
+  if (!isPlainObject(session))
+    throw invalidInput("Invalid plan read: provide an execution session reference. Inspect workflow authority with mstar status validate.");
+  const { storeId, epoch, workflowId, role, sessionId } = session;
+  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 || !isNonEmptyString(workflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
+    throw invalidInput("Invalid coordinator session reference: provide storeId, positive epoch, workflowId, role, and sessionId. Inspect workflow authority with mstar status validate.");
+  }
+  if (!isNonEmptyString(planId))
+    throw invalidInput("Invalid plan read: provide the explicit plan id. Inspect workflow rows with mstar status validate.");
+  if (caller.role !== "coordinator" || caller.sessionId !== sessionId || caller.workflowId !== workflowId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not match the coordinator session reference. Inspect workflow authority with mstar status validate.");
+  }
+  return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
+}
+async function bindExecutionSession(context, input) {
+  const bind = resolveBindRequest(context.caller, input);
+  const requestHash2 = bindSessionRequestHash(context.caller, bind, input.expected);
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. A staged store is inspectable only through migration diagnostics.`);
+    }
+    const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
+    if (recorded !== null) {
+      if (recorded.requestHash !== requestHash2) {
+        throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(bind.operationId)} is already committed on this store epoch for a different request. ` + `An operation id is an idempotency key, not a reusable slot — retry the committed request unchanged, or express the ` + `new effect under a new operation id. Nothing was bound.`, { operation_id: bind.operationId, recorded_fingerprint: recorded.requestHash, requested_fingerprint: requestHash2 });
+      }
+      const receipt2 = readCommittedReceipt(recorded, tx, bind.operationId, bind.workflowId, {
+        kind: "session",
+        key: [bind.workflowId, "coordinator", bind.sessionId]
+      });
+      assertReferenceAuthority(tx, receipt2.data.storeId, receipt2.data.epoch);
+      liveSession(tx, { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId });
+      return { ...receipt2, operationId: bind.operationId, replayed: true };
+    }
+    const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
+    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [bind.workflowId], header.revision);
+    assertExecutionToken(expected, {
+      kind: "workflow",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [bind.workflowId],
+      revision: header.revision
+    });
+    const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    if (view.state.status !== "running") {
+      throw new CoordinationError("coordination.invalid-transition", "Coordinator session binding requires a running workflow lifecycle. Inspect current workflow state with mstar status validate.", { workflow_id: bind.workflowId, status: view.state.status });
+    }
+    const rows = readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    if (live !== undefined) {
+      throw sessionBindRefusal({
+        code: "coordination.identity-mismatch",
+        detail: `workflow ${bind.workflowId} already holds the ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at epoch ${tx.epoch}. Ownership is not replaceable by a bind: resume that holder's own binding, or run recoverExecutionCoordinator naming ${JSON.stringify(live.ref.sessionId)} with its stop/reload attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: live.ref.sessionId,
+        holderEpoch: live.ref.epoch,
+        facts: { holder: live.ref.sessionId, holder_epoch: live.ref.epoch, current_epoch: tx.epoch }
+      });
+    }
+    const mine = rows.find((row) => row.ref.sessionId === bind.sessionId);
+    if (mine !== undefined && (mine.state !== "active" || mine.ref.epoch !== tx.epoch)) {
+      throw sessionBindRefusal({
+        code: "execution.session-unavailable",
+        detail: `workflow ${bind.workflowId} records session ${JSON.stringify(bind.sessionId)} in state ${mine.state} at epoch ${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or epoch-invalidated binding is never revived ` + `by a normal bind — run recoverExecutionCoordinator, which takes the workflow token, an operation id, a reason and the ` + `prior holder ${JSON.stringify(bind.sessionId)} with its stop/reload attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: bind.sessionId,
+        holderEpoch: mine.ref.epoch,
+        facts: { row_state: mine.state, row_epoch: mine.ref.epoch, current_epoch: tx.epoch }
+      });
+    }
+    if (header.creatorSessionId !== null && header.creatorSessionId !== bind.sessionId) {
+      const recorded2 = rows[0];
+      throw sessionBindRefusal({
+        code: "coordination.identity-mismatch",
+        detail: `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted caller is ${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity` + (recorded2 === undefined ? `, and this workflow records NO coordinator session row to recover — its supported route is recoverExecutionCoordinator ` + `with priorSessionId: null, a reason and a valid activation attestation` : `, or through recoverExecutionCoordinator naming the recorded coordinator ${JSON.stringify(recorded2.ref.sessionId)} (epoch ${recorded2.ref.epoch}) with stop attestation`) + `. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: recorded2 === undefined ? null : recorded2.ref.sessionId,
+        holderEpoch: recorded2 === undefined ? tx.epoch : recorded2.ref.epoch,
+        facts: {
+          creator_session_id: header.creatorSessionId,
+          caller_session_id: bind.sessionId,
+          recorded_coordinator_rows: rows.length
+        }
+      });
+    }
+    if (header.creatorSessionId === null) {
+      if (rows.length > 0) {
+        const recorded2 = rows[0];
+        throw sessionBindRefusal({
+          code: "coordination.identity-mismatch",
+          detail: `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` + `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator naming the recorded coordinator ` + `${JSON.stringify(recorded2.ref.sessionId)} (epoch ${recorded2.ref.epoch}) with its stop/reload attestation, the current workflow token, an operation id, a reason and a valid activation attestation. Nothing was bound.`,
+          workflowId: bind.workflowId,
+          sessionId: bind.sessionId,
+          holder: recorded2.ref.sessionId,
+          holderEpoch: recorded2.ref.epoch,
+          facts: { coordinator_rows: rows.length }
+        });
+      }
+      tx.db.prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?").run(bind.sessionId, bind.workflowId);
+    }
+    const now = new Date().toISOString();
+    const address = { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId };
+    writeExecutionSession(tx.db, { workflowId: bind.workflowId, address, epoch: tx.epoch, now });
+    advanceWorkflowHeaderRevision(tx, { workflowId: bind.workflowId, now });
+    const data = {
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      workflowId: bind.workflowId,
+      role: "coordinator",
+      sessionId: bind.sessionId
+    };
+    const receipt = {
+      data,
+      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, "coordinator", bind.sessionId], 1),
+      storeId: tx.storeId,
+      epoch: tx.epoch
+    };
+    writeOperationReceipt(tx, { operationId: bind.operationId, requestHash: requestHash2, workflowId: bind.workflowId, planId: null, receipt, now });
+    return { ...receipt, operationId: bind.operationId, replayed: false };
+  });
+}
+function sessionBindRefusal(input) {
+  const problem = {
+    component: "session",
+    path: "session",
+    code: input.code,
+    sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(input.workflowId)}, read in this transaction`],
+    currentFacts: [input.detail],
+    needed: input.holder === null ? `the supported route for a workflow with no recorded coordinator row: recoverExecutionCoordinator with priorSessionId: null, ` + `a non-empty reason and a valid activation attestation, or — while the workflow is still unbound — a bind by the creating identity` : `the supported coordinator recovery: run recoverExecutionCoordinator naming the RECORDED coordinator ${JSON.stringify(input.holder)} (epoch ${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own live reference while it is current`,
+    withheldEffect: "the session binding and its revision: authority was withheld, so no row, revision or receipt changed under this operation",
+    availableWork: input.holder === null ? [
+      `run recoverExecutionCoordinator with priorSessionId: null once the workflow needs a new coordinator`,
+      "independent operations on other workflows continue"
+    ] : [
+      `resume the recorded coordinator's own binding through resumeExecutionSession while its row is current`,
+      `run recoverExecutionCoordinator for that recorded holder once its stop/reload is attested`,
+      "independent operations on other workflows continue"
+    ]
+  };
+  return new ExecutionError("execution.session-unavailable", input.detail, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    session_id: input.sessionId,
+    ...input.holder === null ? {} : { holder: input.holder },
+    ...input.facts,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    recoveryFacts: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] })
+  });
+}
+function readExecutionPlanWitness(tx, read) {
+  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+  const live = liveSession(tx, {
+    workflowId: read.workflowId,
+    role: "coordinator",
+    sessionId: read.sessionId
+  });
+  const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
+  const view = workflow.plans.find((candidate) => candidate.plan.id === read.planId);
+  const token = workflow.planTokens[read.planId];
+  if (view === undefined || token === undefined) {
+    throw new CoordinationError("coordination.plan-not-found", "The addressed workflow holds no matching plan. Inspect plan rows with mstar status validate.", { workflow_id: read.workflowId, plan_id: read.planId });
+  }
+  return {
+    workflowId: read.workflowId,
+    planId: read.planId,
+    view,
+    siblings: workflow.plans.filter((candidate) => candidate.plan.id !== read.planId),
+    token,
+    revision: parseExecutionToken(token).revision,
+    workflowToken: workflow.workflowToken,
+    session: live.ref
+  };
+}
+function resolveWorkflowWrite(caller, session, workflowId) {
+  if (caller?.role !== "coordinator")
+    throw new ExecutionError("execution.scope-mismatch", "workflow writes require the coordinator identity");
+  if (!isNonEmptyString(caller.sessionId))
+    throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
+  if (!isNonEmptyString(workflowId))
+    throw invalidInput("Invalid workflow operation: provide the non-empty workflow id it addresses. Inspect registered workflows with mstar status validate.");
+  if (!isPlainObject(session))
+    throw invalidInput("Invalid workflow operation: provide an execution session reference. Inspect workflow authority with mstar status validate.");
+  const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId } = session;
+  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 || !isNonEmptyString(boundWorkflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
+    throw invalidInput("Invalid workflow operation: provide a valid coordinator session reference. Inspect workflow authority with mstar status validate.");
+  }
+  if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId) {
+    throw new ExecutionError("execution.scope-mismatch", "the trusted caller does not match the supplied coordinator reference");
+  }
+  if (caller.workflowId !== workflowId)
+    throw new ExecutionError("execution.scope-mismatch", "the caller does not own the addressed workflow");
+  return { workflowId, sessionId, referenceStoreId: storeId, referenceEpoch: epoch };
+}
+function resolveWorkflowSession(tx, read) {
+  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+  return liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId }).ref;
+}
+function readExecutionWorkflowWitness(tx, read) {
+  const session = resolveWorkflowSession(tx, read);
+  const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(read.workflowId);
+  if (registered === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle — a terminal or unregistered workflow stays ` + `as history and is never amended`, { workflow_id: read.workflowId });
+  }
+  const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
+  return {
+    workflowId: read.workflowId,
+    view,
+    token: view.workflowToken,
+    revision: parseExecutionToken(view.workflowToken).revision,
+    session
+  };
+}
+async function readExecutionPlan(context, sessionOrPlanId, addressedPlanId) {
+  const planId = typeof sessionOrPlanId === "string" ? sessionOrPlanId : addressedPlanId;
+  if (!isNonEmptyString(planId))
+    throw invalidInput("Invalid plan read: provide the plan id it selects. Inspect plan rows with mstar status validate.");
+  const session = typeof sessionOrPlanId === "string" ? (await readOwnExecutionSession(context)).data : sessionOrPlanId;
+  const read = resolvePlanRead(context.caller, session, planId);
+  return withExecutionReadTransaction(context, (tx) => {
+    const witness = readExecutionPlanWitness(tx, read);
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
+  });
 }
 async function readExecutionSession(context, session) {
   if (!isPlainObject(session) || !isNonEmptyString(session.storeId) || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) {
@@ -13694,12 +14496,13 @@ var BASE64URL_RE;
 var TOKEN_KEY_DECODER;
 var ownedTransactions;
 var OPERATION_ID_RE;
+var CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
+var BIND_SESSION_OPERATION = "bindExecutionSession";
 var EXECUTION_SESSION_STATES;
 var init_execution_store = __esm(() => {
   init_coordination();
   init_coordination_write();
   init_coordination_transitions();
-  init_lease();
   init_path();
   init_recovery_intent();
   init_status();
@@ -13728,7 +14531,7 @@ var init_execution_store = __esm(() => {
   DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
   BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
   TOKEN_KEY_DECODER = new TextDecoder("utf-8", { fatal: true });
-  ownedTransactions = new AsyncLocalStorage3;
+  ownedTransactions = new AsyncLocalStorage2;
   OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
   EXECUTION_SESSION_STATES = ["active", "suspended", "revoked"];
 });
@@ -14079,14 +14882,14 @@ var init_issue = __esm(() => {
     superseded: true
   };
 });
-function violation7(severity, code2, message, fix) {
+function violation6(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
-function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation6("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validateProjectRegister(doc) {
@@ -14094,37 +14897,37 @@ function validateProjectRegister(doc) {
   if (!isPlainObject(doc)) {
     return {
       ok: false,
-      violations: [violation7("high", "project.register.invalid", "project register must be an object")]
+      violations: [violation6("high", "project.register.invalid", "project register must be an object")]
     };
   }
   if (doc.entries === undefined) {
-    violations.push(violation7("high", "project.register.missing-entries", "missing required field: entries"));
+    violations.push(violation6("high", "project.register.missing-entries", "missing required field: entries"));
   } else if (!isPlainObject(doc.entries)) {
-    violations.push(violation7("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
+    violations.push(violation6("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
   } else {
     for (const [key, entries] of Object.entries(doc.entries)) {
       if (key.trim() === "") {
-        violations.push(violation7("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
+        violations.push(violation6("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
       }
       if (!Array.isArray(entries)) {
-        violations.push(violation7("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
+        violations.push(violation6("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
         continue;
       }
       for (const entry of entries) {
         violations.push(...validateResidual(entry).violations);
         if (!isPlainObject(entry))
           continue;
-        validateNonEmptyString4(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
+        validateNonEmptyString3(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
         if (entry.registered_at === undefined) {
-          violations.push(violation7("high", "project.register.missing-registered-at", "missing required field: registered_at"));
+          violations.push(violation6("high", "project.register.missing-registered-at", "missing required field: registered_at"));
         } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
-          violations.push(violation7("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
+          violations.push(violation6("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
         }
         if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
-          violations.push(violation7("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
+          violations.push(violation6("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
         }
         if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
-          violations.push(violation7("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
+          violations.push(violation6("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
         }
       }
     }
@@ -14141,25 +14944,25 @@ var init_project = __esm(() => {
   DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
 });
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve10(startDir);
+  const start = resolve8(startDir);
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
   if (explicit)
-    return resolve10(start, explicit);
-  const boundary = resolve10(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+    return resolve8(start, explicit);
+  const boundary = resolve8(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   if (rc !== null && rc.config.harnessDir)
-    return resolve10(rc.dir, rc.config.harnessDir);
+    return resolve8(rc.dir, rc.config.harnessDir);
   let dir = start;
   for (;; ) {
     if (!isAtOrBelow2(dir, boundary))
       return null;
-    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
+    for (const candidate of [join12(dir, ".mstar"), join12(dir, ".agents"), join12(dir, ".plans"), join12(dir, "plans")]) {
       if (isDirectory(candidate))
         return candidate;
     }
     if (dir === boundary)
       return null;
-    const parent = dirname9(dir);
+    const parent = dirname8(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -14177,56 +14980,56 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname9(boundary);
+        boundary = dirname8(boundary);
     }
-    return resolve10(boundary);
+    return resolve8(boundary);
   } catch {}
   return startDir;
 }
 function isAtOrBelow2(dir, root) {
-  const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute5(rel);
+  const rel = relative2(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute3(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve10(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
+  const dir = resolve8(harnessDir);
+  const rc = loadMstarc(dir, dirname8(dir));
   const declared = rc?.config[key];
-  return declared ? resolve10(rc.dir, declared) : null;
+  return declared ? resolve8(rc.dir, declared) : null;
 }
 function resolveSpecsDir(harnessDir, opts = {}) {
   const declared = mstarcDirOverride(harnessDir, "specsDir");
   if (declared !== null) {
     if (opts.create !== false)
-      mkdirSync5(declared, { recursive: true });
+      mkdirSync4(declared, { recursive: true });
     return declared;
   }
-  const harness = resolve10(harnessDir);
-  const repoRoot = dirname9(harness);
+  const harness = resolve8(harnessDir);
+  const repoRoot = dirname8(harness);
   const candidates = [
-    join14(harness, "specs"),
-    join14(repoRoot, "docs", "specs"),
-    join14(repoRoot, "specs"),
-    join14(harness, "designs"),
-    join14(repoRoot, "designs")
+    join12(harness, "specs"),
+    join12(repoRoot, "docs", "specs"),
+    join12(repoRoot, "specs"),
+    join12(harness, "designs"),
+    join12(repoRoot, "designs")
   ];
   for (const candidate of candidates) {
     if (isDirectory(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join14(harness, "specs");
+  const fallback = join12(harness, "specs");
   if (opts.create !== false)
-    mkdirSync5(fallback, { recursive: true });
+    mkdirSync4(fallback, { recursive: true });
   return fallback;
 }
 function resolvePlanDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null)
     return declared;
-  const dir = resolve10(harnessDir);
-  const name = basename7(dir);
+  const dir = resolve8(harnessDir);
+  const name = basename6(dir);
   if (name === ".plans" || name === "plans")
     return dir;
-  return join14(dir, "plans");
+  return join12(dir, "plans");
 }
 function assertSafePathComponent(value, what) {
   if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
@@ -14237,21 +15040,21 @@ function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join14(resolve10(harnessDir), "iterations");
+  return join12(resolve8(harnessDir), "iterations");
 }
 function resolveKnowledgeDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
   if (declared !== null)
     return declared;
-  return join14(resolve10(harnessDir), "knowledge");
+  return join12(resolve8(harnessDir), "knowledge");
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve10(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join14(resolve10(harness), fallback);
+  return declared !== null ? declared : join12(resolve8(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -14261,16 +15064,16 @@ function resolveProjectDir(startDir = process.cwd(), opts = {}) {
 }
 function isDirectory(dir) {
   try {
-    return statSync4(dir).isDirectory();
+    return statSync3(dir).isDirectory();
   } catch {
     return false;
   }
 }
 function hasFiles(dir) {
   try {
-    for (const entry of readdirSync9(dir, { withFileTypes: true })) {
+    for (const entry of readdirSync8(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (hasFiles(join14(dir, entry.name)))
+        if (hasFiles(join12(dir, entry.name)))
           return true;
       } else if (entry.isFile()) {
         return true;
@@ -14339,6 +15142,30 @@ var init_plan_path = __esm(() => {
     "working branch": true
   };
 });
+function validateIntegrationMergeLease(lease) {
+  const violations = [];
+  if (!isPlainObject(lease)) {
+    return {
+      ok: false,
+      violations: [
+        violation7("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
+      ]
+    };
+  }
+  validateNonEmptyString4(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
+  if (lease.claimed_at === undefined) {
+    violations.push(violation7("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
+  } else if (typeof lease.claimed_at !== "string" || !(RFC3339_Z_RE.test(lease.claimed_at) || DATE_ONLY_RE.test(lease.claimed_at))) {
+    violations.push(violation7("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
+  }
+  validateNonEmptyString4(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
+  validateNonEmptyString4(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
+  validateNonEmptyString4(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
+  if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
+    violations.push(violation7("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
+  }
+  return { ok: violations.length === 0, violations };
+}
 function isStandaloneDevelopmentWorkflow(snapshot) {
   return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
 }
@@ -14354,25 +15181,34 @@ function rowValidationRoute(snapshot, row) {
   }
   return "integration";
 }
-function violation8(severity, code2, message, fix) {
+function stableJson(value) {
+  if (Array.isArray(value))
+    return `[${value.map(stableJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+function violation7(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
-function validateNonEmptyString5(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation8("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation8("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validateWorktreePathValue(violations, value, field) {
-  if (typeof value !== "string" || value.trim() === "" || !isAbsolute7(value)) {
-    violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute5(value)) {
+    violations.push(violation7("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
 function deliveryEvidenceViolations(value, what) {
   const violations = [];
   const invalid3 = (message) => {
-    violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
+    violations.push(violation7("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
   };
   if (!isPlainObject(value)) {
     invalid3("must be an object");
@@ -14429,40 +15265,40 @@ function validateWorkflowSnapshot(doc) {
   if (!isPlainObject(doc)) {
     return {
       ok: false,
-      violations: [violation8("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
+      violations: [violation7("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
     };
   }
   if (doc.schema_version === undefined) {
-    violations.push(violation8("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
+    violations.push(violation7("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
   } else if (doc.schema_version !== 1) {
-    violations.push(violation8("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
+    violations.push(violation7("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
   }
   if (doc.version !== undefined) {
-    violations.push(violation8("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
+    violations.push(violation7("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
   }
-  validateNonEmptyString5(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
+  validateNonEmptyString4(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
   if (doc.type === undefined) {
-    violations.push(violation8("high", "workflow.snapshot.missing-type", "missing required field: type"));
+    violations.push(violation7("high", "workflow.snapshot.missing-type", "missing required field: type"));
   } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
-    violations.push(violation8("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
+    violations.push(violation7("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
   }
   if (doc.status === undefined) {
-    violations.push(violation8("high", "workflow.snapshot.missing-status", "missing required field: status"));
+    violations.push(violation7("high", "workflow.snapshot.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
-    violations.push(violation8("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation7("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
-  validateNonEmptyString5(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
-  validateNonEmptyString5(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
+  validateNonEmptyString4(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
+  validateNonEmptyString4(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
   if (doc.ended_at !== undefined) {
-    validateNonEmptyString5(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
+    validateNonEmptyString4(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
   }
   if (doc.phase !== undefined && typeof doc.phase !== "string") {
-    violations.push(violation8("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
+    violations.push(violation7("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
   }
   if (doc.plans === undefined) {
-    violations.push(violation8("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
+    violations.push(violation7("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
   } else if (!Array.isArray(doc.plans)) {
-    violations.push(violation8("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
+    violations.push(violation7("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
   } else {
     const snapshotDoc = doc;
     for (const row of doc.plans) {
@@ -14479,7 +15315,7 @@ function validateWorkflowSnapshot(doc) {
   }
   if (doc.execution_policy !== undefined) {
     if (!isPlainObject(doc.execution_policy)) {
-      violations.push(violation8("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
+      violations.push(violation7("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
     }
   }
   if (doc.integration_merge_lease !== undefined) {
@@ -14487,11 +15323,11 @@ function validateWorkflowSnapshot(doc) {
   }
   if (doc.branch !== undefined) {
     if (!isPlainObject(doc.branch)) {
-      violations.push(violation8("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
+      violations.push(violation7("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
       for (const key of ["base", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
-          violations.push(violation8("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
+          violations.push(violation7("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
       }
     }
@@ -14499,32 +15335,32 @@ function validateWorkflowSnapshot(doc) {
   const legacyWorktreePath = doc.control_worktree_path;
   const canonicalWorktreePath = doc.integration_worktree_path;
   if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
-    violations.push(violation8("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
+    violations.push(violation7("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
   } else {
     if (canonicalWorktreePath !== undefined) {
       validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
     }
     if (legacyWorktreePath !== undefined) {
-      violations.push(violation8("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
+      violations.push(violation7("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
       validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
     }
   }
   if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
-    violations.push(violation8("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
+    violations.push(violation7("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
   }
   if (doc.compass_ref !== undefined) {
-    validateNonEmptyString5(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
+    validateNonEmptyString4(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
   }
   if (doc.delivery_kind !== undefined) {
     if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
-      violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
+      violations.push(violation7("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
     }
   }
   if (doc.project !== undefined) {
-    validateNonEmptyString5(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
+    validateNonEmptyString4(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
   }
   if (doc.completion_policy !== undefined) {
-    validateNonEmptyString5(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
+    validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
     violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
@@ -14532,13 +15368,16 @@ function validateWorkflowSnapshot(doc) {
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
     if (doc.ended_at === undefined) {
-      violations.push(violation8("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
+      violations.push(violation7("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
     }
     if (doc.integration_merge_lease !== undefined) {
-      violations.push(violation8("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
+      violations.push(violation7("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
     }
   }
   return { ok: violations.length === 0, violations };
+}
+function isTerminalSnapshot(doc) {
+  return WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
 }
 var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 var WORKFLOW_LIFECYCLE_STATUSES;
@@ -14546,21 +15385,25 @@ var WORKFLOW_TERMINAL_STATUSES;
 var WORKFLOW_LIFECYCLE_TYPES;
 var WORKFLOW_DELIVERY_KINDS;
 var WORKFLOW_COMPOUND_OUTCOMES;
+var DATE_PART;
+var RFC3339_Z_RE;
+var DATE_ONLY_RE;
 var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
 var WorkflowSnapshotValidationError;
 var init_workflow = __esm(() => {
   init_coordination_write();
-  init_lease();
   init_path();
   init_plan_path();
   init_status();
-  init_store();
   init_persist_payload_schemas();
   WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
   WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
   WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
   WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
   WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
+  DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
+  RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
+  DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
   WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
     violations;
     constructor(message, violations) {
@@ -14711,7 +15554,7 @@ function readMainWorktree(cwd) {
 var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
-  init_lease();
+  init_workflow();
   QC_ALIGNMENT_FIELDS = [
     { key: "planId", label: "plan_id" },
     { key: "reviewRange", label: "Review range" },
@@ -14738,15 +15581,15 @@ function errorCode(error) {
 }
 function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   if (isNonEmptyString(harnessDir))
-    return resolve14(cwd, harnessDir);
-  const start = resolve14(cwd);
+    return resolve12(cwd, harnessDir);
+  const start = resolve12(cwd);
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync6(join19(dir, ".git"));
+      const marker = statSync5(join16(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
@@ -14756,14 +15599,32 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join19(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join16(dir, ".git") });
     }
-    const parent = dirname10(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       break;
     dir = parent;
   }
   return resolveHarnessDir(start);
+}
+function executionInputSelection(row, planId) {
+  const selection = { plan_id: planId };
+  if (isPlainObject(row)) {
+    const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+    for (const key of FROZEN_ROW_FIELDS) {
+      if (row[key] !== undefined)
+        selection[key] = row[key];
+    }
+    for (const key of FROZEN_METADATA_FIELDS) {
+      if (metadata[key] !== undefined)
+        selection[key] = metadata[key];
+    }
+  }
+  return selection;
+}
+function executionInputHash(row, planId) {
+  return createHash8("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
 }
 var PERSIST_PAYLOAD_CONTRACTS;
 var EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
@@ -14871,8 +15732,8 @@ function loadSqliteDriverSync() {
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const root = resolve15(context.harnessDir);
-  return join20(resolveProcessHarnessDir(root, root) ?? root, "store.db");
+  const root = resolve13(context.harnessDir);
+  return join17(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -14935,7 +15796,7 @@ function assertAbsentOrRegularStoreFile(dbPath) {
   let stats;
   let examineError;
   try {
-    stats = lstatSync5(dbPath);
+    stats = lstatSync6(dbPath);
   } catch (error) {
     const code2 = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     if (code2 === "ENOENT")
@@ -14967,7 +15828,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync16(`${dbPath}-wal`))
+  if (existsSync14(`${dbPath}-wal`))
     return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
@@ -15312,7 +16173,7 @@ function isTransientReadOpenFailure(error, dbPath) {
     return false;
   if (!isRawCantOpen(error))
     return false;
-  return existsSync16(dbPath);
+  return existsSync14(dbPath);
 }
 function dropProbeConnection() {
   const current = probeConnection;
@@ -15327,7 +16188,7 @@ function probeConnectionFor(dbPath) {
   let dev;
   let ino;
   try {
-    const stats = statSync7(dbPath);
+    const stats = statSync6(dbPath);
     dev = stats.dev;
     ino = stats.ino;
   } catch {
@@ -15344,7 +16205,7 @@ function probeConnectionFor(dbPath) {
 }
 function probeExecutionAuthority(dbPath) {
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync16(dbPath)) {
+  if (!existsSync14(dbPath)) {
     dropProbeConnection();
     return { kind: "absent", dbPath };
   }
@@ -15374,10 +16235,14 @@ function probeExecutionAuthority(dbPath) {
 }
 function withExecutionReadGuard(context, body) {
   const probe = probeExecutionAuthority(storeDbPath(context));
+  if (probe.kind === "absent") {
+    throw new StoreError("store.not-initialized", 'No execution store exists. Run "mstar harness scaffold" then "mstar store init"; for legacy state run "mstar store upgrade".');
+  }
   if (probe.kind === "unreadable")
     refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.kind !== "active") {
-    throw new StoreError("execution.consumer-not-ready", "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.");
+    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --attestation <file.json>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
+    throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
   }
   const db = probeConnectionFor(probe.dbPath);
   if (db === null) {
@@ -15394,8 +16259,8 @@ async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync16(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+  if (!existsSync14(dbPath)) {
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -15405,7 +16270,7 @@ async function openStore(context, mode) {
       if (attempt >= attempts || !isTransientReadOpenFailure(error, dbPath)) {
         refuseOpenFailure(error, dbPath);
       }
-      await sleep2(READ_OPEN_BACKOFF_MS);
+      await sleep(READ_OPEN_BACKOFF_MS);
     }
   }
 }
@@ -15899,12 +16764,62 @@ create unique index execution_sessions_active_coordinator
   on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
 drop table execution_leases;
 `;
+var MIGRATION_10_SQL = `
+create table dsh_ledger_events(
+  seq_rowid integer primary key autoincrement,
+  workflow_id text not null,
+  event_id text,
+  event_json text not null,
+  recorded_at text not null
+);
+create index dsh_ledger_events_workflow on dsh_ledger_events(workflow_id, seq_rowid);
+create table dsh_accepted_identities(
+  workflow_id text not null,
+  event_id text not null,
+  digest text not null,
+  accepted_at text not null,
+  primary key(workflow_id, event_id)
+);
+create table dsh_scan_bounds(
+  workflow_id text not null,
+  session_id text not null,
+  next integer not null,
+  stream text,
+  primary key(workflow_id, session_id)
+);
+create table dsh_session_bindings(
+  session_id text not null,
+  cwd text not null,
+  selected_workflow_id text,
+  execution_binding text,
+  excluded_before_seq integer not null default 0,
+  updated_at text not null,
+  primary key(session_id, cwd)
+);
+create table dsh_status_emissions(
+  session_id text not null,
+  cwd text not null,
+  turn integer not null,
+  emitted_at text not null,
+  payload_json text not null,
+  primary key(session_id, cwd)
+);
+`;
+var MIGRATION_11_SQL = `
+alter table dsh_ledger_events add column legacy_source_digest text;
+alter table dsh_ledger_events add column legacy_line integer;
+create unique index dsh_ledger_events_legacy_line
+  on dsh_ledger_events(workflow_id, legacy_source_digest, legacy_line)
+  where legacy_source_digest is not null;
+`;
 var MIGRATIONS;
+var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
 var EXECUTION_MIGRATION;
 var READ_OPEN_ATTEMPTS = 5;
 var READ_OPEN_BACKOFF_MS = 5;
 var probeConnection = null;
+var dshTransactions;
 var init_store_db = __esm(() => {
   init_coordination();
   StoreError = class StoreError2 extends Error {
@@ -15928,8 +16843,11 @@ var init_store_db = __esm(() => {
     { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
     { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
     { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
-    { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState }
+    { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
+    { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
+    { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL }
   ];
+  DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
     "execution_meta",
     "execution_workflows",
@@ -15942,6 +16860,7 @@ var init_store_db = __esm(() => {
     "execution_migrations"
   ];
   EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
+  dshTransactions = new Set;
 });
 init_store_db();
 init_roadmap_content();
@@ -16012,7 +16931,6 @@ init_path();
 init_plan_path();
 init_status();
 init_status();
-init_lease();
 init_workflow();
 init_workflow();
 init_workflow();
@@ -16048,7 +16966,7 @@ var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync9(join22(dir, name));
+    statSync8(join19(dir, name));
     return true;
   } catch {
     return false;
@@ -16068,15 +16986,15 @@ function hasHarnessRootMarkers(dir) {
 function isHarnessRootDir(dir) {
   if (hasHarnessRootMarkers(dir))
     return true;
-  const parentResolved = resolveHarnessDir(dirname14(dir));
-  return parentResolved !== null && resolve17(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname13(dir));
+  return parentResolved !== null && resolve15(parentResolved) === dir;
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve17(target);
+  let dir = resolve15(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname14(dir);
+    const parent = dirname13(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -16085,12 +17003,12 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve17(targetPath);
+  const resolved = resolve15(targetPath);
   const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
-    const rel = relative7(harnessDir2, resolved);
+    const rel = relative6(harnessDir2, resolved);
     if (name === STATUS_FILE && rel === STATUS_FILE)
       return { harnessDir: harnessDir2, kind: "status" };
     let workflowDir;
@@ -16099,19 +17017,19 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join22(harnessDir2, "workflows");
-      projectDir = join22(harnessDir2, "projects");
+      workflowDir = join19(harnessDir2, "workflows");
+      projectDir = join19(harnessDir2, "projects");
     }
-    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
+    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
     }
-    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative7(projectDir, resolved))) {
+    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative6(projectDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "register" };
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -16119,13 +17037,13 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname14(resolved));
+  const fallbackDir = resolveHarnessDir(dirname13(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
 }
-function violationLine(violation11) {
-  return `[${violation11.severity}] ${violation11.code}: ${violation11.message}${violation11.fix ? ` (fix: ${violation11.fix})` : ""}`;
+function violationLine(violation10) {
+  return `[${violation10.severity}] ${violation10.code}: ${violation10.message}${violation10.fix ? ` (fix: ${violation10.fix})` : ""}`;
 }
 var MAX_STATUS_CONTENT_LENGTH = 2097152;
 function oversizedViolation(filePath) {
@@ -16167,10 +17085,10 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync17(filePath))
+  if (!existsSync15(filePath))
     return [];
   try {
-    if (statSync9(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
+    if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
   } catch {
@@ -16237,20 +17155,20 @@ function caseFoldedKindOf(name) {
   return null;
 }
 function landedPathOf(filePath) {
-  let probe = resolve18(filePath);
+  let probe = resolve16(filePath);
   const suffix = [];
   let symlinkHops = 0;
   for (;; ) {
     try {
-      return resolve18(realpathSync9(probe), ...suffix);
+      return resolve16(realpathSync9(probe), ...suffix);
     } catch {
       let linkTarget;
       try {
         linkTarget = readlinkSync(probe);
       } catch {
-        const parent = dirname15(probe);
+        const parent = dirname14(probe);
         if (parent === probe)
-          return resolve18(filePath);
+          return resolve16(filePath);
         suffix.unshift(basename13(probe));
         probe = parent;
         continue;
@@ -16258,22 +17176,22 @@ function landedPathOf(filePath) {
       if (symlinkHops >= MAX_SYMLINK_HOPS)
         throw new SymlinkResolutionError;
       symlinkHops++;
-      probe = resolve18(dirname15(probe), linkTarget);
+      probe = resolve16(dirname14(probe), linkTarget);
     }
   }
 }
 function isStoreAuthorityTarget(target) {
   if (!isStoreAuthorityName(basename13(target)))
     return false;
-  return isHarnessRootDir(dirname15(target));
+  return isHarnessRootDir(dirname14(target));
 }
 function caseFoldedDocKind(candidate) {
-  const target = resolve18(candidate);
+  const target = resolve16(candidate);
   const name = basename13(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
-  let dir = dirname15(target);
+  let dir = dirname14(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let base = dir;
@@ -16281,13 +17199,13 @@ function caseFoldedDocKind(candidate) {
         try {
           base = kind === "snapshot" ? resolveWorkflowDir(dir, { harnessDir: dir }) : resolveProjectDir(dir, { harnessDir: dir });
         } catch {
-          base = resolve18(dir, kind === "snapshot" ? "workflows" : "projects");
+          base = resolve16(dir, kind === "snapshot" ? "workflows" : "projects");
         }
       }
-      if (CASE_FOLDED_SHAPES[kind].test(relative8(base, target)))
+      if (CASE_FOLDED_SHAPES[kind].test(relative7(base, target)))
         return { harnessDir: dir, kind };
     }
-    const parent = dirname15(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -16297,15 +17215,9 @@ function caseFoldedRegisterRoot(candidate) {
   const doc = caseFoldedDocKind(candidate);
   return doc?.kind === "register" ? doc.harnessDir : null;
 }
-init_core();
-init_iteration();
-init_lease();
-init_path();
-init_project();
-init_store();
-init_store_db();
 init_coordination_write();
-init_status();
+init_iteration();
+init_path();
 init_workflow();
 init_audit();
 init_iteration();
@@ -16334,7 +17246,11 @@ var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
 init_qcreview_schema();
 init_coordination();
-init_store();
+init_core();
+init_coordination_write();
+init_coordination();
+init_path();
+var fsStoreInstances = new WeakSet;
 init_workflow();
 init_session_identity();
 init_coordination();
@@ -16342,9 +17258,9 @@ init_coordination_write();
 init_path();
 init_coordination();
 init_store_db();
+init_store_db();
 init_workflow();
 init_coordination_write();
-init_lease();
 init_status();
 init_workflow();
 init_execution_store();
@@ -16354,6 +17270,8 @@ init_coordination_write();
 init_execution_store();
 init_status();
 init_workflow();
+init_store_db();
+init_execution_store();
 init_store_db();
 var UNPARSEABLE_JSON = Symbol("unparseable-json");
 init_execution_store();
@@ -16419,7 +17337,6 @@ init_store_db();
 init_catalog();
 init_coordination_write();
 init_iteration();
-init_lease();
 init_execution_store();
 init_status();
 init_workflow();
@@ -16436,7 +17353,7 @@ class ProjectionError extends Error {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync22(spec.absolutePath, "utf8");
+    content3 = readFileSync21(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -16449,7 +17366,7 @@ function readCompassSource(spec) {
       diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  return { state: "ok", sha256: createHash14("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
@@ -16588,7 +17505,7 @@ function deriveCompass(iterationId, content3, relativePath) {
   }
   const gate2 = validateCompassFrontmatter(frontmatter);
   if (!gate2.ok)
-    return { diagnostic: `invalid: ${gate2.violations.map((violation18) => violation18.code).join(", ")}` };
+    return { diagnostic: `invalid: ${gate2.violations.map((violation17) => violation17.code).join(", ")}` };
   const body = bodyOf(content3);
   return {
     iterationId,
@@ -16646,12 +17563,12 @@ async function captureExecutionProjectionSources(context) {
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash14("sha256").update(content3, "utf8").digest("hex");
+      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash14("sha256").update(shaText, "utf8").digest("hex");
+      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
@@ -16718,9 +17635,9 @@ async function captureExecutionProjectionSources(context) {
       }
       const projectionState = servedWorkflow.state;
       const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
-      const workflowErrors = workflowValidation.violations.filter((violation18) => violation18.code !== LEGACY_WORKTREE_PATH_CODE);
+      const workflowErrors = workflowValidation.violations.filter((violation17) => violation17.code !== LEGACY_WORKTREE_PATH_CODE);
       if (workflowErrors.length > 0) {
-        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation18) => violation18.code).join(", ")})`);
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation17) => violation17.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
@@ -16782,7 +17699,7 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join29(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join28(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
@@ -16833,7 +17750,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash14("sha256").update(payload, "utf8").digest("hex");
+  return createHash16("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -16979,7 +17896,7 @@ function projectionRenders(db, rowsOf) {
   });
 }
 function renderedDigest(tables) {
-  return createHash14("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
+  return createHash16("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
 }
 function captureRenders(db, capture) {
   return projectionRenders(db, (spec) => spec.captureRows(capture));
@@ -18020,7 +18937,6 @@ init_status();
 init_store_activation();
 init_coordination_write();
 init_execution_session();
-init_lease();
 init_path();
 init_store_db();
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
@@ -18028,12 +18944,17 @@ var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
 init_coordination_write();
 init_core();
 init_execution_store();
-init_lease();
 init_store_db();
 init_store_activation();
 var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
 var PROVENANCE_ORIGIN_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
+var ROADMAP_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
+var EXECUTION_COVERAGE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
+var MILESTONE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
+var DSH_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
+var EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-coordinator-only")?.version ?? Number.POSITIVE_INFINITY;
+var DSH_LEGACY_PROVENANCE_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;
 init_recovery_intent();
 
 // hooks/src/mstar-write-gate.ts
@@ -18106,8 +19027,8 @@ async function readExecutionWriteRoute(harnessDir) {
 function blockAuthorityWrite(toolName, display, violations) {
   writeSync(2, `[Morning Star write gate] blocked ${toolName} to ${display}
 `);
-  for (const violation2 of violations)
-    writeSync(2, `${violationLine(violation2)} (${SKILL_POINTER})
+  for (const violation of violations)
+    writeSync(2, `${violationLine(violation)} (${SKILL_POINTER})
 `);
   writeSync(2, `${AUTHORITY_LINE}
 `);
@@ -18118,8 +19039,8 @@ function displaySafe(text6) {
   return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
-  const rel = relative5(harnessDir, targetPath);
-  return displaySafe(rel && !rel.startsWith("..") && !isAbsolute3(rel) ? rel : targetPath);
+  const rel = relative4(harnessDir, targetPath);
+  return displaySafe(rel && !rel.startsWith("..") && !isAbsolute4(rel) ? rel : targetPath);
 }
 function readStdinJson() {
   try {
@@ -18158,7 +19079,7 @@ function reconstructEditContent(tool, targetPath) {
       return;
     if (typeof newString !== "string" || newString === "")
       return;
-    if (statSync5(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
+    if (statSync4(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
       return;
     const current = readFileSync(targetPath, "utf8");
     const first = current.indexOf(oldString);
@@ -18187,13 +19108,13 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve5(isAbsolute3(rawPath) ? rawPath : join6(cwd, rawPath));
+    const targetPath = resolve5(isAbsolute4(rawPath) ? rawPath : join6(cwd, rawPath));
     let landed;
     try {
       landed = landedPathOf(targetPath);
     } catch (error) {
       if (error instanceof SymlinkResolutionError) {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, dirname8(targetPath)), [
+        blockAuthorityWrite(toolName, displayTarget(targetPath, dirname11(targetPath)), [
           authorityViolation(error.code, error.message)
         ]);
       }
@@ -18201,7 +19122,7 @@ try {
     }
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname8(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname11(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }

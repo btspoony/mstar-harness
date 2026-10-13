@@ -133,7 +133,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 
 | Domain | Contents | Home | Writable from a worktree? |
 |---|---|---|---|
-| **Process SSOT** (gitignored) | `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/` (`status.json` / workflow snapshots / session JSON: migration staging only) | control root = the **primary checkout** (main worktree) | **No.** Always addressed via absolute control-root paths; a second process-SSOT copy must never be bootstrapped under any worktree. |
+| **Process SSOT** (gitignored) | `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/` (`status.json` / workflow snapshots / legacy session JSON: read-only import/history only) | control root = the **primary checkout** (main worktree) | **No.** Always addressed via absolute control-root paths; a second process-SSOT copy must never be bootstrapped under any worktree. |
 | **Tracked results** (Git-following) | `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md` | whichever checkout holds the target branch | **Yes.** Readable from any worktree; written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. |
 | **Product source** | repository code | feature worktree on `Working branch` | feature worktree only. |
 
