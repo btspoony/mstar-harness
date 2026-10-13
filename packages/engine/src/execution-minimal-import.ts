@@ -808,20 +808,11 @@ export async function upgradeStoreMinimal(input: {
     // legacy source: it is reported as its own code so the command surface can
     // return the actionable usage refusal naming the exact retry. It is raised
     // before any execution row is registered.
-    if (error instanceof DeliveryDeclarationError) {
-      throw new ExecutionError(
-        "execution.delivery-declaration-required",
-        `${error.message}. No execution workflow was registered from this tree; the legacy source bytes are unchanged, so rerun the same \`store upgrade\` with the declarations above.`,
-      );
-    }
-    // An unmatched execution acknowledgement is the same class of caller-input
-    // condition: reported with its own code and the exact same-entry retry.
-    if (error instanceof WorkflowSkipError) {
-      throw new ExecutionError(
-        "execution.workflow-skip-unmatched",
-        `${error.message} No execution workflow was registered from this tree; the legacy source bytes are unchanged, so rerun the same \`store upgrade\` with corrected acknowledgements.`,
-      );
-    }
+    const earlyRefusalCode = error instanceof DeliveryDeclarationError
+      ? "execution.delivery-declaration-required"
+      : error instanceof WorkflowSkipError
+        ? "execution.workflow-skip-unmatched"
+        : undefined;
     let authority = "authority state could not be read";
     try {
       const store = await openStore(context, "read");
@@ -838,6 +829,10 @@ export async function upgradeStoreMinimal(input: {
       // Keep the original import failure and disclose that state could not be observed.
     }
     const cause = error instanceof Error ? error.message : String(error);
+    if (earlyRefusalCode !== undefined) {
+      const causeSentence = cause.endsWith(".") ? cause : `${cause}.`;
+      throw new ExecutionError(earlyRefusalCode, `${causeSentence} The legacy source bytes are unchanged. Schema version ${schemaVersion} was committed before legacy execution import failed; ${authority}. The failed import transaction committed no rows, and existing execution rows remain unchanged. Resolve the reported cause through its source owner, then retry \`mstar store upgrade --operator <name>\`.`);
+    }
     const detail = `Schema version ${schemaVersion} was committed before legacy execution import failed; ${authority}. The failed import transaction committed no rows, and existing execution rows remain unchanged. Resolve the reported cause through its source owner, then retry \`mstar store upgrade --operator <name>\`. Original refusal: ${cause}`;
     if (error instanceof ExecutionError) throw new ExecutionError(error.code, detail);
     if (error instanceof StoreError) throw new StoreError(error.code, detail, error.details);

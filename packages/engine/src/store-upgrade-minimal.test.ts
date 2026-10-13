@@ -1941,13 +1941,16 @@ test("an execution acknowledgement naming a trusted, unknown or v1 registration 
   const trusted = legacyWorkspace("acked-trusted");
   // `wf-acked-trusted` is a real in-root directory: this run would import it, so
   // skipping it would silently drop a trusted source.
-  await expect(upgradeStoreMinimal({
+  const trustedRefusal = await upgradeStoreMinimal({
     context: trusted.context, operator: "operator", operationId: "op-acked-trusted",
     acknowledgedWorkflowSkips: ["wf-acked-trusted"],
-  })).rejects.toMatchObject({
-    code: "execution.workflow-skip-unmatched",
-    message: expect.stringContaining("matched no workflow source this run refuses"),
-  });
+  }).then(() => { throw new Error("an unmatched acknowledgement unexpectedly succeeded"); }, (error: Error & { code?: string; message: string }) => error);
+  expect(trustedRefusal.code).toBe("execution.workflow-skip-unmatched");
+  expect(trustedRefusal.message).toContain("matched no workflow source this run refuses");
+  expect(trustedRefusal.message).toContain("Schema version");
+  expect(trustedRefusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(trustedRefusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(trustedRefusal.message).toContain("retry `mstar store upgrade --operator <name>`");
   const trustedStore = await openStore(trusted.context, "read");
   try { expect(trustedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
   finally { trustedStore.close(); }
@@ -2565,6 +2568,10 @@ test("an active standalone v1 plan without a declared delivery kind refuses befo
   expect(refusal.message).toContain("v1-standalone");
   expect(refusal.message).toContain("--delivery");
   expect(refusal.message).toContain("legacy source bytes are unchanged");
+  expect(refusal.message).toContain("Schema version");
+  expect(refusal.message).toContain("issue/catalog authority active, execution authority active");
+  expect(refusal.message).toContain("The failed import transaction committed no rows, and existing execution rows remain unchanged");
+  expect(refusal.message).toContain("retry `mstar store upgrade --operator <name>`");
   const refusedStore = await openStore(context, "read");
   try {
     expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });

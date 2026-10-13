@@ -11,6 +11,7 @@ A registered legacy leaf that is not a regular file (a FIFO, socket or device) r
 ## Store CLI upgrade and recovery
 
 `mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing recognized v1/v2 workflow state directly into the local store. It creates or opens the store, activates execution authority, and reports unrecognized or unresolvable inputs while preserving original source bytes and paths. The standalone `mstar migrate` file-staging entry is retired; use `store upgrade` without a staging step. Stop older installed writers and align consumers before an authority upgrade; documentation changes do not perform that operational cutover.
+If `execution.delivery-declaration-required` or `execution.workflow-skip-unmatched` refuses, its cause appears first, followed by the committed schema version and current issue/catalog and execution authority states. The failed import transaction committed no rows and existing execution rows remain unchanged. Resolve the cause through its source owner, correct the declarations or acknowledgements, then retry with `mstar store upgrade --operator <name>`. Store initialization or normalization may already have committed even though no execution rows were imported.
 
 Active standalone v1 plan lifts require one addressed JSON object per original workflow ID via variadic `--delivery <json...>`. Take IDs from the refusal, not a directory basename. For example, if it lists `v1-build` and `v1-check`, retry the same source with both intents:
 
