@@ -62,7 +62,7 @@
  * (deterministic, no clock reads).
  */
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { artifactVersion, readArtifactBytes } from "./coordination-write.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
@@ -213,14 +213,34 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const compassPath = join(iterationsDir, entry.name, "delivery-compass.md");
-    let content: string;
     let bytes: Buffer;
-    try {
-      bytes = readFileSync(compassPath);
-      content = bytes.toString("utf8");
-    } catch {
-      continue; // dir without a canonical compass is not an iteration
+    // A canonical compass is read through ONE bounded, no-follow descriptor: a
+    // linked, special or otherwise non-regular leaf refuses by name before any
+    // byte is read (a blocking open on a writer-less FIFO never returns, so the
+    // old path read could hang `store upgrade` with no recovery), while a leaf
+    // that simply cannot be read keeps the established "not an iteration"
+    // treatment.
+    let info;
+    try { info = lstatSync(compassPath); } catch { continue; } // missing: not an iteration
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error(
+        `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`,
+      );
     }
+    let fd: number | undefined;
+    try {
+      fd = openSync(compassPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      if (!fstatSync(fd).isFile()) {
+        throw new Error(
+          `refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`,
+        );
+      }
+      bytes = readFileSync(fd);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("refusing to convert")) throw error;
+      continue; // unreadable compass is still not an iteration
+    } finally { if (fd !== undefined) closeSync(fd); }
+    const content = bytes.toString("utf8");
     const doc = parseCompassFrontmatterText(content, compassPath);
     const status = doc.status;
     if (status !== "active" && status !== "locked" && status !== "completed") {

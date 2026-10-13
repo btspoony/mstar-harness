@@ -3175,61 +3175,63 @@ for (const leaf of ["status", "snapshot", "session"] as const) {
   });
 }
 
-test("a legacy root register that is a FIFO at open refuses instead of blocking", async () => {
-  const name = "fifo-root-register";
-  const { context } = legacyWorkspace(name);
+test("a legacy root register replaced after its verified read still answers with the imported identity", async () => {
+  const { context, statusBytes } = legacyV1Workspace("v1-replaced-register");
   const statusPath = join(context.harnessDir, "status.json");
-  // The harness fixture lives on disk, and a blocking open cannot be interrupted
-  // in-process, so the probe runs in a child with a real timeout: a regression
-  // fails this case instead of wedging the suite.
-  rmSync(statusPath);
-  execFileSync("mkfifo", [statusPath]);
-  const probe = (harnessDir: string, operationId: string): { status: string; code?: string } =>
+  const realOpen = nodeFs.openSync;
+  let opens = 0;
+  // Deterministic injection: this path is opened ONCE by the verified read that
+  // produces the rows, so a later read must never redefine the receipt's
+  // identity. A build that re-opens it for the digest hits this replacement.
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, ...rest: unknown[]) => {
+    if (path === statusPath) {
+      opens += 1;
+      if (opens === 2) writeFileSync(statusPath, JSON.stringify({ version: 1, updated_at: "2026-10-09", metadata: {}, plans: [] }));
+    }
+    return (realOpen as (...args: unknown[]) => number)(path, ...rest);
+  }) as never);
+  const input = { context, operator: "operator", operationId: "op-v1-replaced", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  let first: Awaited<ReturnType<typeof upgradeStoreMinimal>>;
+  try { first = await upgradeStoreMinimal(input); } finally { spy.mockRestore(); }
+  // The converted rows come from the bytes that were read, not from the path's
+  // later content.
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
+  expect([...readFileSync(statusPath)]).toEqual([...statusBytes]);
+  // The retained receipt still answers its own input: identity came from the
+  // imported bytes, so the same request replays instead of conflicting.
+  expect(await upgradeStoreMinimal(input)).toEqual(first);
+});
+
+test("a v1 compass that is not a regular file refuses instead of blocking the upgrade", async () => {
+  const { context } = legacyV1Workspace("v1-compass-fifo");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  rmSync(compass);
+  execFileSync("mkfifo", [compass]);
+  // A blocking compass read cannot be interrupted in-process, so the probe runs
+  // in a child with a real timeout: a regression fails this case, not the suite.
+  const probe = (harnessDir: string, operationId: string): { status: string; code?: string; message?: string; imported?: number } =>
     JSON.parse(execFileSync(process.execPath, ["-e", `
       const mod = await import(${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))});
       try {
-        const result = await mod.upgradeStoreMinimal({ context: { harnessDir: ${JSON.stringify(harnessDir)} }, operator: "operator", operationId: ${JSON.stringify(operationId)} });
-        console.log(JSON.stringify({ status: "ok", verdict: result.verdict }));
+        const result = await mod.upgradeStoreMinimal({
+          context: { harnessDir: ${JSON.stringify(harnessDir)} }, operator: "operator",
+          operationId: ${JSON.stringify(operationId)},
+          deliveryDeclarations: ${JSON.stringify(V1_STANDALONE_DECLARATION)},
+        });
+        console.log(JSON.stringify({ status: "ok", verdict: result.verdict, imported: result.imported }));
       } catch (error) {
-        console.log(JSON.stringify({ status: "threw", code: error && error.code }));
+        console.log(JSON.stringify({ status: "threw", code: error && error.code, message: String(error && error.message).slice(0, 1200) }));
       }
     `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
-  const refused = probe(context.harnessDir, "op-fifo-root");
-  expect(refused).toMatchObject({ status: "threw", code: "execution.migration-conflict" });
-  expect(lstatSync(statusPath).isFIFO()).toBe(true);
-  // The refusal is per source and the read was bounded: a decidable root in the
-  // same run shape still imports.
-  const { context: healthy, unknownBytes } = legacyWorkspace("fifo-root-register-control");
-  expect(probe(healthy.harnessDir, "op-fifo-control")).toMatchObject({ status: "ok", verdict: "upgraded" });
-  expect(readFileSync(join(healthy.harnessDir, "status.json")).length).toBeGreaterThan(0);
-  expect(unknownBytes.length).toBeGreaterThan(0);
+  const refused = probe(context.harnessDir, "op-v1-compass-fifo");
+  expect(refused.status).toBe("threw");
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain("delivery-compass.md");
+  expect(lstatSync(compass).isFIFO()).toBe(true);
+  // A decidable v1 root in the same run shape still imports its rows.
+  const { context: healthy } = legacyV1Workspace("v1-compass-fifo-control");
+  expect(probe(healthy.harnessDir, "op-v1-compass-control")).toMatchObject({ status: "ok", imported: 2 });
 }, 30_000);
-
-test("a v1 root converts from the verified register bytes without a second path read", async () => {
-  const { context } = legacyV1Workspace("v1-single-read");
-  const statusPath = join(context.harnessDir, "status.json");
-  const realRead = nodeFs.readFileSync;
-  const pathReads: string[] = [];
-  const probe = spyOn(nodeFs, "readFileSync").mockImplementation(((path: string | number, ...rest: unknown[]) => {
-    if (typeof path === "string" && path === statusPath) pathReads.push(path);
-    return (realRead as (...args: unknown[]) => unknown)(path, ...rest);
-  }) as never);
-  let result;
-  try {
-    result = await upgradeStoreMinimal({
-      context, operator: "operator", operationId: "op-v1-single-read", deliveryDeclarations: V1_STANDALONE_DECLARATION,
-    });
-  }
-  finally { probe.mockRestore(); }
-  expect(result.verdict).toBe("upgraded");
-  // The classification read and the converted rows come from one descriptor
-  // read: the path was never re-acquired (readFileSync receives only numbers
-  // for that file, which the spy would have recorded as no path read at all).
-  expect(pathReads).toEqual([]);
-  const store = await openStore(context, "read");
-  try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toMatchObject({ n: expect.any(Number) }); }
-  finally { store.close(); }
-});
 
 test("a malformed legacy plan row is skippable instead of blocking every other workflow", async () => {
   const root = join(ROOT, "malformed-row", ".mstar");

@@ -486,7 +486,7 @@ import { basename as basename12, dirname as dirname13, join as join19, relative 
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash12 } from "node:crypto";
-import { readFileSync as readFileSync16, readdirSync as readdirSync10 } from "node:fs";
+import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync16, readdirSync as readdirSync10 } from "node:fs";
 import { join as join20, relative as relative8 } from "node:path";
 import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
 import { basename as basename14, isAbsolute as isAbsolute10, join as join21, resolve as resolve17, sep as sep10 } from "node:path";
@@ -498,11 +498,11 @@ import { existsSync as existsSync18, readdirSync as readdirSync13, unlinkSync as
 import { basename as basename15, isAbsolute as isAbsolute12, join as join24, resolve as resolve18, sep as sep11 } from "node:path";
 import { existsSync as existsSync19, readFileSync as readFileSync18 } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join25, resolve as resolve19 } from "node:path";
-import { closeSync as closeSync3, constants as constants3, existsSync as existsSync20, fstatSync as fstatSync3, lstatSync as lstatSync9, mkdirSync as mkdirSync7, openSync as openSync3, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
+import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync10, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
 import { dirname as dirname16, isAbsolute as isAbsolute14, join as join27, relative as relative9, resolve as resolve20, sep as sep12 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
 import { createHash as createHash13 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
+import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync9, openSync as openSync3, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
 import { dirname as dirname15, join as join26 } from "node:path";
 import { dirname as dirname17, isAbsolute as isAbsolute15 } from "node:path";
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
@@ -514,27 +514,27 @@ import { existsSync as existsSync21, readFileSync as readFileSync22, statSync as
 import { dirname as dirname18, isAbsolute as isAbsolute16, join as join29 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
 import { createHash as createHash19 } from "node:crypto";
-import { existsSync as existsSync22, lstatSync as lstatSync10, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
+import { existsSync as existsSync22, lstatSync as lstatSync11, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
 import { join as join30, resolve as resolve21 } from "node:path";
 import {
-  closeSync as closeSync4,
+  closeSync as closeSync5,
   constants as fsConstants,
-  fstatSync as fstatSync4,
+  fstatSync as fstatSync5,
   fsyncSync as fsyncSync2,
-  lstatSync as lstatSync11,
+  lstatSync as lstatSync12,
   mkdirSync as mkdirSync8,
-  openSync as openSync4,
+  openSync as openSync5,
   writeSync
 } from "node:fs";
 import { dirname as dirname19, join as join31 } from "node:path";
 import { createHash as createHash20, randomUUID as randomUUID7 } from "node:crypto";
 import {
-  closeSync as closeSync5,
+  closeSync as closeSync6,
   copyFileSync as copyFileSync2,
   createReadStream,
   existsSync as existsSync23,
   mkdtempSync,
-  openSync as openSync5,
+  openSync as openSync6,
   readFileSync as readFileSync24,
   readdirSync as readdirSync17,
   readSync as readSync2,
@@ -20329,14 +20329,32 @@ function scanCompasses(harnessDir) {
     if (!entry.isDirectory())
       continue;
     const compassPath = join20(iterationsDir, entry.name, "delivery-compass.md");
-    let content3;
     let bytes;
+    let info;
     try {
-      bytes = readFileSync16(compassPath);
-      content3 = bytes.toString("utf8");
+      info = lstatSync8(compassPath);
     } catch {
       continue;
     }
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`);
+    }
+    let fd;
+    try {
+      fd = openSync2(compassPath, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+      if (!fstatSync2(fd).isFile()) {
+        throw new Error(`refusing to convert: compass ${JSON.stringify(compassPath)} is not a regular in-root file (a linked or special path is never read); replace it with a regular file, then rerun store upgrade`);
+      }
+      bytes = readFileSync16(fd);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("refusing to convert"))
+        throw error;
+      continue;
+    } finally {
+      if (fd !== undefined)
+        closeSync2(fd);
+    }
+    const content3 = bytes.toString("utf8");
     const doc = parseCompassFrontmatterText(content3, compassPath);
     const status = doc.status;
     if (status !== "active" && status !== "locked" && status !== "completed") {
@@ -23390,17 +23408,17 @@ function lossStatement(refusal) {
   }
 }
 function readBytes(path2) {
-  const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+  const fd = openSync3(path2, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   try {
-    if (!fstatSync2(fd).isFile())
+    if (!fstatSync3(fd).isFile())
       throw new Error(`not a regular file: ${path2}`);
     return readFileSync19(fd);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
 }
 function readInside(parent, child) {
-  const st = lstatSync8(parent);
+  const st = lstatSync9(parent);
   if (st.isSymbolicLink() || !st.isDirectory())
     throw new Error(`unsafe ancestor directory: ${parent}`);
   return readBytes(join26(parent, child));
@@ -23413,7 +23431,7 @@ function evaluate(context, now2) {
   const refusals = [];
   const dirs = join26(root, "workflows");
   try {
-    const rootInfo = lstatSync8(dirs);
+    const rootInfo = lstatSync9(dirs);
     if (rootInfo.isSymbolicLink())
       refusals.push({
         selector: "dsh-workflows",
@@ -23495,7 +23513,7 @@ function evaluate(context, now2) {
         let historySafe = true;
         const historyDir = join26(dir, HISTORY);
         try {
-          const hs = lstatSync8(historyDir);
+          const hs = lstatSync9(historyDir);
           if (hs.isSymbolicLink() || !hs.isDirectory()) {
             historySafe = false;
             throw new Error("history path is not a real directory");
@@ -23870,7 +23888,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
   const registeredUnderRoot = registeredExecution.filter(({ dir }) => dir !== workflowsDir && dir.startsWith(workflowsPrefix));
   let info;
   try {
-    info = lstatSync9(workflowsDir);
+    info = lstatSync10(workflowsDir);
   } catch (error) {
     if (error.code === "ENOENT")
       return { enumerable: false, refusedRegisteredIds: new Set };
@@ -23880,7 +23898,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     const refusedRegisteredIds = new Set;
     for (const entry of registeredExecution) {
       try {
-        const entryInfo = lstatSync9(entry.dir);
+        const entryInfo = lstatSync10(entry.dir);
         if (entryInfo.isSymbolicLink() || !entryInfo.isDirectory())
           refusedRegisteredIds.add(entry.id);
       } catch {}
@@ -23931,7 +23949,7 @@ function binding(value) {
 function readSourceBytes(path2, label) {
   let info;
   try {
-    info = lstatSync9(path2);
+    info = lstatSync10(path2);
   } catch {
     conflict2(`${label} is missing at ${path2}; restore the file or remove its registration, then rerun store upgrade.`);
   }
@@ -23939,8 +23957,8 @@ function readSourceBytes(path2, label) {
     throw new UnsafeSourceError(`${label} at ${path2} is not a regular file.`);
   let fd;
   try {
-    fd = openSync3(path2, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
-    const opened = fstatSync3(fd);
+    fd = openSync4(path2, constants4.O_RDONLY | (constants4.O_NOFOLLOW ?? 0) | (constants4.O_NONBLOCK ?? 0));
+    const opened = fstatSync4(fd);
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
       throw new UnsafeSourceError(`${label} at ${path2} was replaced, is not a regular file, or is no longer the verified bytes.`);
     }
@@ -23953,7 +23971,7 @@ function readSourceBytes(path2, label) {
     return conflict2(`${label} at ${path2} is unreadable (${error instanceof Error ? error.message : String(error)}); restore read access and rerun store upgrade.`);
   } finally {
     if (fd !== undefined)
-      closeSync3(fd);
+      closeSync4(fd);
   }
 }
 function readRegularJson(path2, label, read = readSourceBytes) {
@@ -24140,7 +24158,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     }
     const info = refusedRegistered && !isRealWorkflowTree ? null : (() => {
       try {
-        return lstatSync9(dir);
+        return lstatSync10(dir);
       } catch {
         return null;
       }
@@ -24173,7 +24191,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       const rawInventory = legacySnapshotInventory(snapshotValue);
       const snapshot = projectLegacySnapshot(snapshotValue);
       if (existsSync20(sessionsDir)) {
-        const sessionsInfo = lstatSync9(sessionsDir);
+        const sessionsInfo = lstatSync10(sessionsDir);
         if (sessionsInfo.isSymbolicLink() || !sessionsInfo.isDirectory())
           throw new UnsafeSourceError(`workflow ${entry.id} sessions path is not a real directory.`);
         for (const sessionEntry of readdirSync15(sessionsDir, { withFileTypes: true })) {
@@ -28048,7 +28066,7 @@ function registerSources(context) {
     const registerPath = join30(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
-      info = lstatSync10(registerPath);
+      info = lstatSync11(registerPath);
     } catch {
       continue;
     }
@@ -28657,7 +28675,7 @@ function scanLedger(bytes) {
 function openWithoutFollowing(path2, flags, mode) {
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   try {
-    return mode === undefined ? openSync4(path2, flags | noFollow) : openSync4(path2, flags | noFollow, mode);
+    return mode === undefined ? openSync5(path2, flags | noFollow) : openSync5(path2, flags | noFollow, mode);
   } catch (error) {
     if (error.code === "ELOOP") {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is a symbolic link; a retained ledger leaf is opened directly and never followed.`);
@@ -28666,17 +28684,17 @@ function openWithoutFollowing(path2, flags, mode) {
   }
 }
 function fsyncDirectory(dir) {
-  const fd = openSync4(dir, "r");
+  const fd = openSync5(dir, "r");
   try {
     fsyncSync2(fd);
   } finally {
-    closeSync4(fd);
+    closeSync5(fd);
   }
 }
 function assertLedgerPathIdentity(path2, opened, phase) {
   let current;
   try {
-    current = lstatSync11(path2);
+    current = lstatSync12(path2);
   } catch {
     throw new ExecutionLedgerError("execution-ledgers.target-replaced", `${path2} changed ${phase}; no success receipt was issued.`);
   }
@@ -28697,7 +28715,7 @@ function commitLedgerFrame(path2, frame) {
     fd = openWithoutFollowing(path2, fsConstants.O_WRONLY | fsConstants.O_APPEND);
   }
   try {
-    opened = fstatSync4(fd);
+    opened = fstatSync5(fd);
     if (!opened.isFile()) {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is not a regular file; nothing was written.`);
     }
@@ -28710,7 +28728,7 @@ function commitLedgerFrame(path2, frame) {
     }
     fsyncSync2(fd);
   } finally {
-    closeSync4(fd);
+    closeSync5(fd);
   }
   if (created)
     fsyncDirectory(dirname19(path2));
@@ -28719,7 +28737,7 @@ function commitLedgerFrame(path2, frame) {
 function assertRealDirectory(path2, what) {
   let info = null;
   try {
-    info = lstatSync11(path2);
+    info = lstatSync12(path2);
   } catch (error) {
     if (error.code !== "ENOENT")
       throw error;
@@ -28734,7 +28752,7 @@ function assertRealDirectory(path2, what) {
 function prepareWorkflowBodyDir(context, session, dir) {
   let info = null;
   try {
-    info = lstatSync11(dir);
+    info = lstatSync12(dir);
   } catch (error) {
     if (error.code !== "ENOENT")
       throw error;
@@ -29025,7 +29043,7 @@ function walStoreShapeOf(context) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES2);
   let fd;
   try {
-    fd = openSync5(dbPath, "r");
+    fd = openSync6(dbPath, "r");
   } catch {
     return null;
   }
@@ -29034,7 +29052,7 @@ function walStoreShapeOf(context) {
   } catch {
     return null;
   } finally {
-    closeSync5(fd);
+    closeSync6(fd);
   }
   if (header[18] !== WAL_FILE_FORMAT_VERSION2 || header[19] !== WAL_FILE_FORMAT_VERSION2)
     return null;
