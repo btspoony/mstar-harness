@@ -909,7 +909,7 @@ describe("execution-restore", () => {
     writeFileSync(marker, "keep-marker");
     writeFileSync(source, "keep-source");
     const script = `
-      import { previewExecutionRestore, restoreExecutionBackup } from ${JSON.stringify(join(ROOT, "packages/engine/src/execution-recovery.ts"))};
+      import { previewExecutionRestore, restoreExecutionBackup } from ${JSON.stringify(new URL("./execution-recovery.ts", import.meta.url).href)};
       const context = { harnessDir: ${JSON.stringify(world.harness)} };
       const preview = await previewExecutionRestore(context, ${JSON.stringify(point.backupPath)});
       const receipt = await restoreExecutionBackup(context, { preview, operator: ${JSON.stringify(OPERATOR)}, authorization: ${JSON.stringify(AUTHORIZATION)} });
@@ -949,28 +949,37 @@ describe("execution-restore", () => {
       `console.log(JSON.stringify(receipt));`;
     const realOpenStore = storeDb.openStore;
     let peerRan = false;
-    let ownedSafetyPath: string | null = null;
+    let ownedAttemptId: string | null = null;
+    let ownedRecord: { storeId: string; newEpoch: number; preRestoreBackup: { backupPath: string } } | null = null;
+    let ownedSafetyFacts: Record<string, number> | null = null;
+    let ownedSafetyDigest: string | null = null;
+    let peerReceipt: { storeId: string; epoch: number } | null = null;
     const openSpy = spyOn(storeDb, "openStore").mockImplementation(async (context, mode) => {
       const handle = await realOpenStore(context, mode);
       const close = handle.close.bind(handle);
       handle.close = () => {
         close();
         if (peerRan || mode !== "write" || context.harnessDir !== world.harness) return;
-        const row = rawGet<{ result_json: string }>(
+        const row = rawGet<{ operation_id: string; result_json: string }>(
           world.dbPath,
-          "select result_json from store_operations where operation_id like 'restore-attempt:%' order by committed_at desc limit 1",
+          "select operation_id, result_json from store_operations where operation_id like 'restore-attempt:%' order by committed_at desc limit 1",
         );
         if (row === undefined) return;
-        const record = JSON.parse(row.result_json) as { preRestoreBackup: { backupPath: string } };
+        const record = JSON.parse(row.result_json) as NonNullable<typeof ownedRecord>;
         if (!existsSync(record.preRestoreBackup.backupPath)) return;
         peerRan = true;
+        ownedAttemptId = row.operation_id;
+        ownedRecord = record;
         ownedSafetyPath = record.preRestoreBackup.backupPath;
+        ownedSafetyFacts = footprint(ownedSafetyPath);
+        ownedSafetyDigest = sha256OfBytes(readFileSync(ownedSafetyPath));
         const peer = spawnSync(process.execPath, ["-e", peerSource], {
           cwd: world.root,
           env: { ...process.env, RESTORE_HARNESS: world.harness, RESTORE_POINT: point.backupPath },
           encoding: "utf8",
         });
         if (peer.status !== 0) throw new Error(`peer restore failed: ${peer.stderr}`);
+        peerReceipt = JSON.parse(peer.stdout.trim()) as { storeId: string; epoch: number };
         throw new Error("test-owned failure after native commit and handle close");
       };
       return handle;
@@ -980,16 +989,31 @@ describe("execution-restore", () => {
         const preview = await previewExecutionRestore(world.context, point.backupPath);
         return restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION });
       });
-      expect(failed.message).toContain("test-owned failure after native commit");
       expect(peerRan).toBe(true);
+      expect(ownedAttemptId).not.toBeNull();
+      expect(ownedRecord).not.toBeNull();
+      expect(peerReceipt).not.toBeNull();
       expect(ownedSafetyPath).not.toBeNull();
       expect(existsSync(ownedSafetyPath!)).toBe(true);
-      expect(footprint(world.dbPath).epoch).toBeGreaterThan(point.epoch + 1);
-      expect(rawAll<{ operation_id: string }>(
+      expect(sha256OfBytes(readFileSync(ownedSafetyPath!))).toBe(ownedSafetyDigest);
+      expect(footprint(ownedSafetyPath!)).toEqual(ownedSafetyFacts);
+      expect(footprint(world.dbPath).epoch).toBeGreaterThan(ownedRecord!.newEpoch);
+      expect(peerReceipt!.storeId).toBe(world.storeId);
+      expect(footprint(world.dbPath).epoch).toBe(peerReceipt!.epoch);
+      expect(rawGet<{ operation_id: string }>(
         world.dbPath,
-        "select operation_id from store_operations where operation_id like 'restore-attempt:%'",
-      )).toHaveLength(1);
-      expect(recoveryRecords(world)).toHaveLength(1);
+        `select operation_id from store_operations where operation_id = '${ownedAttemptId}'`,
+      )).toBeUndefined();
+      const peerRecord = rawGet<{ result_json: string }>(
+        world.dbPath,
+        "select result_json from store_operations where operation_id like 'restore-attempt:%'",
+      );
+      expect(peerRecord).toBeTruthy();
+      expect(JSON.parse(peerRecord!.result_json)).toMatchObject({
+        storeId: peerReceipt!.storeId,
+        newEpoch: peerReceipt!.epoch,
+        phase: "replaced",
+      });
     } finally {
       openSpy.mockRestore();
     }
