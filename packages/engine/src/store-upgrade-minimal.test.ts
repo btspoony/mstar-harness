@@ -1899,7 +1899,7 @@ test("an explicit execution acknowledgement skips exactly the named registered l
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
   expect(result.skipped).toContainEqual({
     path: "workflows/wf-acked-registered-root",
-    reason: "registered workflow wf-acked-registered-root skipped by --ack-skip-workflow; its symlinked legacy source was not read and no execution row was imported for it",
+    reason: "registered workflow wf-acked-registered-root skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it",
   });
   expect(result.dispositions).toContainEqual(expect.stringContaining("workflow wf-acked-registered-root: skipped by --ack-skip-workflow"));
   expect(result.dispositions).toContainEqual(expect.stringContaining("no resumption is fabricated"));
@@ -2771,6 +2771,142 @@ test("a v1 root whose lift is unacceptable reports the committed schema and auth
   }
   expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
   expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
+});
+
+/* ------------------------------------------------------------------------ *
+ * Registered non-directory source: default refusal and explicit recovery
+ * ------------------------------------------------------------------------ */
+
+/**
+ * A real regular file where a registered workflow directory belongs. Both the
+ * whole-`workflows/` root and a single per-workflow registration can take this
+ * shape; the file's bytes are the witness the refusal and the acknowledged skip
+ * must leave untouched.
+ */
+const NON_DIRECTORY_BYTES = "NOT-A-WORKFLOW-SOURCE-BYTES\n";
+
+test("a registered per-workflow path that is a regular file refuses by default, then an explicit acknowledgement imports only the healthy sibling with the loss named", async () => {
+  const { context } = legacyWorkspace("nondir-child");
+  const blockingId = "wf-nondir-child";
+  const blockingPath = join(context.harnessDir, "workflows", blockingId);
+  // A real regular file where the registered workflow directory belongs; the
+  // registration the fixture wrote still names it.
+  rmSync(blockingPath, { recursive: true, force: true });
+  writeFileSync(blockingPath, NON_DIRECTORY_BYTES);
+
+  // A healthy in-root sibling so a partial import is observable.
+  const healthyId = "wf-nondir-child-healthy";
+  const healthyDir = join(context.harnessDir, "workflows", healthyId);
+  mkdirSync(join(healthyDir, "sessions"), { recursive: true });
+  writeFileSync(join(healthyDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: healthyId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" }, plans: [],
+  }));
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: healthyId, type: "plan", started_at: "2026-10-04", dir: `workflows/${healthyId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+  // The store must already exist for a pre-run snapshot of the whole protected
+  // state; the refusal below must leave every byte of it identical.
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const before = await protectedStore(context);
+
+  // Default: the non-directory registered source is refused and nothing commits
+  // — not even the healthy sibling.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-child" })
+    .then(() => { throw new Error("a non-directory registered source was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("is not a real in-root directory");
+  expect(refusal.message).toContain("a non-directory path is not a workflow source");
+  expect(refusal.message).toContain(`--ack-skip-workflow ${blockingId}`);
+  expect(await protectedStore(context)).toEqual(before);
+  expect(readFileSync(blockingPath, "utf8")).toBe(NON_DIRECTORY_BYTES);
+
+  // Explicit recovery: only the healthy sibling imports; the regular file keeps
+  // its bytes and its lost import is named, with no fabricated resumption.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-nondir-child-ack",
+    acknowledgedWorkflowSkips: [blockingId],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.skipped).toContainEqual({
+    path: `workflows/${blockingId}`,
+    reason: `registered workflow ${blockingId} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`,
+  });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${blockingId}: skipped by --ack-skip-workflow`),
+  );
+  expect(recovered.dispositions).toContainEqual(expect.stringContaining("no resumption is fabricated"));
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: healthyId }]);
+  } finally { store.close(); }
+  expect(readFileSync(blockingPath, "utf8")).toBe(NON_DIRECTORY_BYTES);
+  // The refused source keeps its registered identity in the source register.
+  expect(JSON.parse(readFileSync(statusPath, "utf8"))).toMatchObject({
+    workflows: expect.arrayContaining([expect.objectContaining({ id: blockingId })]),
+  });
+});
+
+test("a whole workflows root that is a regular file refuses naming its original registered ids, then the same acknowledgement skips only those IMPORTs", async () => {
+  const { context } = legacyWorkspace("nondir-root");
+  const workflowId = "wf-nondir-root";
+  const workflowsDir = join(context.harnessDir, "workflows");
+  rmSync(workflowsDir, { recursive: true, force: true });
+  writeFileSync(workflowsDir, NON_DIRECTORY_BYTES);
+
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-root" })
+    .then(() => { throw new Error("a non-directory workflows root that registers a workflow was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("is not a real directory");
+  expect(refusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  const refusedStore = await openStore(context, "read");
+  try { expect(refusedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { refusedStore.close(); }
+  expect(readFileSync(workflowsDir, "utf8")).toBe(NON_DIRECTORY_BYTES);
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-nondir-root-ack",
+    acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 0, authorityState: "active" });
+  expect(recovered.skipped).toContainEqual({
+    path: `workflows/${workflowId}`,
+    reason: `registered workflow ${workflowId} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`,
+  });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`),
+  );
+  const store = await openStore(context, "read");
+  try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
+  finally { store.close(); }
+  // The root keeps its bytes: the skip disposed an IMPORT, never the source.
+  expect(readFileSync(workflowsDir, "utf8")).toBe(NON_DIRECTORY_BYTES);
+});
+
+test("a missing registered source stays an ordinary reported skip and is not an ackable refusal", async () => {
+  const { context } = legacyWorkspace("nondir-missing");
+  const workflowId = "wf-nondir-missing";
+  // The registered directory stays real; only its snapshot is missing, which is
+  // the existing reported skip shape (a wholly missing path is the separate
+  // containment refusal).
+  rmSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
+
+  // Missing is the existing reported skip: no refusal, and no acknowledgement of
+  // it is accepted, because the run never refused that source.
+  const skipped = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-nondir-missing" });
+  expect(skipped.imported).toBe(0);
+  expect(skipped.skipped).toContainEqual({
+    path: `workflows/${workflowId}/snapshot.json`,
+    reason: "registered workflow snapshot is missing; left in place",
+  });
+  const unmatched = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-nondir-missing-ack",
+    acknowledgedWorkflowSkips: [workflowId],
+  }).then(() => { throw new Error("a missing source was accepted as an ackable refusal"); }, (error: Error & { code?: string }) => error);
+  expect(unmatched.code).toBe("execution.workflow-skip-unmatched");
 });
 
 test("concurrent importer processes serialize through SQLite, not a status directory", async () => {

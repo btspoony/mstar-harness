@@ -425,7 +425,7 @@ describe("store and execution command surface", () => {
     const result = dataOf(recovered);
     expect(result.skipped).toContainEqual({
       path: `workflows/${workflowId}`,
-      reason: `registered workflow ${workflowId} skipped by --ack-skip-workflow; its symlinked legacy source was not read and no execution row was imported for it`,
+      reason: `registered workflow ${workflowId} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`,
     });
     expect(result.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
     expect(JSON.parse(JSON.stringify(result.dsh))).toMatchObject({
