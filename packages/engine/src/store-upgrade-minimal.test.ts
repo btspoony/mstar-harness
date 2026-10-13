@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
-import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence } from "./workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
@@ -571,6 +571,10 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     operator: "operator",
     operationId: "op-active-schema8-normalize",
     attestation: retiredAttestation,
+    // The retained legacy source for this id collides with the native row the
+    // schema-8 store already holds: the normalization keeps the native row and
+    // skips only that legacy IMPORT.
+    acknowledgedWorkflowSkips: [workflowId],
   });
   const store = await openStore(context, "read");
   try {
@@ -1068,6 +1072,9 @@ test("a logical missing-plan claim refuses unchanged and recovers from its genui
   }
   await upgradeStoreMinimal({
     context, operator: "operator", operationId: "recovered-upgrade", attestation: stopDocument(sessionId),
+    // The restored generation holds the same native workflow the retained legacy
+    // source names, so this retry keeps the native row and skips only its IMPORT.
+    acknowledgedWorkflowSkips: [workflowId],
   });
   await continuePlan(context, workflowId, planId);
 });
@@ -1391,13 +1398,35 @@ test("no-store upgrade initializes execution schema and imports every populated 
     store.close();
   }
 
-  const replay = await upgradeStoreMinimal({ ...input, operationId: "op-no-store-populated-replay" });
-  expect(replay.imported).toBe(0);
-  const afterReplay = await openStore(context, "read");
+  // A LATER operation id is not a replay: the recognized legacy source now
+  // collides with the native row this store already holds, so it refuses
+  // instead of silently skipping the source or guessing a prior import from a
+  // matching id.
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-no-store-populated-replay" })
+    .then(() => { throw new Error("a repeated legacy import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain("--ack-skip-workflow wf-no-store-populated");
+  const afterRefusal = await openStore(context, "read");
   try {
-    expect(afterReplay.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+    expect(afterRefusal.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
   } finally {
-    afterReplay.close();
+    afterRefusal.close();
+  }
+  // The supported recovery is the ordinary acknowledgement on the same entry:
+  // the native row is kept and only the legacy IMPORT is skipped.
+  const recovered = await upgradeStoreMinimal({
+    ...input, operationId: "op-no-store-populated-ack",
+    acknowledgedWorkflowSkips: ["wf-no-store-populated"],
+  });
+  expect(recovered.imported).toBe(0);
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining("workflow wf-no-store-populated: skipped by --ack-skip-workflow"),
+  );
+  const afterRecovery = await openStore(context, "read");
+  try {
+    expect(afterRecovery.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+  } finally {
+    afterRecovery.close();
   }
 });
 
@@ -1905,7 +1934,7 @@ test("an execution acknowledgement naming a trusted, unknown or v1 registration 
     acknowledgedWorkflowSkips: ["wf-acked-trusted"],
   })).rejects.toMatchObject({
     code: "execution.workflow-skip-unmatched",
-    message: expect.stringContaining("matched no registered workflow source this run refuses"),
+    message: expect.stringContaining("matched no workflow source this run refuses"),
   });
   const trustedStore = await openStore(trusted.context, "read");
   try { expect(trustedStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
@@ -1929,6 +1958,271 @@ test("an execution acknowledgement naming a trusted, unknown or v1 registration 
   const v1Store = await openStore(v1.context, "read");
   try { expect(v1Store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
   finally { v1Store.close(); }
+});
+
+/* ------------------------------------------------------------------------ *
+ * Native/legacy ID collision
+ * ------------------------------------------------------------------------ */
+
+/**
+ * One store with a REAL native workflow+plan created through the public
+ * producers (not hand-written SQL), plus the control root's retained legacy v2
+ * source for the SAME id — the shape the silent-omission defect came from. The
+ * native branch differs from the legacy one, so the collision's preserved native
+ * row is distinguishable from what the legacy source would have imported.
+ */
+async function nativeCollisionWorkspace(name: string): Promise<{ context: StoreContext; workflowId: string; legacyBytes: Buffer }> {
+  const { context } = legacyWorkspace(name);
+  const workflowId = `wf-${name}`;
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const root = await readExecutionState(context);
+  await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId, role: "coordinator" })), {
+    entry: { id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-10-04",
+      updated_at: "2026-10-04",
+      delivery_kind: "development",
+      branch: { source: `feature/native-${workflowId}`, target: "main" },
+      plans: [{ id: `${workflowId}-plan`, title: "Native collision plan", file: `${workflowId}-plan.md`, status: "Todo" }],
+    } satisfies WorkflowSnapshot,
+    expected: root.token,
+    operationId: `create-${name}`,
+  });
+  // The legacy source the fixture's `legacyWorkspace` wrote stays exactly as it
+  // is on disk; this read is the byte witness the collision must not touch.
+  const legacyBytes = readFileSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE));
+  return { context, workflowId, legacyBytes };
+}
+
+test("a recognized legacy source whose id already exists natively refuses, then an explicit acknowledgement keeps the native authority and skips only its IMPORT", async () => {
+  const { context, workflowId, legacyBytes } = nativeCollisionWorkspace("native-id-collision");
+  // An unrelated healthy legacy row in the SAME run, so a partial import is
+  // observable: the refusal must commit NOTHING, including that healthy row.
+  const healthyId = "wf-native-id-collision-healthy";
+  const healthyDir = join(context.harnessDir, "workflows", healthyId);
+  mkdirSync(healthyDir, { recursive: true });
+  writeFileSync(join(healthyDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: healthyId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+    delivery_kind: "development", branch: { source: `feature/${healthyId}`, target: "main" }, plans: [],
+  }));
+  const statusPath = join(context.harnessDir, "status.json");
+  const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows: Array<Record<string, unknown>> };
+  status.workflows.push({ id: healthyId, type: "plan", started_at: "2026-10-04", dir: `workflows/${healthyId}` });
+  writeFileSync(statusPath, JSON.stringify(status));
+  const before = await protectedStore(context);
+  // The exact native header content, so the preserved row is observed as
+  // content and not merely as a surviving id.
+  const native = await openStore(context, "read");
+  let nativeHeader: { state_json: string; revision: number };
+  try {
+    nativeHeader = native.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string; revision: number };
+  } finally { native.close(); }
+  expect(JSON.parse(nativeHeader.state_json)).toMatchObject({ branch: { source: `feature/native-${workflowId}` } });
+
+  // Default: the collision refuses before any execution row commits, names the
+  // exact original id and the runnable same-source recovery.
+  const refusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-native-id-collision" })
+    .then(() => { throw new Error("a native-id collision was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  // Nothing committed — not even the healthy row, so no partial import is real.
+  expect(await protectedStore(context)).toEqual(before);
+  const refusedStore = await openStore(context, "read");
+  try {
+    expect(refusedStore.db.prepare("select workflow_id from execution_workflows order by workflow_id").all()).toEqual([{ workflow_id: workflowId }]);
+  } finally { refusedStore.close(); }
+  // The legacy source bytes are untouched by the refusal.
+  expect([...readFileSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE))]).toEqual([...legacyBytes]);
+
+  // The explicit acknowledgement keeps the native row and imports ONLY the
+  // healthy row, reporting the colliding import loss with native progress
+  // intact.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-id-collision-ack",
+    acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(recovered.skipped).toContainEqual({
+    path: `workflows/${workflowId}`,
+    reason: `legacy source for workflow ${workflowId} skipped by --ack-skip-workflow; the native execution authority already holds that id, so its native rows were kept and its legacy IMPORT was skipped`,
+  });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow; the native execution authority already holds that id`),
+  );
+  expect(recovered.dispositions).toContainEqual(expect.stringContaining("no prior import or resumption is inferred"));
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: healthyId }, { workflow_id: workflowId }]);
+    // The native header is byte-identical to the pre-run state: the legacy
+    // source was NOT imported over it.
+    expect(store.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId))
+      .toEqual(nativeHeader);
+    // The colliding legacy plan was never imported: the only plan row is the one
+    // the native creation wrote, and the healthy workflow carries none.
+    expect(store.db.prepare("select workflow_id, plan_id from execution_plans").all())
+      .toEqual([{ workflow_id: workflowId, plan_id: `${workflowId}-plan` }]);
+  } finally { store.close(); }
+  // The legacy bytes remain retryable and untouched.
+  expect([...readFileSync(join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE))]).toEqual([...legacyBytes]);
+});
+
+test("a later new-operation import of the same legacy source requires explicit acknowledgement rather than heuristic replay, and native progress is not byte-frozen", async () => {
+  const { context, workflowId } = nativeCollisionWorkspace("native-id-later-op");
+  const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+  const legacyBytes = Buffer.from(readFileSync(snapshotPath));
+  const readHeader = async (): Promise<{ state_json: string; revision: number }> => {
+    const handle = await openStore(context, "read");
+    try {
+      return handle.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string; revision: number };
+    } finally { handle.close(); }
+  };
+  const nativeHeader = await readHeader();
+
+  // A genuine first import under one operation: the colliding source's own
+  // retained receipt is the ONLY thing that may replay it.
+  const first = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-later-first", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(first.imported).toBe(0);
+  // Exact same-operation replay: the retained request/result receipt answers and
+  // the whole protected state (including that receipt) is unchanged.
+  const afterFirst = await protectedStore(context);
+  expect(await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-later-first", acknowledgedWorkflowSkips: [workflowId],
+  })).toEqual(first);
+  expect(await protectedStore(context)).toEqual(afterFirst);
+  expect(await readHeader()).toEqual(nativeHeader);
+
+  // The native source body is later EDITED: native progress, not the retained
+  // legacy body, is authoritative, so this changes nothing about the receipt.
+  const edited = JSON.parse(legacyBytes.toString("utf8")) as Record<string, unknown>;
+  edited.updated_at = "2026-10-09";
+  (edited.branch as Record<string, unknown>).source = `feature/edited-${workflowId}`;
+  writeFileSync(snapshotPath, JSON.stringify(edited));
+  // The EDITED bytes are what the next run reads as a source; the receipt and the
+  // native row stay the same because neither depends on that body.
+  expect(await protectedStore(context)).toEqual(afterFirst);
+
+  // A LATER operation id whose request omits the acknowledgement is NOT a
+  // replay — no id/type/date/header heuristic may fabricate one — so it
+  // refuses the collision again.
+  const laterRefusal = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-native-later-second" })
+    .then(() => { throw new Error("a heuristic replay served a later operation"); }, (error: Error & { code?: string }) => error);
+  expect(laterRefusal.code).toBe("execution.migration-conflict");
+  expect(laterRefusal.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  // The acknowledgement on the later operation skips the import for real: the
+  // native row (whose progress the operator owns) is untouched and the edited
+  // legacy body is NOT read as an authority or used as a byte gate.
+  const later = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-later-second-ack", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(later.imported).toBe(0);
+  expect(await readHeader()).toEqual(nativeHeader);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id, plan_id from execution_plans").all())
+      .toEqual([{ workflow_id: workflowId, plan_id: `${workflowId}-plan` }]);
+    // The two acknowledged operations each committed their OWN receipt.
+    expect(store.db.prepare("select count(*) as n from store_operations where operation_id in (?, ?)").get("op-native-later-second-ack", "op-native-later-first")).toEqual({ n: 2 });
+  } finally { store.close(); }
+  // The edited legacy bytes stay exactly as the operator left them.
+  expect(readFileSync(snapshotPath).toString("utf8")).toBe(JSON.stringify(edited));
+});
+
+test("a v1 root whose converted lifecycle id already exists natively refuses, then recovers through the same acknowledgement", async () => {
+  const { context } = legacyV1Workspace("v1-native-collision");
+  // One of the two converted v1 lifecycles is already a native row, so the v1
+  // route shares the same collision contract as the v2 route. `iter-v1` stays
+  // un-imported so the collision is the ONLY cause of the refusal.
+  const initialized = await initializeStore(context);
+  initialized.close();
+  const root = await readExecutionState(context);
+  await createExecutionWorkflow(executionContextFor(context, createLocalExecutionIdentity({ workflowId: "v1-standalone", role: "coordinator" })), {
+    entry: { id: "v1-standalone", type: "plan", started_at: "2026-10-04", dir: "workflows/v1-standalone" },
+    snapshot: {
+      schema_version: 1, id: "v1-standalone", type: "plan", status: "paused", started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: "feature/native-v1-standalone", target: "main" },
+      plans: [{ id: "v1-standalone", title: "Native v1 plan", file: "v1-standalone.md", status: "Todo" }],
+    } satisfies WorkflowSnapshot,
+    expected: root.token,
+    operationId: "create-v1-native-collision",
+  });
+  // The exact native header bytes the acknowledgement must leave untouched.
+  const native = await openStore(context, "read");
+  let nativeHeader: { state_json: string };
+  try {
+    nativeHeader = native.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
+  } finally { native.close(); }
+  expect(JSON.parse(nativeHeader.state_json)).toMatchObject({ branch: { source: "feature/native-v1-standalone" } });
+
+  const refusal = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-native-collision",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("a v1 native-id collision was silently omitted"); }, (error: Error & { code?: string }) => error);
+  expect(refusal.code).toBe("execution.migration-conflict");
+  expect(refusal.message).toContain("--ack-skip-workflow v1-standalone");
+  // The unrelated v1 lifecycle did not import either: no partial registration.
+  const refusedStore = await openStore(context, "read");
+  try { expect(refusedStore.db.prepare("select workflow_id from execution_workflows").all()).toEqual([{ workflow_id: "v1-standalone" }]); }
+  finally { refusedStore.close(); }
+
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-native-collision-ack",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedWorkflowSkips: ["v1-standalone"],
+  });
+  expect(recovered).toMatchObject({ verdict: "upgraded", imported: 1 });
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow; the native execution authority already holds that id"),
+  );
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select workflow_id from execution_workflows order by workflow_id").all())
+      .toEqual([{ workflow_id: "iter-v1" }, { workflow_id: "v1-standalone" }]);
+    // The native row keeps ITS OWN branch/kind; the acknowledged v1 conversion
+    // (declared development anchors) did not import over it.
+    expect(store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone"))
+      .toEqual(nativeHeader);
+  } finally { store.close(); }
+});
+
+test("one unmatched acknowledgement in a mixed request refuses the whole run before any write, even when another acknowledgement is valid", async () => {
+  const { context, workflowId } = nativeCollisionWorkspace("native-id-mixed-ack");
+  const before = await protectedStore(context);
+
+  // `workflowId` genuinely collides and is acknowledged, but
+  // `wf-never-anywhere` names nothing this run refuses: the whole request is
+  // caller input, so it refuses as usage before any execution row commits —
+  // the valid acknowledgement is not silently honoured on a rejected request.
+  const mixed = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-mixed-ack",
+    acknowledgedWorkflowSkips: [workflowId, "wf-never-anywhere"],
+  }).then(() => { throw new Error("a mixed acknowledgement silently skipped a source"); }, (error: Error & { code?: string }) => error);
+  expect(mixed.code).toBe("execution.workflow-skip-unmatched");
+  expect(mixed.message).toContain("wf-never-anywhere");
+  expect(await protectedStore(context)).toEqual(before);
+
+  // Dropping only the unmatched id is the same-entry retry: the colliding
+  // source is skipped and the native row is kept.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-mixed-ack-retry",
+    acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(recovered.imported).toBe(0);
+  expect(recovered.dispositions).toContainEqual(
+    expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow; the native execution authority already holds that id`),
+  );
+  // The retained receipt of that accepted retry then answers its own replay.
+  expect(await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-native-mixed-ack-retry",
+    acknowledgedWorkflowSkips: [workflowId],
+  })).toEqual(recovered);
 });
 
 test("changed execution acknowledgements under one operation id conflict with the retained receipt", async () => {
@@ -2178,13 +2472,35 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
   expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
 
-  // Ordinary retry is the same public operation, keeps the same declarations,
-  // and imports nothing new.
-  const replay = await upgradeStoreMinimal({
+  // A LATER operation id is not a replay, and the v1 source this run converts
+  // now collides with the native rows the first upgrade committed: it refuses
+  // and names the same-entry acknowledgement.
+  const refusedRetry = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-v1-direct-2",
     deliveryDeclarations: V1_STANDALONE_DECLARATION,
+  }).then(() => { throw new Error("a repeated v1 import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
+  expect(refusedRetry.code).toBe("execution.migration-conflict");
+  expect(refusedRetry.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
+  // The acknowledged retry keeps the native authority and skips only the legacy
+  // IMPORTs; the source bytes stay untouched.
+  const recovered = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-v1-direct-3",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
   });
-  expect(replay.imported).toBe(0);
+  expect(recovered.imported).toBe(0);
+  expect(recovered.dispositions).toEqual(expect.arrayContaining([
+    expect.stringContaining("workflow iter-v1: skipped by --ack-skip-workflow"),
+    expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow"),
+  ]));
+  const afterRecovery = await openStore(context, "read");
+  try {
+    expect(afterRecovery.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 2 });
+    expect(afterRecovery.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 2 });
+  } finally {
+    afterRecovery.close();
+  }
+  expect([...readFileSync(join(context.harnessDir, "status.json"))]).toEqual([...statusBytes]);
 });
 
 test("an active standalone v1 plan without a declared delivery kind refuses before any row registers, then a declared retry continues it", async () => {
@@ -2510,9 +2826,18 @@ try {
   } finally {
     store.close();
   }
-  // The supported retry is the same public operation and imports nothing new.
-  const retry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry", deliveryDeclarations: V1_STANDALONE_DECLARATION });
-  expect(retry.imported).toBe(0);
+  // A LATER operation id is not a replay: the v1 lifecycles this store already
+  // holds collide with the retained source, so it refuses and names the
+  // same-entry acknowledgement instead of silently skipping them.
+  const refusedRetry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry", deliveryDeclarations: V1_STANDALONE_DECLARATION })
+    .then(() => { throw new Error("a repeated v1 import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
+  expect(refusedRetry.code).toBe("execution.migration-conflict");
+  const ackedRetry = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-concurrent-retry-ack",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION,
+    acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
+  });
+  expect(ackedRetry.imported).toBe(0);
   // No filesystem mutex directory was created anywhere in the workspace.
   expect(existsSync(join(context.harnessDir, ".status-write.lockdir"))).toBe(false);
   expect(existsSync(join(context.harnessDir, ".execution-maintenance"))).toBe(false);

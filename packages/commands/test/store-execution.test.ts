@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { captureIssue, getIssue, initializeStore, openStore } from "@mstar-harness/engine";
+import { captureIssue, createExecutionWorkflow, getIssue, initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
 import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandDefinitions } from "../src/index.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -440,6 +440,74 @@ describe("store and execution command surface", () => {
     // child lstat or snapshot read).
     expect(lstatSync(workflowDir).isSymbolicLink()).toBe(true);
     expect([...readFileSync(join(target, "snapshot.json"))]).toEqual([...linkedSnapshot]);
+  });
+  test("store upgrade refuses a native/legacy ID collision by default and recovers through the same acknowledgement", async () => {
+    const root = fixture("store-upgrade-native-collision");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.close();
+    const workflowId = "wf-native-command-collision";
+    const planId = `${workflowId}-plan`;
+    const caller = { sessionId: "fixture-collision-coordinator", role: "coordinator" as const, workflowId };
+    const rootToken = (await readExecutionState({ harnessDir: harness })).token;
+    await createExecutionWorkflow({ harnessDir: harness, caller }, {
+      entry: { id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` },
+      snapshot: {
+        schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+        delivery_kind: "development", branch: { source: `feature/native-${workflowId}`, target: "main" },
+        plans: [{ id: planId, title: "Native command plan", file: `${planId}.md`, status: "Todo" }],
+      } as never,
+      expected: rootToken,
+      operationId: "create-native-command-collision",
+    });
+    // The retained legacy source for the SAME id, with a DIFFERENT branch so the
+    // preserved native row is distinguishable from what the legacy import holds.
+    const workflowDir = join(harness, "workflows", workflowId);
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify({
+      schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: `feature/legacy-${workflowId}`, target: "main" },
+      plans: [{ id: planId, title: "Legacy command plan", file: `${planId}.md`, status: "InProgress" }],
+    }));
+    writeFileSync(join(harness, "status.json"), JSON.stringify({
+      version: 2, updated_at: "2026-10-04", workflows: [{ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }],
+    }));
+    const legacyBytes = readFileSync(join(workflowDir, "snapshot.json"));
+    const command = definition("store.upgrade");
+
+    // Default: refused (exit 1) with the exact id and same-entry recovery named;
+    // the native row and the legacy bytes are untouched.
+    const refused = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(refused).toMatchObject({ status: "refused", code: "execution.migration-conflict", exitCode: 1 });
+    expect(refused.message).toContain(`--ack-skip-workflow ${workflowId}`);
+    const afterRefusal = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(JSON.parse((afterRefusal.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json))
+        .toMatchObject({ branch: { source: `feature/native-${workflowId}` } });
+      expect(afterRefusal.db.prepare("select count(*) as n from execution_plans where workflow_id = ?").get(workflowId)).toEqual({ n: 1 });
+    } finally { afterRefusal.close(); }
+    expect([...readFileSync(join(workflowDir, "snapshot.json"))]).toEqual([...legacyBytes]);
+
+    // The acknowledgement is the supported recovery: usage-class exit 0 with a
+    // named lost-import receipt, native row still authoritative.
+    const recovered = await invoke(command, { harness, operator: "fixture", ackSkipWorkflow: [workflowId] }, root);
+    expect(recovered.status).toBe("ok");
+    const result = dataOf(recovered);
+    expect(result.skipped).toContainEqual({
+      path: `workflows/${workflowId}`,
+      reason: `legacy source for workflow ${workflowId} skipped by --ack-skip-workflow; the native execution authority already holds that id, so its native rows were kept and its legacy IMPORT was skipped`,
+    });
+    expect(result.dispositions).toContainEqual(
+      expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow; the native execution authority already holds that id`),
+    );
+    const store2 = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(JSON.parse((store2.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json))
+        .toMatchObject({ branch: { source: `feature/native-${workflowId}` } });
+      expect(store2.db.prepare("select count(*) as n from execution_plans where workflow_id = ?").get(workflowId)).toEqual({ n: 1 });
+    } finally { store2.close(); }
+    expect([...readFileSync(join(workflowDir, "snapshot.json"))]).toEqual([...legacyBytes]);
   });
   test("an acknowledged DSH import replays its receipt without a second write", async () => {
     const root = fixture("store-upgrade-dsh-replay");
