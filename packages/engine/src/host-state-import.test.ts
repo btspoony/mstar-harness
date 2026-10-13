@@ -1,6 +1,7 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
+import * as nodeFs from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -565,4 +566,134 @@ test("a symlinked snapshots ancestor refuses the status source and a plain docum
   // The document-only workflow directory is not an authority and produced no refusal.
   const acked = await importDshHostStateFiles({ context, operator: "fixture", operationId: "unsafe-status-ack", acknowledgedSkips: ["dsh-status"] });
   expect(acked.verdict).toBe("partially-imported");
+});
+
+test("a legacy source leaf swapped for a symlink at the open boundary is never followed", async () => {
+  const { context, workflow } = await fixture("leaf-swap");
+  const idsPath = join(workflow, "agent-flow-ids.jsonl");
+  writeFileSync(idsPath, '{"id":"wfe1:session:event","d":"digest"}\n');
+  writeFileSync(join(workflow, "agent-flow.jsonl"), '{"eventId":"wfc1:session:tool"}\n');
+  // The bytes a race winner would substitute: a complete, different registry.
+  const outside = join(context.harnessDir, "outside-registry.jsonl");
+  const outsideBytes = '{"id":"wfe1:outside:event","d":"outside-digest"}\n';
+  writeFileSync(outside, outsideBytes);
+
+  // Test-only race instrumentation: whichever leaf observation comes LAST
+  // (the pre-fix `lstat`, or the no-follow `open`) swaps the leaf for a link
+  // to the outside registry at that instant, then restores the platform calls.
+  const realLstatSync = nodeFs.lstatSync;
+  const realOpenSync = nodeFs.openSync;
+  let swapped = false;
+  const swapAt = (path: unknown): void => {
+    if (swapped || typeof path !== "string" || path !== idsPath) return;
+    swapped = true;
+    rmSync(idsPath);
+    symlinkSync(outside, idsPath);
+  };
+  const lstatSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((path: string) => {
+    swapAt(path);
+    return realLstatSync(path);
+  }) as never);
+  const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, flags: number) => {
+    swapAt(path);
+    return realOpenSync(path, flags);
+  }) as never);
+  try {
+    await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "leaf-swap" }))
+      .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-ledger:wf-leaf-swap") });
+  } finally {
+    lstatSpy.mockRestore();
+    openSpy.mockRestore();
+  }
+  expect(swapped).toBe(true);
+  // The link was never followed: recovery through the public acknowledgement
+  // imports neither the outside registry nor the withheld tail.
+  const acked = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "leaf-swap-ack", acknowledgedSkips: ["dsh-ledger:wf-leaf-swap"],
+  });
+  expect(acked.imported.identities).toBe(0);
+  expect(acked.imported.ledgerRows).toBe(0);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from dsh_accepted_identities").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from dsh_ledger_events where event_json like '%outside%'").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+  // Byte equality alone would prove nothing: the outside bytes were never consumed at all.
+  expect(readFileSync(outside, "utf8")).toBe(outsideBytes);
+});
+
+test("a tail-only crash-window row registers its recovered identity and dedups the native replay", async () => {
+  const { context, workflow } = await fixture("crash-window");
+  // The legacy writer committed the durable row BEFORE its identity-index entry
+  // and before the cursor advance: the row is complete, the registry never
+  // learned it, and the bound stays behind the row's stream position.
+  const line = '{"v":1,"ts":1760000000000,"kind":"dispatch","agent":"session-a","eventId":"wfe1:dispatch:session-a:stream-a:3","source":{"sessionId":"session-a","streamId":"stream-a","seq":3}}';
+  const digest = createHash("sha256").update(line).digest("hex").slice(0, 32);
+  const tail = `${line}\n{"eventId":"wfc1:s:c:tool","n":1}\n{"eventId":"wfc1:s:c:tool","n":1}\n`;
+  writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
+  writeFileSync(join(workflow, "workflow-ledger-cursors.json"), JSON.stringify({ v: 2, cursors: { "session-a": { next: 1, stream: "stream-a" } } }));
+  const result = await importDshHostStateFiles({ context, operator: "fixture", operationId: "crash-window" });
+  expect(result.imported.identities).toBe(1);
+  expect(result.imported.ledgerRows).toBe(3);
+  const store = await openStore(context, "read");
+  try {
+    // Only the durable native row recovered an accepted identity; the ordinary
+    // duplicate-capable display rows stay unregistered display evidence.
+    expect(store.db.prepare("select event_id, digest from dsh_accepted_identities where workflow_id = ?").all("wf-crash-window")).toEqual([
+      { event_id: "wfe1:dispatch:session-a:stream-a:3", digest },
+    ]);
+    expect(store.db.prepare("select event_json from dsh_ledger_events where workflow_id = ? order by seq_rowid").all("wf-crash-window")).toEqual([
+      { event_json: line },
+      { event_json: '{"eventId":"wfc1:s:c:tool","n":1}' },
+      { event_json: '{"eventId":"wfc1:s:c:tool","n":1}' },
+    ]);
+  } finally { store.close(); }
+
+  // Real native consumer re-observation at the unadvanced bound: the same
+  // identity and digest replay as a no-op that only advances the bound.
+  expect(appendDshWorkflowEvent(context, {
+    workflowId: "wf-crash-window", eventId: "wfe1:dispatch:session-a:stream-a:3", digest, lineJson: line,
+    source: { sessionId: "session-a", streamId: "stream-a", seq: 3 },
+  })).toMatchObject({ kind: "replayed" });
+  expect(readDshScanBound(context, "wf-crash-window", "session-a")).toEqual({ next: 4, stream: "stream-a" });
+
+  // Different bytes under the same identity stay a conflict; the original row
+  // and its accepted identity stand.
+  const tampered = createHash("sha256").update('{"tampered":true}').digest("hex").slice(0, 32);
+  expect(appendDshWorkflowEvent(context, {
+    workflowId: "wf-crash-window", eventId: "wfe1:dispatch:session-a:stream-a:3", digest: tampered, lineJson: '{"tampered":true}',
+    source: { sessionId: "session-a", streamId: "stream-a", seq: 3 },
+  })).toMatchObject({ kind: "refused" });
+  const after = await openStore(context, "read");
+  try {
+    expect(after.db.prepare("select count(*) as n from dsh_ledger_events where workflow_id = ? and event_id = ?").get("wf-crash-window", "wfe1:dispatch:session-a:stream-a:3")).toEqual({ n: 1 });
+    expect(after.db.prepare("select count(*) as n from dsh_ledger_events where event_json = ?").get('{"tampered":true}')).toEqual({ n: 0 });
+    expect(after.db.prepare("select digest from dsh_accepted_identities where workflow_id = ? and event_id = ?").get("wf-crash-window", "wfe1:dispatch:session-a:stream-a:3")).toEqual({ digest });
+  } finally { after.close(); }
+});
+
+test("a tail row that disagrees with the retained identity index refuses the source and never rewrites it", async () => {
+  const { context, workflow } = await fixture("index-tail-disagreement");
+  const indexed = '{"id":"wfe1:session:event","d":"indexed-digest"}\n';
+  const line = '{"eventId":"wfe1:session:event","v":1}';
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), indexed);
+  writeFileSync(join(workflow, "agent-flow.jsonl"), `${line}\n`);
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "index-tail-disagreement" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("disagree for this identity") });
+  // Source-preserved: the conflicting legacy bytes were never rewritten.
+  expect(readFileSync(join(workflow, "agent-flow.jsonl"), "utf8")).toBe(`${line}\n`);
+  expect(readFileSync(join(workflow, "agent-flow-ids.jsonl"), "utf8")).toBe(indexed);
+});
+
+test("a torn native tail line withholds the tail instead of importing an undecidable identity", async () => {
+  const { context, workflow } = await fixture("torn-native-tail");
+  writeFileSync(join(workflow, "agent-flow.jsonl"), '{"eventId":"wfe1:dispatch:session-a:stream-a:3","v":1,"kind":"disp');
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "torn-native-tail" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("not a parseable row") });
+  const acked = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "torn-native-tail-ack", acknowledgedSkips: ["dsh-ledger:wf-torn-native-tail"],
+  });
+  expect(acked.imported.ledgerRows).toBe(0);
+  expect(acked.imported.identities).toBe(1);
 });

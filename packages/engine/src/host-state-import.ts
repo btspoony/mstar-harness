@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ExecutionError, withExecutionTransaction } from "./execution-store.js";
 import { storeDbPath, StoreError, withExecutionReadGuard, type StoreContext } from "./store-db.js";
@@ -49,11 +49,20 @@ function lossStatement(refusal: Refusal): string {
   }
 }
 
-/** Read one regular file whose parent directory must itself be a real directory. */
+/**
+ * Read one regular file through ONE descriptor: the leaf is opened without
+ * following a final symlink and the same descriptor is verified with `fstat`,
+ * read and closed, so a path swapped for a link after any earlier ancestor
+ * check can never contribute another file's bytes. Where a platform does not
+ * provide `O_NOFOLLOW`, the same-descriptor `fstat` verification remains the
+ * boundary.
+ */
 function readBytes(path: string): Buffer {
-  const st = lstatSync(path);
-  if (st.isSymbolicLink() || !st.isFile()) throw new Error(`not a regular file: ${path}`);
-  return readFileSync(path);
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error(`not a regular file: ${path}`);
+    return readFileSync(fd);
+  } finally { closeSync(fd); }
 }
 /** Read a child only through a verified, non-symlinked ancestor directory. */
 function readInside(parent: string, child: string): Buffer {
@@ -106,6 +115,34 @@ function evaluate(context: StoreContext, now: string): Evaluation {
       const knownTailLines = present[FLOW] ? nonBlankLines(present[FLOW]!) : 0;
       const registryLoss = `the entire accepted-identity registry for ${entry.name} (${knownIndexLines} index line(s) present) and the coupled display tail (${knownTailLines} non-blank line(s) present) were discarded`;
 
+      // One parse of the display tail. A durable workflow row carries its own
+      // `wfe1:` id and the digest its producer recorded for the identity index
+      // (sha256 of the serialized line, first 32 hex chars) is recoverable from
+      // the retained line itself; a line that cannot be parsed but still names
+      // that namespace is a torn native row whose identity is undecidable.
+      const tailRows: Array<{ eventId: string | null; lineJson: string; lineIndex: number }> = [];
+      const tailIdentities = new Map<string, string>();
+      let tailUndecidable: string | null = null;
+      if (present[FLOW] !== undefined) {
+        for (const [i, line] of present[FLOW]!.toString("utf8").split("\n").entries()) {
+          if (line.trim() === "") continue;
+          let eventId: string | null = null;
+          try {
+            const parsed: unknown = JSON.parse(line);
+            const id = parsed !== null && typeof parsed === "object" && "eventId" in parsed ? parsed.eventId : undefined;
+            if (typeof id === "string") eventId = id;
+          } catch { if (line.includes('"wfe1:')) tailUndecidable = `display-tail line ${i + 1} names a native event identity but is not a parseable row`; }
+          tailRows.push({ eventId, lineJson: line, lineIndex: i + 1 });
+          if (eventId !== null && eventId.startsWith("wfe1:")) {
+            const digest = hash(line).slice(0, 32);
+            const prior = tailIdentities.get(eventId);
+            if (prior !== undefined && prior !== digest) tailUndecidable = `the display tail holds native identity ${eventId} with two different byte sets`; // hash-gate: authorized — Reject a retained tail that carries one native identity under two different byte sets.
+            else tailIdentities.set(eventId, digest);
+          }
+          if (tailUndecidable !== null) break;
+        }
+      }
+
       // Retained-history completeness: an unsafe or unreadable history ancestor is
       // never followed for any purpose (identity completeness or archive proof).
       const historyIdentities = new Map<string, string>();
@@ -137,6 +174,7 @@ function evaluate(context: StoreContext, now: string): Evaluation {
       }
 
       const identityRows: Array<{ eventId: string; digest: string; acceptedAt: string }> = [];
+      const seen = new Map<string, string>();
       let identityRefused = !historySafe || unreadable.has(IDS);
       if (unreadable.has(IDS)) refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identity index", discarded: registryLoss, reason: `the identity index could not be safely read`, source });
       if (present[IDS] === undefined) {
@@ -145,7 +183,6 @@ function evaluate(context: StoreContext, now: string): Evaluation {
           refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: "identities", discarded: registryLoss, reason: "the identity index is absent while retained history holds identified rows", source });
         }
       } else if (!identityRefused) {
-        const seen = new Map<string, string>();
         let malformed: string | null = null;
         for (const [i, line] of present[IDS]!.toString("utf8").split("\n").entries()) {
           if (!line) continue;
@@ -221,6 +258,7 @@ function evaluate(context: StoreContext, now: string): Evaluation {
         } catch (e) { tailRefusal = `the compaction journal is not a recognized transaction (${String(e)})`; }
         if (tailRefusal === null && journalDecision !== "invalid") findings.push({ source, kind: "journal", decision: journalDecision });
       }
+      else if (tailUndecidable !== null) tailRefusal = tailUndecidable;
       // A genuine tail/journal safety refusal is published whenever the tail bytes
       // are not simply absent: unreadable FLOW, a journal present without FLOW, and
       // an unreadable journal all refuse. Only a truly absent FLOW with no journal
@@ -235,11 +273,26 @@ function evaluate(context: StoreContext, now: string): Evaluation {
         refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: tailFacts, discarded: tailLoss, reason: "the tail identities cannot be verified because the identity registry was refused", source });
       } else {
         const tailDigest = hash(present[FLOW]!);
-        for (const [i, line] of present[FLOW]!.toString("utf8").split("\n").entries()) if (line.trim() !== "") {
-          let eventId: string | null = null; try { const id = (JSON.parse(line) as { eventId?: unknown }).eventId; if (typeof id === "string") eventId = id; } catch {}
-          ledgerRows.push({ eventId, lineJson: line, lineIndex: i + 1, recordedAt: now });
+        // Recovery of the legacy crash window: the writer committed the durable
+        // row before its identity-index entry, so a `wfe1:` row can be retained
+        // here with no registry line. Its digest is the producer's own line
+        // digest, so the identity is recovered and registered together with the
+        // tail evidence it belongs to; ordinary duplicate-capable display rows
+        // (`wfc1:` and unidentified) never carry identity authority.
+        let conflicting: string | null = null;
+        for (const [eventId, digest] of tailIdentities) {
+          const prior = seen.get(eventId);
+          if (prior !== undefined && prior !== digest) { conflicting = eventId; break; } // hash-gate: authorized — Refuse a legacy source whose accepted-identity index and retained tail bytes disagree for one identity.
         }
-        tailSourceDigest = ledgerRows.length ? tailDigest : null;
+        if (conflicting !== null) {
+          identityRefused = true;
+          identityRows.length = 0;
+          refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "registry", facts: `identity ${conflicting}`, discarded: registryLoss, reason: "the accepted identity index and the retained tail bytes disagree for this identity", source });
+        } else {
+          for (const [eventId, digest] of tailIdentities) if (!seen.has(eventId)) { seen.set(eventId, digest); identityRows.push({ eventId, digest, acceptedAt: now }); }
+          for (const row of tailRows) ledgerRows.push({ eventId: row.eventId, lineJson: row.lineJson, lineIndex: row.lineIndex, recordedAt: now });
+          tailSourceDigest = ledgerRows.length ? tailDigest : null;
+        }
       }
 
       // Scan-bound sidecar: an indivisible unit — validated in full before its rows
