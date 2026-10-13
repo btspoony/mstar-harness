@@ -524,11 +524,8 @@ import {
   lstatSync as lstatSync11,
   mkdirSync as mkdirSync8,
   openSync as openSync2,
-  renameSync as renameSync3,
-  writeFileSync as writeFileSync6,
   writeSync
 } from "node:fs";
-import { execFileSync as execFileSync6 } from "node:child_process";
 import { dirname as dirname19, join as join31 } from "node:path";
 import { createHash as createHash19, randomUUID as randomUUID7 } from "node:crypto";
 import {
@@ -542,7 +539,7 @@ import {
   readdirSync as readdirSync17,
   readSync as readSync2,
   rmSync as rmSync2,
-  writeFileSync as writeFileSync7
+  writeFileSync as writeFileSync6
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname20, join as join32, relative as relative10, resolve as resolve21, sep as sep12 } from "node:path";
@@ -28491,34 +28488,6 @@ function openWithoutFollowing(path2, flags, mode) {
     throw error;
   }
 }
-function replaceLedgerForTest(path2, stage) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  if (process.env[`MSTAR_LEDGER_REPLACE_${stage.replace("-", "_").toUpperCase()}`] !== path2)
-    return;
-  const displaced = `${path2}.displaced-${stage}`;
-  const replacement = `${path2}.replacement-${stage}`;
-  renameSync3(path2, displaced);
-  writeFileSync6(replacement, `replacement inode canonical bytes (${stage})
-`);
-  renameSync3(replacement, path2);
-}
-function interleavingSeam(path2) {
-  replaceLedgerForTest(path2, "before-commit");
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path2)
-    return;
-  const peer = process.env.MSTAR_LEDGER_PEER_PARTIAL_SCRIPT;
-  if (peer !== undefined && peer !== "")
-    execFileSync6("bun", [peer, path2], { stdio: "ignore" });
-}
-function writeRequestLength(line) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return line.length;
-  const parsed = Number.parseInt(process.env.MSTAR_LEDGER_WRITE_CAPACITY_BYTES ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 && parsed < line.length ? parsed : line.length;
-}
 function fsyncDirectory(dir) {
   const fd = openSync2(dir, "r");
   try {
@@ -28555,16 +28524,14 @@ function commitLedgerFrame(path2, frame) {
     if (!opened.isFile()) {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is not a regular file; nothing was written.`);
     }
-    interleavingSeam(path2);
     assertLedgerPathIdentity(path2, opened, "before append");
     const line = Buffer.concat([Buffer.from(`
 `, "utf8"), frame]);
-    const written = writeSync(fd, line, 0, writeRequestLength(line), null);
+    const written = writeSync(fd, line, 0, line.length, null);
     if (written !== line.length) {
       throw new ExecutionLedgerError("execution-ledgers.append-short", `only ${written} of ${line.length} bytes of the framed note reached ${path2}; the partial bytes stay in place and are never repaired or truncated in a peer's name. Retry the append with a new record id.`);
     }
     fsyncSync(fd);
-    replaceLedgerForTest(path2, "after-fsync");
   } finally {
     closeSync2(fd);
   }
@@ -28949,7 +28916,7 @@ async function openWalWithoutJournalReadSnapshot(context) {
   try {
     const image = join32(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
-    writeFileSync7(`${image}-wal`, "");
+    writeFileSync6(`${image}-wal`, "");
     const handle = await openStore({ harnessDir: scratch }, "read");
     return {
       handle: {
@@ -36142,7 +36109,7 @@ var init_engine = __esm(() => {
 // hooks/src/session-context.ts
 import fs from "node:fs";
 import path2 from "node:path";
-import { execFileSync as execFileSync7 } from "node:child_process";
+import { execFileSync as execFileSync6 } from "node:child_process";
 function readStdinJson() {
   try {
     const raw = fs.readFileSync(0, "utf8");
@@ -36154,7 +36121,7 @@ function readStdinJson() {
   }
 }
 function git(args, cwd) {
-  return execFileSync7("git", args, {
+  return execFileSync6("git", args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]
