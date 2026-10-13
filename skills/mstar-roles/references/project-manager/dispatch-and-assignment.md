@@ -188,6 +188,7 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 **Plan Update**: ...
 **Handoff**: narrative to `project-manager` (not auto-dispatch)
 **Git**: <commit lines or N/A>
+**Git identity evidence**: <real `git log -1 --oneline` with the configured author; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides — `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes)>
 **Worktree path**: <absolute path or N/A>
 ```
 

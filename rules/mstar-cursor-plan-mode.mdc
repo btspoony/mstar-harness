@@ -25,6 +25,7 @@ Before any implement/code todo, CreatePlan **must** list these three bootstrap t
 Do **not** mark an implement todo complete until:
 
 - `git commit` on the authorized Working branch for that **task id** (no end-of-plan batch commit unless PM allowed)
+  Each todo's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 - matching checkbox `- [x]` in the SSOT plan file
 - `status.json` updated when the coordination round requires it
 - evidence: real `git log -1 --oneline`

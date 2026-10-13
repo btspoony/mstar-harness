@@ -82,6 +82,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 3. **mismatch 时**：不产生任何提交。tracked 子树（`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`、`CONCEPTS.md`、迭代 package 中 tracked 部分）的写入本就落在 **integration worktree**（检出 `<spec_integration_branch>` 的专用检出，§3.2 直写）；mismatch 时在正确检出的 integration worktree 重做这些写入，然后重跑本 checklist（进程产物 plans/iterations/status/sdd 为 gitignored 本地工件，经 control root 绝对路径读写，不受影响）。
 
 **在 integration worktree（`integration_worktree_path`，检出 `<spec_integration_branch>`）中执行 —— never the primary checkout**：
+Close commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或用 `-c` 覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
 
 ```bash
 git branch --show-current   # must print <spec_integration_branch> — mismatch → STOP, see above

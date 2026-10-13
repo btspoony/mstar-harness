@@ -72,6 +72,7 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ### Implement
 
+Each implement task's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 - [ ] <task-id-1>: <description>
   - Done when: git commit on Working branch + checkbox [x] in SSOT plan + evidence below
 - [ ] <task-id-2>: ...
