@@ -66,12 +66,9 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  renameSync,
   type Stats,
-  writeFileSync,
   writeSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { canonicalTarget, isNonEmptyString, isPlainObject, sha256Bytes } from "./coordination-write.js";
 import { assertExecutionSessionCurrent } from "./execution-session.js";
@@ -292,40 +289,6 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
   }
 }
 
-/**
- * Test-runner-only atomic replacement at an append boundary.
- */
-function replaceLedgerForTest(path: string, stage: "before-commit" | "after-fsync"): void {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env[`MSTAR_LEDGER_REPLACE_${stage.replace("-", "_").toUpperCase()}`] !== path) return;
-  const displaced = `${path}.displaced-${stage}`;
-  const replacement = `${path}.replacement-${stage}`;
-  renameSync(path, displaced);
-  writeFileSync(replacement, `replacement inode canonical bytes (${stage})\n`);
-  renameSync(replacement, path);
-}
-
-function interleavingSeam(path: string): void {
-  replaceLedgerForTest(path, "before-commit");
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
-  if (process.env.MSTAR_LEDGER_REPLACE_BEFORE_COMMIT === path) return;
-  const peer = process.env.MSTAR_LEDGER_PEER_PARTIAL_SCRIPT;
-  if (peer !== undefined && peer !== "") execFileSync("bun", [peer, path], { stdio: "ignore" });
-}
-
-/**
- * Test-runner-only shortening of the single write call's requested length, so a
- * frame is provably incomplete without mocking the driver. Production always
- * requests the whole frame, and both cases take the same ordinary refusal path:
- * the descriptor reports fewer bytes than the frame, which is exactly what a
- * short append (full filesystem, resource limit) produces.
- */
-function writeRequestLength(line: Buffer): number {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return line.length;
-  const parsed = Number.parseInt(process.env.MSTAR_LEDGER_WRITE_CAPACITY_BYTES ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 && parsed < line.length ? parsed : line.length;
-}
-
 /** Fsync one directory's own entry (used only when this append created a file). */
 function fsyncDirectory(dir: string): void {
   const fd = openSync(dir, "r");
@@ -388,10 +351,9 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
         `${path} is not a regular file; nothing was written.`,
       );
     }
-    interleavingSeam(path);
     assertLedgerPathIdentity(path, opened, "before append");
     const line = Buffer.concat([Buffer.from("\n", "utf8"), frame]);
-    const written = writeSync(fd, line, 0, writeRequestLength(line), null);
+    const written = writeSync(fd, line, 0, line.length, null);
     if (written !== line.length) {
       throw new ExecutionLedgerError(
         "execution-ledgers.append-short",
@@ -400,7 +362,6 @@ function commitLedgerFrame(path: string, frame: Buffer): void {
       );
     }
     fsyncSync(fd);
-    replaceLedgerForTest(path, "after-fsync");
   } finally {
     closeSync(fd);
   }
