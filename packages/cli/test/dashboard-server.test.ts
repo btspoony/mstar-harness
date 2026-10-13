@@ -655,39 +655,37 @@ describe("hostile invocation-cwd dotenv", () => {
     });
     const initial = await refreshProjections(context);
     const beforeHandle = await openStore(context, "read");
-    let before: { revision: number; generation: number; planIds: string[] };
+    let before: { revision: number; generation: number; planRows: Record<string, unknown>[] };
     try {
       before = {
         revision: (beforeHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision,
         generation: (beforeHandle.db.prepare("select generation from projection_meta where id = 1").get() as { generation: number }).generation,
-        planIds: (beforeHandle.db.prepare("select plan_id from projection_plans order by plan_id").all() as { plan_id: string }[]).map((row) => row.plan_id),
+        planRows: beforeHandle.db.prepare("select * from projection_plans order by plan_id").all() as Record<string, unknown>[],
       };
     } finally { beforeHandle.close(); }
     expect(initial.generation).toBe(before.generation);
-    expect(before.planIds).toEqual([planId]);
+    expect(before.planRows.map((row) => row.plan_id)).toEqual([planId]);
 
     const churn = JSON.stringify({ kind: "update-row", workflowId, planId });
-    writeFileSync(join(dir, ".env"), [
+    const invocationDir = mkdtempSync(join(ROOT, "hostile-invocation-cwd-"));
+    expect(existsSync(join(invocationDir, ".mstar"))).toBe(false);
+    writeFileSync(join(invocationDir, ".env"), [
       "MSTAR_STORE_TEST_RUNNER=1",
       `MSTAR_PROJECTION_DB_CHURN='${churn}'`,
       "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR=induced",
+      `MSTAR_HARNESS_DIR=${context.harnessDir}`,
       "",
     ].join("\n"));
-    const cleanEnv = { ...process.env };
-    for (const key of ["MSTAR_STORE_TEST_RUNNER", "MSTAR_PROJECTION_DB_CHURN", "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR", "MSTAR_HARNESS_DIR"]) delete cleanEnv[key];
-    const env = { PATH: cleanEnv.PATH ?? "" };
-    const environmentProof = spawnSync("bun", ["-e", "console.log(JSON.stringify({ runner: process.env.MSTAR_STORE_TEST_RUNNER, churn: process.env.MSTAR_PROJECTION_DB_CHURN, err: process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR }))"], {
-      cwd: dir, env, encoding: "utf8", timeout: 10_000,
-    });
-    expect(environmentProof.status).toBe(0);
-    expect(environmentProof.error).toBeUndefined();
-    expect(JSON.parse(environmentProof.stdout.trim())).toEqual({ runner: "1", churn, err: "induced" });
+    const env = { ...process.env };
+    for (const key of ["MSTAR_STORE_TEST_RUNNER", "MSTAR_PROJECTION_DB_CHURN", "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR", "MSTAR_HARNESS_DIR"]) delete env[key];
 
     const cliDir = join(import.meta.dir, "..");
     const bundle = join(cliDir, "dist", "mstar-harness.js");
     expect(existsSync(bundle)).toBe(true);
+    // No local `.mstar` exists: the built CLI can serve this fixture only if
+    // Bun loaded MSTAR_HARNESS_DIR from this same invocation cwd's `.env`.
     const child = spawn("bun", [bundle, "dashboard", "--port", "0"], {
-      cwd: dir, env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: invocationDir, env, stdio: ["ignore", "pipe", "pipe"],
     });
     let dashboardUrl: string | undefined;
     try {
@@ -724,9 +722,10 @@ describe("hostile invocation-cwd dotenv", () => {
       });
       const apiUrl = new URL("/api/workflows", dashboardUrl);
       apiUrl.searchParams.set("token", new URL(dashboardUrl).searchParams.get("token")!);
-      const response = await raw(apiUrl.href);
+      // Bound the real HTTP request independently of the process startup and shutdown bounds.
+      const response = await fetch(apiUrl, { signal: AbortSignal.timeout(10_000) });
       expect(response.status).toBe(200);
-      const envelope = JSON.parse(response.body) as { projection: { freshness: string; generation: number }; data: { items: Array<{ id: string }> } };
+      const envelope = await response.json() as { projection: { freshness: string; generation: number }; data: { items: Array<{ id: string }> } };
       expect(envelope.projection.freshness).toBe("current");
       expect(envelope.projection.generation).toBe(before.generation);
       expect(envelope.data.items.map((item) => item.id)).toEqual([workflowId]);
@@ -744,7 +743,7 @@ describe("hostile invocation-cwd dotenv", () => {
       const after = {
         revision: (afterHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision,
         generation: (afterHandle.db.prepare("select generation from projection_meta where id = 1").get() as { generation: number }).generation,
-        planIds: (afterHandle.db.prepare("select plan_id from projection_plans order by plan_id").all() as { plan_id: string }[]).map((row) => row.plan_id),
+        planRows: afterHandle.db.prepare("select * from projection_plans order by plan_id").all() as Record<string, unknown>[],
       };
       expect(after).toEqual(before);
     } finally { afterHandle.close(); }
