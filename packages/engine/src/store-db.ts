@@ -231,11 +231,17 @@ export function storeDbPath(context: { harnessDir: string }): string {
   return join(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 
-/** The bounded wait, normalised ONCE at each public entry (contract §2): an
- * injected or invalid value falls back to the published 5000ms constant, so the
- * number used for the pragma is always the number the refusal reports. */
+/** SQLite's `busy_timeout` is a signed 32-bit millisecond count. */
+const MAX_BUSY_TIMEOUT_MS = 2147483647;
+
+/** The bounded wait, normalised ONCE at each public entry (contract §2): the
+ * pragma only accepts a signed 32-bit integer millisecond count, so a caller's
+ * value is floored into that domain and falls back to the published 5000ms
+ * constant when even the floor is out of it — the number the pragma uses is
+ * then the number every refusal reports. */
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_BUSY_TIMEOUT_MS;
+  const floored = Math.floor(value);
+  return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
 
 function refuseOpenFailure(error: unknown, dbPath: string, timeout = DEFAULT_BUSY_TIMEOUT_MS): never {

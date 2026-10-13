@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
+import { backupStore } from "./store-activation.js";
 import {
   MIN_BUN_VERSION,
   MIGRATIONS,
@@ -292,6 +293,43 @@ describe("store-db L2 fix round", () => {
     const timeout = row.timeout ?? row.busy_timeout;
     expect(timeout).toBe(5000);
     handle.close();
+  });
+
+  test("a non-integral bounded wait reaches the pragma as the exact integer every refusal reports", async () => {
+    const dir = mkdtempSync(join(ROOT, "busy-fraction-"));
+    const held = mkdtempSync(join(ROOT, "busy-fraction-holder-"));
+    // SQLite's busy_timeout is an integer millisecond count: the effective
+    // pragma value for 1.5ms must be the SAME normalised integer the refusal
+    // text reports, never the raw 1.5 the pragma would silently truncate.
+    const handle = await initializeStore({ harnessDir: dir }, { busyTimeoutMs: 1.5 });
+    const row = handle.db.prepare("pragma busy_timeout").get() as { timeout?: number; busy_timeout?: number };
+    const effective = row.timeout ?? row.busy_timeout;
+    expect(effective).toBe(1);
+    // The copy is how this suite obtains store bytes this process has not
+    // already mapped, so a competing writer can genuinely hold the file.
+    await backupStore({ harnessDir: dir }, { out: join(held, "store.db") });
+    handle.close();
+    const holder = new DatabaseSync(join(held, "store.db"));
+    try {
+      holder.exec("pragma busy_timeout=0");
+      holder.exec("pragma journal_mode=delete");
+      holder.exec("begin exclusive");
+      holder.prepare("select count(*) as n from store_meta").get();
+      const refusal: unknown = await openStore({ harnessDir: held }, "write", { busyTimeoutMs: 1.5 }).then(
+        () => null,
+        (error) => error,
+      );
+      expect(refusal).toMatchObject({ code: "store.busy" });
+      const message = refusal instanceof Error ? refusal.message : "";
+      expect(message).toContain(`bounded wait (${effective}ms)`);
+    } finally {
+      try {
+        holder.exec("rollback");
+      } catch {
+        // the exclusive section may already be gone
+      }
+      holder.close();
+    }
   });
 
   test("migration-1 forbids self-edges, sorts related endpoints, and constrains imported 0/1", async () => {
