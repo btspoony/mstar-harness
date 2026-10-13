@@ -24215,9 +24215,9 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       refusal ??= `workflow ${entry.id} directory ${dir} is not a real in-root directory (${kind}); rerun store upgrade with \`--ack-skip-workflow ${entry.id}\` to keep that source in place and skip ONLY its legacy IMPORT (the loss is reported in the receipt), or restore it as a real in-root directory, then rerun store upgrade.`;
       continue;
     }
-    if (!isPathWithin(root, dir) || dir === root)
-      throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
     try {
+      if (!isPathWithin(root, dir) || dir === root)
+        throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
       const sessionsDir = join27(dir, "sessions");
       const snapshotPath = join27(dir, WORKFLOW_SNAPSHOT_FILE);
       if (info === null || !existsSync20(snapshotPath)) {

@@ -519,8 +519,13 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
     // must not escape the control root on the default path. It is deliberately
     // placed AFTER the acknowledgement `continue` above, so an acknowledged
     // linked source is never canonicalized (which would resolve its link).
-    if (!isPathWithin(root, dir) || dir === root) throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
     try {
+      // Inside the workflow scope on purpose: an escaping registration is this
+      // workflow's own source failure, so the catch below registers the id and
+      // either honours `--ack-skip-workflow <id>` or raises the actionable refusal.
+      // It still runs AFTER the acknowledgement `continue` above, so an
+      // acknowledged linked source is never canonicalized.
+      if (!isPathWithin(root, dir) || dir === root) throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
       const sessionsDir = join(dir, "sessions");
       const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
       if (info === null || !existsSync(snapshotPath)) {

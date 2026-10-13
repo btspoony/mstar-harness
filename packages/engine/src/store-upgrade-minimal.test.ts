@@ -2445,6 +2445,17 @@ test("an ordinary registered workflow reached through an out-of-root ancestor sy
       code: "execution.migration-conflict",
       message: expect.stringContaining("resolves outside control root"),
     });
+  // The escaping registration is this workflow's own source failure, so the
+  // refusal names the acknowledgement and the id it addresses.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-containment-ancestor-again" }))
+    .rejects.toMatchObject({
+      code: "execution.migration-conflict",
+      message: expect.stringContaining(`--ack-skip-workflow ${workflowId}`),
+    });
+  const skipped = await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "op-containment-ancestor-ack", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(skipped).toMatchObject({ verdict: "upgraded", imported: 0 });
   const store = await openStore(context, "read");
   try { expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 }); }
   finally { store.close(); }
