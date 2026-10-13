@@ -187,23 +187,30 @@ class UnsafeSourceError extends ExecutionError {
 /**
  * Read one registered legacy source leaf through ONE descriptor: the leaf is
  * opened without following a final symlink and WITHOUT blocking, and the same
- * descriptor is verified against the probe by device/inode before it is read,
- * so a swapped LEAF refuses after the type probe instead of being followed.
+ * descriptor is verified against the `lstat` probe by device/inode before it is
+ * read, so a LEAF swapped after that probe refuses instead of contributing the
+ * replacement's bytes.
  *
  * That is the whole guard. These importers assume the control root they read is
  * trusted and defend against ACCIDENTAL symlink traversal, not against a writer
- * already inside that root: an intermediate ANCESTOR directory swapped after
- * the probe is followed by the open into a regular file the `fstat` accepts.
+ * already inside that root. This reader's uncovered case is an intermediate
+ * ANCESTOR directory replaced BEFORE the leaf probe: the probe and the open then
+ * both observe the redirected regular file, so the device/inode comparison
+ * (which rejects a post-probe leaf swap) sees one consistent inode and passes.
  * `isPathWithin` below still refuses a source that resolves *outside* the
  * control root on the default path, but a redirect that stays in-root is not
  * caught here. Where a supported flow imports a tree the operator does not
  * trust (for example a `.mstar` copied from another checkout), the correct shape
  * is a staged, re-validated private copy — not descriptor anchoring.
  *
- * The guard is also only as wide as the platform's constants: `O_NOFOLLOW` and
- * `O_NONBLOCK` are OR-ed in as `?? 0`, so where a runtime omits one the leaf
- * open degrades silently to a plain, blocking open (no Windows CI exercises
- * this today). The guard is described here, never implied.
+ * The guard is also only as wide as the platform's constants, and each flag
+ * degrades independently (`O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`). Where a runtime
+ * omits `O_NOFOLLOW`, only the no-follow protection disappears, so a final
+ * symlink would be followed; where it omits `O_NONBLOCK`, only the non-blocking
+ * open disappears, so a FIFO or other special file could block the open. In both
+ * cases the descriptor checks remain: the regular-file `fstat` refusal, and the
+ * device/inode comparison against the probe. No Windows CI exercises this today,
+ * so the guard is described here, never implied.
  */
 function readSourceBytes(path: string, label: string): Buffer {
   let info;

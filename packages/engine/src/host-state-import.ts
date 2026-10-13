@@ -57,17 +57,23 @@ function lossStatement(refusal: Refusal): string {
  *
  * The guard's reach stops at that final component. The importers assume the
  * control root they read is trusted and defend against ACCIDENTAL symlink
- * traversal, not against a writer already inside that root: a swapped ANCESTOR
- * directory is followed by the open into a regular file that then passes
- * `fstat`. Where a supported flow imports a tree the operator does not trust
- * (for example a `.mstar` copied from another checkout), the correct shape is a
- * staged, re-validated private copy — not descriptor anchoring, which would
- * also buy a platform matrix for a rare maintenance read.
+ * traversal, not against a writer already inside that root. This reader checks
+ * its parent directory before opening (`readInside`) and then verifies only the
+ * descriptor's TYPE, so a parent replaced after that check, or an ancestor above
+ * it, can lead the open to a DIFFERENT regular file and still pass — unlike the
+ * execution importer, which compares device/inode and so rejects that swap when
+ * it happens after its own probe. Where a supported flow imports a tree the
+ * operator does not trust (for example a `.mstar` copied from another checkout),
+ * the correct shape is a staged, re-validated private copy — not descriptor
+ * anchoring, which would also buy a platform matrix for a rare maintenance read.
  *
- * The guard is only as wide as the platform's constants: `O_NOFOLLOW` and
- * `O_NONBLOCK` are OR-ed in as `?? 0`, so where a runtime omits one the leaf
- * open degrades silently to a plain open (no Windows CI exercises this today).
- * The guard is therefore described here, never implied.
+ * The guard is also only as wide as the platform's constants, and each flag
+ * degrades independently (`O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`). Where a runtime
+ * omits `O_NOFOLLOW`, only the no-follow protection disappears, so a final
+ * symlink would be followed; where it omits `O_NONBLOCK`, only the non-blocking
+ * open disappears, so a FIFO or other special file could block the open. In both
+ * cases the regular-file `fstat` refusal remains. No Windows CI exercises this
+ * today, so the guard is described here, never implied.
  */
 function readBytes(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
