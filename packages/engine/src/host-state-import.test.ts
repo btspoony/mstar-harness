@@ -697,3 +697,36 @@ test("a torn native tail line withholds the tail instead of importing an undecid
   expect(acked.imported.ledgerRows).toBe(0);
   expect(acked.imported.identities).toBe(1);
 });
+
+test("a decidable journal does not outrank a torn tail line", async () => {
+  const { context, workflow } = await fixture("journal-torn-tail");
+  const historyDir = join(workflow, "agent-flow-history");
+  mkdirSync(historyDir, { recursive: true });
+  const archived = '{"eventId":"wfe1:session:old"}';
+  writeFileSync(join(historyDir, "chunk-000001.jsonl"), `${archived}\n`);
+  // A complete live row followed by a torn native row: the journal is fully
+  // decidable (the observed tail equals its recorded post-compaction bytes),
+  // yet the second line's identity is undecidable.
+  const tail = '{"eventId":"wfc1:session:new"}\n{"eventId":"wfe1:session:gone","v":1,"kind":"disp';
+  writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), `${JSON.stringify({ id: "wfe1:session:old", d: sha(archived).slice(0, 32) })}\n`);
+  writeFileSync(join(workflow, "agent-flow-compaction.json"), JSON.stringify({
+    version: 1,
+    lines: 1,
+    tailBefore: { bytes: 64, sha256: sha("pre-compaction-tail") },
+    tailAfter: { bytes: Buffer.byteLength(tail), sha256: sha(tail) },
+    archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: Buffer.byteLength(`${archived}\n`), sha256: sha(`${archived}\n`) },
+  }));
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "journal-torn-tail" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("not a parseable row") });
+  // Source-preserved: the torn legacy bytes were never rewritten.
+  expect(readFileSync(join(workflow, "agent-flow.jsonl"), "utf8")).toBe(tail);
+  // The existing source-scoped acknowledgement recovers: the whole tail stays
+  // withheld (no undecidable row imports) while the verified registry lands.
+  const acked = await importDshHostStateFiles({
+    context, operator: "fixture", operationId: "journal-torn-tail-ack", acknowledgedSkips: ["dsh-ledger:wf-journal-torn-tail"],
+  });
+  expect(acked.imported.ledgerRows).toBe(0);
+  expect(acked.imported.identities).toBe(1);
+  expect(acked.findings).toContainEqual(expect.objectContaining({ kind: "dropped-by-ack", category: "tail" }));
+});

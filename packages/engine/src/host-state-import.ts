@@ -258,7 +258,10 @@ function evaluate(context: StoreContext, now: string): Evaluation {
         } catch (e) { tailRefusal = `the compaction journal is not a recognized transaction (${String(e)})`; }
         if (tailRefusal === null && journalDecision !== "invalid") findings.push({ source, kind: "journal", decision: journalDecision });
       }
-      else if (tailUndecidable !== null) tailRefusal = tailUndecidable;
+      // A decidable journal must not outrank an undecidable tail: the real
+      // filesystem/journal reasons above keep their priority, and a torn or
+      // identity-conflicting tail refuses on its own once they are clear.
+      if (tailRefusal === null && tailUndecidable !== null) tailRefusal = tailUndecidable;
       // A genuine tail/journal safety refusal is published whenever the tail bytes
       // are not simply absent: unreadable FLOW, a journal present without FLOW, and
       // an unreadable journal all refuse. Only a truly absent FLOW with no journal
