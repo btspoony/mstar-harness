@@ -1198,6 +1198,15 @@ describe("store-db publication makes the canonical directory entry durable", () 
       }
     };
     expect(await authorityState()).toBe("staged");
+    const sourceBytes = readFileSync(join(projectsDir, "residuals.json"));
+    const before = await openStore(context, "read");
+    let expectedIssues: unknown;
+    try {
+      expectedIssues = before.db.prepare("select * from issues order by id").all();
+      expect(expectedIssues).toContainEqual(expect.objectContaining({ title: "Staged legacy residual", severity: "high" }));
+    } finally {
+      before.close();
+    }
 
     const instrument = failDirectoryBarriers();
     let refusal: unknown;
@@ -1221,12 +1230,12 @@ describe("store-db publication makes the canonical directory entry durable", () 
     expect(await authorityState()).toBe("staged");
     const staged = await openStore(context, "read");
     try {
-      expect(staged.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+      expect(staged.db.prepare("select * from issues order by id").all()).toEqual(expectedIssues);
     } finally {
       staged.close();
     }
     // The staged legacy source bytes are preserved.
-    expect(existsSync(join(projectsDir, "residuals.json"))).toBe(true);
+    expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
 
     // Once the barrier condition clears, the SAME public entry really finishes:
     // the authority activates and the staged rows stay exactly as they were.
@@ -1235,9 +1244,10 @@ describe("store-db publication makes the canonical directory entry durable", () 
     expect(await authorityState()).toBe("active");
     const activated = await openStore(context, "read");
     try {
-      expect(activated.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+      expect(activated.db.prepare("select * from issues order by id").all()).toEqual(expectedIssues);
     } finally {
       activated.close();
     }
+    expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
   }, 60_000);
 });

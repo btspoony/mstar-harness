@@ -80,7 +80,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
           : code === "store.created-handle-failed"
             ? "The named store is created, active and retained. Once the named condition clears, inspect it with mstar status validate; initialization is create-only. For an interrupted upgrade, run mstar store upgrade --harness <same-control-root> --operator <name>."
             : code === "store.publication-barrier-failed"
-              ? "The named store is published and retained; only its directory-entry barrier is outstanding, which is a platform/filesystem capability this one refused. Rerun mstar store upgrade --harness <same-control-root> --operator <name> to retry the barrier on that published path; initialization is create-only, and the upgrade diagnostic names whether any import or activation still remains."
+              ? "The named store is published and retained, but this call could not synchronize its directory entry. Resolve the named platform/filesystem condition, then rerun mstar store upgrade --harness <same-control-root> --operator <name> to retry the barrier and finish any remaining import or activation; initialization is create-only."
             : code === "store.publication-failed"
               ? "No store was created at the named path. Resolve the named filesystem condition (permissions, space or hard-link support). For a fresh harness, run mstar store init --harness <control-root>; for existing legacy sources, run mstar store upgrade --operator <name> --harness <control-root>. Select a hard-link-capable filesystem before either attempt."
               : id === "store.init"
