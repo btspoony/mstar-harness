@@ -143,6 +143,13 @@ export type LegacyV1Conversion = {
    * conversion.
    */
   duplicatePlanIds: DuplicatePlanId[];
+  /**
+   * Every canonical compass the caller acknowledged as non-regular
+   * (`--ack-skip-compass`): it was never read, so it produced no iteration
+   * lifecycle and the plan rows it registered convert as standalone rows. The
+   * caller reports the exact loss per skipped iteration.
+   */
+  skippedCompasses: SkippedCompass[];
   /** Harness-relative files the conversion read (source-digest input). */
   sources: string[];
   /** sha256 of the exact bytes read for each entry of `sources`, same order. */
@@ -164,6 +171,29 @@ export type DuplicatePlanId = {
   /** Ordinals of the rows that are NOT converted; each is a lost duplicate. */
   dropped: number[];
 };
+
+/** One canonical compass this conversion was acknowledged to skip (`--ack-skip-compass <iteration-id>`). */
+export type SkippedCompass = {
+  /** Iteration DIRECTORY name under `iterations/`, which is all an unread compass can be addressed by. */
+  id: string;
+  /** Harness-relative compass path, for the receipt's per-item loss report. */
+  path: string;
+};
+
+/**
+ * An acknowledgement that named no compass this conversion could skip: the
+ * iteration directory holds no canonical `delivery-compass.md`, that compass is
+ * a regular readable file, or the root is not a v1 tree at all. Carried as a
+ * distinct type so the import producer raises it as the discoverable same-entry
+ * usage refusal instead of a generic migration failure, mirroring
+ * `DeliveryDeclarationError`.
+ */
+export class CompassSkipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CompassSkipError";
+  }
+}
 
 /** The converted declaration facts one caller supplies for its ACTIVE lifts. */
 export type DeliveryLiftDeclarations = readonly DeliveryLiftDeclaration[];
@@ -222,15 +252,34 @@ function compareIds(a: string, b: string): number {
  * `delivery-compass.<role>.md` review-chain variants are NOT grouping
  * sources). A malformed compass (unreadable/unsupported frontmatter or
  * unknown status) fails loud — a conversion must never misgroup silently.
+ *
+ * A non-regular canonical compass refuses by name, and the caller's
+ * `--ack-skip-compass <iteration DIRECTORY name>` answers that refusal: the
+ * leaf is never opened, so the iteration contributes no lifecycle and the plans
+ * it registered convert as standalone rows. An unacknowledged one is collected
+ * in `refusals` rather than thrown, so the caller can rank it against its own
+ * unmatched acknowledgements; every other acknowledgement is returned as
+ * unmatched, so an id that is not a refused compass stays a usage error instead
+ * of a silent no-op.
  */
-function scanCompasses(harnessDir: string): CompassInfo[] {
+function scanCompasses(harnessDir: string, acknowledgedCompassSkips: ReadonlySet<string>): {
+  compasses: CompassInfo[];
+  skipped: SkippedCompass[];
+  refusals: Error[];
+  unmatchedAcknowledgements: string[];
+} {
   const iterationsDir = join(harnessDir, "iterations");
   const out: CompassInfo[] = [];
+  const skipped: SkippedCompass[] = [];
+  const refusals: Error[] = [];
+  const consumed = new Set<string>();
   let entries;
   try {
     entries = readdirSync(iterationsDir, { withFileTypes: true });
   } catch {
-    return out; // no iterations dir -> no registered iteration lifecycles
+    // No iterations dir -> no registered iteration lifecycles, and no compass
+    // any acknowledgement could have addressed.
+    return { compasses: out, skipped, refusals, unmatchedAcknowledgements: [...acknowledgedCompassSkips].sort(compareIds) };
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -244,13 +293,24 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     // treatment.
     let info;
     try { info = lstatSync(compassPath); } catch { continue; } // missing: not an iteration
-    // One refusal text for every non-regular shape (static or raced), naming both
+    // One refusal text for every non-regular shape (static or raced), naming all
     // supported continuations plus the route that skips legacy imports entirely.
     const refusalPath = JSON.stringify(compassPath);
     const notRegular = (): Error => new Error(
-      `refusing to convert: compass ${refusalPath} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, or remove it to convert those plans as standalone rows, then rerun store upgrade. To explicitly start WITHOUT any legacy imports, use \`store init --harness <new-empty-control-root>\`; existing stores and all legacy bytes remain untouched.`,
+      `refusing to convert: compass ${refusalPath} is not a regular in-root file (a linked or special path is never read); replace it with a regular file to keep this iteration's grouping, rerun store upgrade with \`--ack-skip-compass ${entry.name}\` to leave the compass unread and convert the plans it registered as standalone rows (the loss is reported in the receipt), or remove it to convert those plans as standalone rows; to explicitly start WITHOUT any legacy imports, use \`store init --harness <new-empty-control-root>\`; existing stores and all legacy bytes remain untouched.`,
     );
-    if (info.isSymbolicLink() || !info.isFile()) throw notRegular();
+    if (info.isSymbolicLink() || !info.isFile()) {
+      if (acknowledgedCompassSkips.has(entry.name)) {
+        consumed.add(entry.name);
+        skipped.push({ id: entry.name, path: relative(harnessDir, compassPath).split(/[\\/]+/).join("/") });
+        continue;
+      }
+      // Collected, not thrown: an acknowledgement that names nothing this
+      // conversion refuses is caller input and must win over this source
+      // refusal, exactly like the importer's other acknowledgement guards.
+      refusals.push(notRegular());
+      continue;
+    }
     let fd: number | undefined;
     try {
       fd = openSync(compassPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
@@ -296,7 +356,13 @@ function scanCompasses(harnessDir: string): CompassInfo[] {
     });
   }
   out.sort((a, b) => compareIds(a.id, b.id));
-  return out;
+  skipped.sort((a, b) => compareIds(a.id, b.id));
+  return {
+    compasses: out,
+    skipped,
+    refusals,
+    unmatchedAcknowledgements: [...acknowledgedCompassSkips].filter((id) => !consumed.has(id)).sort(compareIds),
+  };
 }
 
 /** Deterministic max/min over candidate legacy dates (ignores undefined). */
@@ -582,8 +648,15 @@ function applyRootMetadataLift(
  * re-acquiring the path (a leaf replaced between the two reads would otherwise
  * decide the classification from one inode and the rows from another). Callers
  * without a prior read (the standalone conversion entry) keep the path read.
+ *
+ * `acknowledgedCompassSkips` carries the caller's `--ack-skip-compass` ids (the
+ * iteration DIRECTORY names under `iterations/`): an acknowledged non-regular
+ * compass is never opened, so its iteration produces no lifecycle and the plans
+ * it registered convert as standalone rows — reported in `skippedCompasses`.
+ * An id that names no such refused compass is a `CompassSkipError` (caller
+ * input), never a silent skip.
  */
-export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDeclarations = [], verifiedStatusBytes?: Buffer): LegacyV1Conversion {
+export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDeclarations = [], verifiedStatusBytes?: Buffer, acknowledgedCompassSkips: readonly string[] = []): LegacyV1Conversion {
   const statusPath = join(root, MIGRATE_STATUS_FILE);
   const source = verifiedStatusBytes === undefined
     ? readArtifactBytes(statusPath)
@@ -641,7 +714,18 @@ export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDecl
   const rootUpdatedAt = dateString(legacy.updated_at) ?? dateString(metadata.updated_at) ?? SYNTHESIZED_DATE;
   const updatedAt = dateString(metadata.updated_at) ?? rootUpdatedAt;
 
-  const compasses = scanCompasses(root);
+  const scan = scanCompasses(root, new Set(acknowledgedCompassSkips));
+  // Caller input first: an acknowledgement that names no refused compass is a
+  // usage error, and ranking it before the source refusal keeps the two
+  // refusals' contracts (exit 2 vs exit 1) in the order the operator can act on.
+  if (scan.unmatchedAcknowledgements.length > 0) {
+    throw new CompassSkipError(
+      `--ack-skip-compass ${scan.unmatchedAcknowledgements.join(" ")} matched no refused compass \u2014 no canonical iterations/<iteration-id>/delivery-compass.md under this v1 root is a non-regular leaf (a linked, special or otherwise non-regular path) this conversion refuses. ` +
+        `Pass the iteration DIRECTORY name of a compass this invocation refuses as non-regular (the refusal names that exact form), or omit --ack-skip-compass entirely.`,
+    );
+  }
+  if (scan.refusals.length > 0) throw scan.refusals[0]!;
+  const compasses = scan.compasses;
   // Compass iteration ids become `workflows/<id>/...` path segments (and
   // `compass_ref` values) — refuse unsafe ids fail-loud.
   for (const compass of compasses) {
@@ -743,6 +827,7 @@ export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDecl
     updatedAt,
     snapshots,
     duplicatePlanIds,
+    skippedCompasses: scan.skipped,
     sources: compasses.map((compass) => relative(root, compass.file).split(/[\\/]+/).join("/")),
     sourceHashes: compasses.map((compass) => [
       relative(root, compass.file).split(/[\\/]+/).join("/"),

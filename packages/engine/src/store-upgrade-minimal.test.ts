@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
-import { upgradeStoreMinimal } from "./execution-minimal-import.js";
+import { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
 import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
@@ -3513,6 +3513,82 @@ test("a duplicated standalone v1 plan id is a skippable source instead of a whol
     reason: expect.stringContaining("plan id v1-standalone is duplicated in the v1 root plans[]"),
   });
   expect(acked.dispositions).toContainEqual(expect.stringContaining("plan id v1-standalone: duplicate plan id in the v1 root plans[]"));
+});
+
+test("an acknowledged non-regular v1 compass is never read and its plans import as standalone rows", async () => {
+  const { context } = legacyV1Workspace("v1-ack-compass");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const relocated = join(context.harnessDir, "relocated-compass.md");
+  writeFileSync(relocated, readFileSync(compass));
+  rmSync(compass);
+  symlinkSync(relocated, compass);
+  const input = { context, operator: "operator", operationId: "op-v1-ack-compass", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  // Default: the refusal names the exact acknowledgement that skips this
+  // iteration, and nothing commits.
+  const error = await upgradeStoreMinimal(input)
+    .then(() => { throw new Error("expected a compass refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("execution.migration-conflict");
+  expect(error.message).toContain("--ack-skip-compass iter-v1");
+  // An acknowledgement naming a compass this invocation did not refuse is caller
+  // input (exit 2 at the command surface), never a silent skip.
+  await expect(upgradeStoreMinimal({ ...input, operationId: "op-v1-ack-compass-unmatched", acknowledgedCompassSkips: ["iter-not-refused"] }))
+    .rejects.toMatchObject({ code: "execution.compass-skip-unmatched" });
+  // With the acknowledgement the compass is never opened, the iteration does not
+  // exist as a lifecycle and its registered plan imports as a standalone row.
+  const realOpen = nodeFs.openSync;
+  const opened: string[] = [];
+  const spy = spyOn(nodeFs, "openSync").mockImplementation(((target: string, ...rest: unknown[]) => {
+    if (typeof target === "string") opened.push(target);
+    return (realOpen as (...args: unknown[]) => number)(target, ...rest);
+  }) as never);
+  let acked: MinimalStoreUpgradeResult;
+  try {
+    acked = await upgradeStoreMinimal({ ...input, operationId: "op-v1-ack-compass-acked", acknowledgedCompassSkips: ["iter-v1"] });
+  } finally { spy.mockRestore(); }
+  expect(opened).not.toContain(compass);
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["v1-standalone", "wf-v1-ack-compass"] });
+  expect(acked.skipped).toContainEqual({
+    path: "iterations/iter-v1/delivery-compass.md",
+    reason: expect.stringContaining("iteration iter-v1 skipped by --ack-skip-compass"),
+  });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("iteration iter-v1: skipped by --ack-skip-compass"));
+  const store = await openStore(context, "read");
+  try {
+    const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("wf-v1-ack-compass") as { state_json: string };
+    expect(JSON.parse(row.state_json)).toMatchObject({ type: "plan" });
+  } finally { store.close(); }
+});
+
+test("the DSH retry names the compass acknowledgement and the delivery declaration it still needs", async () => {
+  const { context } = legacyV1Workspace("dsh-retry-compass");
+  const workflowId = "wf-dsh-retry-compass";
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const relocated = join(context.harnessDir, "relocated-compass.md");
+  writeFileSync(relocated, readFileSync(compass));
+  rmSync(compass);
+  symlinkSync(relocated, compass);
+  const dshDir = join(context.harnessDir, "workflows", workflowId);
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(join(dshDir, "agent-flow-ids.jsonl"), '{"id":"wfe1:x:1","d":"a"}\n{"id":"wfe1:x:1","d":"b"}\n');
+  const input = {
+    context, operator: "operator", operationId: "op-dsh-retry-compass",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedCompassSkips: ["iter-v1"],
+  };
+  const error = await upgradeStoreMinimal(input)
+    .then(() => { throw new Error("expected a DSH refusal"); }, (failure: Error & { code?: string }) => failure);
+  expect(error.code).toBe("store.upgrade-dsh-source-refused");
+  expect(error.message).toContain(`dsh-ledger:${workflowId}`);
+  // The unchanged root still refuses that compass and still needs the delivery
+  // declaration, so the advertised retry names all three acknowledgements.
+  expect(error.message).toContain("--ack-skip-compass iter-v1");
+  expect(error.message).toContain(JSON.stringify(V1_STANDALONE_DECLARATION[0]));
+  expect(error.message).toContain("--ack-skip-workflow v1-standalone wf-dsh-retry-compass");
+  const retried = await upgradeStoreMinimal({
+    ...input, operationId: "op-dsh-retry-compass-2",
+    acknowledgedSkips: [`dsh-ledger:${workflowId}`],
+    acknowledgedWorkflowSkips: ["v1-standalone", "wf-dsh-retry-compass"],
+  });
+  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
 });
 
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {

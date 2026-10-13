@@ -13,7 +13,7 @@
  * unsafe/duplicate id refusals, and cross-class id collisions.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJson } from "../src/core.js";
@@ -380,6 +380,39 @@ describe("convertLegacyV1Tree — refusals", () => {
       doc.plans.push({ id: "v2.0.0", title: "collides with the iteration", file: "x.md", status: "Todo" });
       writeFileSync(join(root, MIGRATE_STATUS_FILE), JSON.stringify(doc));
       expect(() => convertLegacyV1Tree(root)).toThrow(/lifecycle id collision/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an acknowledged non-regular compass is not read and its plans convert as standalone rows", () => {
+    const root = fixtureTree();
+    try {
+      const compass = join(root, "iterations", "v2.0.0", "delivery-compass.md");
+      const outside = join(root, "relocated-compass.md");
+      writeFileSync(outside, readFileSync(compass));
+      rmSync(compass);
+      symlinkSync(outside, compass);
+      // Default: the refusal names the acknowledgement that skips exactly this
+      // iteration, alongside the two filesystem repairs.
+      expect(() => convertLegacyV1Tree(root)).toThrow(/--ack-skip-compass v2\.0\.0/);
+      // An acknowledgement naming a compass this conversion did not refuse is
+      // caller input, never a silent no-op.
+      expect(() => convertLegacyV1Tree(root, [], undefined, ["v9.9.9"])).toThrow(/--ack-skip-compass v9\.9\.9 matched no refused compass/);
+      const converted = convertLegacyV1Tree(root, [], undefined, ["v2.0.0"]);
+      expect(converted.skippedCompasses).toEqual([{ id: "v2.0.0", path: "iterations/v2.0.0/delivery-compass.md" }]);
+      expect(converted.snapshots.some((snapshot) => snapshot.id === "v2.0.0")).toBe(false);
+      for (const planId of [
+        "00000808-slice1-engine-foundation",
+        "00000808-slice2-sdd-iteration",
+        "00000808-slice3-dispatch-git-gates",
+        "00000808-slice4-lints-scaffolds",
+        "00000808-slice5-hardgates-close",
+      ]) {
+        const snapshot = converted.snapshots.find((candidate) => candidate.id === planId)!;
+        expect(snapshot.type).toBe("plan");
+        expect(snapshot.data.plans).toHaveLength(1);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
