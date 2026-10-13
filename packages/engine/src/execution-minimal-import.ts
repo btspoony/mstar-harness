@@ -548,8 +548,8 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (refusedCollisions.length > 0) {
       conflict(
         `the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow. ` +
-          `Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt), or remove/relocate the named legacy sources from this control root, then rerun store upgrade. ` +
-          `No native row and no legacy byte was changed by this attempt.`,
+          `Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). ` +
+          `No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`,
       );
     }
     let imported = 0;
