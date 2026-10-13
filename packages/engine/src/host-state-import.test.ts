@@ -591,8 +591,9 @@ test("a legacy source leaf swapped for a symlink at the open boundary is never f
     symlinkSync(outside, idsPath);
   };
   const lstatSpy = spyOn(nodeFs, "lstatSync").mockImplementation(((path: string) => {
+    const stat = realLstatSync(path);
     swapAt(path);
-    return realLstatSync(path);
+    return stat;
   }) as never);
   const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((path: string, flags: number) => {
     swapAt(path);
@@ -708,12 +709,13 @@ test("a decidable journal does not outrank a torn tail line", async () => {
   // decidable (the observed tail equals its recorded post-compaction bytes),
   // yet the second line's identity is undecidable.
   const tail = '{"eventId":"wfc1:session:new"}\n{"eventId":"wfe1:session:gone","v":1,"kind":"disp';
+  const tailBefore = `${archived}\n${tail}`;
   writeFileSync(join(workflow, "agent-flow.jsonl"), tail);
   writeFileSync(join(workflow, "agent-flow-ids.jsonl"), `${JSON.stringify({ id: "wfe1:session:old", d: sha(archived).slice(0, 32) })}\n`);
   writeFileSync(join(workflow, "agent-flow-compaction.json"), JSON.stringify({
     version: 1,
     lines: 1,
-    tailBefore: { bytes: 64, sha256: sha("pre-compaction-tail") },
+    tailBefore: { bytes: Buffer.byteLength(tailBefore), sha256: sha(tailBefore) },
     tailAfter: { bytes: Buffer.byteLength(tail), sha256: sha(tail) },
     archive: { chunk: "chunk-000001.jsonl", offset: 0, bytes: Buffer.byteLength(`${archived}\n`), sha256: sha(`${archived}\n`) },
   }));
