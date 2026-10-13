@@ -37,6 +37,15 @@ Backup captures a consistent native database image, including committed WAL stat
 
 The native restore receipt is authoritative. Failure to write its optional filesystem copy does not turn an already-committed restore into a refusal: the successful result returns `recoveryReceiptPath: null`. A proven pre-commit failure reclaims only that attempt's newly owned safety image; a changed or unreadable store generation preserves the image rather than treating a missing operation row as proof that no commit occurred. Dsh skip acknowledgements can recover unregistered Dsh-only symlink sources without following them, including a symlinked whole `workflows/` root with `--ack-skip-dsh dsh-workflows`; the receipt discloses the dropped source while preserving the link and target bytes. This never authorizes reading or discarding registered execution sources through symlinks.
 
+For registered v2 execution sources refused because their root or directory is a symlink, `--ack-skip-workflow <id...>` explicitly skips importing only the original IDs named by the refusal. It never reads their linked targets, changes source bytes or erases existing native rows; receipts name each lost import, and skipped workflows are not automatically resumable. Dsh disposal still needs its independent acknowledgement. For a linked whole root naming `legacy-a` and `legacy-b`, retry the same source with:
+
+```sh
+mstar-harness store upgrade --harness .mstar --operator maintenance \
+  --ack-skip-workflow legacy-a legacy-b --ack-skip-dsh dsh-workflows
+```
+
+Only acknowledge imports you intend to lose. Trusted, unknown or inapplicable IDs refuse; remove those IDs and retry the same source, or omit `--ack-skip-workflow` entirely. Per-directory Dsh selectors come from the separate Dsh refusal; use `store upgrade --help` for the CLI input or MCP `ackSkipWorkflow: ["legacy-a", "legacy-b"]`.
+
 Workflow notes are ordinary admitted append facts, not execution authority. Current-session, provenance and trusted-target checks still govern admission, but an admitted append may finish after a later session revocation. There is no cancellation-after-admission guarantee or SQLite writer transaction spanning the filesystem append; repeated IDs may append again, and receipts return only the note ID.
 
 | Command | Purpose | Owning skill |
