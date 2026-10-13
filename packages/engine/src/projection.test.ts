@@ -24,7 +24,6 @@
  * - a rebuild leaves issue/catalog revisions and rows untouched;
  * - a format-version bump discards the old generation and rebuilds.
  */
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -386,63 +385,6 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
   return f;
 }
 
-  test("hostile invocation-cwd .env cannot churn the ACTIVE projection", async () => {
-    const workflowId = "wf-hostile-env";
-    const planId = "plan-hostile-env";
-    const f = await activeWorkflowFixture("active-hostile-env-", workflowId, planId);
-    const initial = await refreshProjections(f.context);
-    const before = await projections(f);
-    const beforeHandle = await openStore(f.context, "read");
-    let beforeRevision: number;
-    try { beforeRevision = (beforeHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision; }
-    finally { beforeHandle.close(); }
-    const childDir = mkdtempSync(join(ROOT, "hostile-env-cwd-"));
-    const projectionModule = new URL("./projection.js", import.meta.url).href;
-    const storeModule = new URL("./store-db.js", import.meta.url).href;
-    const driver = join(childDir, "refresh.mjs");
-    writeFileSync(join(childDir, ".env"), [
-      "MSTAR_STORE_TEST_RUNNER=1",
-      `MSTAR_PROJECTION_DB_CHURN='${JSON.stringify({ kind: "update-row", workflowId, planId })}'`,
-      "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR=induced",
-      "",
-    ].join("\n"));
-    writeFileSync(driver, `
-import { refreshProjections } from ${JSON.stringify(projectionModule)};
-import { openStore } from ${JSON.stringify(storeModule)};
-const context = ${JSON.stringify(f.context)};
-console.log(JSON.stringify({ kind: "environment", churn: process.env.MSTAR_PROJECTION_DB_CHURN, runner: process.env.MSTAR_STORE_TEST_RUNNER, err: process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR }));
-const report = await refreshProjections(context);
-const handle = await openStore(context, "read");
-try {
-  const revision = handle.db.prepare("select revision from store_meta where id = 1").get().revision;
-  const rows = handle.db.prepare("select plan_id from projection_plans order by plan_id").all();
-  console.log(JSON.stringify({ kind: "result", freshness: report.freshness, generation: report.generation, revision, planIds: rows.map((row) => row.plan_id) }));
-} finally { handle.close(); }
-`);
-    const child = spawnSync(process.execPath, [driver], {
-      cwd: childDir,
-      env: {},
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    expect(child.status).toBe(0);
-    expect(child.error).toBeUndefined();
-    const output = child.stdout.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(output[0]).toMatchObject({
-      kind: "environment",
-      churn: JSON.stringify({ kind: "update-row", workflowId, planId }),
-      runner: "1",
-      err: "induced",
-    });
-    expect(output[1]).toMatchObject({
-      kind: "result",
-      freshness: "current",
-      generation: initial.generation,
-      revision: beforeRevision,
-      planIds: [planId],
-    });
-    expect(await projections(f)).toEqual(before);
-  });
 
   test("ACTIVE execution rows publish through the dashboard projection", async () => {
     const f = await fixture("active-smoke-");

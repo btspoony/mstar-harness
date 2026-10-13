@@ -30,7 +30,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
@@ -55,7 +55,6 @@ const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
-afterEach(() => {});
 
 type Fixture = { dir: string; harness: string; context: StoreContext };
 
