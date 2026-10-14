@@ -410,6 +410,33 @@ describe("mstar session run — documented invocation", () => {
     expect(identity.sessionId).not.toBe(COORDINATOR_ID);
   });
 
+  test("a child the launcher cannot find surfaces the admitted exit 127", async () => {
+    const fixture = await activeFixture("mstar-session-missing-child");
+    const missing = spawnCli(
+      [
+        "session",
+        "run",
+        "--workflow",
+        WORKFLOW_ID,
+        "--role",
+        "coordinator",
+        "--harness",
+        fixture.harnessDir,
+        "--",
+        "mstar-binary-that-does-not-exist",
+      ],
+      fixture,
+      cliEnv(fixture),
+    );
+    // The admitted child outcome survives the launcher: a missing executable is
+    // the effect's own 127, reported in the child-exit envelope.
+    expect(missing.exitCode).toBe(127);
+    expect(jsonOf(missing)).toMatchObject({ command: "session.run", status: "error", code: "session.child-exit", exitCode: 127 });
+    // The refusal still names the cause and a reachable recovery.
+    expect(stringMember(jsonOf(missing), "message")).toContain("executable not found in $PATH");
+    expect(stringMember(jsonOf(missing), "recovery")).toContain("mstar session run");
+  });
+
   test("reports the signal a child was killed by, and refuses a plan selector on the coordinator launch", async () => {
     const fixture = await activeFixture("mstar-session-signal");
     const killed = spawnCli(
@@ -1266,6 +1293,28 @@ async function storedTerminalState(fixture: Fixture): Promise<{ status?: unknown
   }
 }
 
+/**
+ * The one `mstar …` invocation a refusal's recovery advertises, with its
+ * angle-bracket placeholders bound to the caller's own facts. Flags and order
+ * come from the refusal text itself, so an advertised argument shape the
+ * parser rejects fails the caller that runs this.
+ */
+function advertisedInvocation(recovery: string, bindings: ReadonlyArray<readonly [RegExp, string]>): string[] {
+  const start = recovery.indexOf("mstar ");
+  if (start < 0) throw new Error(`recovery names no mstar invocation: ${recovery}`);
+  const from = recovery.slice(start + "mstar ".length);
+  const boundary = from.search(/[.;]\s/);
+  const clause = (boundary < 0 ? from : from.slice(0, boundary)).trim();
+  const argv = clause.split(/\s+/).map((token) => {
+    const cleaned = token.replace(/[.;,]+$/, "");
+    const binding = bindings.find(([pattern]) => pattern.test(cleaned));
+    return binding === undefined ? cleaned : binding[1];
+  });
+  const unbound = argv.filter((token) => /^<.*>$/.test(token));
+  if (unbound.length > 0) throw new Error(`recovery advertises unbound placeholder(s) ${unbound.join(", ")}: ${recovery}`);
+  return argv;
+}
+
 describe("mstar plan — direct coordinator prepare and completion (standalone development)", () => {
   test("the coordinator prepares, progresses and completes the row with no second seat", async () => {
     const fixture = await activeDeliveryFixture("mstar-direct-completion");
@@ -1400,6 +1449,75 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(phase6.exitCode).toBe(0);
     expect(jsonOf(phase6)).toMatchObject({ status: "ok", data: { phase: 6 } });
+  }, 30_000);
+
+  test("the plan.complete refusal advertises a recovery that completes the row verbatim", async () => {
+    const fixture = await activeDeliveryFixture("mstar-completion-recovery");
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-recovery");
+
+    const prepared = runCli(
+      ["plan", "prepare", "--plan", PLAN_ID,
+        ...prepareConfig(fixture, { worktreePath: fixture.featurePath, workingBranch: "feature/exec-session" }),
+        "--operation", "prepare-recovery", "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode, prepared.stdout).toBe(0);
+    const startPath = join(fixture.root, "recovery-start.json");
+    writeJson(startPath, { status: "InProgress", summary: "recovery start", evidence_paths: [fixture.qaReport] });
+    expect(runCli(
+      ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    ).exitCode).toBe(0);
+
+    const evidencePath = join(fixture.root, "recovery-completion.json");
+    writeJson(evidencePath, {
+      source_sha: fixture.sourceSha,
+      review_base: fixture.baseSha,
+      review_head: fixture.sourceSha,
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+
+    // The refusal an operator sees before the row is review-complete: the text
+    // this case then executes IS the recovery that refusal advertised.
+    const refused = runCli(
+      ["plan", "complete", "--plan", "plan-absent", "--file", evidencePath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    const recovery = stringMember(objectMember(jsonOf(refused), "details"), "recovery");
+    if (recovery === undefined) throw new Error(`the plan.complete refusal carries no details.recovery: ${refused.stdout}`);
+    // The advertised shape is the one the parser accepts: a path, never an
+    // inline-JSON flag given a file path.
+    expect(recovery).toContain("--file <absolute-evidence.json>");
+    expect(recovery).not.toContain("--evidence <");
+
+    const reviewPath = join(fixture.root, "recovery-review.json");
+    writeJson(reviewPath, { status: "InReview", summary: "recovery review", evidence_paths: [fixture.qaReport] });
+    expect(runCli(
+      ["plan", "progress", "--plan", PLAN_ID, "--file", reviewPath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    ).exitCode).toBe(0);
+
+    // The advertised invocation, verbatim: every flag and value comes from the
+    // refusal text, with only its own placeholders bound to this fixture.
+    const advertised = advertisedInvocation(recovery, [
+      [/^<workflow/, WORKFLOW_ID],
+      [/^<plan/, PLAN_ID],
+      [/\.json>$/, evidencePath],
+    ]);
+    const applied = runCli(advertised, fixture, identity);
+    expect(applied.exitCode, applied.stdout).toBe(0);
+    expect(jsonOf(applied).command).toBe("plan.complete");
+    expect(await storedRowStatus(fixture)).toBe("Done");
   }, 30_000);
 
   test("the removed transfer verbs are absent from the command surface", async () => {

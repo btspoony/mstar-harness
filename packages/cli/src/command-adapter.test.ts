@@ -1,7 +1,8 @@
 import { encodeExecutionSessionRef, serializeExecutionValue, type ExecutionIdentity } from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions, getCommandSchemas, type InvocationContext } from "@mstar-harness/commands";
-import { mintedIdentityScopeProblem, renderCommandContract, resolveCliSessionIdentity } from "./command-adapter";
-import { afterEach, expect, test } from "bun:test";
+import { mintedIdentityScopeProblem, readStdinPayload, renderCommandContract, resolveCliSessionIdentity } from "./command-adapter";
+import { PassThrough } from "node:stream";
+import { afterEach, describe, expect, test } from "bun:test";
 test("issue payload help uses registry field requiredness", () => {
   const definitions = getCommandDefinitions();
   const close = definitions.find((definition) => definition.id === "issue.close");
@@ -143,4 +144,36 @@ test("registry exposes schema descriptors for supported operations", async () =>
     const published = await executeCommand("schema", { command: definition.id }, context);
     expect(published).toMatchObject({ status: "ok", data: { descriptor: { id: definition.id } } });
   }
+});
+
+describe("stdin payload reader", () => {
+  test("a silent non-interactive stream refuses instead of holding the command open, and detaches its listeners", async () => {
+    const stream = new PassThrough();
+    await expect(readStdinPayload(stream, 20)).rejects.toMatchObject({ code: "command.stdin-unavailable" });
+    expect(stream.listenerCount("data")).toBe(0);
+    expect(stream.listenerCount("end")).toBe(0);
+    expect(stream.listenerCount("error")).toBe(0);
+    stream.destroy();
+  });
+
+  test("a delivered payload resolves and leaves no listener behind", async () => {
+    const stream = new PassThrough();
+    const read = readStdinPayload(stream, 1_000);
+    stream.write("payload\n");
+    stream.end();
+    await expect(read).resolves.toBe("payload\n");
+    expect(stream.listenerCount("data")).toBe(0);
+    expect(stream.listenerCount("end")).toBe(0);
+    expect(stream.listenerCount("error")).toBe(0);
+  });
+
+  test("an interactive terminal keeps its unbounded read", async () => {
+    const stream = Object.assign(new PassThrough(), { isTTY: true });
+    const read = readStdinPayload(stream, 20);
+    // Well past the bound: an interactive producer is a human, not a silent pipe.
+    await Bun.sleep(80);
+    stream.write("typed\n");
+    stream.end();
+    await expect(read).resolves.toBe("typed\n");
+  });
 });
