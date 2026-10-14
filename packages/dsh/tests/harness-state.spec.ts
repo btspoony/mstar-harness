@@ -118,9 +118,9 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
     return harnessDir
   }
 
-  it('severity is the issue vocabulary verbatim, and the buckets read critical→info', async () => {
+  it('severity is the issue vocabulary verbatim, and the buckets read critical→nit', async () => {
     const harnessDir = await seedWithIssues()
-    await seedOpenIssue(harnessDir, { title: 'info issue', severity: 'info', operationId: 'op-i' })
+    await seedOpenIssue(harnessDir, { title: 'nit issue', severity: 'nit', operationId: 'op-i' })
     await seedOpenIssue(harnessDir, { title: 'critical issue', severity: 'critical', operationId: 'op-c' })
     await seedOpenIssue(harnessDir, { title: 'medium issue', severity: 'medium', operationId: 'op-m' })
 
@@ -128,13 +128,13 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
     expect(payload.state?.residuals).toEqual([
       { severity: 'critical', count: 1 },
       { severity: 'medium', count: 1 },
-      { severity: 'info', count: 1 },
+      { severity: 'nit', count: 1 },
     ])
     // Severity rank desc first: the critical leads regardless of capture order.
     expect(payload.state?.residualFindings?.map((finding) => [finding.severity, finding.title])).toEqual([
       ['critical', 'critical issue'],
       ['medium', 'medium issue'],
-      ['info', 'info issue'],
+      ['nit', 'nit issue'],
     ])
   })
 
@@ -144,26 +144,26 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
       await seedOpenIssue(harnessDir, { title: `critical ${index}`, severity: 'critical', operationId: `op-c${index}` })
     }
     for (let index = 1; index <= 8; index++) {
-      await seedOpenIssue(harnessDir, { title: `info ${index}`, severity: 'info', operationId: `op-n${index}` })
+      await seedOpenIssue(harnessDir, { title: `nit ${index}`, severity: 'nit', operationId: `op-n${index}` })
     }
 
     const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state?.residuals).toEqual([
       { severity: 'critical', count: 4 },
-      { severity: 'info', count: 8 },
+      { severity: 'nit', count: 8 },
     ])
     const findings = payload.state?.residualFindings
     expect(findings).toHaveLength(10)
-    // The four criticals lead; the six info rows shown are whichever the
+    // The four criticals lead; the six nit rows shown are whichever the
     // authority's own order ranked highest WITHIN that severity (rank desc →
-    // last real activity desc → id asc — the info rows were captured at
+    // last real activity desc → id asc — the nit rows were captured at
     // different instants, so their activity order, not their id order,
     // decides). What the display must never do is invent a rank or an id.
     const criticalIds = new Set(['I-000001', 'I-000002', 'I-000003', 'I-000004'])
     expect(findings?.slice(0, 4).every((finding) => finding.severity === 'critical' && criticalIds.has(finding.id))).toBe(true)
-    expect(findings?.slice(4).every((finding) => finding.severity === 'info')).toBe(true)
-    const infoIds = new Set(Array.from({ length: 8 }, (_, index) => `I-${String(index + 5).padStart(6, '0')}`))
-    expect(findings?.slice(4).every((finding) => infoIds.has(finding.id))).toBe(true)
+    expect(findings?.slice(4).every((finding) => finding.severity === 'nit')).toBe(true)
+    const nitIds = new Set(Array.from({ length: 8 }, (_, index) => `I-${String(index + 5).padStart(6, '0')}`))
+    expect(findings?.slice(4).every((finding) => nitIds.has(finding.id))).toBe(true)
   })
 })
 

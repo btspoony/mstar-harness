@@ -235,16 +235,16 @@ function captureDispatchWarns(ctx: BootResult['ctx']): string[] {
 /* ---------------------------------- mode off ---------------------------------- */
 
 describe('iteration violation output contract', () => {
-  it('preserves info severity and admits it in the declared output schema', () => {
+  it('preserves nit severity and admits it in the declared output schema', () => {
     const result = {
       ok: false,
-      severity: 'info',
+      severity: 'nit',
       code: 'iteration.note',
       message: 'Informational result',
     } satisfies Parameters<typeof iterationViolationView>[0]
     const view = iterationViolationView(result)
     expect(view).toEqual({
-      severity: 'info',
+      severity: 'nit',
       code: 'iteration.note',
       message: 'Informational result',
     })
