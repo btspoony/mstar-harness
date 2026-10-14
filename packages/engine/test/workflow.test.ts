@@ -466,7 +466,7 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
     });
     expect(consultDeliveryEvidence(complete as never)).toEqual([]);
 
-    const unregistered = consultDeliveryEvidence(validSnapshot({ type: "plan" }) as never);
+    const unregistered = consultDeliveryEvidence(validSnapshot({ type: "plan", status: "running", ended_at: undefined }) as never);
     expect(unregistered.map((item) => item.code)).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
 
     const incomplete = consultDeliveryEvidence(validSnapshot({
@@ -474,6 +474,12 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
       delivery: { ...complete.delivery, merge: undefined },
     }) as never);
     expect(incomplete.map((item) => item.code)).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+  });
+
+  test("a terminal plan header without a registered kind is accepted history, never an actionable violation", () => {
+    for (const status of ["completed", "failed", "stopped"] as const) {
+      expect(consultDeliveryEvidence(validSnapshot({ type: "plan", status }) as never)).toEqual([]);
+    }
   });
 });
 

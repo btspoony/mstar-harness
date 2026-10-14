@@ -12727,7 +12727,7 @@ async function adoptTerminalWorkflow(context, input) {
     }
     const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(input.workflowId);
     if (row === undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no terminal header to adopt; register the workflow through the supported workflow registration route`);
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no header to adopt; register the workflow through the supported workflow registration route`);
     }
     const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
     if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
@@ -12738,12 +12738,7 @@ async function adoptTerminalWorkflow(context, input) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is already registered; finish its lifecycle through mstar status workflow-close`);
     }
     const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
-    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; no supported exit exists for a non-terminal header without registry membership`);
-    }
-    if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.stop_reason)) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason`);
-    }
+    const unclosed = state.status !== "completed" && state.status !== "stopped" && state.status !== "failed";
     if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
     }
@@ -12776,6 +12771,7 @@ async function adoptTerminalWorkflow(context, input) {
     const now = new Date().toISOString();
     const nextState = {
       ...state,
+      ...unclosed ? { status: "stopped", ended_at: isNonEmptyString(state.ended_at) ? state.ended_at : now } : {},
       lifecycle_adopted_at: now,
       adopt_reason: input.reason,
       adoption_actor_session_id: caller.sessionId,
@@ -15397,8 +15393,10 @@ function consultDeliveryEvidence(snapshot) {
   const workflowId = nonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const kind = snapshot.delivery_kind;
   if (typeof kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(kind)) {
+    if (isTerminalSnapshot(snapshot))
+      return [];
     return [
-      violation7("high", "PHASE6_DELIVERY_KIND_UNREGISTERED", `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind — a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1), so this snapshot's delivery evidence cannot be consulted`, 'Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. For an ACTIVE workflow, close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason "<blocker>"`, then register a replacement workflow with a new id and the correct declared delivery kind. Keep the failed workflow as history; a terminal legacy snapshot cannot be re-registered or backfilled, so preserve it and record the missing kind as an explicit workflow residual rather than editing the snapshot.')
+      violation7("high", "PHASE6_DELIVERY_KIND_UNREGISTERED", `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind — a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1), so this snapshot's delivery evidence cannot be consulted`, 'Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. Close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason "<blocker>"`, then register a replacement workflow with a new id and the correct declared delivery kind; keep the failed workflow as history.')
     ];
   }
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;

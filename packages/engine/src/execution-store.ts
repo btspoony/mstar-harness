@@ -1986,26 +1986,33 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
 }
 
 /**
- * Adopt a terminal header that was imported without ACTIVE registry membership.
- * This is deliberately not a close: the terminal state is unchanged and no
- * registry membership is created.
+ * Adopt a header that is not ACTIVE registry membership. This is deliberately
+ * not a close: no registry membership is created, and a header that is already
+ * terminal keeps its recorded status and `ended_at` untouched.
  *
- * A terminal header may still hold ACTIVE coordinator session rows at the
- * current epoch — a crashed or replaced writer whose binding was never
- * revoked. Such rows are settled INSIDE this same adoption transaction, and
- * only against the operator's stop attestation: a valid `ActivationAttestation`
- * whose `stoppedSessions` name EVERY addressed ACTIVE session as
- * stopped/reloaded, revoking exactly those rows, never the identity making the
- * call. The attested stop is the trust boundary (the engine cannot observe a
- * dead process), so an unattested holder is never silently revoked, and an
- * explicitly supplied malformed proof refuses before any store access. A changed
- * proof under this committed operation id conflicts while its receipt remains
- * (`execution.operation-conflict`). Adoption prunes the workflow's OTHER receipts
- * on commit and keeps its own terminal receipt as the current-epoch replay
- * anchor, so an identical retry replays; a retry under a DIFFERENT operation id
- * reaches the terminal header instead — a stale explicit revision refuses
- * `execution.header-revision-conflict`, an omitted or current revision refuses
- * `execution.adoption-refused` with read-back guidance.
+ * Eligibility is registry membership, never the header's own status. A header
+ * that left the ACTIVE registry without ever reaching a terminal value (a
+ * lifecycle that never closed) is terminalized to `stopped` INSIDE this same
+ * transaction, together with its adoption record and its settled session rows,
+ * so no committed state carries an adoption on a still-running header. That is
+ * the honest outcome: nothing recorded a successful completion here, and this
+ * route never fabricates delivery evidence to claim one.
+ *
+ * A header may still hold ACTIVE coordinator session rows at the current epoch
+ * — a crashed or replaced writer whose binding was never revoked. Such rows are
+ * settled INSIDE this same adoption transaction, and only against the operator's
+ * stop attestation: a valid `ActivationAttestation` whose `stoppedSessions` name
+ * EVERY addressed ACTIVE session as stopped/reloaded, revoking exactly those
+ * rows, never the identity making the call. The attested stop is the trust
+ * boundary (the engine cannot observe a dead process), so an unattested holder
+ * is never silently revoked, and an explicitly supplied malformed proof refuses
+ * before any store access. A changed proof under this committed operation id
+ * conflicts while its receipt remains (`execution.operation-conflict`). Adoption
+ * prunes the workflow's OTHER receipts on commit and keeps its own receipt as
+ * the current-epoch replay anchor, so an identical retry replays; a retry under a
+ * DIFFERENT operation id reaches the header instead — a stale explicit revision
+ * refuses `execution.header-revision-conflict`, an omitted or current revision
+ * refuses `execution.adoption-refused` with read-back guidance.
  * The committed receipt records settled targets and approving provenance.
  */
 export async function adoptTerminalWorkflow(
@@ -2081,7 +2088,7 @@ export async function adoptTerminalWorkflow(
     const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?")
       .get(input.workflowId) as { revision?: unknown; state_json?: unknown } | undefined;
     if (row === undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no terminal header to adopt; register the workflow through the supported workflow registration route`);
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no header to adopt; register the workflow through the supported workflow registration route`);
     }
     const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
     if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
@@ -2092,12 +2099,15 @@ export async function adoptTerminalWorkflow(
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is already registered; finish its lifecycle through mstar status workflow-close`);
     }
     const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
-    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; no supported exit exists for a non-terminal header without registry membership`);
-    }
-    if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.stop_reason)) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason`);
-    }
+    // Registry membership, not the header's own status, decides eligibility
+    // here: once a header has left the ACTIVE registry nothing else can reach
+    // it, so a status that never reached a terminal value is a fact this
+    // transaction settles rather than a reason to strand the row. A header that
+    // never closed is terminalized to `stopped` in THIS SAME transaction (below,
+    // with the adoption record and the settled session rows), so the store never
+    // records an adoption on a header still claiming to be running; a header
+    // already terminal keeps its recorded outcome and `ended_at` untouched.
+    const unclosed = state.status !== "completed" && state.status !== "stopped" && state.status !== "failed";
     // The terminal-adoption record is checked BEFORE the settlement: a header
     // whose close receipt already exists is a read-back case, never a reason to
     // demand or perform another settlement.
@@ -2158,6 +2168,13 @@ export async function adoptTerminalWorkflow(
     const now = new Date().toISOString();
     const nextState = {
       ...state,
+      // An unregistered header that never closed is terminalized HERE, inside
+      // this same transaction, so no committed store state carries an adoption
+      // record beside a header still claiming to be running. `stopped` is the
+      // honest outcome: nothing recorded a successful completion, and this route
+      // invents no delivery evidence to claim one. A header that is already
+      // terminal keeps its own recorded status and `ended_at`.
+      ...(unclosed ? { status: "stopped", ended_at: isNonEmptyString(state.ended_at) ? state.ended_at : now } : {}),
       lifecycle_adopted_at: now,
       adopt_reason: input.reason,
       adoption_actor_session_id: caller.sessionId,

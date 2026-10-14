@@ -81,7 +81,7 @@ async function completeAndUnregister(
   context: { harnessDir: string },
   workflowId: string,
   planId: string,
-  options: { delivery?: boolean; rowDone?: boolean } = {},
+  options: { delivery?: boolean; rowDone?: boolean; unregistered?: boolean } = {},
 ) {
   const store = await openStore(context, "write");
   try {
@@ -91,6 +91,7 @@ async function completeAndUnregister(
     state.status = "completed";
     state.ended_at = "2026-09-02T00:00:00.000Z";
     state.updated_at = "2026-09-02T00:00:00.000Z";
+    if (options.unregistered) delete state.delivery_kind;
     if (options.delivery) {
       state.delivery = {
         compound: { outcome: "updated" },
@@ -139,6 +140,17 @@ async function completeAndUnregister(
   });
 
 
+
+  test("a completed plan header with no registered kind is accepted history, not a phase-6 blocker", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-terminal-unregistered");
+    await completeAndUnregister(storeContext, "wf-terminal-unregistered", planId, { delivery: true, rowDone: true, unregistered: true });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-terminal-unregistered", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
+  });
 
   test("completed plan without delivery evidence is blocked", async () => {
     const cwd = tempRoot();
