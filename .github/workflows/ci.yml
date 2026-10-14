@@ -177,11 +177,6 @@ jobs:
             exit 1
           fi
 
-      # Root typecheck resolves the workspace engine and command exports
-      # through gitignored dist declarations; build those dependencies first.
-      - name: Build engine and workspace declarations for typecheck
-        run: bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build
-
       - name: Typecheck
         run: bun run typecheck
 

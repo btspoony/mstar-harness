@@ -75,13 +75,6 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: bun run release:validate -- "v${VERSION}"
 
-      # Root typecheck resolves @mstar-harness/engine via packages/engine/dist
-      # (types: ./dist/index.d.ts), which is gitignored — build it first.
-      # The engine build is idempotent (rm -rf dist && bun build && bunx tsc);
-      # prepublishOnly also rebuilds before publish.
-      - name: Build engine (declarations for typecheck)
-        run: bun run engine:build
-
       - name: Typecheck
         run: bun run typecheck
 
