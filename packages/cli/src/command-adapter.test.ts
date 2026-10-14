@@ -167,6 +167,17 @@ describe("stdin payload reader", () => {
     expect(stream.listenerCount("error")).toBe(0);
   });
 
+  test("a stream error rejects and detaches its listeners like a completed read", async () => {
+    const stream = new PassThrough();
+    const failure = new Error("stdin read failed");
+    const read = readStdinPayload(stream, 1_000);
+    stream.emit("error", failure);
+    await expect(read).rejects.toBe(failure);
+    expect(stream.listenerCount("data")).toBe(0);
+    expect(stream.listenerCount("end")).toBe(0);
+    expect(stream.listenerCount("error")).toBe(0);
+  });
+
   test("an interactive terminal keeps its unbounded read", async () => {
     const stream = Object.assign(new PassThrough(), { isTTY: true });
     const read = readStdinPayload(stream, 20);
