@@ -694,7 +694,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
   /** The golden fixture's open issues (the authority the row reads). */
   const GOLDEN_ISSUES = [
     { title: 'deferred blocker', severity: 'high' as const, operationId: 'op-golden-1' },
-    { title: 'style nit', severity: 'info' as const, operationId: 'op-golden-2' },
+    { title: 'style nit', severity: 'nit' as const, operationId: 'op-golden-2' },
   ]
   /** The golden fixture's project roadmap (frontmatter milestones — the project rollup source). */
   const GOLDEN_ROADMAP = [
@@ -809,18 +809,18 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       ],
       residualFindings: [
         { planId: '', id: 'I-000001', severity: 'high', title: 'deferred blocker' },
-        { planId: '', id: 'I-000002', severity: 'info', title: 'style nit' },
+        { planId: '', id: 'I-000002', severity: 'nit', title: 'style nit' },
       ],
       residuals: [
         { severity: 'high', count: 1 },
-        { severity: 'info', count: 1 },
+        { severity: 'nit', count: 1 },
       ],
       project: {
         milestones: ['P1 foundation', 'P2 migrate + dogfood', 'P3 dsh viz'],
         roadmapSource: { kind: 'present', absentProjectIds: [], diagnostic: null },
         openResiduals: [
           { severity: 'high', count: 1 },
-          { severity: 'info', count: 1 },
+          { severity: 'nit', count: 1 },
         ],
       },
       iterationBaseBranch: 'dev-dsh',
@@ -867,7 +867,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     const text = textOf(row)
     expect(text).toContain(`workflow: ${GOLDEN_WORKFLOW} (active)`)
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
-    expect(text).toContain('residuals: high 1, info 1')
+    expect(text).toContain('residuals: high 1, nit 1')
     expect(text).toContain('store: projection unavailable')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')

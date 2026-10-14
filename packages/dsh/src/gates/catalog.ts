@@ -85,9 +85,9 @@ export const DEFAULT_CATALOG_TTL_MS = 60_000
  * the display's bucket order for the open-issue rollup. The authority's own
  * order (`listIssues`: severity rank desc → last real activity desc → id asc)
  * decides the DETAIL rows; this list only orders the severity BUCKETS so the
- * digest reads critical→info regardless of which bucket arrived first.
+ * digest reads critical→nit regardless of which bucket arrived first.
  */
-const ISSUE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const
+const ISSUE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
 
 /**
  * How many open issues one catalog refresh will enumerate before it discloses

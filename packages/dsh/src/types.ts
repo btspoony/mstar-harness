@@ -97,7 +97,7 @@ export interface MstarEngineStatusPayload {
 
 /** JSON projection of one engine `ValidationResult` (lossless — `fix` omitted when absent). */
 export interface IterationGateViolationView {
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'nit'
   code: string
   message: string
   fix?: string
@@ -181,7 +181,7 @@ export interface ResidualFindingView {
 }
 
 /** Open-issue counts by severity (non-zero severities only). */
-export type HarnessResidualSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+export type HarnessResidualSeverity = 'critical' | 'high' | 'medium' | 'low' | 'nit'
 
 /** Open-issue counts by severity (non-zero severities only). */
 export interface HarnessResidualView {

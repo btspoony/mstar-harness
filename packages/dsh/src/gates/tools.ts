@@ -39,7 +39,7 @@ export const ITERATION_VIOLATION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'info'] },
+    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
     code: { type: 'string', required: true },
     message: { type: 'string', required: true },
     fix: { type: 'string' },
