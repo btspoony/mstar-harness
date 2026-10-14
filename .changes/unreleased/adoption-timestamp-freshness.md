@@ -1,6 +1,6 @@
 ---
 category: Fix
-packages: engine
+packages: root, engine
 ---
 
 - **Terminal adoption stamps fresh lifecycle timestamps on a header it terminalizes.** When `adoptTerminalWorkflow` settles an unregistered header that never closed, the adoption instant now becomes both `ended_at` and the snapshot's `updated_at`, instead of reusing an `ended_at` an imported non-terminal snapshot may still have carried and leaving `updated_at` at the import-time value. Projections and audits no longer read an end time that predates later recorded activity. An already-terminal header keeps its recorded `status`, `ended_at` and `updated_at` byte-for-byte, as before.

@@ -1988,7 +1988,7 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
 /**
  * Adopt a header that is not ACTIVE registry membership. This is deliberately
  * not a close: no registry membership is created, and a header that is already
- * terminal keeps its recorded status and `ended_at` untouched.
+ * terminal keeps its recorded status, `ended_at` and `updated_at` untouched.
  *
  * Eligibility is registry membership, never the header's own status. A header
  * that left the ACTIVE registry without ever reaching a terminal value (a
@@ -2106,7 +2106,7 @@ export async function adoptTerminalWorkflow(
     // never closed is terminalized to `stopped` in THIS SAME transaction (below,
     // with the adoption record and the settled session rows), so the store never
     // records an adoption on a header still claiming to be running; a header
-    // already terminal keeps its recorded outcome and `ended_at` untouched.
+    // already terminal keeps its recorded outcome, `ended_at` and `updated_at` untouched.
     const unclosed = state.status !== "completed" && state.status !== "stopped" && state.status !== "failed";
     // The terminal-adoption record is checked BEFORE the settlement: a header
     // whose close receipt already exists is a read-back case, never a reason to
@@ -2178,7 +2178,7 @@ export async function adoptTerminalWorkflow(
       // `ended_at` an imported non-terminal snapshot still carried is
       // superseded, so a projection or audit can never read an end time that
       // predates later recorded activity. A header that is already terminal
-      // keeps its own recorded status and `ended_at` untouched.
+      // keeps its own recorded status, `ended_at` and `updated_at` untouched.
       ...(unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {}),
       lifecycle_adopted_at: now,
       adopt_reason: input.reason,
