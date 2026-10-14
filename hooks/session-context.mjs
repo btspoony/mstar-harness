@@ -34397,7 +34397,7 @@ var init_engine = __esm(() => {
     init_dev21();
   });
   init_core = __esm2(() => {
-    SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+    SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
   });
   init_dispatch = __esm2(() => {
     init_core();

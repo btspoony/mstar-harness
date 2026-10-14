@@ -1,6 +1,6 @@
 ---
 category: Fix
-packages: judgment, skills
+packages: root
 ---
 
 - **Deterministic shadow-pack identity**: source ordering now uses locale-independent code-unit comparison, so identical frozen inputs produce the same `packId` regardless of locale behavior.
