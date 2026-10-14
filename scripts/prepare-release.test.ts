@@ -350,16 +350,46 @@ describe("checkVersionCollision (prepare-time published-version gate)", () => {
 });
 
 describe("publishedPackageNames (release surfaces on the registry)", () => {
-  test("lists the published workspace packages, never the private root", async () => {
-    expect(await publishedPackageNames()).toEqual([
-      "@mstar-harness/cli",
-      "@mstar-harness/opencode",
-      "@mstar-harness/engine",
-      "@mstar-harness/commands",
-      "@mstar-harness/opencode-v2",
-      "@mstar-harness/dsh",
-      "@mstar-harness/omp",
-    ]);
+  /** Controlled workspace: one publishable package, one private package, one
+   * non-npm surface. Returns the surface list the discovery reads. */
+  async function withFixtureWorkspace(fn: (surfaces: { path: string }[]) => Promise<void>): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "mstar-surfaces-"));
+    const prevCwd = process.cwd();
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "workspace-root", version: "1.0.0" }));
+      writeFileSync(join(dir, "plugin.json"), JSON.stringify({ name: "portable-manifest" }));
+      for (const [pkg, manifest] of [
+        ["published", { name: "@mstar-harness/published", version: "1.0.0" }],
+        ["private-one", { name: "@mstar-harness/private-one", version: "1.0.0", private: true }],
+        ["nameless", { version: "1.0.0" }],
+      ] as const) {
+        mkdirSync(join(dir, "packages", pkg), { recursive: true });
+        writeFileSync(join(dir, "packages", pkg, "package.json"), JSON.stringify(manifest));
+      }
+      process.chdir(dir);
+      await fn([
+        { path: "package.json" },
+        { path: "plugin.json" },
+        { path: "packages/published/package.json" },
+        { path: "packages/private-one/package.json" },
+        { path: "packages/nameless/package.json" },
+      ]);
+    } finally {
+      process.chdir(prevCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("probes public npm package names only: the private root, plugin manifests, private and nameless packages are excluded", async () => {
+    await withFixtureWorkspace(async (surfaces) => {
+      expect(await publishedPackageNames(surfaces)).toEqual(["@mstar-harness/published"]);
+    });
+  });
+
+  test("the production surface list yields only scoped npm package names", async () => {
+    const names = await publishedPackageNames();
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.every((name) => /^@mstar-harness\//.test(name))).toBe(true);
   });
 });
 

@@ -133,10 +133,14 @@ async function readCurrentVersion(): Promise<string> {
 
 /** Published npm names of the release surfaces, read from the same
  * `VERSION_SURFACES` list `release:validate` checks (the private root and the
- * non-npm plugin manifests contribute no name). */
-export async function publishedPackageNames(): Promise<string[]> {
+ * non-npm plugin manifests contribute no name). `surfaces` is injected by tests
+ * so the private/non-npm exclusion is proven against controlled manifests
+ * without pinning the production inventory. */
+export async function publishedPackageNames(
+  surfaces: readonly { path: string }[] = VERSION_SURFACES,
+): Promise<string[]> {
   const names: string[] = [];
-  for (const surface of VERSION_SURFACES) {
+  for (const surface of surfaces) {
     if (!/^packages\/[^/]+\/package\.json$/.test(surface.path)) continue;
     const pkg = (await Bun.file(surface.path).json()) as { name?: string; private?: boolean };
     if (pkg.name && !pkg.private) names.push(pkg.name);
