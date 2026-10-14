@@ -322,7 +322,7 @@ process.stdout.write(JSON.stringify(receipt));
       code: "issue.scope-refused",
       details: { causes: [{ field: "severity", received: "urgent" }] },
     });
-    expect((failure as Error).message).toContain("critical, high, medium, low, info");
+    expect((failure as Error).message).toContain("critical, high, medium, low, nit");
     expect((failure as Error).message).not.toContain("kind");
   });
   test("capture enum refusals redact credential-like scalar input and reduce object input to type facts", () => {

@@ -3,8 +3,8 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - Severity enum + total order: `mstar-artifacts/references/status-and-residuals.md`
- *   `critical|high|medium|low|info` (lowercase English), total order
- *   `critical > high > medium > low > info`; `warning`/`Major`/non-English
+ *   `critical|high|medium|low|nit` (lowercase English), total order
+ *   `critical > high > medium > low > nit`; `warning`/`Major`/non-English
  *   values forbidden.
  * - `ValidationResult` / `GateResult` shapes: roadmap
  *   §8.5 C4 — engine returns `{ ok: boolean, severity, code, message, fix? }`;
@@ -32,16 +32,16 @@ import type { GateResult } from "../src/core.js";
 describe("Severity enum + total order", () => {
   test("SEVERITY_ORDER lists exactly the five allowed values, heavy → light", () => {
     // Spec: status-and-residuals.md § severity — allowed values + total order
-    // `critical` > `high` > `medium` > `low` > `info`.
-    expect(SEVERITY_ORDER).toEqual(["critical", "high", "medium", "low", "info"]);
+    // `critical` > `high` > `medium` > `low` > `nit`.
+    expect(SEVERITY_ORDER).toEqual(["critical", "high", "medium", "low", "nit"]);
   });
 
-  test("forbidden values (warning, Major, non-English, retired nit) are not part of the enum", () => {
-    // Spec: status-and-residuals.md § severity — `warning`, `Major`, `nit`, and
+  test("forbidden values (warning, Major, non-English, retired info) are not part of the enum", () => {
+    // Spec: status-and-residuals.md § severity — `warning`, `Major`, `info`, and
     // any non-English value are forbidden in JSON severity fields.
     expect(SEVERITY_ORDER).not.toContain("warning");
     expect(SEVERITY_ORDER).not.toContain("Major");
-    expect(SEVERITY_ORDER).not.toContain("nit");
+    expect(SEVERITY_ORDER).not.toContain("info");
     for (const value of SEVERITY_ORDER) {
       expect(value).toBe(value.toLowerCase());
       expect(value).toMatch(/^[a-z]+$/);
@@ -65,7 +65,7 @@ describe("ValidationResult / GateResult shapes", () => {
       message: string;
       fix?: string;
     } = { ok: false, severity: "high", code: "STATUS-001", message: "bad", fix: "edit status.json" };
-    const minimal: typeof full = { ok: true, severity: "info", code: "X", message: "n/a" };
+    const minimal: typeof full = { ok: true, severity: "nit", code: "X", message: "n/a" };
 
     expect(full.ok).toBe(false);
     expect(full.severity).toBe("high");
