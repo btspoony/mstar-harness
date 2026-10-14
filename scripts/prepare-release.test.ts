@@ -1,7 +1,9 @@
 /**
- * scripts/prepare-release.ts — fragment `packages:` token validation.
+ * scripts/prepare-release.ts — fragment `packages:` token validation and
+ * routing, the prepare-time published-version gate, and the release-surface
+ * version helpers it shares with `release:validate`.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -394,30 +396,53 @@ describe("publishedPackageNames (release surfaces on the registry)", () => {
 });
 
 describe("fragment routing (unreleased fragment -> package changelog)", () => {
-  const REPO_ROOT = join(import.meta.dir, "..");
+  /** The changelog input contract: `parseFragment` splits frontmatter, the
+   * language blocks and `packages` routing. Fixture-driven, so these assertions
+   * pin the contract and not one historical fragment file. */
+  const FRAGMENT = `---
+category: Changed
+packages: engine, cli
+---
 
-  /** `release:prepare` archives consumed fragments, so a shipped fragment lives
-   * under `unreleased/` only until the next release. */
-  function locateFragment(name: string): string {
-    const unreleased = join(REPO_ROOT, ".changes", "unreleased", name);
-    if (existsSync(unreleased)) return unreleased;
-    for (const version of readdirSync(join(REPO_ROOT, ".changes", "archive"))) {
-      const archived = join(REPO_ROOT, ".changes", "archive", version, name);
-      if (existsSync(archived)) return archived;
-    }
-    throw new Error(`fragment ${name} is in neither .changes/unreleased nor .changes/archive`);
-  }
+- English bullet.
 
-  test("env-injection-seams-removed routes to the engine changelog only", () => {
-    const name = "env-injection-seams-removed.md";
-    const frag = parseFragment(name, readFileSync(locateFragment(name), "utf8"));
-    expect(frag.packages).toEqual(["engine"]);
+<!-- CN -->
+- 中文要点。
+`;
+
+  test("packages: tokens route to exactly those changelogs", () => {
+    const frag = parseFragment("fixture.md", FRAGMENT);
+    expect(frag.packages).toEqual(["engine", "cli"]);
+    expect(frag.category).toBe("Changed");
     expect(validateFragmentPackages(frag.packages, frag.file)).toEqual([]);
-    // The CN block is separated by its marker; a raw Chinese bullet here would
-    // be assembled into the EN-only engine changelog as English content.
-    expect(frag.en).not.toMatch(/[\u4e00-\u9fff]/);
     expect(CHANGELOGS.filter((target) => frag.packages.includes(target.pkg)).map((target) => target.path)).toEqual([
+      "packages/cli/CHANGELOG.md",
       "packages/engine/CHANGELOG.md",
     ]);
+  });
+
+  test("the CN block is split out of the English body", () => {
+    const frag = parseFragment("fixture.md", FRAGMENT);
+    expect(frag.en).toContain("English bullet");
+    expect(frag.cn).toContain("中文要点");
+    // A package changelog is EN-only, so CN text left in the EN body would be
+    // assembled into it as an English bullet.
+    expect(frag.en).not.toMatch(/[\u4e00-\u9fff]/);
+  });
+
+  test("every unreleased fragment declares frontmatter with known packages tokens", async () => {
+    const dir = join(import.meta.dir, "..", ".changes", "unreleased");
+    const files = readdirSync(dir).filter((file) => file.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(0);
+    const problems: string[] = [];
+    for (const file of files) {
+      const text = await Bun.file(join(dir, file)).text();
+      const frag = parseFragment(file, text);
+      // Without frontmatter the assembler defaults the fragment to `root`, so an
+      // engine change silently lands in the root changelogs.
+      if (!text.startsWith("---")) problems.push(`${file}: no frontmatter (routed to ${frag.packages.join(", ")})`);
+      problems.push(...validateFragmentPackages(frag.packages, file));
+    }
+    expect(problems).toEqual([]);
   });
 });
