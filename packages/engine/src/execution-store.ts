@@ -2172,9 +2172,14 @@ export async function adoptTerminalWorkflow(
       // this same transaction, so no committed store state carries an adoption
       // record beside a header still claiming to be running. `stopped` is the
       // honest outcome: nothing recorded a successful completion, and this route
-      // invents no delivery evidence to claim one. A header that is already
-      // terminal keeps its own recorded status and `ended_at`.
-      ...(unclosed ? { status: "stopped", ended_at: isNonEmptyString(state.ended_at) ? state.ended_at : now } : {}),
+      // invents no delivery evidence to claim one. Both lifecycle instants are
+      // the adoption instant: the header's own `updated_at` is the snapshot's
+      // last-change stamp (nothing else rewrites it on this route) and any
+      // `ended_at` an imported non-terminal snapshot still carried is
+      // superseded, so a projection or audit can never read an end time that
+      // predates later recorded activity. A header that is already terminal
+      // keeps its own recorded status and `ended_at` untouched.
+      ...(unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {}),
       lifecycle_adopted_at: now,
       adopt_reason: input.reason,
       adoption_actor_session_id: caller.sessionId,

@@ -12771,7 +12771,7 @@ async function adoptTerminalWorkflow(context, input) {
     const now = new Date().toISOString();
     const nextState = {
       ...state,
-      ...unclosed ? { status: "stopped", ended_at: isNonEmptyString(state.ended_at) ? state.ended_at : now } : {},
+      ...unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {},
       lifecycle_adopted_at: now,
       adopt_reason: input.reason,
       adoption_actor_session_id: caller.sessionId,

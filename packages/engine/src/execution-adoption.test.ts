@@ -149,13 +149,15 @@ describe("terminal workflow adoption", () => {
         const db = await openStore(context, "read");
         try {
           return db.db.prepare(
-            "select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at " +
-              "from execution_workflows where workflow_id = ?",
+            "select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at, " +
+              "json_extract(state_json, '$.updated_at') as updated_at from execution_workflows where workflow_id = ?",
           ).get("wf-stranded");
         } finally { db.close(); }
       };
       const before = await recorded();
-      expect(before).toEqual({ status: terminal, ended_at: "2026-10-01T01:00:00.000Z" });
+      expect(before).toEqual({
+        status: terminal, ended_at: "2026-10-01T01:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z",
+      });
       const applied = await adoptTerminalWorkflow({ harnessDir: context.harnessDir, caller }, {
         workflowId: "wf-stranded", expectedRevision: 1, reason: `adopt the ${terminal} record`, operationId: `adopt-terminal-${terminal}`,
       });
@@ -166,6 +168,46 @@ describe("terminal workflow adoption", () => {
         actor_session_id: caller.sessionId, operation_id: `adopt-terminal-${terminal}`,
       }]);
       expect(await recorded()).toEqual(before);
+    }
+  });
+
+  test("an adopted never-closed header carries the adoption instant in both ended_at and updated_at", async () => {
+    // The adoption is the header's last recorded lifecycle change, so the close
+    // instant and the snapshot's own `updated_at` must BOTH be the adoption
+    // instant. A stale `updated_at` is the plain case; the second fixture adds
+    // an `ended_at` a non-terminal snapshot may carry (the validator only
+    // requires it to be present and non-empty), which an imported orphan can
+    // hold from before later recorded activity.
+    for (const stale of [
+      { updated_at: "2026-10-01T01:00:00.000Z" },
+      { updated_at: "2026-10-01T01:00:00.000Z", ended_at: "2026-10-01T00:30:00.000Z" },
+    ]) {
+      const { context, caller } = await strandedTerminal();
+      const writer = await openStore(context, "write");
+      try {
+        writer.db.prepare("update execution_workflows set state_json = ?, updated_at = ? where workflow_id = ?")
+          .run(JSON.stringify({
+            id: "wf-stranded", schema_version: 1, type: "plan", status: "running",
+            started_at: "2026-10-01T00:00:00.000Z", ...stale,
+          }), stale.updated_at, "wf-stranded");
+      } finally { writer.close(); }
+      const before = new Date().toISOString();
+      await adoptTerminalWorkflow({ harnessDir: context.harnessDir, caller }, {
+        workflowId: "wf-stranded", expectedRevision: 1, reason: "adopt a never-closed header", operationId: "adopt-fresh-timestamps",
+      });
+      const after = new Date().toISOString();
+      const db = await openStore(context, "read");
+      try {
+        const row = db.db.prepare(
+          "select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at, " +
+            "json_extract(state_json, '$.updated_at') as updated_at from execution_workflows where workflow_id = ?",
+        ).get("wf-stranded") as { status: string; ended_at: string; updated_at: string };
+        expect(row.status).toBe("stopped");
+        expect(row.ended_at).toBe(row.updated_at);
+        // Bounded by the wall-clock window of the call, so "fresh" means this
+        // adoption and not merely "not the stale fixture value".
+        expect(row.ended_at >= before && row.ended_at <= after).toBe(true);
+      } finally { db.close(); }
     }
   });
 
