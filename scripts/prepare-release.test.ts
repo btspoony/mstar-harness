@@ -431,11 +431,11 @@ packages: engine, cli
   });
 
   test("every unreleased fragment declares frontmatter with known packages tokens", async () => {
+    // A successful release archives every fragment and legitimately empties this
+    // queue, so the invariant is asserted per fragment and holds vacuously then.
     const dir = join(import.meta.dir, "..", ".changes", "unreleased");
-    const files = readdirSync(dir).filter((file) => file.endsWith(".md"));
-    expect(files.length).toBeGreaterThan(0);
     const problems: string[] = [];
-    for (const file of files) {
+    for (const file of readdirSync(dir).filter((entry) => entry.endsWith(".md"))) {
       const text = await Bun.file(join(dir, file)).text();
       const frag = parseFragment(file, text);
       // Without frontmatter the assembler defaults the fragment to `root`, so an
