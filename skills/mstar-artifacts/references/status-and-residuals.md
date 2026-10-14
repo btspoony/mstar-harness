@@ -122,7 +122,7 @@ Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifec
       {
         "id": "R1",
         "title": "Finding title",
-        "severity": "critical | high | medium | low | nit",
+        "severity": "critical | high | medium | low | info",
         "source": "QC-#1 qc1.md F-001 @ <review-range>, QA qa.md, review, …",
         "scope": "Affected file or component",
         "decision": "defer | accept | risk-accepted",
@@ -169,14 +169,14 @@ Each captured issue's — and each migrated register entry's — **`severity`** 
 
 Only these five, **lowercase English**:
 
-`critical`, `high`, `medium`, `low`, `nit`
+`critical`, `high`, `medium`, `low`, `info`
 
 ### 2. Total order (heavy → light)
 
-`critical` > `high` > `medium` > `low` > `nit`
+`critical` > `high` > `medium` > `low` > `info`
 
-- **`nit` is always lighter than `low`** — never invert or equate.
-- **Forbidden** in JSON: `warning`, `Major`, non-English, or any value not listed.
+- `info` is the lowest severity.
+- **Refused** in JSON: `warning`, `Major`, non-English, or any value not listed. `validateResidual` reports `status.residual.invalid-severity` and lists the accepted values (`critical | high | medium | low | info`).
 
 ### 3. Meaning and gate relationship
 
@@ -186,13 +186,13 @@ Only these five, **lowercase English**:
 | `high` | Not blocking — the same unsafe-to-ship classes whose unsafe outcome is **not reachable on this merge** (narrow reach, unreachable path, or already mitigated), **or significant tech debt**; fix, escalate, or open a residual with PM follow-up. |
 | `medium` | Should address this or next milestone; may be open residual. |
 | `low` | Small impact, cheap fix; may be open residual. |
-| `nit` | Style, naming, wording, non-behavior doc nits; **lighter than `low`**. PM may omit from the register if no tracking needed. |
+| `info` | Informational, non-blocking findings. |
 
-Summary vs `mstar-review-qc`: unresolved **`critical`** → usually `Request Changes`; **`high`** often “fix or explicit decision before merge”; **`medium` / `low` / `nit`** may ship with residual tracking (final **Verdict** = PM consolidation).
+Summary vs `mstar-review-qc`: unresolved **`critical`** → usually `Request Changes`; **`high`** often “fix or explicit decision before merge”; **`medium` / `low` / `info`** may ship with residual tracking (final **Verdict** = PM consolidation).
 
 ### 4. QC report section → JSON `severity`
 
-Grade by **what would happen if the finding is true**, never by how uncertain you are. Whether a finding blocks turns on whether its unsafe outcome is **reachable on this merge** — the axis defined in §3 — and not on the report section (Critical / Warning / Suggestion) it was filed under; the filing is a routing hint, not a severity decision. Two classes reach `high` or above: (a) **unsafe to ship** — correctness, security, data loss, broken public contract → `critical` / `high` even at low confidence; (b) **significant tech debt** → `high`. Everything else stays below: documentation accuracy, citations/line numbers, naming, wording, and test polish are `low` / `nit` — including inside a normative document — **unless the defect would itself drive an unsafe outcome** (a normative instruction that leads an executor into a correctness, security, or data failure), in which case it grades by that consequence. Evidence confidence belongs in the report (`Confidence`), not encoded by inflating `severity`. When the uncertainty is about **scope** (reachability) rather than severity class, record the worst-case class among the plausible ones and state the open question in the entry's `scope`.
+Grade by **what would happen if the finding is true**, never by how uncertain you are. Whether a finding blocks turns on whether its unsafe outcome is **reachable on this merge** — the axis defined in §3 — and not on the report section (Critical / Warning / Suggestion) it was filed under; the filing is a routing hint, not a severity decision. Two classes reach `high` or above: (a) **unsafe to ship** — correctness, security, data loss, broken public contract → `critical` / `high` even at low confidence; (b) **significant tech debt** → `high`. Everything else stays below: documentation accuracy, citations/line numbers, naming, wording, and test polish are `low` / `info` — including inside a normative document — **unless the defect would itself drive an unsafe outcome**, in which case it follows the same reachability axis.
 
 When registering into the project register (template in `mstar-review-qc`):
 
@@ -200,11 +200,11 @@ When registering into the project register (template in `mstar-review-qc`):
 | ----------------------- | --------------- |
 | **Critical** | Default `critical`. PM may record `high` only when the §3 axis puts the unsafe outcome outside reachability on this merge, with the reasoning stated in `title`/`scope`. |
 | **Warning** | `medium` for ordinary substantive non-blocking items. A security/correctness/data finding follows the same §3 reachability axis as the **Critical** row: `high` when the unsafe outcome is not reachable on this merge, `critical` when it is — note the Warning filing in `title`/`scope`. |
-| **Suggestion** | `low` or `nit`: substantive improvement → `low`; pure style/optional → `nit`. |
+| **Suggestion** | `low` or `info`: substantive improvement → `low`; purely informational → `info`. |
 
 **Common mistake:** report **Warning** is not a valid `severity` string; there is no `warning` in the enum (see legacy below).
 
-### 5. Cross-chain vocabulary (one axis, four labels)
+### 5. Cross-chain vocabulary (one axis, five severity values)
 
 The blocking judgement is decided **once**, on the §3 axis. Each chain's label set is a different projection of that one decision — map by **axis band**, never by label shape:
 
@@ -213,8 +213,7 @@ The blocking judgement is decided **once**, on the §3 axis. Each chain's label 
 | **Blocking** — unsafe outcome reachable on this change/merge | `critical` | `must-fix` | **Critical** | `Critical` |
 | High impact, non-blocking — unsafe but not reachable here, or significant tech debt | `high` | `should-fix` | **Warning** | `Important` |
 | Substantive, non-blocking — below the above | `medium` | `should-fix` | **Warning** | `Important` |
-| Small and cheap | `low` | `nit` | **Suggestion** | `Minor` |
-| Style / naming / wording | `nit` | `nit` | **Suggestion** | `Minor` |
+| Small and cheap or style / naming / wording | `low` or `info` | `nit` | **Suggestion** | `Minor` |
 
 **A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it.
 
@@ -245,7 +244,7 @@ Intent: clear findings in the current plan session whenever possible. Open items
 
 1. After QC: default path is **fix-now + targeted re-review**, not `Approve with residuals`.
 2. Do **not** capture an open issue for items that can be fixed in this session.
-3. **`nit`**: fix in-session **or** drop with no capture (existing “no tracking needed”); **never** capture style-only nits.
+3. **Low-impact findings**: fix in-session **or** drop with no capture when no tracking is needed; do not capture style-only findings.
 4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (Durable Roadmap Gate written) — **except `critical`** (unsafe outcome reachable on this merge, §3): a `critical` is fixed now, or the risk is explicitly accepted and the issue is **closed** per item 6, never left open as the approval's remaining item.
 5. **True defer** only: external dependency; product/scope decision for a later iteration; or explicit **current-turn** user defer — plus Durable Roadmap Gate.
 6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close the issue** (do not leave it open). Prefer a cheap fix over waive-as-shortcut.
@@ -257,7 +256,7 @@ Non-blocking open issues — `severity` below `critical` on the §3 axis — may
 
 1. **Capture before InReview exit**: every remaining open finding is captured as an issue **linked to this plan** with machine-enum `severity` before the plan leaves InReview (→ § Issue capture above).
 2. **Disclose on every decision surface**: every consolidated QC decision, Completion Report, and Status Update states the open-item situation — the list, each issue's `severity`, and its tracking location (issue id). Silence about open findings is a gate violation, not a style issue; when nothing is open, say `N/A — none open`.
-3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `nit` may be captured and carried (fix-now remains preferred when cheap).
+3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `info` may be captured and carried (fix-now remains preferred when cheap).
 4. **Close-time disclosure**: close-time artifacts carry the same open-item list with `id` + `severity` + tracking location + blocker-defer flag — each plan's durable `## Review Gate Summary` (main plan), the iteration compass `## Quality Gate Summary`, and the PR delivery body (`N/A — none open` when empty). A close without these disclosures is not a close. Disclosure does not override critical-blocking, explicit `zero-residual` requirements, or the §4 closure authority: terminalizing a workflow never silently closes its open findings. `mstar status tech-debt` remains the cross-iteration visibility rollup.
 
 > **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.

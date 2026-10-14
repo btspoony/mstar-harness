@@ -10615,7 +10615,7 @@ function writeJson(filePath, value) {
 }
 var SEVERITY_ORDER;
 var init_core = __esm(() => {
-  SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+  SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
 });
 function enforcementValue(raw) {
   const value = raw.trim();
