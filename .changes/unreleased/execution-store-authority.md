@@ -87,7 +87,7 @@ packages: root, cli, engine, commands, dsh
 - 删除 `store safe-upgrade` 及 staged execution 的 `preview`、`apply`、`activate`、`retire`、`abort` 动词。独立 `store backup` 保留；execution 的 `restore-preview`、`restore` 与 `export` 作为独立备份/灾难恢复及 live-state 报告工具保留。
 - **Canonical store 管理入口：** CLI 和 MCP 的 store 操作现在支持通过 `--harness` 显式选择或正常项目发现定位 canonical control root。备份校验、维护锁及迁移/激活 attestation 守卫保持生效；命令帮助明确说明支持的目标。
 - Store 升级迁移退休现在要求当前快照或根执行记录作为证据；仅有陈旧日志历史不再符合条件。
-- 新增 `workflow adopt-terminal`，为已处于终态但未注册的 workflow header 记录接管收据，并通过 revision CAS 与状态读面如实呈现。
+- 新增 `workflow adopt-terminal`，为未注册的 workflow header 记录接管收据，并通过 revision CAS 与状态读面如实呈现。
 - 将 `mstar persist` 家族限制为 `review` 和 `json`；engine 的 `status` 与 `snapshot` kind 仍仅用于迁移路径，其永久调用方为 `migrate.ts`。
 - 退役 coordinated artifact 读取/替换链及其公共导出。coordinated purge-entry veto 仍延期至 T21 terminal sweep 处理。
 - 注册重放不再对**终态生命周期快照**作出"已注册且活跃"的应答：close 窗口内（磁盘快照已终态、root 登记仍在）已提交的注册以 `catalog.registration-terminal-lifecycle` 拒绝；已提交的 reconcile 重放也应用相同守卫。让正在执行的 close 完成；若 close 中断，则运行 `mstar status workflow-close --workflow <workflow-id> --harness '<harness-root>'` 完成注销后重试注册。普通 plan 行进度重放仍照常返回已提交回执（#323）。
