@@ -421,10 +421,10 @@ export interface AgentFlowEventView {
   readonly childId?: string
   /**
    * Settle + `subagent-link` rows: the registry background-job id the row
-   * carries (`jobs.onJobDone` → `recordJobSettle`; the post-execute
-   * background branch for a link). A jobs-registry key (`<kind>-N`), never a
-   * child session id and never the Assignment `Task N` tag. A continuable
-   * link omits it (that path starts no registry job).
+   * carries (`jobs.events` settled notification → `recordJobSettle`; the
+   * post-execute background branch for a link). A jobs-registry key
+   * (`<kind>-N`), never a child session id or Assignment `Task N` tag. A
+   * continuable link omits it (that path starts no registry job).
    */
   readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end events only). */

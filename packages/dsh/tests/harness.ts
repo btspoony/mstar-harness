@@ -42,16 +42,10 @@ import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import * as plugin from '../src/index.ts'
 
 /**
- * Local structural types for the fake jobs service. rc.2 removed the
- * `@deepseek-ai/dsh-jobs` `JobSnapshot`/`JobDoneListener` type exports this
- * harness was typed against; the plugin consumes the terminal snapshot
- * structurally (`JobDoneSnapshot`, `src/gates/agent-flow.ts`) and keeps no
- * upstream type import, so the fake declares the SAME contract locally. The
- * fields beyond the plugin's structural read (`kind`, `label`, `reported`)
- * are what the spec fixtures pass; the `status`/`startedAt`/`finishedAt`
- * semantics are the contract the settle pairing verifies.
+ * Local structural type for settled lifecycle events consumed by the plugin.
+ * The pinned jobs package exports them through `jobs.events.subscribe`.
  */
-type JobDoneListener = (snapshot: JobDoneSnapshot, owner: Agent | undefined) => void | PromiseLike<void>
+type SettledJobEvent = { type: 'settled'; job: JobDoneSnapshot }
 
 /** Terminal snapshot fixture shape driven through {@link FakeJobRegistry.fireDone}. */
 export interface FakeJobSnapshot extends JobDoneSnapshot {
@@ -109,45 +103,29 @@ export class FakeLoaderRegistry extends Service {
 }
 
 /**
- * Minimal in-memory `jobs` service for the settle-pairing tests (plan
- *  Task 1 — Step 1 seam probe): implements the
- * ONE contract the plugin consumes — `onJobDone(listener)` with the upstream
- * `JobDoneListener` signature `(snapshot, owner)` — and lets the test drive
- * terminal snapshots through {@link fireDone}. Mounted as the
- * `@deepseek-ai/dsh-jobs-fake` module row (`bootApp({ jobsService: 'fake' })`)
- * so the plugin's REAL `ctx.inject(['jobs'])` wiring registers against it —
- * the full Loader → apply → inject → onJobDone composition under test,
- * without the heavy real registry (dsh-jobs-local + dsh-agent + a live
- * registered agent). The snapshot contract (terminal statuses,
- * startedAt/finishedAt) is verified in the spec fixtures against
- * {@link FakeJobSnapshot}.
+ * Minimal jobs service fake for settle-pairing tests. It implements the
+ * exported lifecycle-event subscription used by the plugin and lets tests
+ * drive settled projections through {@link fireDone}.
  */
 export class FakeJobRegistry extends Service {
-  private listener: JobDoneListener | undefined
+  private listeners = new Set<(event: SettledJobEvent) => void>()
 
   constructor(ctx: Context) {
     super(ctx, 'jobs')
   }
 
-  onJobDone(listener: JobDoneListener): () => void {
-    this.listener = listener
-    return () => {
-      if (this.listener === listener) this.listener = undefined
-    }
+  readonly events = {
+    subscribe: (_filter: { owners: 'scope' }, listener: (event: SettledJobEvent) => void): (() => void) => {
+      this.listeners.add(listener)
+      return () => this.listeners.delete(listener)
+    },
   }
 
-  /** Test driver: fire a terminal snapshot through the registered listener. */
-  fireDone(snapshot: FakeJobSnapshot, owner?: Agent): void {
-    const listener = this.listener
-    if (listener !== undefined) void listener(snapshot, owner)
+  /** Test driver: emit a terminal lifecycle event. */
+  fireDone(snapshot: FakeJobSnapshot): void {
+    for (const listener of this.listeners) listener({ type: 'settled', job: snapshot })
   }
 }
-
-/**
- * Structural `subagent/start` payload (the advisory decision-point
- * listener's shape — the payload itself is no longer consumed by the
- * plugin; the event drives the one-pass advisory latch in tests).
- */
 export interface SubagentStartPayload {
   /** Unique identity shared with the paired terminal event. */
   readonly runId: unknown
@@ -665,8 +643,7 @@ export interface BootOptions {
   /**
    * Mount the {@link FakeJobRegistry} as the `jobs` service (the
    * `@deepseek-ai/dsh-jobs-fake` row + module map) so the plugin's
-   * `ctx.inject(['jobs'])` onJobDone wiring registers against it (plan
-   *  Task 1 seam probe).
+   * `ctx.inject(['jobs'])` lifecycle-event subscription registers against it.
    */
   jobsService?: 'fake'
   /**
@@ -1159,8 +1136,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // exists when the bundled mstar commands register (the real dsh app
     // always composes dsh-commands).
     { name: '@deepseek-ai/dsh-commands' },
-    // The fake jobs service row (only when requested): provides `ctx.jobs` so the
-    // plugin's deferred `ctx.inject(['jobs'])` onJobDone wiring fires.
+    // The fake jobs service row (only when requested): provides `ctx.jobs` for
+    // the plugin's deferred lifecycle-event subscription.
     ...(options.jobsService !== undefined ? [{ name: '@deepseek-ai/dsh-jobs-fake' }] : []),
     // The fake agents service row (only when requested): provides `ctx.get('agents')`
     // so the seams that read live agents resolve fake-registered children.

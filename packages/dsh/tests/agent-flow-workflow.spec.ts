@@ -11,7 +11,15 @@ import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogge
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import { seedActiveWorkflow, selectedGenerationFor } from './harness.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
-process.env.MSTAR_STORE_TEST_RUNNER ??= '1'
+it('drains resolver work without relying on the test-runner environment', async () => {
+  const prior = process.env.MSTAR_STORE_TEST_RUNNER
+  delete process.env.MSTAR_STORE_TEST_RUNNER
+  try {
+    await awaitWorkflowLedgerIdle()
+  } finally {
+    if (prior !== undefined) process.env.MSTAR_STORE_TEST_RUNNER = prior
+  }
+})
 const roots: string[] = []
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))

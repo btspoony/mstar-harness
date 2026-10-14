@@ -273,19 +273,11 @@ const streamChains = new Map<string, Promise<void>>()
 const pendingStreamTasks = new Set<Promise<void>>()
 
 /**
- * The TEST SEAM for the asynchronous (resolver) route: resolves once every
- * queued per-stream task has settled, including tasks queued by earlier ones.
- * Gated exactly like the engine's test-runner knobs (`MSTAR_STORE_TEST_RUNNER=1`)
- * — it has no production consumer, so an ungated call is a refusal rather than a
- * hidden behavioural knob. The synchronous pre-activation route needs no await:
- * its rows are already recorded when the registration/listener call returns.
+ * Test-only drain for the asynchronous resolver route. No production consumer
+ * calls this; tests opt into waiting explicitly rather than selecting it via
+ * process environment.
  */
 export async function awaitWorkflowLedgerIdle(): Promise<void> {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== '1') {
-    throw new Error(
-      'awaitWorkflowLedgerIdle is a test-runner-gated seam (set MSTAR_STORE_TEST_RUNNER=1); production consumers must not await it',
-    )
-  }
   while (pendingStreamTasks.size > 0) {
     await Promise.all([...pendingStreamTasks])
   }
