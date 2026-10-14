@@ -57,6 +57,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { iterationViolationView } from '../src/gates/_shared.ts'
+import { ITERATION_VIOLATION_SCHEMA } from '../src/gates/tools.ts'
 import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
@@ -231,6 +233,24 @@ function captureDispatchWarns(ctx: BootResult['ctx']): string[] {
 }
 
 /* ---------------------------------- mode off ---------------------------------- */
+
+describe('iteration violation output contract', () => {
+  it('preserves info severity and admits it in the declared output schema', () => {
+    const result = {
+      ok: false,
+      severity: 'info',
+      code: 'iteration.note',
+      message: 'Informational result',
+    } satisfies Parameters<typeof iterationViolationView>[0]
+    const view = iterationViolationView(result)
+    expect(view).toEqual({
+      severity: 'info',
+      code: 'iteration.note',
+      message: 'Informational result',
+    })
+    expect(ITERATION_VIOLATION_SCHEMA.properties.severity.enum).toContain(view.severity)
+  })
+})
 
 describe('workflow gate — mode off', () => {
   it('(a) workflowGate off → workflow call passes through, no verdict row', async () => {
