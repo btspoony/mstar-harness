@@ -1,6 +1,6 @@
 ---
 category: Changed
-packages: engine
+packages: engine, commands
 ---
 
 - **Terminal adoption no longer requires a recorded stop reason.** `adoptTerminalWorkflow` refuses a stopped/failed header whose `state.stop_reason` is missing no more — nothing in the engine ever writes that field, so the guard stranded every normally stopped workflow's ACTIVE coordinator session row behind a hand-edited SQLite row. The terminal-status check, registry membership, revision CAS, self-settlement refusal, adoption-record read-back and per-header ACTIVE-session coverage are unchanged, and the retired recovery branch is gone from the CLI refusal vocabulary.

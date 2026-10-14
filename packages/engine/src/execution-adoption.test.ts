@@ -128,6 +128,47 @@ describe("terminal workflow adoption", () => {
     expect(dashboard.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
   });
 
+  test("leaves an already-terminal header's own status and ended_at exactly untouched", async () => {
+    // Exact equality on the pre-adoption values, not presence: an adoption that
+    // unconditionally stamped `ended_at` (or forced `stopped`) would still pass a
+    // `toMatchObject` check, so both values are captured before the call and
+    // compared unchanged after it. `completed` is the fixture that catches an
+    // unconditional rewrite to `stopped`.
+    for (const terminal of ["stopped", "completed"] as const) {
+      const { context, caller } = await strandedTerminal();
+      const writer = await openStore(context, "write");
+      try {
+        writer.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+          .run(JSON.stringify({
+            id: "wf-stranded", schema_version: 1, type: "plan", status: terminal,
+            started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z",
+            updated_at: "2026-10-01T01:00:00.000Z", stop_reason: "fixture terminal stop",
+          }), "wf-stranded");
+      } finally { writer.close(); }
+      const recorded = async () => {
+        const db = await openStore(context, "read");
+        try {
+          return db.db.prepare(
+            "select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at " +
+              "from execution_workflows where workflow_id = ?",
+          ).get("wf-stranded");
+        } finally { db.close(); }
+      };
+      const before = await recorded();
+      expect(before).toEqual({ status: terminal, ended_at: "2026-10-01T01:00:00.000Z" });
+      const applied = await adoptTerminalWorkflow({ harnessDir: context.harnessDir, caller }, {
+        workflowId: "wf-stranded", expectedRevision: 1, reason: `adopt the ${terminal} record`, operationId: `adopt-terminal-${terminal}`,
+      });
+      expect(applied.replayed).toBe(false);
+      expect(applied.data.terminalAdoptions).toEqual([{
+        id: "wf-stranded", status: terminal, revision: 2,
+        lifecycle_adopted_at: expect.any(String), adopt_reason: `adopt the ${terminal} record`,
+        actor_session_id: caller.sessionId, operation_id: `adopt-terminal-${terminal}`,
+      }]);
+      expect(await recorded()).toEqual(before);
+    }
+  });
+
   test("refuses stale CAS, registered rows, and unattested active-session rows", async () => {
     const stale = await strandedTerminal();
     const staleBefore = await footprint(stale.context);
