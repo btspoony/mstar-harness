@@ -867,7 +867,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     const text = textOf(row)
     expect(text).toContain(`workflow: ${GOLDEN_WORKFLOW} (active)`)
     expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
-    expect(text).toContain('residuals: high 1, info 1')
+    expect(text).toContain('residuals: high 1, nit 1')
     expect(text).toContain('store: projection unavailable')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
