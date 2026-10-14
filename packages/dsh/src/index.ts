@@ -690,9 +690,15 @@ export function apply(ctx: Context, config: Config): void {
         }
       }
     }).jobs
-    jobs.events.subscribe({ owners: 'scope' }, (event) => {
-      if (event.type === 'settled') recordJobSettle(event.job, pairing)
-    })
+    try {
+      return jobs.events.subscribe({ owners: 'scope' }, (event) => {
+        if (event.type === 'settled') recordJobSettle(event.job, pairing)
+      })
+    } catch (error) {
+      ctx.logger(AGENT_FLOW_LOGGER).error(
+        `jobs.events.subscribe registration failed (background settle pairing degraded): ${(error as Error).message}`,
+      )
+    }
   })
 
   // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map

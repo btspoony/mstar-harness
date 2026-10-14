@@ -322,6 +322,17 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
   })
 })
 
+describe('background settle subscription lifecycle', () => {
+  it('unsubscribes when the plugin fiber is disposed', async () => {
+    const app = booted = await bootApp({ jobsService: 'fake' })
+    const jobs = app.ctx.get('jobs') as unknown as FakeJobRegistry
+    expect(jobs.subscriberCount).toBe(1)
+
+    await app.pluginFiber!.dispose()
+    expect(jobs.subscriberCount).toBe(0)
+  })
+})
+
 /* ------------------------- (d) native persona channel cross-check ------------------------- */
 
 describe('fork persona — the native channel composes on fork dispatches', () => {

@@ -113,6 +113,9 @@ export class FakeJobRegistry extends Service {
   constructor(ctx: Context) {
     super(ctx, 'jobs')
   }
+  get subscriberCount(): number {
+    return this.listeners.size
+  }
 
   readonly events = {
     subscribe: (_filter: { owners: 'scope' }, listener: (event: SettledJobEvent) => void): (() => void) => {
