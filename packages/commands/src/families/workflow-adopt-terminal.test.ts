@@ -69,11 +69,6 @@ function expectAdoptionRefusal(result: CommandEnvelope, firstLine: string, recov
     recovery,
   });
 }
-function expectDeadEndMarkers(recovery: string, needsIssue397Residual: boolean): void {
-  expect(recovery).toContain("No supported exit exists");
-  expect(recovery).toContain("mstar issue add");
-  if (needsIssue397Residual) expect(recovery).toContain("I-000397 residual surface");
-}
 
 /**
  * Command envelope `data` is validated at this boundary instead of cast, so the
@@ -563,22 +558,56 @@ test("a changed proof under a committed operation id is an operation conflict, n
 });
 
 
-test("nonterminal-header refusal routes through execution bind and normal close", async () => {
+test("an unregistered header that never closed is adopted into a terminal state through the command transport", async () => {
   const { root, harness } = await fixture();
   await withWriter(harness, (db) => db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
     .run(JSON.stringify({ id: "wf-command", schema_version: 1, type: "plan", status: "running", started_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-command"));
-  const refused = await executeCommand("workflow.adopt-terminal", {
-    workflow: "wf-command", harness, expect: "1", operation: "adopt-running", reason: "not terminal",
+  // The operator needs no knowledge of how this row got here: registry
+  // membership is what makes it adoptable, and the adoption terminalizes it in
+  // the same transaction, so the retired "no supported exit exists" answer and
+  // its issue-capture dead end must not reappear.
+  const adopted = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-running", reason: "close an unregistered header",
   }, invocation(root));
-  expectAdoptionRefusal(
-    refused,
-    "[execution.adoption-refused] workflow wf-command is not terminal; no supported exit exists for a non-terminal header without registry membership",
-    "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
-  );
-  expectDeadEndMarkers(
-    "No supported exit exists for this non-terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.",
-    true,
-  );
+  expect(adopted).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
+  const status = await executeCommand("status.validate", {}, invocation(root));
+  expect(status.status).toBe("ok");
+  if (status.status !== "ok") throw new Error("expected status validate success");
+  expect(terminalState(status.data).terminalAdoptions)
+    .toMatchObject([{ id: "wf-command", status: "stopped", revision: 2, lifecycle_adopted_at: expect.any(String) }]);
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.ended_at') as ended_at from execution_workflows where workflow_id = ?").get("wf-command"))
+      .toMatchObject({ status: "stopped", ended_at: expect.any(String) });
+  });
+});
+
+test("an ACTIVE holder on an unregistered header is settled only under the operator attestation", async () => {
+  const { root, harness } = await fixture();
+  await withWriter(harness, (db) => db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+    .run(JSON.stringify({ id: "wf-command", schema_version: 1, type: "plan", status: "running", started_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-command"));
+  await withActiveHolder(harness, "stranded-holder");
+  const refused = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-running-holder", reason: "close an unregistered header",
+  }, invocation(root));
+  expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused" });
+  if (refused.status !== "refused") throw new Error("expected the ACTIVE-holder refusal");
+  expect(refused.details).toMatchObject({
+    active_holder_sessions: ["stranded-holder"],
+    adoption_refusal: "active-session-proof-required",
+  });
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state from execution_sessions where session_id = ?").get("stranded-holder")).toEqual({ state: "active" });
+    expect(db.prepare("select json_extract(state_json, '$.status') as status from execution_workflows where workflow_id = ?").get("wf-command")).toEqual({ status: "running" });
+  });
+  const attestation = writeAttestation(root, ["stranded-holder"]);
+  const applied = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-running-holder", reason: "close an unregistered header", attestation,
+  }, invocation(root));
+  expect(applied).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder")).toEqual({ state: "revoked", revision: 2 });
+    expect(db.prepare("select json_extract(state_json, '$.status') as status from execution_workflows where workflow_id = ?").get("wf-command")).toEqual({ status: "stopped" });
+  });
 });
 
 test("a failed header carrying no recorded stop reason is adopted like any other terminal header", async () => {
@@ -607,7 +636,7 @@ test("missing-header refusal directs to new registration, not adoption", async (
   }, invocation(root));
   expectAdoptionRefusal(
     refused,
-    "[execution.adoption-refused] workflow wf-command has no terminal header to adopt; register the workflow through the supported workflow registration route",
+    "[execution.adoption-refused] workflow wf-command has no header to adopt; register the workflow through the supported workflow registration route",
     "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection.",
   );
 });

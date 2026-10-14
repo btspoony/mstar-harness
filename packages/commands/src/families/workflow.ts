@@ -56,7 +56,7 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const proofRequired = adoptionRefusal === "active-session-proof-required";
   const proofIncomplete = adoptionRefusal === "active-session-proof-incomplete";
   const recovery = proofRequired
-    ? `Terminal adoption can settle the eligible unadopted terminal header's ACTIVE coordinator session(s) ${holderList} only against genuine operator stop evidence. The refusal details include attestationContract.schema and attestationContract.constraints for the full document; write an absolute JSON file whose stoppedSessions names every listed target as stopped/reloaded, then retry ` +
+    ? `Terminal adoption can settle the eligible unregistered header's ACTIVE coordinator session(s) ${holderList} only against genuine operator stop evidence. The refusal details include attestationContract.schema and attestationContract.constraints for the full document; write an absolute JSON file whose stoppedSessions names every listed target as stopped/reloaded, then retry ` +
       "`mstar workflow adopt-terminal --workflow <id> --reason <text> --attestation <absolute-json>` (omitted --expect derives the current header revision in the guarded transaction; omitted --operation is generated once). Optional discovery: `mstar schema --command workflow.adopt-terminal`. The engine remains the authority; no stop, consumer-readiness, operator, or authorization facts are generated."
     : proofIncomplete
       ? `Add every listed ACTIVE coordinator session (${holderList}) to the attestation's stoppedSessions with state "stopped" or ` +
@@ -68,15 +68,13 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
           ? "Use the title in the selected plan document's H1, or correct that document before registering."
           : code === "execution.header-revision-conflict"
             ? "Run `mstar status validate` and retry with its current header revision, or omit --expect to derive the current revision inside the guarded transaction."
-            : code === "execution.adoption-refused" && message.includes("no terminal header")
+            : code === "execution.adoption-refused" && message.includes("has no header to adopt")
               ? "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection."
               : code === "execution.adoption-refused" && message.includes("already registered")
                 ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
-                : code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")
-                  ? "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
-                  : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
-                    ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                    : id === "workflow.adopt-terminal" &&
+                : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
+                  ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
+                  : id === "workflow.adopt-terminal" &&
                       (code === "workflow.adopt-terminal.attestation-unreadable" ||
                         code === "workflow.adopt-terminal.attestation-malformed" || posixReadFailure)
                       ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
@@ -308,7 +306,7 @@ function makeDefinition(
           ownership: "caller" as const,
           route: "cli" as const,
           required: false,
-          constraint: `required only for an eligible unadopted terminal header with current-epoch ACTIVE coordinator session(s); --attestation remains an absolute JSON file path, and its stoppedSessions must name every exact target as stopped/reloaded. The engine refuses undeclared/credential-bearing fields and self-settlement. ${attestationRules}`,
+          constraint: `required only for an eligible unregistered header with current-epoch ACTIVE coordinator session(s); --attestation remains an absolute JSON file path, and its stoppedSessions must name every exact target as stopped/reloaded. The engine refuses undeclared/credential-bearing fields and self-settlement. ${attestationRules}`,
         },
         {
           name: "attestation",
@@ -458,7 +456,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, { delivery: deliveryEvidenceSchema }),
     makeDefinition(
       "workflow.adopt-terminal",
-      "Adopt an eligible unadopted terminal header without registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
+      "Adopt a header that has no ACTIVE registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. A header that never closed is terminalized to stopped in the same transaction as its adoption record, so the committed state never carries an adoption on a still-running header; an already-terminal header keeps its recorded status and ended_at. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
       "write",
       ["workflow", "harness", "expect", "operation", "reason", "attestation"],
       async (input, context) => {
@@ -499,7 +497,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       {
         expect: "Optional positive header-revision CAS; when omitted the engine derives the current addressed revision inside the guarded adoption transaction.",
         operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
-        attestation: `absolute JSON file path for operator proof; required only for eligible unadopted terminal headers with current-epoch ACTIVE coordinator sessions. Exact structure is payload adoptionAttestation; shared semantic constraints: ${attestationRules}`,
+        attestation: `absolute JSON file path for operator proof; required only for an eligible unregistered header with current-epoch ACTIVE coordinator sessions. Exact structure is payload adoptionAttestation; shared semantic constraints: ${attestationRules}`,
       },
       { adoptionAttestation: activationAttestationDocumentSchema },
     ),
