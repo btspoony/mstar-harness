@@ -128,7 +128,7 @@ describe("terminal workflow adoption", () => {
     expect(dashboard.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
   });
 
-  test("refuses stale CAS, registered rows, active-session rows, non-terminal headers, and headers missing both reason keys", async () => {
+  test("refuses stale CAS, registered rows, active-session rows, and non-terminal headers", async () => {
     const stale = await strandedTerminal();
     const staleBefore = await footprint(stale.context);
     await expect(adoptTerminalWorkflow({ harnessDir: stale.context.harnessDir, caller: stale.caller }, {
@@ -170,23 +170,6 @@ describe("terminal workflow adoption", () => {
     running.close();
     await expect(adoptTerminalWorkflow({ harnessDir: nonterminal.context.harnessDir, caller: nonterminal.caller }, {
       workflowId: nonterminal.caller.workflowId, expectedRevision: 1, reason: "running", operationId: "adopt-running",
-    })).rejects.toMatchObject({
-      code: "execution.adoption-refused",
-    });
-
-    const missingReason = await strandedTerminal();
-    const failed = await openStore(missingReason.context, "write");
-    failed.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
-      .run(JSON.stringify({ id: "wf-stranded", schema_version: 1, type: "plan", status: "failed", started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-stranded");
-    failed.close();
-    const missingHeader = await openStore(missingReason.context, "read");
-    try {
-      expect(missingHeader.db.prepare(
-        "select json_extract(state_json, '$.stop_reason') as stop_reason, json_extract(state_json, '$.reason') as reason from execution_workflows where workflow_id = ?",
-      ).get("wf-stranded")).toEqual({ stop_reason: null, reason: null });
-    } finally { missingHeader.close(); }
-    await expect(adoptTerminalWorkflow({ harnessDir: missingReason.context.harnessDir, caller: missingReason.caller }, {
-      workflowId: missingReason.caller.workflowId, expectedRevision: 1, reason: "failed", operationId: "adopt-failed",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
     });
@@ -276,6 +259,38 @@ describe("terminal adoption session settlement", () => {
         .toEqual({ state: "revoked", revision: 2 });
       expect((db.db.prepare("select count(*) as n from execution_registry where workflow_id = ?").get("wf-stranded") as { n: number }).n).toBe(0);
       expect((db.db.prepare("select count(*) as n from execution_operations where operation_id = ?").get("adopt-settle-1") as { n: number }).n).toBe(1);
+    } finally { db.close(); }
+  });
+
+  test("settles a stopped header that carries no recorded stop reason", async () => {
+    const stranded = await strandedWithHolder("active-holder");
+    // The header's terminal reason is absent exactly as the engine's own
+    // lifecycle writer leaves it: the adoption eligibility must not depend on
+    // a field nothing writes, or a normally stopped workflow could never
+    // settle its ACTIVE holder without a hand-edited row.
+    const writer = await openStore(stranded.context, "write");
+    try {
+      writer.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+        .run(JSON.stringify({
+          id: "wf-stranded", schema_version: 1, type: "plan", status: "stopped",
+          started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z",
+          updated_at: "2026-10-01T01:00:00.000Z",
+        }), "wf-stranded");
+      expect(writer.db.prepare(
+        "select json_extract(state_json, '$.stop_reason') as stop_reason, json_extract(state_json, '$.reason') as reason from execution_workflows where workflow_id = ?",
+      ).get("wf-stranded")).toEqual({ stop_reason: null, reason: null });
+    } finally { writer.close(); }
+    const applied = await adopt(stranded, { attestation: attestation(["active-holder"]) });
+    expect(applied.replayed).toBe(false);
+    expect(applied.data.terminalAdoptions).toEqual([{
+      id: "wf-stranded", status: "stopped", revision: 2,
+      lifecycle_adopted_at: expect.any(String), adopt_reason: "settle the stranded holder",
+      actor_session_id: stranded.caller.sessionId, operation_id: "adopt-settle-1",
+    }]);
+    const db = await openStore(stranded.context, "read");
+    try {
+      expect(db.db.prepare("select state, revision from execution_sessions where workflow_id = ? and session_id = ?").get("wf-stranded", "active-holder"))
+        .toEqual({ state: "revoked", revision: 2 });
     } finally { db.close(); }
   });
 

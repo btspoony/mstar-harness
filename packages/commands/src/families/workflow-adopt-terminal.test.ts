@@ -104,11 +104,6 @@ const settlementReceiptSchema = z.object({
     resolvedFrom: z.array(z.object({ path: z.string(), source: z.string() })),
   }).passthrough().optional(),
 }).passthrough();
-/**
- * A refusal's `details`; the recovery guidance and help route live here
- * (`envelope.ts` nests them inside `details`), not at the envelope top level.
- */
-const refusalEnvelopeSchema = z.object({ recovery: z.string(), helpRoute: z.string() }).passthrough();
 function terminalState(data: unknown): {
   terminalUnregistered: NonNullable<z.infer<typeof terminalStateSchema>["terminalUnregistered"]>;
   terminalAdoptions: NonNullable<z.infer<typeof terminalStateSchema>["terminalAdoptions"]>;
@@ -586,23 +581,22 @@ test("nonterminal-header refusal routes through execution bind and normal close"
   );
 });
 
-test("missing terminal-reason refusal states the dead end and issue-capture route", async () => {
+test("a failed header carrying no recorded stop reason is adopted like any other terminal header", async () => {
   const { root, harness } = await fixture();
   await withWriter(harness, (db) => db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
     .run(JSON.stringify({ id: "wf-command", schema_version: 1, type: "plan", status: "failed", started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-command"));
-  const refused = await executeCommand("workflow.adopt-terminal", {
+  // The recorded terminal reason has no writer in the engine, so it is not an
+  // adoption precondition: the header settles through the ordinary route and
+  // the retired dead-end refusal must not reappear.
+  const adopted = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness, expect: "1", operation: "adopt-no-reason", reason: "missing provenance",
   }, invocation(root));
-  // A stopped/failed header without its recorded reason is a dead end this
-  // command must not repair: the assertion is the refusal contract plus the
-  // supported capture route read from the real envelope, not the engine's
-  // exact sentence.
-  expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused", exitCode: 1 });
-  if (refused.status !== "refused") throw new Error("expected the missing-terminal-reason refusal");
-  expect(refused.message).toContain("wf-command");
-  const details = refusalEnvelopeSchema.parse(refused.details);
-  expect(details.helpRoute).toBe("mstar workflow adopt-terminal --help");
-  expectDeadEndMarkers(details.recovery, false);
+  expect(adopted).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
+  const status = await executeCommand("status.validate", {}, invocation(root));
+  expect(status.status).toBe("ok");
+  if (status.status !== "ok") throw new Error("expected status validate success");
+  expect(terminalState(status.data).terminalAdoptions)
+    .toMatchObject([{ id: "wf-command", status: "failed", revision: 2, lifecycle_adopted_at: expect.any(String) }]);
 });
 
 test("missing-header refusal directs to new registration, not adoption", async () => {

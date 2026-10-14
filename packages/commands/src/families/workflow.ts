@@ -74,24 +74,22 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                 ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
                 : code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")
                   ? "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
-                  : code === "execution.adoption-refused" && message.includes("no recorded terminal reason")
-                    ? "No supported exit exists for a stopped/failed header missing the recorded terminal reason; capture an issue with `mstar issue add` and preserve the header."
-                    : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
-                      ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                      : id === "workflow.adopt-terminal" &&
-                        (code === "workflow.adopt-terminal.attestation-unreadable" ||
-                          code === "workflow.adopt-terminal.attestation-malformed" || posixReadFailure)
-                        ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
-                      : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
-                        (code === `${id}.file-malformed` || posixReadFailure)
-                        ? (id === "workflow.evidence"
-                          ? "Correct the absolute JSON path supplied with --file, then retry mstar workflow evidence --workflow <id> --file <absolute-json>."
-                          : "Correct the absolute JSON path supplied with --file, then retry mstar workflow execution-policy --workflow <id> --file <absolute-json>.")
-                        : code === "store.attestation-invalid" || code === "store.activation-blocked"
-                          ? "The engine refused this operator attestation. Use `mstar schema --command workflow.adopt-terminal` for the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
-                          : code.startsWith("execution.adoption")
-                            ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-                            : undefined;
+                  : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
+                    ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
+                    : id === "workflow.adopt-terminal" &&
+                      (code === "workflow.adopt-terminal.attestation-unreadable" ||
+                        code === "workflow.adopt-terminal.attestation-malformed" || posixReadFailure)
+                      ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
+                    : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
+                      (code === `${id}.file-malformed` || posixReadFailure)
+                      ? (id === "workflow.evidence"
+                        ? "Correct the absolute JSON path supplied with --file, then retry mstar workflow evidence --workflow <id> --file <absolute-json>."
+                        : "Correct the absolute JSON path supplied with --file, then retry mstar workflow execution-policy --workflow <id> --file <absolute-json>.")
+                      : code === "store.attestation-invalid" || code === "store.activation-blocked"
+                        ? "The engine refused this operator attestation. Use `mstar schema --command workflow.adopt-terminal` for the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
+                        : code.startsWith("execution.adoption")
+                          ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
+                          : undefined;
   const refusalDetails = details === undefined
     ? undefined
     : {
