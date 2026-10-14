@@ -88,7 +88,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "status.ok").data).toMatchObject({
         total_open: 1,
-        by_severity: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+        by_severity: { critical: 0, high: 1, medium: 0, low: 0, nit: 0 },
         by_project: { _default: 1 },
       });
     });

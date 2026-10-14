@@ -71,7 +71,7 @@ const KINDS: Record<string, true> = {
   decision: true,
   "review-obligation": true,
 };
-const SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, info: true };
+const SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
 
 function refuse(message: string): never {
   throw new SddScriptError(message, 2);

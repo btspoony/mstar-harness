@@ -353,7 +353,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         if (!parsed.success) return invalid("status.tech-debt", parsed.error);
         try {
           const harnessDir = executionHarness(context, parsed.data.harness) ?? parsed.data.harness ?? context.cwd;
-          const bySeverity: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+          const bySeverity: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
           const byProject: Record<string, number> = {};
           let totalOpen = 0;
           for (let offset = 0; ; offset += 200) {

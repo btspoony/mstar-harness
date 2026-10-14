@@ -40,7 +40,7 @@ const inputSchema = z.object({
   project: z.string().optional(),
   disposition: z.enum(["open", "resolved", "waived", "duplicate", "superseded"]).optional(),
   kind: z.enum(["bug", "risk", "improvement", "request", "decision", "review-obligation"]).optional(),
-  severity: z.enum(["critical", "high", "medium", "low", "info"]).optional(),
+  severity: z.enum(["critical", "high", "medium", "low", "nit"]).optional(),
   query: z.string().optional(),
   limit: z.number().int().positive().max(200).optional(),
   offset: z.number().int().nonnegative().optional(),
