@@ -1,10 +1,19 @@
 /**
  * scripts/prepare-release.ts — fragment `packages:` token validation.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { bumpJsonVersion, bumpVersion, parseFragment, syncRootDependencySpecs, validateFragmentPackages } from "./prepare-release.ts";
+import {
+  type RegistryFetch,
+  bumpJsonVersion,
+  bumpVersion,
+  checkVersionCollision,
+  parseFragment,
+  publishedPackageNames,
+  syncRootDependencySpecs,
+  validateFragmentPackages,
+} from "./prepare-release.ts";
 import {
   DEFAULT_VERSION_PATH,
   CHANGELOGS,
@@ -270,5 +279,115 @@ describe("bumpJsonVersion (locator-aware bump)", () => {
       }),
     ).rejects.toThrow("boom");
     expect(process.cwd()).toBe(before);
+  });
+});
+
+describe("checkVersionCollision (prepare-time published-version gate)", () => {
+  const NAMES = ["@mstar-harness/cli", "@mstar-harness/engine"];
+  const answering = (status: number): RegistryFetch => async () => ({ status });
+
+  test("a target version already published is refused, naming the recovery", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, answering(200));
+    expect(result.status).toBe("published");
+    expect(result.message).toContain("@mstar-harness/cli");
+    expect(result.message).toContain("already published");
+    expect(result.message).toContain("bun run release:prepare -- 3.9.4");
+  });
+
+  test("an unpublished version clears every surface (one read per package)", async () => {
+    const urls: string[] = [];
+    const result = await checkVersionCollision("3.12.0", NAMES, async (url) => {
+      urls.push(url);
+      return { status: 404 };
+    });
+    expect(result.status).toBe("free");
+    expect(urls).toEqual([
+      "https://registry.npmjs.org/%40mstar-harness%2Fcli/3.12.0",
+      "https://registry.npmjs.org/%40mstar-harness%2Fengine/3.12.0",
+    ]);
+  });
+
+  test("a published surface is decisive even when an earlier sibling read fails", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, async (url) => {
+      if (url.includes("cli")) throw new Error("getaddrinfo ENOTFOUND");
+      return { status: 200 };
+    });
+    expect(result.status).toBe("published");
+    expect(result.message).toContain("@mstar-harness/engine");
+  });
+
+  test("an unreachable registry states the skip instead of passing silently", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, async () => {
+      throw new Error("getaddrinfo ENOTFOUND");
+    });
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("SKIPPED");
+    expect(result.message).toContain("getaddrinfo ENOTFOUND");
+    expect(result.message).toContain("NOT verified as unpublished");
+  });
+
+  test("a registry answer other than 200/404 is a stated skip, not a pass", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, answering(503));
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("HTTP 503");
+    expect(result.message).toContain("@mstar-harness/cli");
+  });
+
+  test("a hung registry read is bounded and degrades to the stated skip", async () => {
+    const neverSettles: RegistryFetch = (_url, init) => {
+      const { promise, reject } = Promise.withResolvers<{ status: number }>();
+      if (init.signal.aborted) reject(init.signal.reason);
+      else init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      return promise;
+    };
+    const started = Date.now();
+    const result = await checkVersionCollision("3.9.3", NAMES, neverSettles, 25);
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("NOT verified as unpublished");
+    // Two packages share one deadline: not timeoutMs per package.
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("publishedPackageNames (release surfaces on the registry)", () => {
+  test("lists the published workspace packages, never the private root", async () => {
+    expect(await publishedPackageNames()).toEqual([
+      "@mstar-harness/cli",
+      "@mstar-harness/opencode",
+      "@mstar-harness/engine",
+      "@mstar-harness/commands",
+      "@mstar-harness/opencode-v2",
+      "@mstar-harness/dsh",
+      "@mstar-harness/omp",
+    ]);
+  });
+});
+
+describe("fragment routing (unreleased fragment -> package changelog)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+
+  /** `release:prepare` archives consumed fragments, so a shipped fragment lives
+   * under `unreleased/` only until the next release. */
+  function locateFragment(name: string): string {
+    const unreleased = join(REPO_ROOT, ".changes", "unreleased", name);
+    if (existsSync(unreleased)) return unreleased;
+    for (const version of readdirSync(join(REPO_ROOT, ".changes", "archive"))) {
+      const archived = join(REPO_ROOT, ".changes", "archive", version, name);
+      if (existsSync(archived)) return archived;
+    }
+    throw new Error(`fragment ${name} is in neither .changes/unreleased nor .changes/archive`);
+  }
+
+  test("env-injection-seams-removed routes to the engine changelog only", () => {
+    const name = "env-injection-seams-removed.md";
+    const frag = parseFragment(name, readFileSync(locateFragment(name), "utf8"));
+    expect(frag.packages).toEqual(["engine"]);
+    expect(validateFragmentPackages(frag.packages, frag.file)).toEqual([]);
+    // The CN block is separated by its marker; a raw Chinese bullet here would
+    // be assembled into the EN-only engine changelog as English content.
+    expect(frag.en).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(CHANGELOGS.filter((target) => frag.packages.includes(target.pkg)).map((target) => target.path)).toEqual([
+      "packages/engine/CHANGELOG.md",
+    ]);
   });
 });

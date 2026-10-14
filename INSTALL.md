@@ -473,6 +473,27 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
 
 3. **Project knowledge** — bootstrap or refresh via the `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
 
+## Upgrading from 3.x
+
+4.x removes the **plan-PM product route** and replaces it with the ordinary workflow-coordinator route. Two operator habits change:
+
+- **One workflow coordinator drives every row.** The selected workflow's primary coordinator advances each row through the ordinary `prepare`, `progress`, `issue-add` / `issue-close` and direct `complete` operations. Per-plan PM sessions, roles, claims and bindings, sealed Assignment admission, and the handoff / accept / return / integration-start / integration-accept / reconcile / repair / release protocols are gone — there is no alias and no relocated transfer sequence. Coordinator bootstrap/resume and explicit recovery of a stopped workflow coordinator remain.
+- **`/iteration-drive` takes no arguments.** Any nonempty input is refused before boot; an old scoped invocation is never silently reinterpreted as whole-iteration authorization. Select the workflow explicitly when the context is ambiguous.
+
+**Re-install both halves — the CLI and each host plugin upgrade independently, and version drift is the known failure mode.** A stale plugin checkout keeps shipping the removed command surface, so refresh the CLI and re-run the host install and doctor for every host you use:
+
+```bash
+npm i -g @mstar-harness/cli@latest              # or keep using the npx/bunx form, which fetches the current release
+npx @mstar-harness/cli init --target <host> --yes
+npx @mstar-harness/cli doctor --target <host>
+```
+
+`<host>` is one of `opencode`, `cursor`, `codex`, `zcode`, `omp`, `dsh` (Kimi users refresh from the Kimi TUI with `/plugins install` + `/plugins reload`). The Cursor plugin path is its own git checkout and needs `cd ~/.cursor/plugins/local/morning-star-harness && git pull --ff-only` (or the `init` re-run above). Restart or reload the host afterwards — see the per-host sections above.
+
+An existing `{HARNESS_DIR}/store.db` (or legacy `status.json` / snapshot sources) from 3.x comes forward through the public upgrade path: **stop older installed writers first**, then `mstar store upgrade --operator <name> --harness <control-root>`, which opens or creates the store, imports recognizable execution state, activates authority and reports skipped items while leaving skipped source bytes in place ([Commands reference](docs/commands.md)).
+
+The complete list of 4.x entry changes is the release's entry in [CHANGELOG.md](CHANGELOG.md) (Chinese summary: [CHANGELOG_CN.md](CHANGELOG_CN.md)).
+
 ## Report command
 
 `mstar report` generates an offline, redacted issue-report draft. It accepts only explicitly supplied report fields; it does not read credentials, environment variables, files, shell history, or transcripts, and it never submits the issue or makes a network request. Omitted narrative values appear as `absent`; unavailable observed versions appear as `unknown`. Review the generated draft yourself before using it.

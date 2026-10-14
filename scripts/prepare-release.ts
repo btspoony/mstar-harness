@@ -9,11 +9,13 @@
  *
  * What it does:
  *   1. Resolves the next version (explicit arg or auto bump from root package.json).
- *   2. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
- *   3. Inserts a new `## [<version>] - <date>` section into each changelog
+ *   2. Refuses a version the registry already publishes for a release surface
+ *      (bounded probe; an unreachable registry is a stated skip, never a silent pass).
+ *   3. Reads `.changes/unreleased/*.md` fragments and groups them by changelog + category.
+ *   4. Inserts a new `## [<version>] - <date>` section into each changelog
  *      (under `## [Unreleased]`), auto-appending a Version-alignment block.
- *   4. Bumps all version surfaces (including the portable Agent Plugins manifest and both marketplace manifests).
- *   5. Moves consumed fragments to `.changes/archive/<version>/`.
+ *   5. Bumps all version surfaces (including the portable Agent Plugins manifest and both marketplace manifests).
+ *   6. Moves consumed fragments to `.changes/archive/<version>/`.
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
  *   ---
@@ -76,6 +78,23 @@ const DEFAULT_CATEGORY: Record<string, string> = {
   omp: "Changed",
 };
 
+const REGISTRY_URL = "https://registry.npmjs.org";
+/** Bound on the whole published-version probe; a hung registry must never stall prepare. */
+const REGISTRY_TIMEOUT_MS = 10_000;
+
+/** Registry read, status only — injected by tests so the check is offline and deterministic. */
+export type RegistryFetch = (url: string, init: { signal: AbortSignal }) => Promise<{ status: number }>;
+
+/**
+ * Published-version decision for the version selected in `prepare`. Every
+ * status carries the operator-facing line the caller prints, so a refusal and
+ * a degraded check are always visible in the output.
+ */
+export type VersionCollision =
+  | { status: "free"; message: string }
+  | { status: "published"; pkg: string; message: string }
+  | { status: "skipped"; message: string };
+
 function parseArgs(argv: string[]): { version?: string; bump: "patch" | "minor" } {
   const rest = argv.slice(2).filter((a) => a !== "--");
   let version: string | undefined;
@@ -110,6 +129,71 @@ async function readCurrentVersion(): Promise<string> {
   const pkg = (await Bun.file("package.json").json()) as { version: string };
   if (!pkg.version) throw new Error("package.json has no version");
   return pkg.version;
+}
+
+/** Published npm names of the release surfaces, read from the same
+ * `VERSION_SURFACES` list `release:validate` checks (the private root and the
+ * non-npm plugin manifests contribute no name). */
+export async function publishedPackageNames(): Promise<string[]> {
+  const names: string[] = [];
+  for (const surface of VERSION_SURFACES) {
+    if (!/^packages\/[^/]+\/package\.json$/.test(surface.path)) continue;
+    const pkg = (await Bun.file(surface.path).json()) as { name?: string; private?: boolean };
+    if (pkg.name && !pkg.private) names.push(pkg.name);
+  }
+  return names;
+}
+
+/**
+ * Compare the version selected in `prepare` with what the registry already
+ * publishes — a version-equal release is only detectable here, not in the
+ * offline tag gate. Any already-published surface refuses (npm rejects a
+ * duplicate version) and names the recovery — a 200 is decisive even when
+ * another surface could not be read; an unreadable registry returns a stated
+ * skip instead of passing silently. The read is bounded, so a hung registry
+ * degrades to that skip rather than stalling the release. Exported for tests,
+ * which inject `registryFetch`.
+ */
+export async function checkVersionCollision(
+  version: string,
+  packages: readonly string[],
+  registryFetch: RegistryFetch = fetch,
+  timeoutMs: number = REGISTRY_TIMEOUT_MS,
+): Promise<VersionCollision> {
+  // One signal bounds the whole probe (reads run together), so a hung registry
+  // cannot make prepare wait a full timeout per surface.
+  const signal = AbortSignal.timeout(timeoutMs);
+  const probes = await Promise.all(
+    packages.map(async (pkg) => {
+      try {
+        const { status } = await registryFetch(`${REGISTRY_URL}/${encodeURIComponent(pkg)}/${version}`, { signal });
+        if (status === 200) return { pkg, kind: "published" as const };
+        // 404 is the only "not published" answer; anything else is unreadable.
+        if (status === 404) return { pkg, kind: "absent" as const };
+        return { pkg, kind: "error" as const, reason: `HTTP ${status}` };
+      } catch (err) {
+        return { pkg, kind: "error" as const, reason: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
+
+  // A published surface is decisive even if another read failed.
+  const published = probes.find((probe) => probe.kind === "published");
+  if (published) {
+    return {
+      status: "published",
+      pkg: published.pkg,
+      message: `Version ${version} is already published for ${published.pkg}, and npm rejects a duplicate version. Choose a different version and re-run: bun run release:prepare -- ${bumpVersion(version, "patch")}.`,
+    };
+  }
+  const failures = probes.flatMap((probe) => (probe.kind === "error" ? [`${probe.pkg}: ${probe.reason}`] : []));
+  if (failures.length) {
+    return {
+      status: "skipped",
+      message: `Published-version check SKIPPED (${failures.join("; ")}) — ${version} was NOT verified as unpublished. Confirm it is unpublished before merging the release PR.`,
+    };
+  }
+  return { status: "free", message: `Published-version check: ${version} is unpublished for all ${packages.length} release packages.` };
 }
 
 function parseFrontmatter(text: string): { fm: Record<string, string>; body: string } {
@@ -317,6 +401,12 @@ async function main(): Promise<void> {
   if (compareSemver(version, current) <= 0) {
     throw new Error(`Version ${version} must be greater than current ${current}.`);
   }
+
+  // Version selection is the last point before any surface is touched, so the
+  // published-version collision is decided here (never in the offline tag gate).
+  const collision = await checkVersionCollision(version, await publishedPackageNames());
+  if (collision.status === "published") throw new Error(collision.message);
+  console.log(`${collision.message}\n`);
 
   console.log(`Preparing release ${current} -> ${version}\n`);
 
