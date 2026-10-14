@@ -394,8 +394,7 @@ export function apply(ctx: Context, config: Config): void {
   // catalog cache below — an HMR restart resets them and completions outside
   // the window stay unpaired (documented honest degrade; no cross-apply
   // pairing). Shared by the dispatch recording (callId → dispatchRef via the
-  // adapter), the post-execute settle listener (reads callId, writes the
-  // background jobId) and the onJobDone wiring (reads jobId). The
+  // background jobId) and the jobs `settled` event subscription (reads jobId).
   // `catalogBySession` slot map carries the call-window child-identity join
   // (raw label → candidate, keyed by the live parent Session object) through
   // the same lifetime: a catalog outside the apply window joins nothing.
@@ -674,43 +673,26 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerPlanModeBridge(ctx, resolver)
 
-  // Background-job settle pairing — the SECOND real completion seam: a
-  // terminal job snapshot (completed/killed/failed) pairs via the registry
-  // job id (stored by the post-execute background branch) to the dispatch
-  // that started it → recordSettle (completed→ok / killed→denied /
-  // failed→error; durationMs = finishedAt − startedAt when available).
-  // Deferred with `ctx.inject(['jobs'], …)` — the SAME optional-unit
-  // pattern as `registerMstarCommands`: cordis 4 service visibility requires
-  // inject (a direct `ctx.jobs` access throws "cannot get property without
-  // inject"), and the plugin must boot without the jobs service (a
-  // composition without dsh-jobs keeps the ledger dispatch+settle for
-  // foreground calls and leaves background jobs unpaired — honest degrade).
-  // 'jobs' is deliberately NOT in the top-level `inject` (that would block
-  // the whole plugin apply on the service). The child fiber's registrations
-  // are effect-scoped and unwind with this apply.
+  // Background-job settle pairing listens to the exported jobs lifecycle event
+  // stream. `settled` carries the registry job id and terminal projection.
+  // Deferred injection keeps the jobs service optional: without it, foreground
+  // settle pairing still works and background jobs remain honestly unpaired.
   ctx.inject(['jobs'], (jobsCtx) => {
-    // The dsh-jobs service is an OPTIONAL seam — the plugin deliberately
-    // carries no runtime/type import of it (structural `JobDoneSnapshot`
-    // contract in agent-flow.ts), so the runtime `jobsCtx.jobs` is cast to
-    // the ONE consumed surface: `onJobDone(listener)` with the upstream
-    // `JobDoneListener = (snapshot, owner) => void | PromiseLike<void>`.
-    const jobs = (jobsCtx as unknown as { jobs: { onJobDone(listener: (snapshot: JobDoneSnapshot, _owner: unknown) => void): unknown } }).jobs
-    try {
-      // Registration contained  for symmetry with the
-      // rest of the seam wiring: the listener body itself is already
-      // try/catch-contained (`recordJobSettle`), but a THROWING registration
-      // would surface as an unhandled child-fiber error at an arbitrary later
-      // time (whenever the jobs service appears) — contained here instead
-      // (a failed registration only degrades background settle pairing,
-      // honestly: the child fiber still unwinds with this apply).
-      jobs.onJobDone((snapshot, _owner) => {
-        recordJobSettle(snapshot, pairing)
-      })
-    } catch (error) {
-      ctx.logger(AGENT_FLOW_LOGGER).error(
-        `jobs.onJobDone registration failed (contained — background settle pairing degraded): ${(error as Error).message}`,
-      )
-    }
+    const jobs = (jobsCtx as unknown as {
+      jobs: {
+        events: {
+          subscribe(
+            filter: { owners: 'scope' },
+            listener: (event:
+              | { type: 'settled'; job: JobDoneSnapshot }
+              | { type: 'registered' | 'progress' | 'stopping' | 'removed' | 'output' }) => void,
+          ): unknown
+        }
+      }
+    }).jobs
+    jobs.events.subscribe({ owners: 'scope' }, (event) => {
+      if (event.type === 'settled') recordJobSettle(event.job, pairing)
+    })
   })
 
   // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map

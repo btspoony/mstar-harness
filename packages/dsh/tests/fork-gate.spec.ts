@@ -15,7 +15,7 @@
  *   fork dispatch (verdict ok) — no false positives, fork is recorded;
  * - (c) ledger records fork dispatch + settle: a REAL fork dispatch through
  *   the composed registry (registered `subagent_fork` tool, canonical
- *   background shape) → one dispatch event, then the onJobDone terminal →
+ *   background shape) → one dispatch event, then the settled jobs event →
  *   one PAIRED settle — the `registerSettleListener` dispatchTools match
  *   covers fork (verify, no code change beyond `DEFAULT_DISPATCH_TOOLS`),
  *   plus the bare-context foreground pairing probe with an EMPTY config
@@ -208,11 +208,11 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
 /* ---------------------------------- (c) settle pairing ---------------------------------- */
 
 describe('fork settle — ledger records fork dispatch + settle (dispatchTools-driven pairing)', () => {
-  it('(c1) a REAL fork dispatch through the composed registry pairs through tools/post-execute + onJobDone', async () => {
+  it('(c1) a REAL fork dispatch through the composed registry pairs through tools/post-execute + the jobs event stream', async () => {
     const app = booted = await bootApp({ jobsService: 'fake', seedV2: true, dispatchBinding: 'qc-specialist' })
     // The fork tool — the same canonical background shape as the upstream
     // dsh-tool-subagent (the seam-probe fixture), so the post-execute branch
-    // stores `jobId → dispatchRef` and the onJobDone terminal settles.
+    // stores `jobId → dispatchRef` and the settled jobs event settles it.
     app.ctx.tools.register(defineTool({
       name: 'subagent_fork',
       description: 'fork a delegation to a subagent',
@@ -249,8 +249,8 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
     expect(view.events.map((e) => e.kind)).toEqual(['dispatch'])
     expect(view.events[0]).toMatchObject({ kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok' })
 
-    // Fire the terminal through the onJobDone listener the plugin's
-    // `ctx.inject(['jobs'])` wiring registered on the fake jobs service.
+    // Fire the terminal through the jobs lifecycle event subscription that
+    // `ctx.inject(['jobs'])` registered on the fake service.
     const jobs = app.ctx.jobs as unknown as FakeJobRegistry
     jobs.fireDone({
       id: JobId('fork-1'),
