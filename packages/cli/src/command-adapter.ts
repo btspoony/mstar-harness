@@ -775,15 +775,21 @@ export function readStdinPayload(stream: StdinSource = process.stdin, idleTimeou
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   const chunks: Buffer[] = [];
   let timer: NodeJS.Timeout | undefined;
+  const ignoreLateStreamError = () => {};
   const detach = () => {
     stream.removeListener("data", onData);
     stream.removeListener("end", onEnd);
     stream.removeListener("error", onError);
+    // A stream error arriving after this read settled is no longer ours to
+    // reject, but an unhandled `error` event would still tear the process down:
+    // one no-op handler owns every late error (the same idiom the child-stdin
+    // write uses for its expected EPIPE race).
+    stream.on("error", ignoreLateStreamError);
     clearTimeout(timer);
     stream.pause();
   };
   const arm = () => {
-    if (stream.isTTY === true || idleTimeoutMs <= 0) return;
+    if (stream.isTTY === true) return;
     clearTimeout(timer);
     timer = setTimeout(() => {
       detach();

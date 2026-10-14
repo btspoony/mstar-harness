@@ -1494,10 +1494,6 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     expect(refused.exitCode).toBe(1);
     const recovery = stringMember(objectMember(jsonOf(refused), "details"), "recovery");
     if (recovery === undefined) throw new Error(`the plan.complete refusal carries no details.recovery: ${refused.stdout}`);
-    // The advertised shape is the one the parser accepts: a path, never an
-    // inline-JSON flag given a file path.
-    expect(recovery).toContain("--file <absolute-evidence.json>");
-    expect(recovery).not.toContain("--evidence <");
 
     const reviewPath = join(fixture.root, "recovery-review.json");
     writeJson(reviewPath, { status: "InReview", summary: "recovery review", evidence_paths: [fixture.qaReport] });

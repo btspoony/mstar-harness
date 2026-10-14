@@ -150,9 +150,10 @@ describe("stdin payload reader", () => {
   test("a silent non-interactive stream refuses instead of holding the command open, and detaches its listeners", async () => {
     const stream = new PassThrough();
     await expect(readStdinPayload(stream, 20)).rejects.toMatchObject({ code: "command.stdin-unavailable" });
+    // No data/end consumer survives; one no-op handler owns late errors.
     expect(stream.listenerCount("data")).toBe(0);
     expect(stream.listenerCount("end")).toBe(0);
-    expect(stream.listenerCount("error")).toBe(0);
+    expect(stream.listenerCount("error")).toBe(1);
     stream.destroy();
   });
 
@@ -164,7 +165,8 @@ describe("stdin payload reader", () => {
     await expect(read).resolves.toBe("payload\n");
     expect(stream.listenerCount("data")).toBe(0);
     expect(stream.listenerCount("end")).toBe(0);
-    expect(stream.listenerCount("error")).toBe(0);
+    // The one retained handler owns late errors; it never consumes data.
+    expect(stream.listenerCount("error")).toBe(1);
   });
 
   test("a stream error rejects and detaches its listeners like a completed read", async () => {
@@ -175,7 +177,23 @@ describe("stdin payload reader", () => {
     await expect(read).rejects.toBe(failure);
     expect(stream.listenerCount("data")).toBe(0);
     expect(stream.listenerCount("end")).toBe(0);
-    expect(stream.listenerCount("error")).toBe(0);
+    // One no-op error handler owns the stream after settle: a late error must
+    // not surface as an unhandled 'error' event that tears the process down.
+    expect(stream.listenerCount("error")).toBe(1);
+    stream.emit("error", new Error("a late stream error"));
+  });
+
+  test("a settled read never waits: the documented bound holds for non-interactive streams", async () => {
+    const stream = new PassThrough();
+    stream.end("payload\n");
+    await expect(readStdinPayload(stream, 1_000)).resolves.toBe("payload\n");
+
+    // A disabled/absent bound on a non-interactive stream is not an escape: the
+    // read still refuses at the bound instead of waiting forever.
+    const silent = new PassThrough();
+    await expect(readStdinPayload(silent, 0)).rejects.toMatchObject({ code: "command.stdin-unavailable" });
+    expect(silent.listenerCount("data")).toBe(0);
+    silent.destroy();
   });
 
   test("an interactive terminal keeps its unbounded read", async () => {
