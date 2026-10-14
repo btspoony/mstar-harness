@@ -13,7 +13,7 @@ import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandl
 
 
 export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
-export type Severity = "critical" | "high" | "medium" | "low" | "info";
+export type Severity = "critical" | "high" | "medium" | "low" | "nit";
 export type TerminalDisposition = "resolved" | "waived" | "duplicate" | "superseded";
 export type Disposition = "open" | TerminalDisposition;
 
@@ -30,7 +30,7 @@ const SEVERITIES: Record<Severity, true> = {
   high: true,
   medium: true,
   low: true,
-  info: true,
+  nit: true,
 };
 const ISSUE_KIND_VALUES = Object.keys(KINDS);
 const SEVERITY_VALUES = Object.keys(SEVERITIES);
@@ -120,7 +120,7 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   IssueTriage: {
     reason: { required: true, type: "string", description: "Reason for triage change" },
     kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-    severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
+    severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "nit"] },
     impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
     acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
     owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true },
@@ -1095,7 +1095,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const order = `order by case issues.severity
-        when 'critical' then 5 when 'high' then 4 when 'medium' then 3 when 'low' then 2 when 'info' then 1 else 0 end desc,
+        when 'critical' then 5 when 'high' then 4 when 'medium' then 3 when 'low' then 2 when 'nit' then 1 else 0 end desc,
       case when (${LAST_ACTIVITY_SQL}) is null then 1 else 0 end asc,
       (${LAST_ACTIVITY_SQL}) desc,
       issues.id asc`;

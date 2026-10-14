@@ -10,7 +10,7 @@
  * {}; no dual-write with legacy side") + § Common queries (legacy read path).
  * - Severity enum + legacy `"warning"` → `low` normalization:
  * § "Residual findings: `severity` (SSOT, machine field)" — allowed values
- * `critical|high|medium|low|info`; `warning`/`Major`/`nit` forbidden in JSON;
+ * `critical|high|medium|low|nit`; `warning`/`Major`/`info` forbidden in JSON;
  * legacy `"severity": "warning"` is read and rolled up as `low`.
  * `null`/`""` → `medium` (rollup `norm_sev` semantics).
  * - Findings cleanup modes (zero-residual vs allow-residual): § Findings
@@ -172,7 +172,7 @@ describe("normalizeSeverity (legacy read path)", () => {
   });
 
   test("enum values pass through unchanged", () => {
-    for (const severity of ["critical", "high", "medium", "low", "info"]) {
+    for (const severity of ["critical", "high", "medium", "low", "nit"]) {
       expect(normalizeSeverity(severity)).toBe(severity);
     }
   });
@@ -275,7 +275,7 @@ describe("validateResidual", () => {
 
   test("unknown and retired severity values are violations (only five enum values + legacy warning)", () => {
     violationCodes("status.residual.invalid-severity")(validateResidual(entry({ severity: "Major" })));
-    violationCodes("status.residual.invalid-severity")(validateResidual(entry({ severity: "nit" })));
+    violationCodes("status.residual.invalid-severity")(validateResidual(entry({ severity: "info" })));
     violationCodes("status.residual.invalid-severity")(validateResidual(entry({ severity: null })));
   });
 

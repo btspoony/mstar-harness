@@ -228,7 +228,7 @@ describe('store cutover — the authority is the store, never the retired files'
       'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
     })
     await seedOpenIssue(harnessDir, { title: 'open high from the DB', severity: 'high', operationId: 'op-a' })
-    await seedOpenIssue(harnessDir, { title: 'open info from the DB', severity: 'info', operationId: 'op-b' })
+    await seedOpenIssue(harnessDir, { title: 'open nit from the DB', severity: 'nit', operationId: 'op-b' })
     await seedKnowledgeDoc(harnessDir, {
       id: 'doc-conventions',
       relativePath: 'conventions/harness-context.md',
@@ -240,10 +240,10 @@ describe('store cutover — the authority is the store, never the retired files'
     expect(state).not.toBeNull()
     if (state === null) return
     // The issue rollup came from store.db — the retired register does not exist.
-    expect(state.residuals).toEqual([{ severity: 'high', count: 1 }, { severity: 'info', count: 1 }])
+    expect(state.residuals).toEqual([{ severity: 'high', count: 1 }, { severity: 'nit', count: 1 }])
     expect(state.residualFindings?.map((finding) => [finding.id, finding.severity, finding.title])).toEqual([
       ['I-000001', 'high', 'open high from the DB'],
-      ['I-000002', 'info', 'open info from the DB'],
+      ['I-000002', 'nit', 'open nit from the DB'],
     ])
     expect(state.project.openResiduals).toEqual(state.residuals)
     // The knowledge digest came from the catalog table — no README.md exists.

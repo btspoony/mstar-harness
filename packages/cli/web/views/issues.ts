@@ -49,7 +49,7 @@ const KIND_VALUES: Record<string, true> = {
   decision: true,
   "review-obligation": true,
 };
-const SEVERITY_VALUES: Record<string, true> = { critical: true, high: true, medium: true, low: true, info: true };
+const SEVERITY_VALUES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
 
 export const DISPOSITIONS = Object.keys(DISPOSITION_VALUES);
 export const ISSUE_KINDS = Object.keys(KIND_VALUES);

@@ -1439,6 +1439,94 @@ create unique index dsh_ledger_events_legacy_line
   where legacy_source_digest is not null;
 `;
 
+/**
+ * Migration 12 — the severity vocabulary is `critical|high|medium|low|nit`;
+ * the retired `info` value (migration 1's CHECK) is converted, not accepted.
+ *
+ * SQLite cannot alter a CHECK in place, so `issues` is rebuilt. Unlike
+ * migration 9's subject, `issues` IS foreign-key referenced
+ * (`occurrences`, `provenance`, `relations` ×2, `issue_transitions`), and this
+ * batch runs inside one transaction with `foreign_keys=ON`, which no
+ * in-transaction pragma can relax: dropping a referenced parent while child
+ * rows exist aborts, and an `alter table … rename` with FK enforcement
+ * rewrites the children's REFERENCES clauses instead of retargeting them.
+ * The child rows are therefore staged out (their tables, indexes and
+ * constraints untouched), the parent is rebuilt, and the rows are restored
+ * before COMMIT — so the store is FK-consistent at every statement boundary
+ * and `foreign_key_check` holds at commit.
+ *
+ * The rebuilt table restores migration 1's indexes and migration 7's
+ * milestone column, index and triggers; `'info'` rows become `'nit'`.
+ */
+export const MIGRATION_12_SQL = `
+create table occurrences_v12_stage as select * from occurrences;
+create table provenance_v12_stage as select * from provenance;
+create table relations_v12_stage as select * from relations;
+create table issue_transitions_v12_stage as select * from issue_transitions;
+delete from occurrences;
+delete from provenance;
+delete from relations;
+delete from issue_transitions;
+create table issues_nit(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique,
+  milestone_id text references project_milestones(milestone_id)
+);
+insert into issues_nit(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id)
+  select id, project_id, title, kind, case severity when 'info' then 'nit' else severity end, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id
+  from issues;
+drop table issues;
+alter table issues_nit rename to issues;
+create unique index issues_external_identity on issues(provider, external_id) where external_id is not null;
+create index issues_disposition on issues(project_id, disposition, severity);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+insert into occurrences select * from occurrences_v12_stage;
+insert into provenance select * from provenance_v12_stage;
+insert into relations select * from relations_v12_stage;
+insert into issue_transitions select * from issue_transitions_v12_stage;
+drop table occurrences_v12_stage;
+drop table provenance_v12_stage;
+drop table relations_v12_stage;
+drop table issue_transitions_v12_stage;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1452,6 +1540,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
   { version: 10, name: "dsh-host-ledgers", sql: MIGRATION_10_SQL },
   { version: 11, name: "dsh-ledger-legacy-provenance", sql: MIGRATION_11_SQL },
+  { version: 12, name: "severity-vocabulary-nit", sql: MIGRATION_12_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

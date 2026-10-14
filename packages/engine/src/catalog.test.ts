@@ -29,14 +29,17 @@ import {
 } from "./store-db.js";
 import { getCatalog as getCatalogFromIndex } from "./index.js";
 
-// Mirroring the issues table definition in MIGRATION_1_SQL for the v1 fixture.
+// The v1 `issues` table this fixture rebuilds, in migration 1's column shape.
+// Its severity CHECK deliberately carries the CURRENT vocabulary
+// ('critical','high','medium','low','nit'); `MIGRATION_1_SQL` keeps its applied
+// `info` bytes as recorded provenance and must never be edited to match.
 const MIGRATION_1_ISSUES_SQL = `
 create table issues(
   id text primary key,
   project_id text not null,
   title text not null,
   kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
-  severity text not null check (severity in ('critical','high','medium','low','info')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
   disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded')),
   impact text not null,
   acceptance text not null,
@@ -606,8 +609,9 @@ describe("migration 2", () => {
     }
     handle.db.prepare("delete from schema_version where version > 1").run();
     // Migration 7 ALTERs issues and creates named indexes/triggers. Clear those
-    // artifacts, then rebuild issues in its exact migration-1 shape: SQLite
-    // cannot drop milestone_id while its REFERENCES clause remains.
+    // artifacts, then rebuild issues in the fixture's v1 column shape (see
+    // MIGRATION_1_ISSUES_SQL): SQLite cannot drop milestone_id while its
+    // REFERENCES clause remains.
     const residue = handle.db
       .prepare("select type, name from sqlite_master where name like 'issues_milestone%'")
       .all() as { type: string; name: string }[];
