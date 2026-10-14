@@ -624,8 +624,9 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
             resolve(code === null ? "signal" : String(code));
           });
         });
-        // SIGTERM closes the server once and the CLI exits cleanly.
-        expect(exited).toBe("0");
+        // SIGTERM closes the server once and the CLI exits with the signal's own
+        // status (128+15), never the start receipt's 0.
+        expect(exited).toBe("143");
         await expect(raw(url)).rejects.toThrow();
         rmSync(packaging, { recursive: true, force: true });
       }

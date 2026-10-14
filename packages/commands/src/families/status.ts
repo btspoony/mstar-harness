@@ -65,6 +65,23 @@ function isDetailsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * The retained terminal header this control root recorded for a lifecycle it
+ * closed and unregistered: the fact the idempotent close hop reports. An id
+ * this authority never held (a foreign or malformed scope) has no such header
+ * and keeps the not-found refusal it earned.
+ */
+async function retainedClosedLifecycle(harnessDir: string, workflowId: string): Promise<{ status: string; revision: number } | undefined> {
+  const read = await readExecutionAuthority({ harnessDir });
+  const data = read.data;
+  const headers = [
+    ...("terminalUnregistered" in data ? data.terminalUnregistered ?? [] : []),
+    ...("terminalAdoptions" in data ? data.terminalAdoptions ?? [] : []),
+  ];
+  const header = headers.find((entry) => entry.id === workflowId);
+  return header === undefined ? undefined : { status: header.status, revision: header.revision };
+}
+
 function executionHarness(context: InvocationContext, override?: string): string | null {
   return resolveProcessHarnessDir(context.cwd, override);
 }
@@ -217,9 +234,9 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             recovery: ACTIVE_CLOSE_RECOVERY,
           });
         }
+        const harnessDir = executionHarness(context, parsed.data.harness);
+        if (harnessDir === null) return refused("status.workflow-close", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold then mstar store init to create an ACTIVE control root, then rerun the close.");
         try {
-          const harnessDir = executionHarness(context, parsed.data.harness);
-          if (harnessDir === null) return refused("status.workflow-close", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold then mstar store init to create an ACTIVE control root, then rerun the close.");
           if (context.sessionId === undefined || context.sessionId.trim() === "") {
             return refused(
               "status.workflow-close",
@@ -255,6 +272,26 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           // file route is retired, so a store-less or pre-cutover control root is
           // a routing problem, never a reason to fall back to files.
           const code = engineCode(error, "workflow.close-refused");
+          // A re-run of the close against a lifecycle this control root already
+          // recorded as `completed` and unregistered is the documented
+          // idempotent re-run: the retained terminal header is reported back and
+          // nothing is written a second time. An unregistered scope this
+          // authority never closed, or one whose recorded outcome is not the
+          // requested `completed` (a closed lifecycle is never amended), keeps
+          // the engine's own refusal.
+          if (code === "coordination.workflow-not-found") {
+            const retained = await retainedClosedLifecycle(harnessDir, workflow).catch(() => undefined);
+            if (retained !== undefined && retained.status === "completed") {
+              return ok("status.workflow-close", {
+                workflowId: workflow,
+                status: retained.status,
+                revision: retained.revision,
+                alreadyClosed: true,
+                applied: false,
+                message: `workflow ${workflow} is already ${retained.status} and unregistered in this authority; nothing to close`,
+              });
+            }
+          }
           const details =
             error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
               ? error.details

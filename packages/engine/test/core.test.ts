@@ -3,10 +3,9 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - Severity enum + total order: `mstar-artifacts/references/status-and-residuals.md`
- *   § "Residual findings: `severity` (SSOT, machine field)" — allowed values
- *   `critical|high|medium|low|nit` (lowercase English), total order
- *   `critical > high > medium > low > nit`, `nit` always lighter than `low`,
- *   `warning`/`Major`/non-English values forbidden.
+ *   `critical|high|medium|low|info` (lowercase English), total order
+ *   `critical > high > medium > low > info`; `warning`/`Major`/non-English
+ *   values forbidden.
  * - `ValidationResult` / `GateResult` shapes: roadmap
  *   §8.5 C4 — engine returns `{ ok: boolean, severity, code, message, fix? }`;
  *   §8.5 C2 — engine unit tests cite the source section as spec.
@@ -33,26 +32,22 @@ import type { GateResult } from "../src/core.js";
 describe("Severity enum + total order", () => {
   test("SEVERITY_ORDER lists exactly the five allowed values, heavy → light", () => {
     // Spec: status-and-residuals.md § severity — allowed values + total order
-    // `critical` > `high` > `medium` > `low` > `nit`.
-    expect(SEVERITY_ORDER).toEqual(["critical", "high", "medium", "low", "nit"]);
+    // `critical` > `high` > `medium` > `low` > `info`.
+    expect(SEVERITY_ORDER).toEqual(["critical", "high", "medium", "low", "info"]);
   });
 
-  test("nit is always lighter than low — never inverted or equated", () => {
-    // Spec: status-and-residuals.md § severity — "`nit` is always lighter than
-    // `low` — never invert or equate".
-    expect(SEVERITY_ORDER.indexOf("nit")).toBeGreaterThan(SEVERITY_ORDER.indexOf("low"));
-  });
-
-  test("forbidden values (warning, Major, non-English) are not part of the enum", () => {
-    // Spec: status-and-residuals.md § severity — `warning`, `Major`, and any
-    // non-English value are forbidden in JSON severity fields.
+  test("forbidden values (warning, Major, non-English, retired nit) are not part of the enum", () => {
+    // Spec: status-and-residuals.md § severity — `warning`, `Major`, `nit`, and
+    // any non-English value are forbidden in JSON severity fields.
     expect(SEVERITY_ORDER).not.toContain("warning");
     expect(SEVERITY_ORDER).not.toContain("Major");
+    expect(SEVERITY_ORDER).not.toContain("nit");
     for (const value of SEVERITY_ORDER) {
       expect(value).toBe(value.toLowerCase());
       expect(value).toMatch(/^[a-z]+$/);
     }
   });
+
 
   test("order has no duplicates", () => {
     expect([...new Set(SEVERITY_ORDER)]).toEqual(SEVERITY_ORDER);
@@ -70,7 +65,7 @@ describe("ValidationResult / GateResult shapes", () => {
       message: string;
       fix?: string;
     } = { ok: false, severity: "high", code: "STATUS-001", message: "bad", fix: "edit status.json" };
-    const minimal: typeof full = { ok: true, severity: "nit", code: "X", message: "n/a" };
+    const minimal: typeof full = { ok: true, severity: "info", code: "X", message: "n/a" };
 
     expect(full.ok).toBe(false);
     expect(full.severity).toBe("high");

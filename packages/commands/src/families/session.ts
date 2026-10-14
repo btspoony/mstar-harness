@@ -56,6 +56,17 @@ class RecoveryInputError extends Error {
   }
 }
 
+/**
+ * The exit code an effect rejection already admitted for the child it could not
+ * produce (a missing executable is the shell's own 127), or `undefined` for a
+ * launcher-side failure that carries no child outcome.
+ */
+function admittedChildExit(error: unknown): number | undefined {
+  if (error === null || typeof error !== "object" || !("exitCode" in error)) return undefined;
+  const value: unknown = error.exitCode;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function requiredFact(path: string): RefusalDiagnostic {
   return {
     path,
@@ -267,7 +278,18 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
             details: launched,
           };
         } catch (error) {
-          return engineRefusal("session.run", error);
+          // A child that never started still carries the exit code its own
+          // admission assigned (a missing executable is 127): the launcher
+          // reports that admitted outcome in the child-exit envelope instead of
+          // flattening it to the launcher's generic refusal code.
+          const admitted = admittedChildExit(error);
+          if (admitted === undefined) return engineRefusal("session.run", error);
+          return {
+            version: 1, command: "session.run", status: "error", code: "session.child-exit", exitCode: admitted,
+            message: error instanceof Error ? error.message : String(error),
+            details: { identity, binding, exitCode: admitted, signal: null, stdout: "", stderr: "" },
+            recovery: "Correct the reported executable or working directory, then rerun mstar session run.",
+          };
         }
       },
     }),

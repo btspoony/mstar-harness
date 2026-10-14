@@ -97,7 +97,7 @@ export interface MstarEngineStatusPayload {
 
 /** JSON projection of one engine `ValidationResult` (lossless — `fix` omitted when absent). */
 export interface IterationGateViolationView {
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'nit'
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
   code: string
   message: string
   fix?: string
@@ -180,13 +180,8 @@ export interface ResidualFindingView {
   readonly title: string
 }
 
-/**
- * Open-issue counts by severity (non-zero severities only). The severity is the
- * issue contract's own vocabulary, verbatim — the retired register's `nit` rank
- * stays a member of this display union only so existing consumers keep a
- * superset; a store-backed rollup never emits it.
- */
-export type HarnessResidualSeverity = 'critical' | 'high' | 'medium' | 'low' | 'nit' | 'info'
+/** Open-issue counts by severity (non-zero severities only). */
+export type HarnessResidualSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 /** Open-issue counts by severity (non-zero severities only). */
 export interface HarnessResidualView {
@@ -421,10 +416,10 @@ export interface AgentFlowEventView {
   readonly childId?: string
   /**
    * Settle + `subagent-link` rows: the registry background-job id the row
-   * carries (`jobs.onJobDone` → `recordJobSettle`; the post-execute
-   * background branch for a link). A jobs-registry key (`<kind>-N`), never a
-   * child session id and never the Assignment `Task N` tag. A continuable
-   * link omits it (that path starts no registry job).
+   * carries (`jobs.events` settled notification → `recordJobSettle`; the
+   * post-execute background branch for a link). A jobs-registry key
+   * (`<kind>-N`), never a child session id or Assignment `Task N` tag. A
+   * continuable link omits it (that path starts no registry job).
    */
   readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end events only). */

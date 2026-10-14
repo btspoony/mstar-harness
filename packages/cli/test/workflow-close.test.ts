@@ -10,7 +10,8 @@
  * retired, so this suite pins:
  * - exit 0: a fully-closed ACTIVE lifecycle (stored `completed` + `ended_at`,
  *   the root register no longer serving the id, the phase-6 projection passing
- *   on the same state).
+ *   on the same state), and the idempotent re-run of that close (the retained
+ *   terminal header is reported back with an explicit nothing-to-close receipt).
  * - exit 1 refusals before any write: an unfinished plan row
  *   (`coordination.invalid-transition`, header bytes unchanged), a control root
  *   with no ACTIVE authority (`execution.not-active` — the recovery names the
@@ -290,6 +291,20 @@ async function storedHeader(fixture: Fixture): Promise<{ status?: unknown; ended
   }
 }
 
+/** The raw stored row of the workflow: the write witness a no-op close must not move. */
+async function storedRow(fixture: Fixture): Promise<{ revision: number; state_json: string }> {
+  const handle = await openStore(fixture.context, "read");
+  try {
+    const row = handle.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID);
+    if (typeof row !== "object" || row === null || !("revision" in row) || typeof row.revision !== "number" || !("state_json" in row) || typeof row.state_json !== "string") {
+      throw new Error(`no stored row for ${WORKFLOW_ID}`);
+    }
+    return { revision: row.revision, state_json: row.state_json };
+  } finally {
+    handle.close();
+  }
+}
+
 /** The IDs the authority's root register currently serves. */
 async function servedRoot(fixture: Fixture): Promise<readonly { id: string }[]> {
   const read = await readExecutionAuthority(fixture.context);
@@ -324,20 +339,78 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     expect(jsonOf(phase6)).toMatchObject({ status: "ok", data: { phase: 6 } });
   }, 30_000);
 
-  test("a repeated close of the closed lifecycle refuses without a second write", async () => {
+  test("a repeated close of the closed lifecycle is the documented idempotent re-run", async () => {
     const fixture = await activeFixture("mstar-close-retry");
     await registerAndBind(fixture);
     await driveToDone(fixture);
 
     expect(runCli(closeArgs(fixture), fixture.root, identityEnv()).exitCode).toBe(0);
     const terminal = await storedHeader(fixture);
+    const row = await storedRow(fixture);
 
     const retry = runCli(closeArgs(fixture, ["--reason", "again"]), fixture.root, identityEnv());
-    expect(retry.exitCode).toBe(1);
-    // The registry no longer serves the closed lifecycle, so the exact-address
-    // read refuses it; the recorded terminal state is left as it was.
-    expect(envelope(retry).code).toBe("coordination.workflow-not-found");
+    // Exit 0 with an explicit nothing-to-close receipt: the registry no longer
+    // serves the closed lifecycle, and its retained terminal header is reported
+    // back instead of a not-found refusal.
+    expect(retry.exitCode, retry.stdout).toBe(0);
+    expect(jsonOf(retry)).toMatchObject({
+      command: "status.workflow-close",
+      status: "ok",
+      data: { workflowId: WORKFLOW_ID, status: "completed", alreadyClosed: true, applied: false, message: expect.stringContaining("nothing to close") },
+    });
+    // No second write: the stored row (revision + retained state) and the
+    // emptied register are unchanged.
+    expect(await storedRow(fixture)).toEqual(row);
     expect(await storedHeader(fixture)).toEqual(terminal);
+    expect(await servedRoot(fixture)).toHaveLength(0);
+  }, 30_000);
+
+  test("a retained terminal state that is not completed keeps refusing", async () => {
+    const fixture = await activeFixture("mstar-close-stopped");
+    await registerAndBind(fixture);
+    // A terminal outcome the close never fabricates: the lifecycle is stopped,
+    // unregistered and retained.
+    const stopped = runCli(
+      ["workflow", "lifecycle", "--workflow", WORKFLOW_ID, "--status", "stopped", "--reason", "fixture stop", "--harness", fixture.harness],
+      fixture.root,
+      identityEnv(),
+    );
+    expect(stopped.exitCode, stopped.stdout).toBe(0);
+    expect(await servedRoot(fixture)).toHaveLength(0);
+    const terminal = await storedHeader(fixture);
+    const row = await storedRow(fixture);
+    expect(terminal.status).toBe("stopped");
+
+    // The close requests `completed`: a closed lifecycle is never amended, so the
+    // retained `stopped` outcome keeps the not-found refusal it earns and
+    // nothing is written.
+    const closed = runCli(closeArgs(fixture), fixture.root, identityEnv());
+    expect(closed.exitCode).toBe(1);
+    expect(envelope(closed).code).toBe("coordination.workflow-not-found");
+    expect(envelope(closed).data).toBeUndefined();
+    expect(await storedRow(fixture)).toEqual(row);
+    expect(await storedHeader(fixture)).toEqual(terminal);
+  }, 30_000);
+
+  test("an unregistered foreign scope keeps refusing", async () => {
+    const fixture = await activeFixture("mstar-close-foreign");
+    await registerAndBind(fixture);
+    await driveToDone(fixture);
+    expect(runCli(closeArgs(fixture), fixture.root, identityEnv()).exitCode).toBe(0);
+
+    // The caller addresses a workflow this authority never held: there is no
+    // coordinator binding to resume here, so the engine refuses before the
+    // retained-terminal lookup and no idempotent receipt is produced.
+    const foreign = { source: "local", sessionId: "coord-foreign", workflowId: "wf-foreign", role: "coordinator" };
+    const result = runCli(
+      ["status", "workflow-close", "--workflow", "wf-foreign", "--harness", fixture.harness, "--reason", "foreign"],
+      fixture.root,
+      { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(foreign) },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(envelope(result).status).toBe("refused");
+    expect(envelope(result).code).toBe("coordination.session-not-found");
+    expect(envelope(result).data).toBeUndefined();
   }, 30_000);
 });
 

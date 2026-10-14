@@ -1,10 +1,21 @@
 /**
- * scripts/prepare-release.ts — fragment `packages:` token validation.
+ * scripts/prepare-release.ts — fragment `packages:` token validation and
+ * routing, the prepare-time published-version gate, and the release-surface
+ * version helpers it shares with `release:validate`.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { bumpJsonVersion, bumpVersion, parseFragment, syncRootDependencySpecs, validateFragmentPackages } from "./prepare-release.ts";
+import {
+  type RegistryFetch,
+  bumpJsonVersion,
+  bumpVersion,
+  checkVersionCollision,
+  parseFragment,
+  publishedPackageNames,
+  syncRootDependencySpecs,
+  validateFragmentPackages,
+} from "./prepare-release.ts";
 import {
   DEFAULT_VERSION_PATH,
   CHANGELOGS,
@@ -270,5 +281,168 @@ describe("bumpJsonVersion (locator-aware bump)", () => {
       }),
     ).rejects.toThrow("boom");
     expect(process.cwd()).toBe(before);
+  });
+});
+
+describe("checkVersionCollision (prepare-time published-version gate)", () => {
+  const NAMES = ["@mstar-harness/cli", "@mstar-harness/engine"];
+  const answering = (status: number): RegistryFetch => async () => ({ status });
+
+  test("a target version already published is refused, naming the recovery", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, answering(200));
+    expect(result.status).toBe("published");
+    expect(result.message).toContain("@mstar-harness/cli");
+    expect(result.message).toContain("already published");
+    expect(result.message).toContain("bun run release:prepare -- 3.9.4");
+  });
+
+  test("an unpublished version clears every surface (one read per package)", async () => {
+    const urls: string[] = [];
+    const result = await checkVersionCollision("3.12.0", NAMES, async (url) => {
+      urls.push(url);
+      return { status: 404 };
+    });
+    expect(result.status).toBe("free");
+    expect(urls).toEqual([
+      "https://registry.npmjs.org/%40mstar-harness%2Fcli/3.12.0",
+      "https://registry.npmjs.org/%40mstar-harness%2Fengine/3.12.0",
+    ]);
+  });
+
+  test("a published surface is decisive even when an earlier sibling read fails", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, async (url) => {
+      if (url.includes("cli")) throw new Error("getaddrinfo ENOTFOUND");
+      return { status: 200 };
+    });
+    expect(result.status).toBe("published");
+    expect(result.message).toContain("@mstar-harness/engine");
+  });
+
+  test("an unreachable registry states the skip instead of passing silently", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, async () => {
+      throw new Error("getaddrinfo ENOTFOUND");
+    });
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("SKIPPED");
+    expect(result.message).toContain("getaddrinfo ENOTFOUND");
+    expect(result.message).toContain("NOT verified as unpublished");
+  });
+
+  test("a registry answer other than 200/404 is a stated skip, not a pass", async () => {
+    const result = await checkVersionCollision("3.9.3", NAMES, answering(503));
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("HTTP 503");
+    expect(result.message).toContain("@mstar-harness/cli");
+  });
+
+  test("a hung registry read is bounded and degrades to the stated skip", async () => {
+    const neverSettles: RegistryFetch = (_url, init) => {
+      const { promise, reject } = Promise.withResolvers<{ status: number }>();
+      if (init.signal.aborted) reject(init.signal.reason);
+      else init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      return promise;
+    };
+    const started = Date.now();
+    const result = await checkVersionCollision("3.9.3", NAMES, neverSettles, 25);
+    expect(result.status).toBe("skipped");
+    expect(result.message).toContain("NOT verified as unpublished");
+    // Two packages share one deadline: not timeoutMs per package.
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("publishedPackageNames (release surfaces on the registry)", () => {
+  /** Controlled workspace: one publishable package, one private package, one
+   * non-npm surface. Returns the surface list the discovery reads. */
+  async function withFixtureWorkspace(fn: (surfaces: { path: string }[]) => Promise<void>): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "mstar-surfaces-"));
+    const prevCwd = process.cwd();
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "workspace-root", version: "1.0.0" }));
+      writeFileSync(join(dir, "plugin.json"), JSON.stringify({ name: "portable-manifest" }));
+      for (const [pkg, manifest] of [
+        ["published", { name: "@mstar-harness/published", version: "1.0.0" }],
+        ["private-one", { name: "@mstar-harness/private-one", version: "1.0.0", private: true }],
+        ["nameless", { version: "1.0.0" }],
+      ] as const) {
+        mkdirSync(join(dir, "packages", pkg), { recursive: true });
+        writeFileSync(join(dir, "packages", pkg, "package.json"), JSON.stringify(manifest));
+      }
+      process.chdir(dir);
+      await fn([
+        { path: "package.json" },
+        { path: "plugin.json" },
+        { path: "packages/published/package.json" },
+        { path: "packages/private-one/package.json" },
+        { path: "packages/nameless/package.json" },
+      ]);
+    } finally {
+      process.chdir(prevCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("probes public npm package names only: the private root, plugin manifests, private and nameless packages are excluded", async () => {
+    await withFixtureWorkspace(async (surfaces) => {
+      expect(await publishedPackageNames(surfaces)).toEqual(["@mstar-harness/published"]);
+    });
+  });
+
+  test("the production surface list yields only scoped npm package names", async () => {
+    const names = await publishedPackageNames();
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.every((name) => /^@mstar-harness\//.test(name))).toBe(true);
+  });
+});
+
+describe("fragment routing (unreleased fragment -> package changelog)", () => {
+  /** The changelog input contract: `parseFragment` splits frontmatter, the
+   * language blocks and `packages` routing. Fixture-driven, so these assertions
+   * pin the contract and not one historical fragment file. */
+  const FRAGMENT = `---
+category: Changed
+packages: engine, cli
+---
+
+- English bullet.
+
+<!-- CN -->
+- 中文要点。
+`;
+
+  test("packages: tokens route to exactly those changelogs", () => {
+    const frag = parseFragment("fixture.md", FRAGMENT);
+    expect(frag.packages).toEqual(["engine", "cli"]);
+    expect(frag.category).toBe("Changed");
+    expect(validateFragmentPackages(frag.packages, frag.file)).toEqual([]);
+    expect(CHANGELOGS.filter((target) => frag.packages.includes(target.pkg)).map((target) => target.path)).toEqual([
+      "packages/cli/CHANGELOG.md",
+      "packages/engine/CHANGELOG.md",
+    ]);
+  });
+
+  test("the CN block is split out of the English body", () => {
+    const frag = parseFragment("fixture.md", FRAGMENT);
+    expect(frag.en).toContain("English bullet");
+    expect(frag.cn).toContain("中文要点");
+    // A package changelog is EN-only, so CN text left in the EN body would be
+    // assembled into it as an English bullet.
+    expect(frag.en).not.toMatch(/[\u4e00-\u9fff]/);
+  });
+
+  test("every unreleased fragment declares frontmatter with known packages tokens", async () => {
+    // A successful release archives every fragment and legitimately empties this
+    // queue, so the invariant is asserted per fragment and holds vacuously then.
+    const dir = join(import.meta.dir, "..", ".changes", "unreleased");
+    const problems: string[] = [];
+    for (const file of readdirSync(dir).filter((entry) => entry.endsWith(".md"))) {
+      const text = await Bun.file(join(dir, file)).text();
+      const frag = parseFragment(file, text);
+      // Without frontmatter the assembler defaults the fragment to `root`, so an
+      // engine change silently lands in the root changelogs.
+      if (!text.startsWith("---")) problems.push(`${file}: no frontmatter (routed to ${frag.packages.join(", ")})`);
+      problems.push(...validateFragmentPackages(frag.packages, file));
+    }
+    expect(problems).toEqual([]);
   });
 });

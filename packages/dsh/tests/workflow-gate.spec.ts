@@ -57,6 +57,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { iterationViolationView } from '../src/gates/_shared.ts'
+import { ITERATION_VIOLATION_SCHEMA } from '../src/gates/tools.ts'
 import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
@@ -231,6 +233,24 @@ function captureDispatchWarns(ctx: BootResult['ctx']): string[] {
 }
 
 /* ---------------------------------- mode off ---------------------------------- */
+
+describe('iteration violation output contract', () => {
+  it('preserves info severity and admits it in the declared output schema', () => {
+    const result = {
+      ok: false,
+      severity: 'info',
+      code: 'iteration.note',
+      message: 'Informational result',
+    } satisfies Parameters<typeof iterationViolationView>[0]
+    const view = iterationViolationView(result)
+    expect(view).toEqual({
+      severity: 'info',
+      code: 'iteration.note',
+      message: 'Informational result',
+    })
+    expect(ITERATION_VIOLATION_SCHEMA.properties.severity.enum).toContain(view.severity)
+  })
+})
 
 describe('workflow gate — mode off', () => {
   it('(a) workflowGate off → workflow call passes through, no verdict row', async () => {
@@ -660,28 +680,12 @@ function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
 }
 
 /**
- * Drain the ledger consumer's queued stream tasks after a `session/event`
- * append. The plugin installs the consumer WITH the awaited explicit-target
- * resolver (`src/index.ts` `registerWorkflowLedger(ctx, resolver, …, resolveExecutionLedgerTarget)`),
- * so the live route is ASYNCHRONOUS by design: a row's target lookup suspends
- * the consumer and rows are queued per source stream
- * (`workflow-ledger.ts:399-408` enqueue, `:1101-1112` the listener), and
- * `awaitWorkflowLedgerIdle` (`:411-428`) is the branch's own test seam for
- * exactly this drain — gated like the engine's test runner, refusing an
- * ungated call. The synchronous pre-activation route (a direct
- * `registerWorkflowLedger` without a resolver, case (12)) needs no drain: its
- * rows are already recorded when the listener returns. Mirrors
- * `agent-flow-workflow.spec.ts`'s `idle()` in the F2 resolver-route suite.
+ * Drain queued stream work after an event. The resolver route processes rows
+ * asynchronously per source stream; synchronous pre-activation rows need no
+ * drain because they are recorded before the listener returns.
  */
 async function drainLedger(): Promise<void> {
-  const prior = process.env.MSTAR_STORE_TEST_RUNNER
-  process.env.MSTAR_STORE_TEST_RUNNER = '1'
-  try {
-    await awaitWorkflowLedgerIdle()
-  } finally {
-    if (prior === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER
-    else process.env.MSTAR_STORE_TEST_RUNNER = prior
-  }
+  await awaitWorkflowLedgerIdle()
 }
 
 /**

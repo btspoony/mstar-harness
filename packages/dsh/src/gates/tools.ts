@@ -35,11 +35,11 @@ import { sessionCwdOf, iterationViolationView, iterationGateView, HarnessResolve
 import type { IterationGateView } from '../types.ts'
 
 /** Violation item schema shared by the iteration-gate output shape. */
-const ITERATION_VIOLATION_SCHEMA = {
+export const ITERATION_VIOLATION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
+    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'info'] },
     code: { type: 'string', required: true },
     message: { type: 'string', required: true },
     fix: { type: 'string' },

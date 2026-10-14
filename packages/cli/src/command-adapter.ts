@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants } from "node:os";
 import { Command, CommanderError } from "commander";
 import { refusalEnvelope, safeReceivedValue, admitCommandInput, type RefusalDiagnostic } from "@mstar-harness/commands";
 import {
@@ -749,19 +750,82 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
   }
 }
 
+/**
+ * The idle bound on one non-interactive stdin read: a piped stream that
+ * delivers nothing has nothing to read, and waiting forever would leave the
+ * listeners attached with no observable end.
+ */
+export const STDIN_IDLE_TIMEOUT_MS = 30_000;
+
+/** The readable surface a stdin payload read needs; `isTTY` selects the mode. */
+type StdinSource = NodeJS.ReadableStream & { isTTY?: boolean };
+
+/**
+ * Read one stdin payload with the listeners owned by this call.
+ *
+ * Every settle path — `end`, `error`, timeout — removes the three listeners it
+ * attached and pauses the stream, so a finished read never leaves a handler
+ * behind. An interactive terminal keeps the operator's own read (the human is
+ * the producer, and the payload ends at EOF); a non-interactive stream that
+ * delivers nothing within the idle bound refuses instead of holding the command
+ * open forever, naming the cause and the recovery that does not depend on a
+ * piped payload.
+ */
+export function readStdinPayload(stream: StdinSource = process.stdin, idleTimeoutMs: number = STDIN_IDLE_TIMEOUT_MS): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const chunks: Buffer[] = [];
+  let timer: NodeJS.Timeout | undefined;
+  const ignoreLateStreamError = () => {};
+  const detach = () => {
+    stream.removeListener("data", onData);
+    stream.removeListener("end", onEnd);
+    stream.removeListener("error", onError);
+    // A stream error arriving after this read settled is no longer ours to
+    // reject, but an unhandled `error` event would still tear the process down:
+    // one no-op handler owns every late error (the same idiom the child-stdin
+    // write uses for its expected EPIPE race).
+    stream.on("error", ignoreLateStreamError);
+    clearTimeout(timer);
+    stream.pause();
+  };
+  const arm = () => {
+    if (stream.isTTY === true) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      detach();
+      reject(Object.assign(new Error(
+        `no stdin input arrived within ${idleTimeoutMs} ms and this invocation has no interactive terminal; ` +
+          "pipe the payload into stdin, or pass it through the command's own file argument",
+      ), { code: "command.stdin-unavailable" }));
+    }, idleTimeoutMs);
+  };
+  const onData = (chunk: Buffer | string) => {
+    chunks.push(Buffer.from(chunk));
+    // A chunk proves a live producer: the bound covers silence, never a stream
+    // that is still delivering.
+    arm();
+  };
+  const onEnd = () => {
+    detach();
+    resolve(Buffer.concat(chunks).toString("utf8"));
+  };
+  const onError = (error: Error) => {
+    detach();
+    reject(error);
+  };
+  stream.on("data", onData);
+  stream.on("end", onEnd);
+  stream.on("error", onError);
+  arm();
+  stream.resume();
+  return promise;
+}
+
 function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects {
   let stdin: Promise<string> | undefined;
   return {
     readInput() {
-      if (stdin === undefined) {
-        const pending = Promise.withResolvers<string>();
-        const chunks: Buffer[] = [];
-        process.stdin.on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)));
-        process.stdin.on("end", () => pending.resolve(Buffer.concat(chunks).toString("utf8")));
-        process.stdin.on("error", pending.reject);
-        process.stdin.resume();
-        stdin = pending.promise;
-      }
+      if (stdin === undefined) stdin = readStdinPayload();
       return stdin;
     },
     spawn: spawnProcess,
@@ -882,7 +946,11 @@ export function registerCliCommands(
           effects: cliEffects(services),
         });
         writeEnvelope(surfaceAssignmentRecovery(definition.id, envelope), received);
-        if (definition.effects.includes("service") && envelope.status === "ok") await waitForStop();
+        if (definition.effects.includes("service") && envelope.status === "ok") {
+          // The service runs until it is stopped: the signal that stopped it — not
+          // the start receipt — is the process's own exit status (128+n).
+          process.exitCode = 128 + (constants.signals[await waitForStop()] ?? 0);
+        }
       } finally {
         process.removeListener("SIGINT", onSigint);
         process.removeListener("SIGTERM", onSigterm);

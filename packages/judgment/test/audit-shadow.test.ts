@@ -119,6 +119,25 @@ describe("deterministic shadow candidate and synthesis pack adapter", () => {
     expect(changedScope.packId).not.toBe(original.packId);
     expect(changedSource.packId).not.toBe(original.packId);
   });
+  test("pack identity is independent of localeCompare behavior", () => {
+    const findings = [
+      finding("left", "Left claim", [source("z-source", "src/z.ts", "z excerpt")], { relatedFindingIds: ["right"] }),
+      finding("right", "Right claim", [source("a-source", "src/a.ts", "a excerpt")]),
+    ];
+    const pair = buildCandidatePairs(findings, scope)[0];
+    const originalLocaleCompare = String.prototype.localeCompare;
+    const originalPack = buildShadowPack([pair], [unit], scope);
+    try {
+      String.prototype.localeCompare = function (this: string, ...args: Parameters<String["localeCompare"]>) {
+        return -originalLocaleCompare.apply(this, args);
+      };
+      const hostilePack = buildShadowPack([pair], [unit], scope);
+      expect(hostilePack.packId).toBe(originalPack.packId);
+    } finally {
+      String.prototype.localeCompare = originalLocaleCompare;
+    }
+  });
+
 
   test("refuses missing or stale source evidence and does not silently omit inventory pairs", () => {
     const noEvidence = [
