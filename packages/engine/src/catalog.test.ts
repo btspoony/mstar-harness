@@ -36,7 +36,7 @@ create table issues(
   project_id text not null,
   title text not null,
   kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
-  severity text not null check (severity in ('critical','high','medium','low','info')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
   disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded')),
   impact text not null,
   acceptance text not null,

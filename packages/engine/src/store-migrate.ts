@@ -64,7 +64,7 @@ export class StoreMigrationError extends Error {
 export type MigrationVocabulary = {
   /** `lifecycle=open` or absent maps to open; wont-fix is the explicit waived mapping. */
   lifecycle: Record<string, Disposition>;
-  /** Legacy absent/empty → medium, `warning` → low (existing normalizeSeverity rules); `nit` → info. */
+  /** Legacy absent/empty → medium, `warning` → low (existing normalizeSeverity rules); `nit` stays `nit`. */
   severity: Record<string, Severity>;
   /** Legacy rows carry no kind; the constant proposed kind is declared here. */
   kind: IssueKind;
@@ -85,7 +85,7 @@ export const MIGRATION_VOCABULARY: MigrationVocabulary = {
     medium: "medium",
     low: "low",
     warning: "low",
-    nit: "info",
+    nit: "nit",
   },
   kind: LEGACY_ISSUE_KIND,
 };

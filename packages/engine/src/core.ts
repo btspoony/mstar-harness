@@ -11,13 +11,13 @@ import { fileURLToPath } from "node:url";
  * five lowercase-English values; `warning` / `Major` / any other value are
  * forbidden in JSON severity fields.
  */
-export type Severity = "critical" | "high" | "medium" | "low" | "info";
+export type Severity = "critical" | "high" | "medium" | "low" | "nit";
 
 /**
  * Total order, heavy → light (spec: status-and-residuals.md § severity):
- * `critical` > `high` > `medium` > `low` > `info`; `info` is informational.
+ * `critical` > `high` > `medium` > `low` > `nit`; `nit` is informational.
  */
-export const SEVERITY_ORDER: readonly Severity[] = ["critical", "high", "medium", "low", "info"];
+export const SEVERITY_ORDER: readonly Severity[] = ["critical", "high", "medium", "low", "nit"];
 
 /**
  * Result of one harness validation check.

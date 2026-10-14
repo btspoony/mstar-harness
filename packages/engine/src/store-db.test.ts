@@ -25,6 +25,7 @@ import {
   MIGRATIONS,
   migrationChecksum,
   MIN_NODE_VERSION,
+  SCHEMA_VERSION_TABLE_SQL,
   StoreError,
   assertStoreRuntimeSupported,
   compareVersions,
@@ -628,6 +629,118 @@ describe("migration 7 - project_milestones", () => {
     expect(() => insertIssue.run()).toThrow(/milestone.project-mismatch/);
     expect(() => handle.db.prepare("update issues set milestone_id='m-b' where id='I-000103'").run()).toThrow(/milestone.project-mismatch/);
     handle.close();
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Migration 12 rebuilds `issues` for the `nit` vocabulary. `issues` is the
+ * parent of occurrences/provenance/relations/issue_transitions, and the
+ * migration batch runs with foreign_keys=ON, so the test drives the whole path
+ * through the public upgrade against a schema-11 store carrying children.
+ * ------------------------------------------------------------------------ */
+
+describe("migration 12 - severity vocabulary accepts nit and converts info", () => {
+  test("an info row becomes nit, every row survives, and dependent tables still resolve", async () => {
+    const dir = mkdtempSync(join(ROOT, "severity-nit-upgrade-"));
+    const db = new DatabaseSync(join(dir, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin");
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 11)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version values(?, ?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        migrationChecksum(migration),
+        "now",
+      );
+    }
+    db.prepare("update store_meta set authority_state='active' where id=1").run();
+    const insertIssue = db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+        " values (?, 'p-nit', ?, 'bug', ?, 'impact', 'acceptance', 'now', 'now', ?)",
+    );
+    for (const [id, severity] of [
+      ["I-000201", "critical"],
+      ["I-000202", "high"],
+      ["I-000203", "medium"],
+      ["I-000204", "low"],
+      ["I-000205", "info"],
+      ["I-000206", "info"],
+    ] as const) {
+      insertIssue.run(id, `Issue ${id}`, severity, `identity-${id}`);
+    }
+    db.prepare(
+      "insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key," +
+        " location, observed_behavior, evidence_json, recorded_at) values ('I-000205', 'occ-1', 'test', 'src', 'rc', 'ac', 'loc', 'observed', '[]', 'now')",
+    ).run();
+    db.prepare(
+      "insert into provenance(issue_id, kind, target, source_hash) values ('I-000206', 'legacy', 'target', 'hash')",
+    ).run();
+    db.prepare("insert into relations(from_issue, relation, to_issue) values ('I-000201', 'blocks', 'I-000205')").run();
+    db.prepare(
+      "insert into issue_transitions(issue_id, from_disposition, to_disposition, recorded_at, reason, evidence_json, issue_revision)" +
+        " values ('I-000205', 'open', 'resolved', 'now', 'done', '[]', 1)",
+    ).run();
+    db.exec("commit");
+    db.close();
+
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+
+    const upgraded = await openStore({ harnessDir: dir }, "read");
+    try {
+      expect(upgraded.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 6 });
+      expect(upgraded.db.prepare("select count(*) as n from issues where severity='info'").get()).toEqual({ n: 0 });
+      expect(upgraded.db.prepare("select count(*) as n from issues where severity='nit'").get()).toEqual({ n: 2 });
+      expect(
+        upgraded.db.prepare("select severity from issues where id in ('I-000201','I-000202','I-000203','I-000204') order by id").all(),
+      ).toEqual([{ severity: "critical" }, { severity: "high" }, { severity: "medium" }, { severity: "low" }]);
+      // The converted rows keep their children resolvable after the rebuild.
+      expect(
+        upgraded.db
+          .prepare("select i.severity from occurrences o join issues i on i.id = o.issue_id where o.occurrence_key='occ-1'")
+          .get(),
+      ).toEqual({ severity: "nit" });
+      expect(
+        upgraded.db.prepare("select i.severity from provenance p join issues i on i.id = p.issue_id").get(),
+      ).toEqual({ severity: "nit" });
+      expect(
+        upgraded.db
+          .prepare("select i.severity from relations r join issues i on i.id = r.from_issue where r.to_issue='I-000205'")
+          .get(),
+      ).toEqual({ severity: "critical" });
+      expect(
+        upgraded.db
+          .prepare("select i.severity from issue_transitions t join issues i on i.id = t.issue_id")
+          .get(),
+      ).toEqual({ severity: "nit" });
+      expect(upgraded.db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // The rebuilt table carries the migration-1 indexes and the migration-7
+      // milestone column; the `nit` CHECK is the live constraint.
+      expect(
+        (upgraded.db.prepare("pragma table_info(issues)").all() as Array<{ name?: string }>).some((column) => column.name === "milestone_id"),
+      ).toBe(true);
+      expect(
+        upgraded.db.prepare("select name from sqlite_master where type='index' and name in ('issues_external_identity','issues_disposition','issues_milestone_disposition')").all(),
+      ).toHaveLength(3);
+    } finally {
+      upgraded.close();
+    }
+    const writable = await openStore({ harnessDir: dir }, "write");
+    try {
+      expect(() =>
+        writable.db
+          .prepare(
+            "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+              " values ('I-000207', 'p-nit', 'Rejected', 'bug', 'info', 'impact', 'acceptance', 'now', 'now', 'identity-I-000207')",
+          )
+          .run(),
+      ).toThrow(/check/i);
+    } finally {
+      writable.close();
+    }
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

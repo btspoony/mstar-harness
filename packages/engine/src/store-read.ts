@@ -615,7 +615,7 @@ const ISSUE_KINDS: Record<string, true> = {
   decision: true,
   "review-obligation": true,
 };
-const ISSUE_SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, info: true };
+const ISSUE_SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
 const ISSUE_DISPOSITIONS: Record<string, true> = {
   open: true,
   resolved: true,
@@ -632,7 +632,7 @@ const ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
 ))`;
 
 const ISSUE_ORDER_SQL = `order by case issues.severity
-    when 'critical' then 5 when 'high' then 4 when 'medium' then 3 when 'low' then 2 when 'info' then 1 else 0 end desc,
+    when 'critical' then 5 when 'high' then 4 when 'medium' then 3 when 'low' then 2 when 'nit' then 1 else 0 end desc,
   case when (${ISSUE_LAST_ACTIVITY_SQL}) is null then 1 else 0 end asc,
   (${ISSUE_LAST_ACTIVITY_SQL}) desc,
   issues.id asc`;
