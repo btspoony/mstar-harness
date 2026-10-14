@@ -914,23 +914,35 @@ export function assertDeliveryRegistrationCoherence(
  * delivery kind — §1). The registered kind, never inferred fields, determines
  * required evidence, and missing evidence is incomplete registration:
  *
- * - no registered `delivery_kind` → `PHASE6_DELIVERY_KIND_UNREGISTERED`;
+ * - no registered `delivery_kind` while the lifecycle can still act on it →
+ *   `PHASE6_DELIVERY_KIND_UNREGISTERED`; on a TERMINAL header the condition is
+ *   accepted history and emits nothing — see the note below;
  * - `development` → registered `branch.source`/`branch.target` plus compound
  *   disposition, PR identity and the PM's verified-merge record;
  * - `verification/report-only` → registered `completion_policy` plus a
  *   fulfilment record naming that same policy.
+ *
+ * A terminal (`completed`/`failed`/`stopped`) `type: plan` header without a
+ * registered kind is a LEGACY snapshot: the kind is fixed at registration, so
+ * no operation can add it, and the only recovery the ACTIVE wording can name
+ * (close as failed, register a replacement) does not exist for a lifecycle that
+ * already closed. Reporting it as an actionable `high` on read-only Phase-6
+ * output would be an unclearable violation an operator cannot act on, so it
+ * emits nothing here. The ACTIVE paths (registration-time / completion-time
+ * callers, which pass a non-terminal header) keep the violation unchanged.
  */
 export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
   if (snapshot.type !== "plan") return [];
   const workflowId = nonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const kind = snapshot.delivery_kind;
   if (typeof kind !== "string" || !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(kind)) {
+    if (isTerminalSnapshot(snapshot)) return [];
     return [
       violation(
         "high",
         "PHASE6_DELIVERY_KIND_UNREGISTERED",
         `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind \u2014 a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md \u00a71), so this snapshot's delivery evidence cannot be consulted`,
-        "Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. For an ACTIVE workflow, close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason \"<blocker>\"`, then register a replacement workflow with a new id and the correct declared delivery kind. Keep the failed workflow as history; a terminal legacy snapshot cannot be re-registered or backfilled, so preserve it and record the missing kind as an explicit workflow residual rather than editing the snapshot.",
+        "Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. Close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason \"<blocker>\"`, then register a replacement workflow with a new id and the correct declared delivery kind; keep the failed workflow as history.",
       ),
     ];
   }

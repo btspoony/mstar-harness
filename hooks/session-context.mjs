@@ -15393,8 +15393,10 @@ function consultDeliveryEvidence(snapshot) {
   const workflowId = nonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const kind = snapshot.delivery_kind;
   if (typeof kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(kind)) {
+    if (isTerminalSnapshot(snapshot))
+      return [];
     return [
-      violation7("high", "PHASE6_DELIVERY_KIND_UNREGISTERED", `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind — a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1), so this snapshot's delivery evidence cannot be consulted`, 'Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. For an ACTIVE workflow, close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason "<blocker>"`, then register a replacement workflow with a new id and the correct declared delivery kind. Keep the failed workflow as history; a terminal legacy snapshot cannot be re-registered or backfilled, so preserve it and record the missing kind as an explicit workflow residual rather than editing the snapshot.')
+      violation7("high", "PHASE6_DELIVERY_KIND_UNREGISTERED", `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind — a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1), so this snapshot's delivery evidence cannot be consulted`, 'Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. Close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason "<blocker>"`, then register a replacement workflow with a new id and the correct declared delivery kind; keep the failed workflow as history.')
     ];
   }
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;
