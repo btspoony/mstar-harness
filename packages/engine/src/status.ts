@@ -17,8 +17,8 @@
  * or `plan_id`; write: one canonical key, prefer `id`).
  * - Severity enum + legacy `"warning"` → `low`: § "Residual findings:
  * `severity` (SSOT, machine field)" — allowed values
- * `critical|high|medium|low|nit`; `warning`/`Major`/non-English forbidden in
- * JSON; legacy `"severity": "warning"` is read and rolled up as `low`.
+ * `critical|high|medium|low|info`; `warning` is legacy and read/rolled up as
+ * `low`, not an allowed new severity.
  * `null`/`""` → `medium` (rollup `norm_sev` semantics).
  * - Residual required fields + lifecycle + archive shape:
  * § Basic structure (entry fields), § Residual findings lifecycle
