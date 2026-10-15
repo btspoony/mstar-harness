@@ -20,6 +20,11 @@
  * It also refuses when a publishable manifest does not carry `<version>`: the
  * release surfaces were then not prepared for this version.
  *
+ * This checks manifest publishability (non-private + version-aligned) and
+ * registry state only: it cannot verify npm trusted-publisher/OIDC
+ * authorization, which only an actual publish attempt proves — a step can
+ * still fail on authorization after a clean preflight.
+ *
  * When `GITHUB_OUTPUT` is set, `skip=` and `publish=` (space-separated names)
  * are appended for the workflow steps to consume.
  */

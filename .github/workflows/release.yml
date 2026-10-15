@@ -101,7 +101,10 @@ jobs:
           bun run omp:build
       # Decide the publish set once, before anything is published. It refuses
       # on any unknown registry state, so a resumed release cannot silently
-      # re-publish an existing version or skip a free one.
+      # re-publish an existing version or skip a free one. It checks manifest
+      # publishability and registry state only — it cannot verify npm
+      # trusted-publisher/OIDC authorization, which only an actual publish
+      # attempt proves, so a step can still fail on authorization afterwards.
       - name: Preflight publish set
         id: preflight
         env:
