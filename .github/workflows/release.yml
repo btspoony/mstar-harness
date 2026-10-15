@@ -15,35 +15,24 @@ name: Release
 # INSTALL.md stays on the last stable release for prerelease lines.
 #
 # No secrets are required for the default flow (the tag is pushed with the
-# workflow's GITHUB_TOKEN). Releases are PR-driven by design: a manual
-# `git tag && git push --tags` no longer auto-publishes.
+# workflow's GITHUB_TOKEN). Releases are PR-driven by design: this workflow has
+# NO manual entry point — dispatching a branch's copy of a workflow that holds
+# `id-token: write` + `contents: write` could publish an unmerged tree, so the
+# publish path is reachable only through a merged `release vX.Y.Z` PR.
+# A release that fails after some packages published is recovered by preparing
+# the next patch release (`bun run release:prepare -- --patch`), which publishes
+# the remaining packages under the new version; the preflight below always skips
+# a version that is already on the registry.
 #
 # NOTE: npm trusted publishing / provenance now runs on the pull_request event
 # instead of push:tags. The workflow filename (`.github/workflows/release.yml`)
 # is unchanged. If the first release via this flow fails publish, provenance
 # trust may need the trigger reverted to push:tags (see git history).
-#
-# Resume contract: a release that fails after some packages published is
-# resumed by dispatching this workflow with `commit=<release commit SHA>` — the
-# immutable SHA of the `chore(release): prepare vX.Y.Z (#N)` merge commit on
-# main. The version comes from that commit's `package.json`; already-published
-# versions are skipped by the preflight, and the tag step already skips an
-# existing tag. Dispatching a branch head is refused: the job holds
-# `id-token: write` + `contents: write`, so a moving ref could publish an
-# unmerged tree's versions, and a retry after new main commits would rebuild an
-# already-chosen version from a different revision. The guard below enforces
-# that the supplied SHA is present and reachable from main.
 
 on:
   pull_request:
     types: [closed]
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      commit:
-        description: "Immutable SHA of the release commit to finish: the 'chore(release): prepare vX.Y.Z (#N)' merge commit on main"
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -52,40 +41,15 @@ permissions:
 jobs:
   release:
     if: >
-      github.event_name == 'workflow_dispatch'
-      || (github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.title, 'release v'))
+      github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.title, 'release v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || inputs.commit }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-
-      # Fail closed before any build or publish step: a manual release may only
-      # finish a version whose release commit is already on main. Fetching main
-      # into its remote-tracking ref makes the ancestry test independent of
-      # checkout's refspec.
-      - name: Guard dispatch commit is merged into main
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-        run: |
-          set -uo pipefail
-          fail() { echo "::error::$1"; exit 1; }
-          if ! git fetch --quiet origin main:refs/remotes/origin/main; then
-            fail "Could not fetch origin/main to verify the release commit."
-          fi
-          if ! git cat-file -e "${RELEASE_COMMIT}^{commit}" 2>/dev/null; then
-            echo "The 'commit' input (${RELEASE_COMMIT}) is not a commit in this checkout."
-            fail "Pass the immutable SHA of the release commit: the 'chore(release): prepare vX.Y.Z (#N)' merge commit on main (see: git log --oneline --first-parent origin/main)."
-          fi
-          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
-            echo "${RELEASE_COMMIT} is not an ancestor of origin/main."
-            fail "A manual release targets only a commit already merged into main. Dispatch again with the merge commit SHA of the 'chore(release): prepare vX.Y.Z (#N)' PR, found with: git log --oneline --first-parent origin/main"
-          fi
-          echo "Verified ${RELEASE_COMMIT} is merged into origin/main."
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -134,11 +98,12 @@ jobs:
           bun run dsh:build
           bun run omp:build
       # Decide the publish set once, before anything is published. It refuses
-      # on any unknown registry state, so a resumed release cannot silently
-      # re-publish an existing version or skip a free one. It checks manifest
-      # publishability and registry state only — it cannot verify npm
-      # trusted-publisher/OIDC authorization, which only an actual publish
-      # attempt proves, so a step can still fail on authorization afterwards.
+      # on any unknown registry state, so a version that already exists on the
+      # registry is skipped explicitly instead of failing at the publish step.
+      # It checks manifest publishability and registry state only — it cannot
+      # verify npm trusted-publisher/OIDC authorization, which only an actual
+      # publish attempt proves, so a step can still fail on authorization
+      # afterwards.
       - name: Preflight publish set
         id: preflight
         env:
@@ -146,8 +111,8 @@ jobs:
         run: bun run scripts/release-preflight.ts "$VERSION"
 
       # Each publish step guards on that preflight result: a version listed in
-      # `skip` is already on the registry (npm rejects a duplicate), so a
-      # resumed release re-runs it as a no-op instead of failing.
+      # `skip` is already on the registry (npm rejects a duplicate), so its step
+      # becomes a reported no-op instead of a failure.
       - name: Publish @mstar-harness/engine
         run: |
           case " ${{ steps.preflight.outputs.skip }} " in

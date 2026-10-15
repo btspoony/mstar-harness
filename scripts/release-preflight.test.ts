@@ -114,12 +114,15 @@ describe("Release workflow publish set (incident-class guard)", () => {
     expect([...published].sort()).toEqual((await publishedPackageNames()).sort());
   });
 
-  // Both halves of the manual-release fix: the dispatch entry must name the
-  // immutable release commit, and the guard must prove it is merged into main.
-  test("the dispatch entry requires a commit input guarded as an ancestor of main", () => {
+  // The release has exactly one entry point: a merged `release vX.Y.Z` PR. A
+  // manual dispatch is refused by construction because this publish job holds
+  // `id-token: write` + `contents: write`, and a dispatched branch could carry
+  // its own copy of the workflow with the guards removed.
+  test("the release workflow has no manual entry point", () => {
     const workflow = readFileSync(".github/workflows/release.yml", "utf8");
-    expect(workflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+commit:\n\s+description: [^\n]+\n\s+required: true/);
-    expect(workflow).toContain('git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main');
-    expect(workflow).toContain("github.event.pull_request.merge_commit_sha || inputs.commit");
+    expect(workflow).not.toContain("workflow_dispatch");
+    expect(workflow).not.toContain("inputs.commit");
+    expect(workflow).toContain("github.event.pull_request.merge_commit_sha");
+    expect(workflow).toContain("types: [closed]");
   });
 });
