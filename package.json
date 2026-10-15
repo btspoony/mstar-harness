@@ -17,7 +17,6 @@
     "typecheck:prepare": "bun run engine:build && bun run judgment:build && bun run --cwd packages/commands build",
     "engine:build": "bun run --cwd packages/engine build",
     "commands:build": "bun run --cwd packages/commands build",
-    "commands:pack": "npm pack --workspace @mstar-harness/commands",
     "judgment:build": "bun run --cwd packages/judgment build",
     "cli:dev": "MSTAR_CLI_PROJECT_ROOT=$PWD bun run --cwd packages/cli dev",
     "cli:build": "bun run --cwd packages/cli build",
@@ -42,7 +41,6 @@
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {
-    "@mstar-harness/commands": "^4.0.0",
     "@mstar-harness/engine": "^4.0.0"
   },
   "devDependencies": {

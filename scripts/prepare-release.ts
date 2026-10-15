@@ -80,7 +80,7 @@ const DEFAULT_CATEGORY: Record<string, string> = {
 
 const REGISTRY_URL = "https://registry.npmjs.org";
 /** Bound on the whole published-version probe; a hung registry must never stall prepare. */
-const REGISTRY_TIMEOUT_MS = 10_000;
+export const REGISTRY_TIMEOUT_MS = 10_000;
 
 /** Registry read, status only — injected by tests so the check is offline and deterministic. */
 export type RegistryFetch = (url: string, init: { signal: AbortSignal }) => Promise<{ status: number }>;
@@ -365,12 +365,12 @@ export async function bumpJsonVersion(
 
 /**
  * Rewrite root runtime dependency specs for workspace packages published with
- * this release. DevDependencies remain build-time workspace links.
+ * this release. `@mstar-harness/commands` is internal (workspace devDependency,
+ * inlined into the CLI bundle), so it stays a `workspace:*` build link and is
+ * never rewritten to a registry range. Other devDependencies remain build-time
+ * workspace links too.
  */
-const ROOT_VERSIONED_DEPENDENCIES = [
-  "@mstar-harness/commands",
-  "@mstar-harness/engine",
-] as const;
+const ROOT_VERSIONED_DEPENDENCIES = ["@mstar-harness/engine"] as const;
 
 /** Keep shipped root dependencies resolvable outside the workspace. */
 export function syncRootDependencySpecs(text: string, version: string): string {

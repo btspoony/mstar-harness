@@ -5,8 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/commands": "^3.11.2",
-        "@mstar-harness/engine": "^3.11.2",
+        "@mstar-harness/engine": "^4.0.0",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
@@ -26,7 +25,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
         "mstar": "dist/mstar-harness.js",
@@ -48,7 +47,7 @@
     },
     "packages/commands": {
       "name": "@mstar-harness/commands",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "dependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
@@ -62,7 +61,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "devDependencies": {
         "@deepseek-ai/dsh-util-code-language": "0.2.0-rc.2",
         "@mstar-harness/commands": "workspace:*",
@@ -169,7 +168,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "dependencies": {
         "mdast-util-from-markdown": "^2.0.3",
         "mdast-util-gfm": "^3.1.0",
@@ -194,7 +193,7 @@
     },
     "packages/omp": {
       "name": "@mstar-harness/omp",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "devDependencies": {
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
@@ -209,7 +208,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "dependencies": {
         "@opencode-ai/plugin": "1.4.8",
       },
@@ -220,7 +219,7 @@
     },
     "packages/opencode-v2": {
       "name": "@mstar-harness/opencode-v2",
-      "version": "3.11.2",
+      "version": "4.0.0",
       "dependencies": {
         "@opencode/plugin": "2.0.26",
         "@opencode/schema": "2.0.26",

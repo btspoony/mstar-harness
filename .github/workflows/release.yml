@@ -2,8 +2,13 @@ name: Release
 
 # PR-driven release. Merging a `release vX.Y.Z` PR runs the whole release inline
 # on the pull_request event: validate -> build -> npm publish (provenance) of
-# @mstar-harness/engine + @mstar-harness/commands +
-# @mstar-harness/cli + @mstar-harness/opencode (dependency order).
+# @mstar-harness/engine + @mstar-harness/cli + @mstar-harness/opencode +
+# @mstar-harness/opencode-v2 + @mstar-harness/dsh + @mstar-harness/omp
+# (dependency order).
+#
+# @mstar-harness/commands is internal: it is a workspace devDependency inlined
+# into the CLI bundle, never published to npm. It carries the release version in
+# lockstep but has no publish step.
 #
 # Prereleases: a `release vX.Y.Z-alpha.N` PR publishes under the npm dist-tag
 # `alpha` (never `latest`) and creates a GitHub Release flagged prerelease.
@@ -17,11 +22,28 @@ name: Release
 # instead of push:tags. The workflow filename (`.github/workflows/release.yml`)
 # is unchanged. If the first release via this flow fails publish, provenance
 # trust may need the trigger reverted to push:tags (see git history).
+#
+# Resume contract: a release that fails after some packages published is
+# resumed by dispatching this workflow with `commit=<release commit SHA>` — the
+# immutable SHA of the `chore(release): prepare vX.Y.Z (#N)` merge commit on
+# main. The version comes from that commit's `package.json`; already-published
+# versions are skipped by the preflight, and the tag step already skips an
+# existing tag. Dispatching a branch head is refused: the job holds
+# `id-token: write` + `contents: write`, so a moving ref could publish an
+# unmerged tree's versions, and a retry after new main commits would rebuild an
+# already-chosen version from a different revision. The guard below enforces
+# that the supplied SHA is present and reachable from main.
 
 on:
   pull_request:
     types: [closed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Immutable SHA of the release commit to finish: the 'chore(release): prepare vX.Y.Z (#N)' merge commit on main"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -30,15 +52,40 @@ permissions:
 jobs:
   release:
     if: >
-      github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.title, 'release v')
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.title, 'release v'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || inputs.commit }}
           fetch-depth: 0
+
+      # Fail closed before any build or publish step: a manual release may only
+      # finish a version whose release commit is already on main. Fetching main
+      # into its remote-tracking ref makes the ancestry test independent of
+      # checkout's refspec.
+      - name: Guard dispatch commit is merged into main
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          if ! git fetch --quiet origin main:refs/remotes/origin/main; then
+            fail "Could not fetch origin/main to verify the release commit."
+          fi
+          if ! git cat-file -e "${RELEASE_COMMIT}^{commit}" 2>/dev/null; then
+            echo "The 'commit' input (${RELEASE_COMMIT}) is not a commit in this checkout."
+            fail "Pass the immutable SHA of the release commit: the 'chore(release): prepare vX.Y.Z (#N)' merge commit on main (see: git log --oneline --first-parent origin/main)."
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
+            echo "${RELEASE_COMMIT} is not an ancestor of origin/main."
+            fail "A manual release targets only a commit already merged into main. Dispatch again with the merge commit SHA of the 'chore(release): prepare vX.Y.Z (#N)' PR, found with: git log --oneline --first-parent origin/main"
+          fi
+          echo "Verified ${RELEASE_COMMIT} is merged into origin/main."
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -86,26 +133,62 @@ jobs:
           bun run opencode-v2:build
           bun run dsh:build
           bun run omp:build
+      # Decide the publish set once, before anything is published. It refuses
+      # on any unknown registry state, so a resumed release cannot silently
+      # re-publish an existing version or skip a free one. It checks manifest
+      # publishability and registry state only — it cannot verify npm
+      # trusted-publisher/OIDC authorization, which only an actual publish
+      # attempt proves, so a step can still fail on authorization afterwards.
+      - name: Preflight publish set
+        id: preflight
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: bun run scripts/release-preflight.ts "$VERSION"
+
+      # Each publish step guards on that preflight result: a version listed in
+      # `skip` is already on the registry (npm rejects a duplicate), so a
+      # resumed release re-runs it as a no-op instead of failing.
       - name: Publish @mstar-harness/engine
-        run: npm publish --workspace @mstar-harness/engine --access public --tag ${{ steps.disttag.outputs.tag }}
-
-      - name: Publish @mstar-harness/commands
-        run: npm publish --workspace @mstar-harness/commands --access public --tag ${{ steps.disttag.outputs.tag }}
-
+        run: |
+          case " ${{ steps.preflight.outputs.skip }} " in
+            *" @mstar-harness/engine "*) echo "@mstar-harness/engine ${{ steps.ver.outputs.version }} is already on the registry; skipping." ;;
+            *) npm publish --workspace @mstar-harness/engine --access public --tag ${{ steps.disttag.outputs.tag }} ;;
+          esac
 
       - name: Publish @mstar-harness/cli
-        run: npm publish --workspace @mstar-harness/cli --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: |
+          case " ${{ steps.preflight.outputs.skip }} " in
+            *" @mstar-harness/cli "*) echo "@mstar-harness/cli ${{ steps.ver.outputs.version }} is already on the registry; skipping." ;;
+            *) npm publish --workspace @mstar-harness/cli --access public --tag ${{ steps.disttag.outputs.tag }} ;;
+          esac
 
       - name: Publish @mstar-harness/opencode
-        run: npm publish --workspace @mstar-harness/opencode --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: |
+          case " ${{ steps.preflight.outputs.skip }} " in
+            *" @mstar-harness/opencode "*) echo "@mstar-harness/opencode ${{ steps.ver.outputs.version }} is already on the registry; skipping." ;;
+            *) npm publish --workspace @mstar-harness/opencode --access public --tag ${{ steps.disttag.outputs.tag }} ;;
+          esac
+
       - name: Publish @mstar-harness/opencode-v2
-        run: npm publish --workspace @mstar-harness/opencode-v2 --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: |
+          case " ${{ steps.preflight.outputs.skip }} " in
+            *" @mstar-harness/opencode-v2 "*) echo "@mstar-harness/opencode-v2 ${{ steps.ver.outputs.version }} is already on the registry; skipping." ;;
+            *) npm publish --workspace @mstar-harness/opencode-v2 --access public --tag ${{ steps.disttag.outputs.tag }} ;;
+          esac
 
       - name: Publish @mstar-harness/dsh
-        run: npm publish --workspace @mstar-harness/dsh --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: |
+          case " ${{ steps.preflight.outputs.skip }} " in
+            *" @mstar-harness/dsh "*) echo "@mstar-harness/dsh ${{ steps.ver.outputs.version }} is already on the registry; skipping." ;;
+            *) npm publish --workspace @mstar-harness/dsh --access public --tag ${{ steps.disttag.outputs.tag }} ;;
+          esac
 
       - name: Publish @mstar-harness/omp
-        run: npm publish --workspace @mstar-harness/omp --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: |
+          case " ${{ steps.preflight.outputs.skip }} " in
+            *" @mstar-harness/omp "*) echo "@mstar-harness/omp ${{ steps.ver.outputs.version }} is already on the registry; skipping." ;;
+            *) npm publish --workspace @mstar-harness/omp --access public --tag ${{ steps.disttag.outputs.tag }} ;;
+          esac
 
       - name: Configure git identity
         run: |
