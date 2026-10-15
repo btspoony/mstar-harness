@@ -24,16 +24,26 @@ name: Release
 # trust may need the trigger reverted to push:tags (see git history).
 #
 # Resume contract: a release that fails after some packages published is
-# resumed by re-dispatching this workflow from `main` (or from the release
-# commit's ref — the run publishes whatever `package.json` says on the
-# dispatched ref). Already-published versions are skipped, and the tag step
-# already skips an existing tag. Do not dispatch from an arbitrary branch.
+# resumed by dispatching this workflow with `commit=<release commit SHA>` — the
+# immutable SHA of the `chore(release): prepare vX.Y.Z (#N)` merge commit on
+# main. The version comes from that commit's `package.json`; already-published
+# versions are skipped by the preflight, and the tag step already skips an
+# existing tag. Dispatching a branch head is refused: the job holds
+# `id-token: write` + `contents: write`, so a moving ref could publish an
+# unmerged tree's versions, and a retry after new main commits would rebuild an
+# already-chosen version from a different revision. The guard below enforces
+# that the supplied SHA is present and reachable from main.
 
 on:
   pull_request:
     types: [closed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      commit:
+        description: "Immutable SHA of the release commit to finish: the 'chore(release): prepare vX.Y.Z (#N)' merge commit on main"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -50,8 +60,32 @@ jobs:
       - name: Checkout merge commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || inputs.commit }}
           fetch-depth: 0
+
+      # Fail closed before any build or publish step: a manual release may only
+      # finish a version whose release commit is already on main. Fetching main
+      # into its remote-tracking ref makes the ancestry test independent of
+      # checkout's refspec.
+      - name: Guard dispatch commit is merged into main
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          if ! git fetch --quiet origin main:refs/remotes/origin/main; then
+            fail "Could not fetch origin/main to verify the release commit."
+          fi
+          if ! git cat-file -e "${RELEASE_COMMIT}^{commit}" 2>/dev/null; then
+            echo "The 'commit' input (${RELEASE_COMMIT}) is not a commit in this checkout."
+            fail "Pass the immutable SHA of the release commit: the 'chore(release): prepare vX.Y.Z (#N)' merge commit on main (see: git log --oneline --first-parent origin/main)."
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
+            echo "${RELEASE_COMMIT} is not an ancestor of origin/main."
+            fail "A manual release targets only a commit already merged into main. Dispatch again with the merge commit SHA of the 'chore(release): prepare vX.Y.Z (#N)' PR, found with: git log --oneline --first-parent origin/main"
+          fi
+          echo "Verified ${RELEASE_COMMIT} is merged into origin/main."
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2

@@ -113,4 +113,13 @@ describe("Release workflow publish set (incident-class guard)", () => {
     expect(published.length).toBeGreaterThan(0);
     expect([...published].sort()).toEqual((await publishedPackageNames()).sort());
   });
+
+  // Both halves of the manual-release fix: the dispatch entry must name the
+  // immutable release commit, and the guard must prove it is merged into main.
+  test("the dispatch entry requires a commit input guarded as an ancestor of main", () => {
+    const workflow = readFileSync(".github/workflows/release.yml", "utf8");
+    expect(workflow).toMatch(/workflow_dispatch:\n\s+inputs:\n\s+commit:\n\s+description: [^\n]+\n\s+required: true/);
+    expect(workflow).toContain('git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main');
+    expect(workflow).toContain("github.event.pull_request.merge_commit_sha || inputs.commit");
+  });
 });
