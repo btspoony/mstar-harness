@@ -14,10 +14,18 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote } from "./global-cli";
+import { defaultDetectVersion, ensureGlobalCli, formatCliDoctorNote, formatVersionSkewWarning } from "./global-cli";
 import { readHarnessVersion } from "./utils";
 
-const BASE = { version: "3.4.0", dryRun: false, noGlobalCli: false };
+// Synthetic version tokens: the helper only needs a well-formed, distinct
+// string to compare — never a real version value.
+const SYNTH_VERSION = "0.0.0-synthetic";
+const SYNTH_OTHER_VERSION = "0.0.0-synthetic-other";
+/** Clearly-published-later token for the skew cases (larger core than any real
+ * release this fixture could be compared against). */
+const SYNTH_PUBLISHED_LATER = "99.0.0-synthetic";
+
+const BASE = { version: SYNTH_VERSION, dryRun: false, noGlobalCli: false };
 
 // One file-scoped fake-bin dir for EVERY fake binary in this file
 // (`mstar-harness`, `npm`, `dsh`). Created once and removed once: each
@@ -57,14 +65,14 @@ describe("ensureGlobalCli", () => {
       log: (line) => lines.push(line),
     });
     expect(result).toEqual({ action: "skipped", reason: "dry-run" });
-    expect(lines.join("\n")).toContain("npm i -g @mstar-harness/cli@3.4.0");
+    expect(lines.join("\n")).toContain(`npm i -g @mstar-harness/cli@${SYNTH_VERSION}`);
   });
 
   test("skips when the PATH version already matches (reason: already-matching)", () => {
     const install = () => {
       throw new Error("install must not be called");
     };
-    const result = ensureGlobalCli({ ...BASE, detectVersion: () => "3.4.0", install });
+    const result = ensureGlobalCli({ ...BASE, detectVersion: () => SYNTH_VERSION, install });
     expect(result).toEqual({ action: "skipped", reason: "already-matching" });
   });
 
@@ -72,11 +80,11 @@ describe("ensureGlobalCli", () => {
     const specs: string[] = [];
     const result = ensureGlobalCli({
       ...BASE,
-      detectVersion: () => "3.3.0",
+      detectVersion: () => SYNTH_OTHER_VERSION,
       install: (spec) => specs.push(spec),
     });
-    expect(result).toEqual({ action: "installed", spec: "@mstar-harness/cli@3.4.0" });
-    expect(specs).toEqual(["@mstar-harness/cli@3.4.0"]);
+    expect(result).toEqual({ action: "installed", spec: `@mstar-harness/cli@${SYNTH_VERSION}` });
+    expect(specs).toEqual([`@mstar-harness/cli@${SYNTH_VERSION}`]);
   });
 
   test("installs when the CLI is missing on PATH (detectVersion returns null)", () => {
@@ -86,8 +94,8 @@ describe("ensureGlobalCli", () => {
       detectVersion: () => null,
       install: (spec) => specs.push(spec),
     });
-    expect(result).toEqual({ action: "installed", spec: "@mstar-harness/cli@3.4.0" });
-    expect(specs).toEqual(["@mstar-harness/cli@3.4.0"]);
+    expect(result).toEqual({ action: "installed", spec: `@mstar-harness/cli@${SYNTH_VERSION}` });
+    expect(specs).toEqual([`@mstar-harness/cli@${SYNTH_VERSION}`]);
   });
 
   test("install throw becomes action: failed with the error message, never rethrown", () => {
@@ -100,7 +108,7 @@ describe("ensureGlobalCli", () => {
     });
     expect(result).toEqual({
       action: "failed",
-      spec: "@mstar-harness/cli@3.4.0",
+      spec: `@mstar-harness/cli@${SYNTH_VERSION}`,
       message: "EACCES: permission denied",
     });
   });
@@ -119,36 +127,42 @@ describe("ensureGlobalCli", () => {
     const out = lines.join("\n");
     expect(out).toContain("Global CLI install failed: EACCES: permission denied");
     expect(out).toContain("Failure kind: permission");
-    expect(out).toContain("npm i -g @mstar-harness/cli@3.4.0");
+    expect(out).toContain(`npm i -g @mstar-harness/cli@${SYNTH_VERSION}`);
     expect(out).toContain("mstar-harness doctor");
   });
 });
 
 // ---------------------------------------------------------------------------
 // Task 3 doctor note — pure three-state formatter. The detected
-// value is injected (a literal here): no PATH probing, no subprocesses, no
-// dependence on the machine's PATH.
+// value is injected (a synthetic token here): no PATH probing, no
+// subprocesses, no dependence on the machine's PATH.
 // ---------------------------------------------------------------------------
 
 describe("formatCliDoctorNote", () => {
   test("missing on PATH names the expected version", () => {
-    expect(formatCliDoctorNote(null, "3.4.0")).toBe("CLI on PATH: mstar-harness not found (expected version 3.4.0)");
+    expect(formatCliDoctorNote(null, SYNTH_VERSION)).toBe(
+      `CLI on PATH: mstar-harness not found (expected version ${SYNTH_VERSION})`,
+    );
   });
 
   test("version mismatch shows both versions", () => {
-    expect(formatCliDoctorNote("2.1.0", "3.4.0")).toBe("CLI on PATH: mstar-harness 2.1.0 (expected 3.4.0)");
+    expect(formatCliDoctorNote(SYNTH_OTHER_VERSION, SYNTH_VERSION)).toBe(
+      `CLI on PATH: mstar-harness ${SYNTH_OTHER_VERSION} (expected ${SYNTH_VERSION})`,
+    );
   });
 
   test("matching version", () => {
-    expect(formatCliDoctorNote("3.4.0", "3.4.0")).toBe("CLI on PATH: mstar-harness 3.4.0 (matching)");
+    expect(formatCliDoctorNote(SYNTH_VERSION, SYNTH_VERSION)).toBe(
+      `CLI on PATH: mstar-harness ${SYNTH_VERSION} (matching)`,
+    );
   });
 });
 
 // ---------------------------------------------------------------------------
 // Version-format pin (F-202): `defaultDetectVersion` must return the
 // trimmed single-line version string. The file-scoped fake-bin dir holds a
-// fake `mstar-harness` emitting "3.4.0" with and without a trailing
-// newline (same file overwritten in place); both must yield "3.4.0".
+// fake `mstar-harness` emitting a synthetic version token with and without a
+// trailing newline (same file overwritten in place); both must yield it.
 // ---------------------------------------------------------------------------
 
 describe("defaultDetectVersion", () => {
@@ -159,11 +173,11 @@ describe("defaultDetectVersion", () => {
       // overwrites the SAME absolute file in place — no dir is created or
       // deleted mid-test, so no spawn depends on re-resolving a moved
       // fake (CI bun 1.2.x determinism).
-      writeFakeBin("mstar-harness", 'printf "3.4.0"');
+      writeFakeBin("mstar-harness", `printf "${SYNTH_VERSION}"`);
       process.env.PATH = `${FAKE_BIN_DIR}:${oldPath ?? ""}`;
-      expect(defaultDetectVersion()).toBe("3.4.0");
-      writeFakeBin("mstar-harness", 'echo "3.4.0"');
-      expect(defaultDetectVersion()).toBe("3.4.0");
+      expect(defaultDetectVersion()).toBe(SYNTH_VERSION);
+      writeFakeBin("mstar-harness", `echo "${SYNTH_VERSION}"`);
+      expect(defaultDetectVersion()).toBe(SYNTH_VERSION);
     } finally {
       process.env.PATH = oldPath;
     }
@@ -250,15 +264,68 @@ describe("init wiring (end-to-end CLI harness)", () => {
 
   /** Fake mstar-harness reporting a version; default non-matching so the
    * install path is always taken deterministically. */
-  function fakeMstarHarness(version = "0.0.0-test"): void {
+  function fakeMstarHarness(version = SYNTH_OTHER_VERSION): void {
     writeFakeBin("mstar-harness", `echo "${version}"\nexit 0`);
   }
 
   /** Fake npm that logs its args, then hangs (used with a tiny install
-   * timeout to exercise the kill path). */
+   * timeout to exercise the kill path). The registry probe is answered
+   * immediately so only the install is what stalls. */
   function fakeNpmHang(): void {
-    writeFakeBin("npm", `printf '%s\\n' "$*" >> "${npmLog}"\nexec sleep 10`);
+    writeFakeBin("npm", `if [ "$1" = "view" ]; then exit 0; fi
+printf '%s\\n' "$*" >> "${npmLog}"
+exec sleep 10`);
   }
+
+  /** Only the `i -g <spec>` invocations: the registry probe shares this binary,
+   * so "npm never ran" is not the contract — "no global install ran" is. */
+  function installLines(): string[] {
+    if (!existsSync(npmLog)) return [];
+    return readFileSync(npmLog, "utf8").trim().split("\n").filter((line) => line.startsWith("i -g "));
+  }
+
+  /** Fake npm that answers `view <pkg> version` with a published version and
+   * logs any other invocation (install path). */
+  function fakeNpmReportingLatest(latest: string): void {
+    writeFakeBin("npm", `if [ "$1" = "view" ]; then echo "${latest}"; exit 0; fi
+printf '%s\\n' "$*" >> "${npmLog}"
+exit 0`);
+  }
+
+  test("an older running CLI installs the published latest instead of itself", () => {
+    fakeNpmReportingLatest(SYNTH_PUBLISHED_LATER);
+    fakeMstarHarness(PACKAGE_VERSION);
+    fakeOpencode();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("the published latest is");
+    expect(result.stdout).toContain(SYNTH_PUBLISHED_LATER);
+    // The reported defect: a PATH version equal to the stale runner must not
+    // make init skip, because what gets installed is the published latest.
+    expect(installLines()).toEqual([`i -g @mstar-harness/cli@${SYNTH_PUBLISHED_LATER}`]);
+  });
+
+  test("a PATH already at the published latest is left alone", () => {
+    fakeNpmReportingLatest(SYNTH_PUBLISHED_LATER);
+    fakeMstarHarness(SYNTH_PUBLISHED_LATER);
+    fakeOpencode();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("already on PATH");
+    expect(installLines()).toEqual([]);
+  });
+
+  test("an unreadable registry leaves init quiet on the version question", () => {
+    fakeNpm(1);
+    fakeMstarHarness(PACKAGE_VERSION);
+    fakeOpencode();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("the published latest is");
+  });
 
   test("dry-run prints the exact npm command and never spawns npm", () => {
     fakeNpm(0);
@@ -280,7 +347,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`Installed @mstar-harness/cli@${PACKAGE_VERSION} globally.`);
     expect(result.stdout).toContain("Status: configured");
-    expect(readFileSync(npmLog, "utf8").trim()).toBe(`i -g @mstar-harness/cli@${PACKAGE_VERSION}`);
+    expect(installLines()).toEqual([`i -g @mstar-harness/cli@${PACKAGE_VERSION}`]);
     expect(existsSync(configPath)).toBe(true);
   });
   test("OpenCode refuses to replace a symlink config and leaves its target untouched", () => {
@@ -316,7 +383,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`Installed @mstar-harness/cli@${PACKAGE_VERSION} globally.`);
     expect(result.stdout).toContain("Status: configured");
-    expect(readFileSync(npmLog, "utf8").trim()).toBe(`i -g @mstar-harness/cli@${PACKAGE_VERSION}`);
+    expect(installLines()).toEqual([`i -g @mstar-harness/cli@${PACKAGE_VERSION}`]);
   });
 
   test("install-mode stays exit 0 when the global install fails", () => {
@@ -336,7 +403,7 @@ describe("init wiring (end-to-end CLI harness)", () => {
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath, "--no-global-cli"], cliEnv());
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Skipping global CLI install (--no-global-cli).");
-    expect(existsSync(npmLog)).toBe(false);
+    expect(installLines()).toEqual([]);
   });
 
   test("a stalled npm install times out and fail-softs with exit 0 (F-201)", () => {
@@ -364,6 +431,20 @@ describe("init wiring (end-to-end CLI harness)", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("already on PATH");
     expect(result.stdout).toContain("Status: configured");
-    expect(existsSync(npmLog)).toBe(false);
+    expect(installLines()).toEqual([]);
+  });
+});
+
+describe("published-latest skew warning", () => {
+  test("stays silent when the registry could not be read or the versions match", () => {
+    expect(formatVersionSkewWarning(SYNTH_VERSION, null)).toBeNull();
+    expect(formatVersionSkewWarning(SYNTH_VERSION, SYNTH_VERSION)).toBeNull();
+  });
+
+  test("names both versions and the pinned-latest recovery", () => {
+    const line = formatVersionSkewWarning(SYNTH_VERSION, SYNTH_OTHER_VERSION);
+    expect(line).toContain(SYNTH_VERSION);
+    expect(line).toContain(SYNTH_OTHER_VERSION);
+    expect(line).toContain("@mstar-harness/cli@latest");
   });
 });

@@ -54,6 +54,17 @@ const DSH_LOCAL_TIMEOUT_MS = 10_000;
 const DSH_ADD_TIMEOUT_MS = 300_000;
 const DSH_ADD_TIMEOUT_ENV = "MSTAR_DSH_SUBPROCESS_TIMEOUT_MS";
 
+/** dsh prints its own exact-version exemption command when it refuses a plugin
+ * for peer-range incompatibility (`dsh plugin --profile <p> allow-version
+ * <spec> --dsh-version <runtime> --accept-risk`). Match that line instead of
+ * building it: the recovery we quote must be the one this dsh build printed,
+ * and flag/version literals here would go stale with dsh's own surface. */
+const DSH_ALLOW_VERSION_RE = /dsh\s+plugin\s+--profile\s+\S+\s+allow-version\s+[^\n]*--accept-risk/;
+/** Runtime version echoed from dsh's text (never a literal here): its recovery
+ * command carries it, the refusal sentence is the fallback shape. */
+const DSH_VERSION_FLAG_RE = /--dsh-version\s+([^\s"'`,]+)/;
+const DSH_INCOMPATIBLE_PHRASE_RE = /incompatible with dsh\s+([^\s:,.]+)/i;
+
 /** Add-path timeout: env override wins, else the conservative default. */
 function addTimeoutMs(): number {
   const raw = process.env[DSH_ADD_TIMEOUT_ENV];
@@ -145,6 +156,30 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       notes.push(`installed: ${spec} (${DSH_BIN} ${addArgs.join(" ")})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const streams = error as { stdout?: unknown; stderr?: unknown };
+      // execFileSync folds only stderr into `message`; dsh prints its refusal
+      // and the recovery command on either stream, so widen with whatever is
+      // not already folded in (keeps dsh's own text verbatim, unduplicated).
+      const detail = [
+        message,
+        typeof streams?.stdout === "string" ? streams.stdout.trim() : "",
+        typeof streams?.stderr === "string" ? streams.stderr.trim() : "",
+      ]
+        .filter((part, index) => index === 0 || (part.length > 0 && !message.includes(part)))
+        .join("\n");
+      // A peer-range refusal is a different failure from a generic add error:
+      // only it carries a recovery the operator can act on. Quote dsh's own
+      // printed recovery and runtime version — flag and version literals are
+      // never ours to invent, and without dsh's own line we name no recovery.
+      const allowance = DSH_ALLOW_VERSION_RE.exec(detail)?.[0];
+      if (allowance) {
+        const runtime = DSH_VERSION_FLAG_RE.exec(detail)?.[1] ?? DSH_INCOMPATIBLE_PHRASE_RE.exec(detail)?.[1];
+        throw new Error(
+          `Cannot install ${spec} via ${DSH_BIN}: rejected as incompatible by the installed ${DSH_BIN} runtime${
+            runtime ? ` ${runtime}` : ""
+          }.\n${detail}\nRecovery: ${allowance}`,
+        );
+      }
       throw new Error(`Failed to install ${spec} via ${DSH_BIN}: ${message}`);
     }
   }

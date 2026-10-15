@@ -1,10 +1,11 @@
-import { diagnoseOmpHost, parseOmpPluginList } from "@mstar-harness/commands";
+import { diagnoseOmpHost, findInstalledPlugin, ompEntryVersion, parseOmpPluginList } from "@mstar-harness/commands";
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runCliCommand } from "../exec";
 import type { AgentAdapter, Scope } from "../types";
-import { resolveProjectRoot } from "../utils";
+import { readHarnessVersion, resolveProjectRoot } from "../utils";
 import {
  REPO_URL,
  HARNESS_REPO_PATH,
@@ -22,6 +23,8 @@ import { ensureHostPresent } from "./host-presence";
 // `skills/`/`commands/`/`agents/`/`hooks/`/`tools/` mirrors are produced by
 // `bun run --cwd packages/omp build`.
 const OMP_PACKAGE_REL = path.join("packages", "omp");
+/** Plugin package name as omp's plugin manager knows it. */
+const OMP_PLUGIN_NAME = "@mstar-harness/omp";
 
 function ompAvailable() {
  try {
@@ -33,7 +36,124 @@ function ompAvailable() {
 }
 
 function runOmp(args: string[], dryRun: boolean): void {
- runCliCommand(["omp", ...args], { dryRun });
+  runCliCommand(["omp", ...args], { dryRun });
+}
+
+function declaredByPluginManager(root: string): boolean {
+  const manifest = path.join(root, "package.json");
+  if (!fs.existsSync(manifest)) return false;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(manifest, "utf8")) as {
+      dependencies?: Record<string, unknown>;
+      devDependencies?: Record<string, unknown>;
+      optionalDependencies?: Record<string, unknown>;
+    };
+    return OMP_PLUGIN_NAME in { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+  } catch {
+    return false;
+  }
+}
+
+/** A refusal that names the step, the observed cause, and a supported recovery. */
+function ompRefusal(step: string, detail: string, recovery: string): Error {
+  return new Error(`${step}: ${detail}\nRecovery: ${recovery}`);
+}
+
+/**
+ * Clear whatever occupies the entry before linking: a stale tree is what makes
+ * `omp plugin link` fail on an unlink error. A package-manager-managed entry is
+ * removed through omp itself; an entry no manifest declares is a leftover.
+ * Exported for tests: `root` is the seam that keeps the check off the real home.
+ */
+export function clearOmpEntry(root: string, ompPackagePath: string, notes: string[]): void {
+  const entry = path.join(root, "node_modules", OMP_PLUGIN_NAME);
+  try {
+    // lstat: a dangling symlink occupies the entry too, and `existsSync` would miss it.
+    fs.lstatSync(entry);
+  } catch {
+    return;
+  }
+  if (declaredByPluginManager(root)) {
+    try {
+      runOmp(["plugin", "uninstall", OMP_PLUGIN_NAME], false);
+      notes.push(`Replaced the existing ${OMP_PLUGIN_NAME} install in ${root} through omp (its manifest declares it).`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw ompRefusal(
+        `Could not replace the existing ${OMP_PLUGIN_NAME} install in ${root}`,
+        message,
+        `run \`omp plugin uninstall ${OMP_PLUGIN_NAME}\`, or link by hand: \`omp plugin link ${ompPackagePath}\``,
+      );
+    }
+    return;
+  }
+  try {
+    fs.rmSync(entry, { recursive: true, force: true });
+    notes.push(`Removed the leftover ${OMP_PLUGIN_NAME} entry at ${entry} (no plugin-manager manifest declares it).`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw ompRefusal(
+      `Could not remove the leftover entry at ${entry}`,
+      message,
+      `install the published plugin instead, which replaces it through omp: \`omp plugin install ${OMP_PLUGIN_NAME}\``,
+    );
+  }
+}
+
+/** An install omp does not list did not happen: assert what we asked for.
+ *  Exported for tests: the fake `omp` on PATH is the seam. */
+export function verifyOmpInstall(notes: string[], expectedVersion: string, linkedTree?: string): void {
+  const entry = findInstalledPlugin(listInstalledPlugins());
+  if (entry === undefined) {
+    throw ompRefusal(
+      "omp plugin list does not report the Morning Star plugin after installing it",
+      "the plugin manager did not register the entry it was given",
+      `inspect with \`omp plugin list\`, then install it yourself: \`omp plugin install ${OMP_PLUGIN_NAME}\``,
+    );
+  }
+  if (linkedTree !== undefined) {
+    if (typeof entry.path !== "string") {
+      // The listing shape is omp's; without a path there is nothing to compare, so
+      // the note says what could not be confirmed instead of claiming it was.
+      notes.push(`omp reports ${OMP_PLUGIN_NAME}, but its listing carries no path to compare with ${linkedTree}.`);
+      return;
+    }
+    let listed: string;
+    let linked: string;
+    try {
+      listed = fs.realpathSync(entry.path);
+      linked = fs.realpathSync(linkedTree);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw ompRefusal(
+        "omp points at a path that cannot be resolved, so the link cannot be confirmed",
+        `linked ${linkedTree}, omp lists ${entry.path}: ${message}`,
+        `link it again: \`omp plugin link ${linkedTree}\`, then \`omp plugin list\``,
+      );
+    }
+    if (listed !== linked) {
+      throw ompRefusal(
+        "omp plugin list points at a different tree than the one just linked",
+        `linked ${linked}, omp lists ${listed}`,
+        `link it again: \`omp plugin link ${linkedTree}\``,
+      );
+    }
+    notes.push(`omp reports ${OMP_PLUGIN_NAME} linked from ${linkedTree}.`);
+    return;
+  }
+  const installed = ompEntryVersion(entry);
+  if (installed !== null && installed !== expectedVersion) {
+    throw ompRefusal(
+      "omp reports a different plugin version than the one installed",
+      `expected ${expectedVersion}, omp lists ${installed}`,
+      `install the expected version yourself: \`omp plugin install ${OMP_PLUGIN_NAME}@${expectedVersion}\``,
+    );
+  }
+  notes.push(
+    installed === null
+      ? `omp reports ${OMP_PLUGIN_NAME} (its listing carries no version).`
+      : `omp reports ${OMP_PLUGIN_NAME} at ${installed}.`,
+  );
 }
 
 /**
@@ -103,6 +223,23 @@ async function runInit(scope: Scope, dryRun: boolean) {
  );
  } else {
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
+ const expectedVersion = readHarnessVersion();
+ const installSpec = `${OMP_PLUGIN_NAME}@${expectedVersion}`;
+ // `omp plugin install` accepts `--scope` only for marketplace specs: it warns
+ // and ignores it otherwise, so the note states where the install actually lands.
+ const installPublished = (): void => {
+   try {
+     runOmp(["plugin", "install", installSpec], dryRun);
+     notes.push(`Installed ${installSpec} via omp plugin install (omp owns where it lands).`);
+   } catch (error) {
+     const message = error instanceof Error ? error.message : String(error);
+     throw ompRefusal(
+       `omp plugin install ${installSpec} failed`,
+       message,
+       `run \`omp plugin install ${installSpec}\` yourself and read its output`,
+     );
+   }
+ };
  // The linked tree's plugin.json/skills/hooks/tools mirrors are gitignored
  // build outputs — without a build the link succeeds with an empty plugin
  // and doctor then fails on the same tree. Build before linking; fall back
@@ -115,24 +252,19 @@ async function runInit(scope: Scope, dryRun: boolean) {
  notes.push("Built the omp package (engine dist + discovery mirrors) before linking.");
  } catch (buildError) {
  const buildMessage = buildError instanceof Error ? buildError.message : String(buildError);
- notes.push(
- `Warning: could not build packages/omp (${buildMessage}). Falling back to: omp plugin install @mstar-harness/omp`,
- );
- const installArgs = ["plugin", "install", "@mstar-harness/omp"];
- if (scope === "project") installArgs.push("--scope", "project");
- try {
- runOmp(installArgs, dryRun);
- notes.push(`Installed @mstar-harness/omp via omp plugin install (${scope}).`);
- } catch (installError) {
- notes.push(`omp plugin install also failed: ${installError instanceof Error ? installError.message : String(installError)}`);
- }
- notes.push(...postInstallNotes(scope, dryRun, projectRoot));
- return { location: HARNESS_REPO_PATH, notes };
+          notes.push(
+            `Warning: could not build packages/omp (${buildMessage}); installing the published plugin instead.`,
+          );
+          installPublished();
+          verifyOmpInstall(notes, expectedVersion);
+          notes.push(...postInstallNotes(scope, dryRun, projectRoot));
+          return { location: HARNESS_REPO_PATH, notes };
  }
  }
  notes.push(
  `Linked omp plugin tree resolved via the workspace engine member; dist + root mirrors are gitignored build outputs (rebuilt automatically above when absent)`,
  );
+ clearOmpEntry(path.join(homedir(), ".omp", "plugins"), ompPackagePath, notes);
  const linkArgs = ["plugin", "link", ompPackagePath];
  if (scope === "project") linkArgs.push("--scope", "project");
  try {
@@ -140,20 +272,16 @@ async function runInit(scope: Scope, dryRun: boolean) {
  notes.push(
  `Linked local harness omp package into omp plugins (${scope}): omp plugin link ${ompPackagePath}${scope === "project" ? " --scope project" : ""}`,
  );
- } catch (error) {
- const message = error instanceof Error ? error.message : String(error);
- notes.push(`omp plugin link failed (${message}). Falling back guidance: omp plugin install @mstar-harness/omp`);
- try {
- const installArgs = ["plugin", "install", "@mstar-harness/omp"];
- if (scope === "project") installArgs.push("--scope", "project");
- runOmp(installArgs, dryRun);
- notes.push(`Installed @mstar-harness/omp via omp plugin install (${scope}).`);
- } catch (installError) {
- const installMessage = installError instanceof Error ? installError.message : String(installError);
- notes.push(`omp plugin install also failed: ${installMessage}`);
- }
- }
- }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw ompRefusal(
+          `omp plugin link ${ompPackagePath} failed`,
+          message,
+          `replace the existing entry through omp (\`omp plugin uninstall ${OMP_PLUGIN_NAME}\`), or install the published plugin instead: \`omp plugin install ${installSpec}\``,
+        );
+      }
+      verifyOmpInstall(notes, expectedVersion, ompPackagePath);
+    }
 
  if (scope === "project") {
  notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));

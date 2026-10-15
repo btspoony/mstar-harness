@@ -10,7 +10,7 @@ import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
-import { ensureGlobalCli } from "./global-cli";
+import { detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
 import type { InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 import { registerMcpCommand } from "./mcp/command";
@@ -65,7 +65,10 @@ async function runInit(options: InitOptions) {
     console.log(`Target: ${target}`);
     console.log(`Install location: ${installResult.location}`);
     for (const note of installResult.notes) console.log(`  - ${note}`);
-    ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
+    const latest = options.dryRun ? null : detectPublishedLatest();
+    const skew = formatVersionSkewWarning(packageVersion, latest);
+    if (skew !== null) console.log(skew);
+    ensureGlobalCli({ version: packageVersion, latest, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
     return;
   }
   const useExplicitModels = hasExplicitModelFlags(options);
@@ -99,7 +102,10 @@ async function runInit(options: InitOptions) {
   console.log(`Config file: ${configPath}`);
   if (adapter.printPostSetupSummary) adapter.printPostSetupSummary(updated);
   for (const [roleId, modelId] of Object.entries(assignments)) console.log(`  - ${roleId}: ${modelId}`);
-  ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
+  const latest = options.dryRun ? null : detectPublishedLatest();
+  const skew = formatVersionSkewWarning(packageVersion, latest);
+  if (skew !== null) console.log(skew);
+  ensureGlobalCli({ version: packageVersion, latest, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
 }
 
 program.name("mstar-harness").description("Morning Star harness CLI for target-based agent bootstrap").version(packageVersion);

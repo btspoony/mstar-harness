@@ -18,6 +18,9 @@
  *     (format-drifted) dump yields an explicit warning note while the adds
  *     still run (pinned no-op keeps it idempotent);
  *   - add failure: a non-zero `add` exit throws `Failed to install <spec>`;
+ *   - incompatible add: a peer-range refusal keeps dsh's own text and adds its
+ *     printed `allow-version` recovery (runtime version included) — never a
+ *     recovery we reconstruct ourselves;
  *   - stalled add: a hung pnpm forward is killed by the bounded subprocess
  *     timeout (ETIMEDOUT) instead of blocking the CLI forever;
  *   - `--dry-run` + `--no-fallbacks`: previews a single add with zero
@@ -40,7 +43,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
-import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
+import { DSH_FALLBACKS_SPEC, DSH_FALLBACKS_VERSION } from "@mstar-harness/commands";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -110,11 +113,14 @@ interface FakeDsh {
  * builtins only so it works under a PATH restricted to the fake dir.
  * `opts.dumpExit` / `opts.addExit` force a non-zero exit on the
  * `--dump-config` / `plugin ... add` branches to simulate probe and add
- * failures; `opts.addSleepSec` makes the add branch sleep first (via
- * /bin/sleep, PATH-independent) to simulate a stalled pnpm forward. */
+ * failures; `opts.addText` makes the add branch print that text on stdout
+ * first (dsh's own diagnostics, served verbatim from a file so no shell
+ * quoting/escaping applies); `opts.addSleepSec` makes the add branch sleep
+ * first (via /bin/sleep, PATH-independent) to simulate a stalled pnpm
+ * forward. */
 function makeFakeDsh(
   dumpFixture: string,
-  opts: { dumpExit?: number; addExit?: number; addSleepSec?: number } = {},
+  opts: { dumpExit?: number; addExit?: number; addSleepSec?: number; addText?: string } = {},
 ): FakeDsh {
   const binDir = mkdtempSync(join(tmpdir(), "dsh-fake-"));
   const homeDir = mkdtempSync(join(tmpdir(), "dsh-user-"));
@@ -126,6 +132,12 @@ function makeFakeDsh(
   const dumpExit = opts.dumpExit ?? 0;
   const addExit = opts.addExit ?? 0;
   const addSleep = opts.addSleepSec ? `  /bin/sleep ${opts.addSleepSec}\n` : "";
+  const addTextFile = join(binDir, "add-output.txt");
+  let addPrint = "";
+  if (opts.addText !== undefined) {
+    writeFileSync(addTextFile, `${opts.addText}\n`);
+    addPrint = `  while IFS= read -r line; do printf '%s\\n' "$line"; done < "${addTextFile}"\n`;
+  }
   const binPath = join(binDir, "dsh");
   writeFileSync(
     binPath,
@@ -139,6 +151,7 @@ function makeFakeDsh(
       "fi",
       'if [ "$1" = "plugin" ]; then',
       addSleep,
+      addPrint,
       `  exit ${addExit}`,
       "fi",
       "exit 0",
@@ -219,7 +232,24 @@ function withDshHomeAndPath(
 }
 
 const MSTAR_SPEC = "@mstar-harness/dsh";
-const FALLBACKS_SPEC = `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`;
+const FALLBACKS_SPEC = DSH_FALLBACKS_SPEC;
+
+/** Fixture runtime tokens: clearly not semver, printed verbatim by the fake
+ * dsh as its own host output (no version literal is invented here). The two
+ * differ so the tests can prove the `--dsh-version` value wins over the
+ * refusal sentence's. */
+const FAKE_DSH_RUNTIME_TOKEN = "<runtime-version>";
+const FAKE_DSH_PROSE_TOKEN = "<reported-dsh-version>";
+
+/** dsh's refusal text (probe-pinned 2026-08-15 wording): the incompatibility
+ * sentence, the exemption pointer, and the exact-version command dsh prints
+ * for this case, followed by its rollback note. */
+const DSH_INCOMPATIBLE_OUTPUT = [
+  `dsh: installation rejected: ${MSTAR_SPEC} is incompatible with dsh ${FAKE_DSH_PROSE_TOKEN}: peerDependencies {"@deepseek-ai/dsh": "<previous-dsh-line>"}.`,
+  "dsh: to grant the exact-version exemption for this install, run `dsh plugin allow-version` or use the plugin manager.",
+  `dsh: to accept the risk, run: dsh plugin --profile web allow-version ${MSTAR_SPEC} --dsh-version ${FAKE_DSH_RUNTIME_TOKEN} --accept-risk`,
+  "dsh: restored package.json, pnpm-lock.yaml, and node_modules.",
+].join("\n");
 
 /** Empty loader tree: nothing installed. */
 const DUMP_EMPTY = "";
@@ -336,12 +366,14 @@ const DUMP_MALFORMED = [
 ].join("\n");
 
 describe("dsh-llm-fallbacks pin lockstep", () => {
-  test("engine export matches packages/dsh/package.json devDependency", () => {
+  test("the install spec's pin is the CLI manifest's declared value", () => {
     const repoRoot = resolve(CLI_ROOT, "..", "..");
-    const dshPkg = JSON.parse(readFileSync(join(repoRoot, "packages/dsh/package.json"), "utf8")) as {
-      devDependencies?: Record<string, string>;
+    const cliPkg = JSON.parse(readFileSync(join(repoRoot, "packages/cli/package.json"), "utf8")) as {
+      mstar?: Record<string, string>;
     };
-    expect(DSH_LLM_FALLBACKS_VERSION).toBe(dshPkg.devDependencies?.["dsh-llm-fallbacks"]);
+    // The install spec's pin is the CLI manifest's declared value — that is the
+    // contract the adapter depends on, not an equality between two constants.
+    expect(DSH_FALLBACKS_VERSION).toBe(cliPkg.mstar?.["dshLlmFallbacks"]);
   });
 });
 
@@ -441,7 +473,7 @@ describe("dshAdapter.runInstallInit", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; notes: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallInit?.("global", false);
       });
       expect(result).toBeDefined();
@@ -538,7 +570,46 @@ describe("dshAdapter.runInstallInit", () => {
         }
       });
       expect(String(error)).toContain(`Failed to install ${MSTAR_SPEC}`);
+      // A generic failure names no recovery: dsh printed none, and inventing
+      // one (flags, version) would be worse than saying nothing.
+      expect(String(error)).not.toContain("allow-version");
+      expect(String(error)).not.toContain("Recovery:");
       // The failing add was still attempted (argv recorded before the exit).
+      expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
+    } finally {
+      fake.remove();
+    }
+  });
+
+  test("incompatibility refusal: names spec, runtime version, and dsh's own allow-version recovery", () => {
+    const fake = makeFakeDsh(DUMP_EMPTY, { addExit: 1, addText: DSH_INCOMPATIBLE_OUTPUT });
+    try {
+      let error: unknown;
+      withPath(fake.binDir, () => {
+        try {
+          dshAdapter.runInstallInit?.("global", false);
+        } catch (e) {
+          error = e;
+        }
+      });
+      const message = String(error);
+      expect(message).toContain(MSTAR_SPEC);
+      // dsh's own incompatibility sentence survives verbatim (the peer range
+      // and the version it names are dsh's text, not ours).
+      expect(message).toContain(DSH_INCOMPATIBLE_OUTPUT.split("\n")[0]);
+      // Runtime version as dsh reported it (a non-semver host token, never a
+      // literal invented by this suite).
+      expect(message).toContain(FAKE_DSH_RUNTIME_TOKEN);
+      expect(message).toContain(FAKE_DSH_PROSE_TOKEN);
+      expect(message).toContain("incompatible");
+      // dsh's printed recovery command, quoted verbatim rather than reconstructed.
+      const recoveryLine = DSH_INCOMPATIBLE_OUTPUT.split("\n").find((line) => /dsh plugin --profile .* allow-version /.test(line));
+      expect(recoveryLine).toBeDefined();
+      expect(message).toContain(recoveryLine!);
+      // dsh's rollback note survives the refusal too.
+      expect(message).toContain("restored package.json, pnpm-lock.yaml, and node_modules.");
+      // The refusal is not the generic shape.
+      expect(message).not.toContain(`Failed to install ${MSTAR_SPEC}`);
       expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
     } finally {
       fake.remove();
@@ -579,7 +650,7 @@ describe("dshAdapter.runInstallDoctor", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -653,7 +724,7 @@ describe("dshAdapter.runInstallDoctor", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -671,7 +742,7 @@ describe("dshAdapter.runInstallDoctor", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_LLM_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -770,6 +841,21 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
     }
   });
 
+  test("incompatibility refusal surfaces dsh's recovery line and exits 1", { timeout: 30_000 }, () => {
+    const fake = makeFakeDsh(DUMP_EMPTY, { addExit: 1, addText: DSH_INCOMPATIBLE_OUTPUT });
+    try {
+      const result = runCli(["init", "--target", "dsh"], { env: fakePathEnv(fake) });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`Setup failed: Cannot install ${MSTAR_SPEC} via dsh`);
+      expect(result.stderr).toContain(FAKE_DSH_RUNTIME_TOKEN);
+      expect(result.stderr).toContain(
+        `dsh plugin --profile web allow-version ${MSTAR_SPEC} --dsh-version ${FAKE_DSH_RUNTIME_TOKEN} --accept-risk`,
+      );
+    } finally {
+      fake.remove();
+    }
+  });
+
   test("missing dsh bin: Setup failed + exit 1 (fail-loud, no silent skip)", { timeout: 30_000 }, () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "dsh-nobin-"));
     const gitPath = Bun.which("git");
@@ -794,7 +880,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
 
   test("both plugins mounted: DSH MCP is unavailable until Cordis config exists", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_BOTH);
-    seedProfileFallbacksPkg(fake.dshHome, DSH_LLM_FALLBACKS_VERSION);
+    seedProfileFallbacksPkg(fake.dshHome, DSH_FALLBACKS_VERSION);
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
       const data = responseData(result);
