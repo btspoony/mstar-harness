@@ -125,13 +125,15 @@ jobs:
           git tag -a -m "Release ${TAG}" "$TAG"
           git push origin "$TAG"
 
+      # The Release body is capped by GitHub at 125000 characters; a large
+      # release line exceeds it, so truncate with a pointer to CHANGELOG.md.
       - name: Extract changelog notes
         id: changelog
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           NOTES_FILE="${RUNNER_TEMP}/release-notes-${VERSION}.md"
-          bun run scripts/extract-changelog-section.ts "$VERSION" > "$NOTES_FILE"
+          bun run scripts/extract-changelog-section.ts "$VERSION" --max-bytes 120000 > "$NOTES_FILE"
           echo "notes_file=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release

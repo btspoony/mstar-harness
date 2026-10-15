@@ -79,8 +79,11 @@ jobs:
           npm pack --workspace @mstar-harness/cli --pack-destination /tmp/pack-out
           npm pack --workspace @mstar-harness/opencode --pack-destination /tmp/pack-out
 
+      # GitHub rejects a PR body over 65536 characters, so cap the inlined
+      # section (a major release line can be twice that). Truncation keeps a
+      # pointer to CHANGELOG.md instead of failing `gh pr create`.
       - name: Extract release notes
-        run: bun run scripts/extract-changelog-section.ts "${{ steps.ver.outputs.version }}" > /tmp/notes.md
+        run: bun run scripts/extract-changelog-section.ts "${{ steps.ver.outputs.version }}" --max-bytes 60000 > /tmp/notes.md
 
       - name: Commit prepared release
         run: |
