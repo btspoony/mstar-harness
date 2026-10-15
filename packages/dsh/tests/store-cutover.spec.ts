@@ -362,7 +362,7 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     // token is deliberately not a release-shaped version.
     expect(() => assertStoreRuntimeSupported({ isBun: true, version: '0.0.0-synthetic' })).not.toThrow()
     try {
-      assertStoreRuntimeSupported({ isBun: true, version: '1.4.0', hasSqlite: false })
+      assertStoreRuntimeSupported({ isBun: true, version: '0.0.0-synthetic', hasSqlite: false })
       throw new Error('expected the missing capability to be refused')
     } catch (error) {
       expect((error as StoreError).code).toBe('store.runtime-unsupported')
