@@ -35,15 +35,30 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 
 ## Install
 
-| Host | Install |
-|------|---------|
-| dsh (DeepSeek Harness) | `npx @mstar-harness/cli init --target dsh` — needs the `dsh` CLI on `PATH`; installs the plugin plus LLM fallbacks (`--no-fallbacks` skips the second) |
-| omp | `npx @mstar-harness/cli init --target omp` — needs the `omp` CLI installed |
-| OpenCode | `npx @mstar-harness/cli init --target opencode` — probes the installed `opencode` version: 1.x installs `@mstar-harness/opencode`, 2.x installs `@mstar-harness/opencode-v2` (override with `--opencode-generation`) |
-| Cursor | `npx @mstar-harness/cli init --target cursor` — creates a real plugin checkout, so `git` is required |
-| Kimi Code | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload` |
-| ZCode | `npx @mstar-harness/cli init --target zcode`, then install **morning-star-harness** from Settings → Plugin Management |
-| Codex | `npx @mstar-harness/cli init --target codex` — needs the `codex` CLI; registers the repo marketplace and adds `morning-star-harness@mstar-repo` |
+Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager. `init` also writes baseline config, runs the doctor checks, and adds the harness gitignore entries; the native command installs the plugin only. Use the native command when `init` is blocked — it bypasses this CLI entirely.
+
+`npx` can serve an older cached resolution, and every step of `init` follows the CLI that ran; add `@latest` (`npx @mstar-harness/cli@latest init …`) when you need the newest release. `init` states which CLI version it is.
+
+- **dsh (DeepSeek Harness)** — needs the `dsh` CLI on `PATH`
+  - CLI: `npx @mstar-harness/cli init --target dsh` — installs the plugin plus LLM fallbacks; `--no-fallbacks` skips the second
+  - Native: `dsh plugin --profile web add @mstar-harness/dsh`, then `dsh plugin --profile web add dsh-llm-fallbacks`
+- **omp** — needs the `omp` CLI installed
+  - CLI: `npx @mstar-harness/cli init --target omp`
+  - Native: `omp plugin install @mstar-harness/omp`
+- **OpenCode**
+  - CLI: `npx @mstar-harness/cli init --target opencode` — detects which plugin key the installed generation uses, and `--opencode-generation` overrides
+  - Native: add `@mstar-harness/opencode` to the singular `plugin` key, or `@mstar-harness/opencode-v2` to the plural `plugins` key, in `opencode.json`, then restart OpenCode
+- **Cursor** — needs `git`; Cursor does not load symlinked plugin directories
+  - CLI: `npx @mstar-harness/cli init --target cursor` — creates a real plugin checkout
+  - Native: `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`, then **Developer: Reload Window**
+- **Kimi Code** — no CLI target; install inside the Kimi TUI
+  - Native: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`
+- **ZCode**
+  - CLI: `npx @mstar-harness/cli init --target zcode` — registers the `mstar-local` marketplace
+  - Native: **Settings → Plugin Management → Discover** → install **morning-star-harness**
+- **Codex** — needs the `codex` CLI
+  - CLI: `npx @mstar-harness/cli init --target codex` — registers the repo marketplace and adds `morning-star-harness@mstar-repo`
+  - Native: `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo`
 
 `init` defaults to `--scope project` (`--scope global` installs host-wide, and Codex's global scope skips the seven slash-command skills; for dsh the flag has no effect — its profile is machine-global), and after a successful run it installs the matching `@mstar-harness/cli` version globally — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
 

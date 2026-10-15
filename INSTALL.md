@@ -44,6 +44,18 @@ Non-interactive preview:
 npx @mstar-harness/cli init --target opencode --dry-run --yes
 ```
 
+Without the CLI — add the published plugin package to `opencode.json` yourself, keyed by the slot that generation reads:
+
+```jsonc
+// singular `plugin` slot
+{ "plugin": ["@mstar-harness/opencode"] }
+
+// plural `plugins` slot
+{ "plugins": ["@mstar-harness/opencode-v2"] }
+```
+
+Restart OpenCode afterwards. This path installs the plugin only: it skips the harness gitignore entries and does not run `doctor`.
+
 ### Cursor
 
 Global (recommended for personal use):
@@ -66,6 +78,14 @@ npx @mstar-harness/cli doctor --target cursor --scope global
 ```
 
 Restart Cursor or run **Developer: Reload Window** after install.
+
+Without the CLI — clone the repo into the plugin path Cursor loads (a real directory, never a symlink):
+
+```bash
+git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness
+```
+
+This path installs the plugin only: it skips the harness gitignore entries and does not run `doctor`. Re-run `git pull` in that checkout to update it.
 
 **Layout note:** Cursor does **not** discover symlinked plugin directories. The CLI maintains a shared checkout at `~/.mstar/harness` and a **separate real git checkout** at the Cursor plugin path. See [Install path layout](#install-path-layout).
 

@@ -36,15 +36,30 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 ## 安装
 
-| 宿主 | 安装 |
-|------|------|
-| dsh（DeepSeek Harness） | `npx @mstar-harness/cli init --target dsh` —— 需要 PATH 上有 `dsh` CLI；会安装插件与 LLM fallbacks（`--no-fallbacks` 跳过后者） |
-| omp | `npx @mstar-harness/cli init --target omp` —— 需要已安装 `omp` CLI |
-| OpenCode | `npx @mstar-harness/cli init --target opencode` —— 探测已安装的 `opencode` 版本：1.x 安装 `@mstar-harness/opencode`，2.x 安装 `@mstar-harness/opencode-v2`（可用 `--opencode-generation` 覆盖） |
-| Cursor | `npx @mstar-harness/cli init --target cursor` —— 会创建真实的插件 checkout，需要 `git` |
-| Kimi Code | Kimi TUI：`/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload` |
-| ZCode | `npx @mstar-harness/cli init --target zcode`，再在 设置 → 插件管理 中安装 **morning-star-harness** |
-| Codex | `npx @mstar-harness/cli init --target codex` —— 需要 `codex` CLI；会注册仓库 marketplace 并添加 `morning-star-harness@mstar-repo` |
+每个宿主都有两条安装路径：本 CLI 的 `init` 流程，或宿主自带的插件管理器。`init` 还会写入基线配置、跑 doctor 检查、补上 harness 的 gitignore 条目；原生命令只装插件本身。`init` 被阻塞时用原生命令 —— 它完全绕过本 CLI。
+
+`npx` 可能命中较旧的缓存解析，而 `init` 的每一步都跟随实际运行的那个 CLI；需要最新版时加 `@latest`（`npx @mstar-harness/cli@latest init …`）。`init` 会打印自己运行的 CLI 版本。
+
+- **dsh（DeepSeek Harness）** —— 需要 PATH 上有 `dsh` CLI
+  - CLI：`npx @mstar-harness/cli init --target dsh` —— 安装插件与 LLM fallbacks；`--no-fallbacks` 跳过后者
+  - 原生：`dsh plugin --profile web add @mstar-harness/dsh`，再执行 `dsh plugin --profile web add dsh-llm-fallbacks`
+- **omp** —— 需要已安装 `omp` CLI
+  - CLI：`npx @mstar-harness/cli init --target omp`
+  - 原生：`omp plugin install @mstar-harness/omp`
+- **OpenCode**
+  - CLI：`npx @mstar-harness/cli init --target opencode` —— 自行判断已安装的代际使用哪个插件键；`--opencode-generation` 可覆盖
+  - 原生：单数 `plugin` 键写 `@mstar-harness/opencode`，复数 `plugins` 键写 `@mstar-harness/opencode-v2`；写入 `opencode.json` 后重启 OpenCode
+- **Cursor** —— 需要 `git`；Cursor 不会加载符号链接的插件目录
+  - CLI：`npx @mstar-harness/cli init --target cursor` —— 会创建真实的插件 checkout
+  - 原生：`git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`，然后 **Developer: Reload Window**
+- **Kimi Code** —— 无 CLI target；在 Kimi TUI 内安装
+  - 原生：`/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload`
+- **ZCode**
+  - CLI：`npx @mstar-harness/cli init --target zcode` —— 注册 `mstar-local` marketplace
+  - 原生：**设置 → 插件管理 → Discover** → 安装 **morning-star-harness**
+- **Codex** —— 需要 `codex` CLI
+  - CLI：`npx @mstar-harness/cli init --target codex` —— 注册仓库 marketplace 并添加 `morning-star-harness@mstar-repo`
+  - 原生：`codex plugin marketplace add btspoony/mstar-harness --ref main`，再执行 `codex plugin add morning-star-harness@mstar-repo`
 
 `init` 默认使用 `--scope project`（`--scope global` 装到宿主全局；Codex 的 global scope 不安装七条斜杠命令 skill；对 dsh 该参数不生效 —— 它的 profile 是机器全局的），成功后还会全局安装同版本的 `@mstar-harness/cli` —— 加 `--no-global-cli` 可跳过。用 `npx @mstar-harness/cli doctor --target <host>` 检查结果，它会同时报告 MCP 配置为 `aligned`、`mismatch` 或 `unavailable`。
 
