@@ -2,10 +2,6 @@
 name: prompt-engineer
 description: "Prompt Engineer - design and optimize prompts and skills for agents, including refactoring and debugging prompt systems."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   task:
     "*": deny

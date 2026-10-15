@@ -2,10 +2,6 @@
 name: ops-engineer
 description: "Ops Engineer - deployment, monitoring, and infrastructure operations, including CI/CD and observability."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   task:
     "*": deny

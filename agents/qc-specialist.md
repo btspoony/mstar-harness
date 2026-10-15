@@ -2,10 +2,6 @@
 name: qc-specialist
 description: "Quality Control Specialist (Reviewer #1) - code review (diff, logic, maintainability). Not a test runner."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   # `edit` covers write/patch/multiedit. Only `.md` under resolved `{SDD_DIR}/review/` bundle roots.
   edit:

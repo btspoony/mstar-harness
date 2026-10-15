@@ -2,10 +2,6 @@
 name: frontend-dev
 description: "Frontend Developer - pages/components/interactions/accessibility/frontend performance. This is the default frontend owner in fullstack work (split with `@fullstack-dev`) and the preferred role for pure UI tasks."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   task:
     "*": deny

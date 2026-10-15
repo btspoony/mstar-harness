@@ -2,10 +2,6 @@
 name: architect
 description: "Architect - system design, technical decisions, and technical documentation (architecture notes, ADRs, interface contracts)."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   bash:
     "*": allow

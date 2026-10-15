@@ -2,10 +2,6 @@
 name: fullstack-dev-2
 description: "Fullstack Developer (Track 2) - the second implementation track parallel to `@fullstack-dev` (independent modules/APIs/page islands). PM should assign this role when tasks can run in parallel or when acceleration is needed, with explicit module boundaries and branch ownership."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   task:
     "*": deny

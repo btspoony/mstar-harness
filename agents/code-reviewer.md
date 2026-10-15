@@ -2,10 +2,6 @@
 name: code-reviewer
 description: "Code Reviewer - SDD per-task review (L2) + codebase audit execution (audit). Read-only seat: does not implement, fix, or occupy a QC seat."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   # `edit` covers write/patch/multiedit. Only `.md` under resolved `{SDD_DIR}` review roots
   # and `{PLAN_DIR}` audit plan roots (`.md`-only mirrors the qc-specialist minimal-permission style).
