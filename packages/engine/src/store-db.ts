@@ -118,9 +118,13 @@ export type StoreRuntimeInfo = {
   hasSqlite?: boolean;
 };
 
+/** The runtime global is outside this build's ambient type map. One named view
+ * keeps the read checked at its use site; this is the module's only cast. */
+const RUNTIME_GLOBAL = globalThis as unknown as { Bun?: { version: string } };
+
 /** Read the actual runtime, preferring the Bun global over `process.versions.node` */
 export function detectStoreRuntime(): StoreRuntimeInfo {
-  const bun = (globalThis as { Bun?: { version: string } }).Bun;
+  const bun = RUNTIME_GLOBAL.Bun;
   if (bun) return { isBun: true, version: bun.version };
   return { isBun: false, version: process.versions.node ?? "0.0.0" };
 }

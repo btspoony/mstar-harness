@@ -24,7 +24,7 @@
           {
             "root": "packages/cli/src",
             "files": 36,
-            "sha256": "1ff893e8b608db0969b4dcccaf8b6654bbf87e94e2dd5df9411e2f70cfaf705b"
+            "sha256": "a65cd459402b6cfcf2e59cada5be610f0f87a4b09cbabbcc91f60a50b3abdf61"
           }
         ],
         "files": [
@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "5d86306001aaec7fb7fd4c37ffe461347f8c925baab48713d5ef6f781d3aef5a",
+            "sha256": "cd6bd5278bca8f3c14854beb9f5bb9e075399269919247e4e6a20f9bab29798c",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "57bf4e4242af780cef862ccf3864ce772874db2a1e84c4e7b9c52c7a1a80cb32"
+            "sha256": "20ff4056a8b14e0e4a0c80b9f717114bda4857e2d891b106361b3e4718ad24e4"
           }
         ]
       },
@@ -164,7 +164,7 @@
           {
             "root": "packages/engine/src",
             "files": 99,
-            "sha256": "9aec9c9c44d762770f178e1e2e164c2bf1787e31eb90a679168c30a6f3ff9ee7"
+            "sha256": "a67ec5bbcb8f6224b4006d39d3aab38440804a9e0982805555ed99a23da02b9a"
           }
         ],
         "files": [
@@ -183,7 +183,7 @@
           {
             "root": "packages/engine/dist",
             "files": 101,
-            "sha256": "bc2ce5a1a71a043844b66c7c6bb0babfb938906e8fe60cf9a620444ee4e2570f",
+            "sha256": "6919613068c24848af3a62c039fdd6cb856ee380e2257e22a612e95c9e140f27",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -196,7 +196,7 @@
           },
           {
             "path": "packages/engine/dist/engine.js",
-            "sha256": "2a355c97ba46c87ac53ffa052c3baf330f5b488dd9d40b8000e4980d1b6a036b"
+            "sha256": "9e3b289622e9edb148d81e5093ad07d1566d5378e3150276d0c5fe9505a1b30c"
           }
         ]
       },
@@ -452,7 +452,7 @@
           {
             "root": "packages/engine/src",
             "files": 99,
-            "sha256": "9aec9c9c44d762770f178e1e2e164c2bf1787e31eb90a679168c30a6f3ff9ee7"
+            "sha256": "a67ec5bbcb8f6224b4006d39d3aab38440804a9e0982805555ed99a23da02b9a"
           }
         ],
         "files": [
@@ -507,7 +507,7 @@
         "files": [
           {
             "path": "hooks/mstar-write-gate.mjs",
-            "sha256": "16bfaff5efedf35a60a2ea1502d30b59494b8484bef39ee76c14daeef5e7b983"
+            "sha256": "d01056e150aca3393de0e9e778945f6d547d9c391753881e61ade4ad1b5c740c"
           }
         ]
       },

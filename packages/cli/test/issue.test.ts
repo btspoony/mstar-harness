@@ -40,7 +40,7 @@ function cliEnv(): Record<string, string> {
   return env;
 }
 
-function runBundle(launcher: "bun-shebang" | "node", args: string[], cwd: string, extra: { nodeArgs?: string[] } = {}): RunResult {
+function runBundle(launcher: "shebang" | "node", args: string[], cwd: string, extra: { nodeArgs?: string[] } = {}): RunResult {
   const argv = launcher === "node" ? [NODE_BIN, ...(extra.nodeArgs ?? []), BUNDLE, ...args] : [BUNDLE, ...args];
   const proc = spawnSync(argv[0]!, argv.slice(1), {
     cwd,
@@ -111,19 +111,19 @@ describe("mstar issue CLI bundle", () => {
     expect(compareVersions(BUN_VERSION, MIN_BUN_VERSION)).toBeGreaterThanOrEqual(0);
   });
 
-  test("built bundle exists with bun shebang", () => {
+  test("the built bundle carries the Node shebang", () => {
     expect(existsSync(BUNDLE)).toBe(true);
     chmodSync(BUNDLE, 0o755);
-    expect(readFileSync(BUNDLE, "utf8").startsWith("#!/usr/bin/env bun")).toBe(true);
+    expect(readFileSync(BUNDLE, "utf8").startsWith("#!/usr/bin/env node")).toBe(true);
   });
 
   test("schema output discloses required and conditional issue payload fields", () => {
-    const schema = runBundle("bun-shebang", ["schema", "CaptureInput"], process.cwd());
+    const schema = runBundle("shebang", ["schema", "CaptureInput"], process.cwd());
     expect(schema.exitCode).toBe(0);
     const parsed = jsonOf(schema).data as { type: string; fields: Array<{ name: string; required: boolean; type: string }> };
     expect(parsed.type).toBe("CaptureInput");
     expect(parsed.fields).toContainEqual(expect.objectContaining({ name: "projectId", required: true, type: "string" }));
-    const closureSchema = runBundle("bun-shebang", ["schema", "ClosureEvidence"], process.cwd());
+    const closureSchema = runBundle("shebang", ["schema", "ClosureEvidence"], process.cwd());
     expect(closureSchema.exitCode).toBe(0);
     const closurePayload = jsonOf(closureSchema).data as {
       fields: Array<{ name: string; required: boolean; requiredWhen?: string[] }>;
@@ -145,18 +145,18 @@ describe("mstar issue CLI bundle", () => {
       required: false,
       requiredWhen: ["resolved", "waived"],
     });
-    const reopenSchema = runBundle("bun-shebang", ["schema", "IssueReopen"], process.cwd());
+    const reopenSchema = runBundle("shebang", ["schema", "IssueReopen"], process.cwd());
     expect(reopenSchema.exitCode).toBe(0);
     expect((jsonOf(reopenSchema).data as { fields: Array<{ name: string; required: boolean; nonblankWhenPresent?: boolean }> }).fields)
       .toContainEqual(expect.objectContaining({ name: "reason", required: true, nonblankWhenPresent: true }));
-    const commandSchema = runBundle("bun-shebang", ["schema", "--command", "issue.reopen"], process.cwd());
+    const commandSchema = runBundle("shebang", ["schema", "--command", "issue.reopen"], process.cwd());
     expect(commandSchema.exitCode).toBe(0);
     const descriptor = (jsonOf(commandSchema).data as { descriptor: { requirements: Array<Record<string, unknown>> } }).descriptor;
     expect(descriptor.requirements).toContainEqual(expect.objectContaining({
       name: "expect",
       tokenKind: "revision",
     }));
-    const reopenHelp = runBundle("bun-shebang", ["issue", "reopen", "--help"], process.cwd());
+    const reopenHelp = runBundle("shebang", ["issue", "reopen", "--help"], process.cwd());
     expect(`${reopenHelp.stdout}${reopenHelp.stderr}`).toContain("Exact current issue revision from `mstar issue");
   });
 
@@ -268,7 +268,7 @@ describe("mstar issue CLI bundle", () => {
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
   });
   test("unknown schema type is a usage refusal with available type names", () => {
-    const result = runBundle("bun-shebang", ["schema", "HandofffEvidence"], process.cwd());
+    const result = runBundle("shebang", ["schema", "HandofffEvidence"], process.cwd());
     expect(result.exitCode).toBe(2);
     const response = jsonOf(result);
     expect(response.status).toBe("usage");
@@ -279,7 +279,7 @@ describe("mstar issue CLI bundle", () => {
     const { root, harness } = await makeHarness();
     const firstFile = join(root, "issue.json");
     writeJson(firstFile, capturePayload());
-    const created = runBundle("bun-shebang", [
+    const created = runBundle("shebang", [
       "issue", "add", "--file", firstFile, "--operation-id", "link-setup-1", "--actor", "project-manager", "--harness", harness,
     ], root);
     expect(created.exitCode).toBe(0);
@@ -287,25 +287,25 @@ describe("mstar issue CLI bundle", () => {
 
     const secondFile = join(root, "second-issue.json");
     writeJson(secondFile, capturePayload({ rootCauseKey: "second-finding", occurrenceKey: "run-2" }));
-    const second = runBundle("bun-shebang", [
+    const second = runBundle("shebang", [
       "issue", "add", "--file", secondFile, "--operation-id", "link-setup-2", "--actor", "project-manager", "--harness", harness,
     ], root);
     expect(second.exitCode).toBe(0);
     expect((jsonOf(second).data as { issueId?: string }).issueId).toBe("I-000002");
 
-    const shown = runBundle("bun-shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
+    const shown = runBundle("shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
     expect(shown.exitCode).toBe(0);
     const expectedRevision = String((jsonOf(shown).data as { revision: number }).revision);
     const file = join(root, "link.json");
     writeJson(file, { relation: "related", issueId: "I-000002" });
-    const result = runBundle("bun-shebang", [
+    const result = runBundle("shebang", [
       "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
       "--operation-id", "link-related", "--actor", "project-manager", "--harness", harness,
     ], root);
     expect(result.exitCode).toBe(0);
     expect(jsonOf(result).status).toBe("ok");
     expect(jsonOf(result).data).toMatchObject({ revision: Number(expectedRevision) + 1 });
-    const stale = runBundle("bun-shebang", [
+    const stale = runBundle("shebang", [
       "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
       "--operation-id", "link-stale-revision", "--actor", "project-manager", "--harness", harness,
     ], root);
@@ -314,13 +314,13 @@ describe("mstar issue CLI bundle", () => {
     expect(String(jsonOf(stale).message)).toContain(
       "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
     );
-    const replay = runBundle("bun-shebang", [
+    const replay = runBundle("shebang", [
       "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
       "--operation-id", "link-related", "--actor", "project-manager", "--harness", harness,
     ], root);
     expect(replay.exitCode).toBe(0);
     expect(jsonOf(replay).data).toEqual(jsonOf(result).data);
-    const afterStale = runBundle("bun-shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
+    const afterStale = runBundle("shebang", ["issue", "show", "--id", "I-000001", "--harness", harness], root);
     expect(afterStale.exitCode).toBe(0);
     expect(jsonOf(afterStale).data).toMatchObject({ revision: Number(expectedRevision) + 1 });
   });
@@ -381,7 +381,7 @@ describe("mstar issue CLI bundle", () => {
     const { root, harness } = await makeHarness();
     const first = join(root, "cap.json");
     writeJson(first, capturePayload());
-    const add = runBundle("bun-shebang", [
+    const add = runBundle("shebang", [
       "issue",
       "add",
       "--file",
@@ -419,7 +419,7 @@ describe("mstar issue CLI bundle", () => {
       harness,
     ], root);
     expect(second.exitCode).toBe(0);
-    const shown = runBundle("bun-shebang", ["issue", "show", "--id", issueId, "--harness", harness], root);
+    const shown = runBundle("shebang", ["issue", "show", "--id", issueId, "--harness", harness], root);
     expect(shown.exitCode).toBe(0);
     const detail = jsonOf(shown).data as { occurrences: unknown[] };
     expect(detail.occurrences).toHaveLength(2);
@@ -522,9 +522,9 @@ describe("mstar issue CLI bundle", () => {
     ], root);
     expect(leaf.exitCode).toBe(1);
     expect(jsonOf(leaf).code).toBe("issue.scope-refused");
-    const empty = runBundle("bun-shebang", ["issue", "list", "--harness", harness], root);
+    const empty = runBundle("shebang", ["issue", "list", "--harness", harness], root);
     expect(jsonOf(empty).data).toMatchObject({ total: 0 });
-    const ok = runBundle("bun-shebang", [
+    const ok = runBundle("shebang", [
       "issue",
       "add",
       "--file",
@@ -543,7 +543,7 @@ describe("mstar issue CLI bundle", () => {
 
   test("CLI envelope exit behavior: success 0, domain 1, usage 2", async () => {
     const { root, harness } = await makeHarness();
-    const missing = runBundle("bun-shebang", ["issue", "show", "--id", "I-999999", "--harness", harness], root);
+    const missing = runBundle("shebang", ["issue", "show", "--id", "I-999999", "--harness", harness], root);
     expect(missing.exitCode).toBe(1);
     expect(jsonOf(missing).status).not.toBe("ok");
     const usage = runBundle("node", ["issue", "add", "--unknown-flag"], root);
@@ -554,7 +554,7 @@ describe("mstar issue CLI bundle", () => {
 
   test("invalid enum and argument handling", async () => {
     const { root, harness } = await makeHarness();
-    const listed = runBundle("bun-shebang", ["issue", "list", "--kind", "not-a-kind", "--harness", harness], root);
+    const listed = runBundle("shebang", ["issue", "list", "--kind", "not-a-kind", "--harness", harness], root);
     expect(listed.exitCode).toBe(2);
     expect(jsonOf(listed).code).toBe("command.invalid-input");
     const add = runBundle("node", ["issue", "add", "--harness", harness, "--actor", "project-manager", "--operation-id", "x"], root);
@@ -699,7 +699,7 @@ registerHooks({
   test("issue --help lists the frozen verb family without opening a store", () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-issue-family-help-"));
     roots.push(root);
-    const result = runBundle("bun-shebang", ["issue", "--help"], root);
+    const result = runBundle("shebang", ["issue", "--help"], root);
     expect(result.exitCode).toBe(0);
     for (const verb of ["add", "list", "show", "occurrence", "triage", "close", "waive", "duplicate", "supersede", "link", "export"]) {
       expect(result.stdout).toContain(verb);

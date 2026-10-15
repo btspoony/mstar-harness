@@ -17252,7 +17252,7 @@ function parsedInstant(value) {
   return Number.isFinite(instant) ? instant : null;
 }
 function detectStoreRuntime() {
-  const bun = globalThis.Bun;
+  const bun = RUNTIME_GLOBAL.Bun;
   if (bun)
     return { isBun: true, version: bun.version };
   return { isBun: false, version: process.versions.node ?? "0.0.0" };
@@ -29923,7 +29923,7 @@ var __create, __getProtoOf, __defProp2, __getOwnPropNames, __hasOwnProp, __toESM
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, MIN_BUN_VERSION = "1.4.0", MIN_NODE_VERSION = "24.18.0", DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, requireDriver, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, MIN_BUN_VERSION = "1.4.0", MIN_NODE_VERSION = "24.18.0", DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, requireDriver, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -35215,6 +35215,7 @@ var init_engine = __esm(() => {
           this.details = details;
       }
     };
+    RUNTIME_GLOBAL = globalThis;
     requireDriver = createRequire22(import.meta.url);
     MIGRATIONS = [
       { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },

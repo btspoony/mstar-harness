@@ -75,7 +75,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       exitCode: 1,
       message,
       recovery: code === "store.runtime-unsupported"
-        ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun mstar store upgrade --operator <name>. An existing store is untouched by this refusal, so nothing needs repair first."
+        ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup, mstar store migrate, mstar store activate or mstar store retire. An existing store is untouched by this refusal, so nothing needs repair first."
         : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
         ? "For a fresh workspace, run mstar harness scaffold then mstar store init; to preserve historical files, run mstar store upgrade --operator <name> --harness <control-root>."
         : code === "store.already-exists"

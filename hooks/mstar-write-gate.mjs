@@ -15646,7 +15646,7 @@ function parsedInstant(value) {
   return Number.isFinite(instant) ? instant : null;
 }
 function detectStoreRuntime() {
-  const bun = globalThis.Bun;
+  const bun = RUNTIME_GLOBAL.Bun;
   if (bun)
     return { isBun: true, version: bun.version };
   return { isBun: false, version: process.versions.node ?? "0.0.0" };
@@ -16266,6 +16266,7 @@ var MIN_BUN_VERSION = "1.4.0";
 var MIN_NODE_VERSION = "24.18.0";
 var DEFAULT_BUSY_TIMEOUT_MS = 5000;
 var StoreError;
+var RUNTIME_GLOBAL;
 var requireDriver;
 var MAX_BUSY_TIMEOUT_MS = 2147483647;
 var DATABASE_HEADER_BYTES = 100;
@@ -16863,6 +16864,7 @@ var init_store_db = __esm(() => {
         this.details = details;
     }
   };
+  RUNTIME_GLOBAL = globalThis;
   requireDriver = createRequire22(import.meta.url);
   MIGRATIONS = [
     { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
