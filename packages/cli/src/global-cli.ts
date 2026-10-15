@@ -101,8 +101,8 @@ export function formatVersionSkewWarning(version: string, latest: string | null)
   if (latest === null || latest === version) return null;
   return (
     `Warning: this CLI is ${CLI_PACKAGE}@${version}; the published latest is ${latest}. ` +
-    `A cached npx resolution can run an older CLI, and every step of this init follows the CLI that ran — ` +
-    `re-run with \`npx ${CLI_PACKAGE}@latest init …\`.`
+    `A cached npx resolution can run an older CLI, and every step of this init follows the CLI that ran \u2014 ` +
+    `re-run with \`npx ${CLI_PACKAGE}@latest init \u2026\`.`
   );
 }
 

@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   compareSemver,
-  DSH_FALLBACKS_SPEC,
-  DSH_FALLBACKS_VERSION,
+  dshFallbacksSpec,
+  dshFallbacksVersion,
   diagnoseZcodeHost,
   diagnoseOpencodeHost,
   diagnoseCodexHost,
@@ -455,7 +455,7 @@ describe("dsh host health", () => {
   test("discovers dsh diagnostics from a synthetic host root", () => {
     const root = fixture();
     writeJson(root, "profiles/web/node_modules/dsh-llm-fallbacks/package.json", {
-      version: DSH_FALLBACKS_VERSION,
+      version: dshFallbacksVersion(),
     });
     const profileDir = resolveDshProfileDir(root);
     expect(profileDir).toBe(path.join(root, "profiles", "web"));
@@ -465,16 +465,16 @@ describe("dsh host health", () => {
     expect(mounted.errors).toEqual([]);
     expect(mounted.notes).toEqual([
       "@mstar-harness/dsh: mounted",
-      `${DSH_FALLBACKS_SPEC}: mounted`,
+      `${dshFallbacksSpec()}: mounted`,
     ]);
 
     const disabled = diagnoseDshHost(dshProbe(DSH_DUMP_FALLBACKS_DISABLED), { dshHome: root });
     expect(disabled.notes).toEqual([
       "@mstar-harness/dsh: mounted",
-      `${DSH_FALLBACKS_SPEC}: disabled`,
+      `${dshFallbacksSpec()}: disabled`,
     ]);
     expect(disabled.errors).toEqual([
-      `${DSH_FALLBACKS_SPEC} is disabled. Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.`,
+      `${dshFallbacksSpec()} is disabled. Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.`,
     ]);
     expect(parseDshLoaderEntries(DSH_DUMP_FALLBACKS_DISABLED)?.find((entry) => entry.name === "dsh-llm-fallbacks")?.enabled)
       .toBe(false);
@@ -489,10 +489,10 @@ describe("dsh host health", () => {
     expect(missing.location).toBe(profileDir);
     expect(missing.notes).toEqual([
       "@mstar-harness/dsh: mounted",
-      `${DSH_FALLBACKS_SPEC}: drifted (installed unknown, pinned ${DSH_FALLBACKS_VERSION})`,
+      `${dshFallbacksSpec()}: drifted (installed unknown, pinned ${dshFallbacksVersion()})`,
     ]);
     expect(missing.errors).toEqual([
-      `${DSH_FALLBACKS_SPEC} is drifted (profile has unknown, harness pins ${DSH_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
+      `${dshFallbacksSpec()} is drifted (profile has unknown, harness pins ${dshFallbacksVersion()}). Run: mstar-harness init --target dsh`,
     ]);
 
     const unavailable = diagnoseDshHost(() => {

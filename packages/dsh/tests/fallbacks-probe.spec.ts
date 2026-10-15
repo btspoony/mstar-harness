@@ -7,13 +7,13 @@
  * the harness real-composition boot (`bootApp` + `ctx.plugin`): its EXACT
  * service-surface assertion is the executable STOP gate for caret-range
  * drift (a drifted resolver fails the version/surface check HERE, not
- * silently in production). Version pin is `DSH_FALLBACKS_VERSION` from
+ * silently in production). Version pin is `dshFallbacksVersion()` from
  * `@mstar-harness/engine` — bump it with the dsh package.json pin.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as fallbacks from 'dsh-llm-fallbacks'
-import { DSH_FALLBACKS_VERSION } from '@mstar-harness/commands'
+import { dshFallbacksVersion } from '@mstar-harness/commands'
 import { bootApp, FakeLoaderRegistry, type BootResult } from './harness.ts'
 import {
   FALLBACKS_ENTRY_NAME,
@@ -61,7 +61,7 @@ describe('fallbacks probe — mounted / unmounted / disabled', () => {
 
     expect(service!.name).toBe('llm-fallbacks')
     expect(typeof service!.version).toBe('string')
-    expect(service!.version).toBe(DSH_FALLBACKS_VERSION)
+    expect(service!.version).toBe(dshFallbacksVersion())
 
   })
 

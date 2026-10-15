@@ -43,7 +43,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
-import { DSH_FALLBACKS_SPEC, DSH_FALLBACKS_VERSION } from "@mstar-harness/commands";
+import { dshFallbacksSpec, dshFallbacksVersion } from "@mstar-harness/commands";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -232,7 +232,7 @@ function withDshHomeAndPath(
 }
 
 const MSTAR_SPEC = "@mstar-harness/dsh";
-const FALLBACKS_SPEC = DSH_FALLBACKS_SPEC;
+const FALLBACKS_SPEC = dshFallbacksSpec();
 
 /** Fixture runtime tokens: clearly not semver, printed verbatim by the fake
  * dsh as its own host output (no version literal is invented here). The two
@@ -461,7 +461,7 @@ describe("dshAdapter.runInstallInit", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; notes: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, dshFallbacksVersion(), () => {
         result = dshAdapter.runInstallInit?.("global", false);
       });
       expect(result).toBeDefined();
@@ -638,7 +638,7 @@ describe("dshAdapter.runInstallDoctor", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, dshFallbacksVersion(), () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -712,7 +712,7 @@ describe("dshAdapter.runInstallDoctor", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, dshFallbacksVersion(), () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -730,7 +730,7 @@ describe("dshAdapter.runInstallDoctor", () => {
     const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
     try {
       let result: { location: string; errors: string[]; notes?: string[] } | undefined;
-      withDshHomeAndPath(dshHome, fake, DSH_FALLBACKS_VERSION, () => {
+      withDshHomeAndPath(dshHome, fake, dshFallbacksVersion(), () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
@@ -868,7 +868,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
 
   test("both plugins mounted: DSH MCP is unavailable until Cordis config exists", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_BOTH);
-    seedProfileFallbacksPkg(fake.dshHome, DSH_FALLBACKS_VERSION);
+    seedProfileFallbacksPkg(fake.dshHome, dshFallbacksVersion());
     try {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
       const data = responseData(result);

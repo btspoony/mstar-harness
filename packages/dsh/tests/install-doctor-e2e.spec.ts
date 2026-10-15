@@ -43,7 +43,7 @@ import { FALLBACKS_ENTRY_NAME, fallbacksMounted } from '../src/gates/fallbacks-p
 import { setAdvisoryLogger, runFallbacksAdvisory, type AdvisoryLogLevel } from '../src/gates/fallbacks-advisory.ts'
 import type { SubagentRuntime, SubagentStartRequest } from '@deepseek-ai/dsh-subagent'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
-import { DSH_FALLBACKS_VERSION } from '@mstar-harness/commands'
+import { dshFallbacksVersion } from '@mstar-harness/commands'
 
 /** Repo root (packages/dsh/tests → up three levels). */
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -54,7 +54,7 @@ const DSH_PROFILE = 'web'
 /** The mstar plugin spec (doctor capability words). */
 const MSTAR_SPEC = '@mstar-harness/dsh'
 /** The fallbacks plugin spec (doctor capability words). */
-const FALLBACKS_SPEC = `dsh-llm-fallbacks@${DSH_FALLBACKS_VERSION}`
+const FALLBACKS_SPEC = `dsh-llm-fallbacks@${dshFallbacksVersion()}`
 /** A published release on the fallbacks generation boundary: the pin
  * (`dsh-llm-fallbacks@0.6.4`) rides the `^0.2.0-rc.1` peer cohort, while the
  * PREVIOUS release (0.5.2) predates it — installing it for real materializes
@@ -405,7 +405,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       expect(doctor.exitCode).toBe(1)
       expect(doctor.stdout).toContain(`${MSTAR_SPEC}: mounted`)
       expect(doctor.stdout).toContain(
-        `${FALLBACKS_SPEC}: drifted (installed ${PREVIOUS_FALLBACKS_VERSION}, pinned ${DSH_FALLBACKS_VERSION})`,
+        `${FALLBACKS_SPEC}: drifted (installed ${PREVIOUS_FALLBACKS_VERSION}, pinned ${dshFallbacksVersion()})`,
       )
       expect(doctor.stdout).toContain(`${FALLBACKS_SPEC} is drifted`)
       expect(doctor.stdout).toContain('Run: mstar-harness init --target dsh')

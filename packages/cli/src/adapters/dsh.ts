@@ -1,12 +1,12 @@
 import {
   DSH_BIN,
   DSH_DUMP_FLAG,
-  DSH_FALLBACKS_LOADER_NAME,
-  DSH_FALLBACKS_SPEC,
+  dshFallbacksLoaderName,
+  dshFallbacksSpec,
   DSH_HOME_ENV,
   DSH_HOME_SUBDIR,
   DSH_INSTALL_HINT,
-  DSH_PLUGIN_SPECS,
+  dshPluginSpecs,
   DSH_PROFILE,
   DSH_PROFILE_FLAG,
   DSH_PROFILES_DIR,
@@ -20,7 +20,7 @@ import {
 import { runCliCommand } from "../exec";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 
-export { DSH_FALLBACKS_LOADER_NAME, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
+export { dshFallbacksLoaderName, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
 
 // --- dsh CLI surface (probe-pinned 2026-08-17 on dsh 0.1.0-rc.6) ---
 // - `--profile <name>` is required and must precede the subcommand:
@@ -130,13 +130,13 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
     }
   }
 
-  for (const spec of DSH_PLUGIN_SPECS) {
-    if (spec === DSH_FALLBACKS_SPEC && initFlags?.noFallbacks) {
+  for (const spec of dshPluginSpecs()) {
+    if (spec === dshFallbacksSpec() && initFlags?.noFallbacks) {
       notes.push(`skipped-by-flag: ${spec} (--no-fallbacks)`);
       continue;
     }
     if (!dryRun && (installed.has(spec) || installed.has(dshLoaderName(spec)))) {
-      const isFallbacks = spec === DSH_FALLBACKS_SPEC;
+      const isFallbacks = spec === dshFallbacksSpec();
       const disabledRow = disabledLoaderNames.has(spec) || disabledLoaderNames.has(dshLoaderName(spec));
       // The enclosing condition already proved this spec's row is present, so
       // drift is the only reason to fall through to the versioned re-add.
@@ -187,7 +187,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   notes.push(`Profile: ${DSH_PROFILE} at ${profileDir}`);
   notes.push("Verify with: mstar-harness doctor --target dsh");
   notes.push(
-    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${DSH_PLUGIN_SPECS.join(
+    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${dshPluginSpecs().join(
       ` && ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add `,
     )}`,
   );
