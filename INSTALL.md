@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **CLI launch vs Node invocation** — the published `mstar-harness` binary is a Bun shebang script (`#!/usr/bin/env bun`): normal launch needs **Bun >=1.4.0** on PATH. Explicit `node dist/mstar-harness.js` needs **Node >=24.18.0**. A package runner is **not** a runtime: `npx` / `bunx` fetch the package and then execute that same Bun-shebang bin, so they need **Bun >=1.4.0** on PATH as well; a Node-only machine uses the explicit `node` invocation instead ([Recommended: CLI install](#recommended-cli-install)). Do not install both runtimes solely because this document lists both entrypoints. Bun-hosted host plugins (dsh, omp, OpenCode build) need Bun `>=1.4.0`; a native Node host process is a Node entry, not an extra Bun demand.
+- **Node.js >=24.18.0** — the published `mstar-harness` binary is a Node script (`#!/usr/bin/env node`), so every launch form — plain `mstar-harness`, `npx @mstar-harness/cli …`, and the explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js …` — executes that same entrypoint on the Node runtime on PATH. A package runner is **not** a runtime: it fetches the package and then executes the bin with the Node already installed. That Node must provide the native `node:sqlite` module (>=24.18.0); no fallback driver exists. Host plugins (dsh, omp, OpenCode) run inside their own host process, not in the CLI.
 - Target host installed:
   - [OpenCode](https://opencode.ai)
   - [Cursor](https://cursor.com)
@@ -20,11 +20,9 @@ Package: `@mstar-harness/cli` (command: `mstar-harness`).
 
 ```bash
 npx @mstar-harness/cli init
-# or
-bunx @mstar-harness/cli init
 ```
 
-Both commands execute the published bin through its `#!/usr/bin/env bun` shebang, so **Bun >=1.4.0 must already be on PATH** — the package runner fetches the package, it does not supply the runtime. On a Node-only machine, install the package and run the same entrypoint with Node instead (floor **Node >=24.18.0**); this form replaces every `npx @mstar-harness/cli …` command in this document, with identical verbs and flags:
+`npx` fetches the package and then executes the published bin through its `#!/usr/bin/env node` shebang, so **Node >=24.18.0 must already be on PATH** — the runner fetches the package, it does not supply the runtime. The equivalent explicit form replaces every `npx @mstar-harness/cli …` command in this document, with identical verbs and flags:
 
 ```bash
 npm install @mstar-harness/cli
@@ -176,7 +174,7 @@ Or install/link directly:
 omp plugin install @mstar-harness/omp
 # maintainer / local checkout (needs a local build first):
 # omp plugin link ~/.mstar/harness/packages/omp
-#   (run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout)
+#   (the linked tree needs its own build first — see packages/omp/README.md → Maintainers / local checkouts)
 ```
 
 Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
@@ -240,7 +238,7 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
 ## Installing the MCP tools
 
-All seven hosts launch the CLI with `npx @mstar-harness/cli mcp`: six JSON-backed host configs (OpenCode's is injected through its plugin `config` hook rather than read as a static file) plus DSH's shipped Cordis profile row (see the dsh row below). The `npx` form executes the published bin through its Bun shebang, so it needs **Bun >=1.4.0** on PATH; the explicit `node <CLI bundle> mcp` form needs **Node >=24.18.0** ([Prerequisites](#prerequisites)).
+All seven hosts launch the CLI with `npx @mstar-harness/cli mcp`: six JSON-backed host configs (OpenCode's is injected through its plugin `config` hook rather than read as a static file) plus DSH's shipped Cordis profile row (see the dsh row below). The published bin is a Node-shebang entry, so the runner executes it on the Node already on PATH and needs **Node >=24.18.0** ([Prerequisites](#prerequisites)).
 
 | Host | Native install | MCP configuration |
 |------|----------------|-------------------|
@@ -256,7 +254,7 @@ There is no separate MCP package, committed per-host stdio bundle, or native bri
 
 The MCP context contract is host-neutral: optional `host` selects context validated against existing supported-host definitions; it is not a role or authority grant. `sessionId` denotes the main conversation session. The interface neither requires nor provides per-call child-agent attribution; existing shared-handler workflow ownership, path, state-transition, and CAS checks remain authoritative.
 
-Use `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` to inspect the selected target (Codex also supports `--scope <global|project>`). **Aligned** means the host's MCP config launches the CLI subcommand with the expected arguments; **mismatch** means those launch settings or the detected runtime (Bun / Node.js floor) differ; **unavailable** means the MCP config is missing or unreadable. Doctor does not spawn the MCP server, open `store.db`, refresh an installed plugin, or prove that the host loaded it.
+Use `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` to inspect the selected target (Codex also supports `--scope <global|project>`). **Aligned** means the host's MCP config launches the CLI subcommand with the expected arguments; **mismatch** means those launch settings or the detected runtime (Node.js floor) differ; **unavailable** means the MCP config is missing or unreadable. Doctor does not spawn the MCP server, open `store.db`, refresh an installed plugin, or prove that the host loaded it.
 OpenCode's package plugin injects the server definition at runtime; DSH's row ships in its bundle patch and loads through the `@deepseek-ai/dsh-mcp-client` bridge plugin. The six JSON-backed configs and the OpenCode dynamic hook use host-native shapes.
 
 Development evidence is the targeted unit/component/integration evidence for the CLI server and host config. Installed-host, browser, device, and live-service verification is a separate authorized activity, not a development acceptance gate; these instructions do not claim such a run.
@@ -282,7 +280,7 @@ Add to `opencode.json` (global or project):
 
 Restart OpenCode.
 
-The OpenCode plugin resolves **skills and agents only inside `@mstar-harness/opencode`** (not `process.cwd()`). Published builds ship `harness-skills/` and `harness-agents/`. If you work from a **git checkout** of this repo, run **`bun install` / `npm install` at the repo root**, then **`bun run opencode:bundle-assets && bun run dsh:bundle-assets`** once to populate those directories under `packages/opencode/` (and the dsh mirrors).
+The OpenCode plugin resolves **skills and agents only inside `@mstar-harness/opencode`** (not `process.cwd()`). Published builds ship `harness-skills/` and `harness-agents/`. If you work from a **git checkout** of this repo, install at the repo root and run the root scripts **`opencode:bundle-assets`** and **`dsh:bundle-assets`** once to populate those directories under `packages/opencode/` (and the dsh mirrors); the repository's development toolchain for those scripts is named in [`AGENTS.md`](AGENTS.md).
 
 Detailed OpenCode setup, migration, and troubleshooting: [`packages/opencode/INSTALL.md`](packages/opencode/INSTALL.md).
 
@@ -418,7 +416,7 @@ Or install/link directly with the omp CLI:
 omp plugin install @mstar-harness/omp
 # local checkout / maintainer link (needs a local build first):
 # omp plugin link ~/.mstar/harness/packages/omp
-#   (run `bun install && bun run engine:build && bun run --cwd packages/omp build` in the checkout)
+#   (the linked tree needs its own build first — see packages/omp/README.md → Maintainers / local checkouts)
 omp plugin list
 ```
 
@@ -484,11 +482,11 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
 
 | Host | What still holds the 3.x copy | Refresh |
 | --- | --- | --- |
-| CLI | the global npm install | `npm i -g @mstar-harness/cli@latest` (or keep using `npx`/`bunx`, which fetches the current release on every run) |
+| CLI | the global npm install | `npm i -g @mstar-harness/cli@latest` (or keep using `npx`, which fetches the current release on every run) |
 | Cursor | the plugin checkout at `~/.cursor/plugins/local/morning-star-harness` (global) or `.cursor/plugins/morning-star-harness` (project) | re-run `npx @mstar-harness/cli init --target cursor --scope <global\|project>` — its adapter `git pull --ff-only`s that checkout — or pull it yourself: `git -C <checkout> pull --ff-only` |
 | Codex | the shared `~/.mstar/harness` checkout (the agent `.toml` source, which `init` does **not** pull) and codex's own marketplace snapshot | `git -C ~/.mstar/harness pull --ff-only`, then `codex plugin marketplace upgrade`, then `codex plugin add morning-star-harness@mstar-repo`, then re-run `npx @mstar-harness/cli init --target codex --scope <global\|project>` to re-copy the agent files — re-running `init` alone keeps the old sources ([Codex: agent files](#codex-agent-files)) |
 | ZCode | the plugin copy installed from the `mstar-local` marketplace (a 3.x snapshot) | re-run `npx @mstar-harness/cli init --target zcode` to rewrite the marketplace catalogs, then reinstall **morning-star-harness** in ZCode (**Settings → Plugin Management → Discover**); ZCode refreshes a `github`-source marketplace itself |
-| omp | the linked `~/.mstar/harness` tree: `init` pulls that checkout and re-links `packages/omp`, but runs the build only when `packages/omp/plugin.json` is **absent** (`adapters/omp.ts:110-132`), so an existing linked 3.x tree keeps its old generated `dist`/mirrors | `git -C ~/.mstar/harness pull --ff-only`, then rebuild that checkout in place — `bun install && bun run engine:build && bun run --cwd packages/omp build` — then `npx @mstar-harness/cli init --target omp` (or `omp plugin link ~/.mstar/harness/packages/omp`); `omp plugin install @mstar-harness/omp` installs the published package instead |
+| omp | the linked `~/.mstar/harness` tree: `init` pulls that checkout and re-links `packages/omp`, but runs the build only when `packages/omp/plugin.json` is **absent** (`adapters/omp.ts:110-132`), so an existing linked 3.x tree keeps its old generated `dist`/mirrors | `git -C ~/.mstar/harness pull --ff-only`, then rebuild that checkout in place with the repository's development toolchain ([`packages/omp/README.md`](packages/omp/README.md) → Maintainers / local checkouts) — then `npx @mstar-harness/cli init --target omp` (or `omp plugin link ~/.mstar/harness/packages/omp`); `omp plugin install @mstar-harness/omp` installs the published package instead |
 | OpenCode | the config row `@mstar-harness/opencode@latest`, resolved by the host at load | re-run `npx @mstar-harness/cli init --target opencode`, then restart OpenCode |
 | dsh | the profile row installed at the 3.x version — re-running `init` reports `skipped-existing` and leaves it | `dsh plugin --profile web add @mstar-harness/dsh` (the same command contract the CLI runs; `init` does re-add the pinned `dsh-llm-fallbacks` row when that one has drifted) |
 | Kimi | the managed copy under `$KIMI_CODE_HOME/plugins/managed/` | in the Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload` |

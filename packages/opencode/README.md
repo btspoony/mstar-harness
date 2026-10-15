@@ -4,7 +4,7 @@ Morning Star harness plugin for [OpenCode](https://opencode.ai).
 
 Install this package via OpenCode’s `plugin` array — it bundles `mstar-*` skills, role agents, and iteration commands so multi-role workflows (PM routing, SDD implement, QC tri-review, iteration lifecycle) work the same way as in the Cursor and Codex plugins.
 
-Development and asset bundling use **Bun >=1.4.0**. The published plugin is a `--target node` bundle for the OpenCode host process — that is a Node entry with a **Node >=24.18.0** floor (`node:sqlite`), not a second demand to install Bun on every OpenCode user machine. Do not treat CLI shebang launch and this plugin entry as “must have both runtimes”: they are two entrypoints with two floors — this plugin is the Node one, the installer CLI below is the Bun-shebang one.
+The published plugin is a `--target node` bundle for the OpenCode host process — a Node entry with a **Node >=24.18.0** floor (`node:sqlite`). The installer CLI is the same Node entrypoint with the same floor, including when it is invoked through `npx`: one runtime requirement covers both, and neither asks you to install a second runtime.
 
 ## Install
 
@@ -24,7 +24,7 @@ Or use the installer CLI:
 npx @mstar-harness/cli init --target opencode
 ```
 
-That command executes the CLI’s Bun-shebang bin, so it needs **Bun >=1.4.0** on PATH — `npx` fetches the package but does not supply the runtime. On a Node-only machine run the installed bundle under Node instead: `node node_modules/@mstar-harness/cli/dist/mstar-harness.js init --target opencode`.
+That command executes the CLI's Node-shebang bin, so it needs **Node >=24.18.0** on PATH — `npx` fetches the package but does not supply the runtime. The equivalent explicit form is `node node_modules/@mstar-harness/cli/dist/mstar-harness.js init --target opencode`.
 
 **OpenCode 2.x hosts:** this package targets the OpenCode 1.x plugin API (`@opencode-ai/plugin` 1.4.8) — on OpenCode 2.x install [`@mstar-harness/opencode-v2`](../opencode-v2/README.md) instead. The installer selects the generation from your host version (`opencode --version`); pass `--opencode-generation <v1|v2>` to override.
 

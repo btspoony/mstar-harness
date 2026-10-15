@@ -5,7 +5,7 @@ This package (`@mstar-harness/opencode-v2`) is the OpenCode 2.x entry. OpenCode 
 ## Prerequisites
 
 - [OpenCode.ai](https://opencode.ai) **2.x** installed — the `opencode` CLI must be on `PATH` for a real (non-`--dry-run`) install: the installer refuses a real install when the host binary is missing, naming the OpenCode install, before any config is written.
-- **Runtime:** the published plugin runs in OpenCode's Node process and needs **Node >=24.18.0** (`node:sqlite`). Monorepo `bundle-assets` / `bun build` need **Bun >=1.4.0**. Users who only install from npm do not need Bun in addition to OpenCode. The CLI's Bun shebang is a different entrypoint — it needs **Bun >=1.4.0** on PATH even when invoked through `npx`.
+- **Runtime:** the published plugin runs in OpenCode's Node process and needs **Node >=24.18.0** (`node:sqlite`). The installer CLI is the same Node entrypoint with the same floor, including when it is invoked through `npx`; no second runtime is involved for either entry. Building this monorepo from source is development work with its own documented setup.
 
 ## Installation
 

@@ -15646,7 +15646,7 @@ function parsedInstant(value) {
   return Number.isFinite(instant) ? instant : null;
 }
 function detectStoreRuntime() {
-  const bun = globalThis.Bun;
+  const bun = RUNTIME_GLOBAL.Bun;
   if (bun)
     return { isBun: true, version: bun.version };
   return { isBun: false, version: process.versions.node ?? "0.0.0" };
@@ -15664,11 +15664,12 @@ function compareVersions(a, b) {
 function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
   const kind = info.isBun ? "Bun" : "Node";
   const floor = info.isBun ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
-    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime (https://bun.sh or https://nodejs.org). No fallback runtime or driver is supported.`);
+    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
   }
   if (compareVersions(info.version, floor) < 0) {
-    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on Bun >=${MIN_BUN_VERSION} or Node >=${MIN_NODE_VERSION}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (https://bun.sh or https://nodejs.org). No older-runtime fallback exists and Node 18 compatibility is not a supported contract.`);
+    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind} >=${floor}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
   }
 }
 async function loadSqliteDriver() {
@@ -16265,6 +16266,7 @@ var MIN_BUN_VERSION = "1.4.0";
 var MIN_NODE_VERSION = "24.18.0";
 var DEFAULT_BUSY_TIMEOUT_MS = 5000;
 var StoreError;
+var RUNTIME_GLOBAL;
 var requireDriver;
 var MAX_BUSY_TIMEOUT_MS = 2147483647;
 var DATABASE_HEADER_BYTES = 100;
@@ -16862,6 +16864,7 @@ var init_store_db = __esm(() => {
         this.details = details;
     }
   };
+  RUNTIME_GLOBAL = globalThis;
   requireDriver = createRequire22(import.meta.url);
   MIGRATIONS = [
     { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },

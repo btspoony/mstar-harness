@@ -27,6 +27,7 @@ import {
   MIN_NODE_VERSION,
   SCHEMA_VERSION_TABLE_SQL,
   StoreError,
+  type StoreRuntimeInfo,
   assertStoreRuntimeSupported,
   compareVersions,
   initializeStore,
@@ -88,6 +89,27 @@ describe("store-db runtime floors (actual versions)", () => {
     );
     expect(() => assertStoreRuntimeSupported({ isBun: true, version: MIN_BUN_VERSION })).not.toThrow();
     expect(() => assertStoreRuntimeSupported({ isBun: false, version: MIN_NODE_VERSION })).not.toThrow();
+  });
+
+  test("a Node refusal names only the Node floor and no other runtime", () => {
+    const probes: readonly { info: StoreRuntimeInfo; names: RegExp }[] = [
+      { info: { isBun: false, version: "24.17.9" }, names: /Node >=24\.18\.0/ },
+      { info: { isBun: false, version: "24.18.0", hasSqlite: false }, names: /node:sqlite/ },
+    ];
+    for (const { info, names } of probes) {
+      const message = (() => {
+        try {
+          assertStoreRuntimeSupported(info);
+        } catch (error) {
+          return (error as Error).message;
+        }
+        throw new Error(`expected a runtime refusal for ${info.version}`);
+      })();
+      expect(message).toMatch(names);
+      expect(message).not.toMatch(/[Bb]un/);
+    }
+    // A Bun-hosted plugin host keeps its own floor; a Node entry never sees it.
+    expect(() => assertStoreRuntimeSupported({ isBun: true, version: "1.3.14" })).toThrow(/Bun >=1\.4\.0/);
   });
 });
 

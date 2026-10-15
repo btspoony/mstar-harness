@@ -118,9 +118,13 @@ export type StoreRuntimeInfo = {
   hasSqlite?: boolean;
 };
 
+/** The runtime global is outside this build's ambient type map. One named view
+ * keeps the read checked at its use site; this is the module's only cast. */
+const RUNTIME_GLOBAL = globalThis as unknown as { Bun?: { version: string } };
+
 /** Read the actual runtime, preferring the Bun global over `process.versions.node` */
 export function detectStoreRuntime(): StoreRuntimeInfo {
-  const bun = (globalThis as { Bun?: { version: string } }).Bun;
+  const bun = RUNTIME_GLOBAL.Bun;
   if (bun) return { isBun: true, version: bun.version };
   return { isBun: false, version: process.versions.node ?? "0.0.0" };
 }
@@ -142,23 +146,28 @@ export function compareVersions(a: string, b: string): number {
  * nothing.
  */
 export function assertStoreRuntimeSupported(info: StoreRuntimeInfo = detectStoreRuntime()): void {
+  // Each runtime's refusal names only its own floor and home: the published CLI
+  // entrypoint is a Node entry (its shebang), so Bun floors are reachable only
+  // from a Bun-hosted plugin host or a development run — never rendered as a
+  // CLI user's requirement.
   const kind = info.isBun ? "Bun" : "Node";
   const floor = info.isBun ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
     throw new StoreError(
       "store.runtime-unsupported",
       `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. ` +
         `The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime ` +
-        `(https://bun.sh or https://nodejs.org). No fallback runtime or driver is supported.`,
+        `(${runtimeHome}). No fallback runtime or driver is supported.`,
     );
   }
   if (compareVersions(info.version, floor) < 0) {
     throw new StoreError(
       "store.runtime-unsupported",
       `${kind} ${info.version} is below the issue-store floor. The store requires the native ` +
-        `"node:sqlite" module on Bun >=${MIN_BUN_VERSION} or Node >=${MIN_NODE_VERSION}; found ${kind} ` +
-        `${info.version}. Upgrade the runtime for this entrypoint (https://bun.sh or https://nodejs.org). ` +
-        `No older-runtime fallback exists and Node 18 compatibility is not a supported contract.`,
+        `"node:sqlite" module on ${kind} >=${floor}; found ${kind} ${info.version}. Upgrade the runtime ` +
+        `for this entrypoint (${runtimeHome}). No older-runtime fallback exists` +
+        `${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`,
     );
   }
 }

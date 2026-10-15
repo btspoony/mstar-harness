@@ -150,7 +150,7 @@ Every host ships a launch configuration for the same server command:
 | ZCode | `.zcode-plugin/mcp.json` (`mcpServers`, stdio) |
 | dsh | The shipped Cordis profile row `mstar-mcp` (server name `mstar`), which loads `npx -y @mstar-harness/cli mcp` through the `@deepseek-ai/dsh-mcp-client` bridge plugin. The row is inert unless that plugin is present in the profile's dependencies (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`); `init` does not install it. |
 
-The JSON configs and OpenCode's hook launch the CLI with `npx @mstar-harness/cli mcp`, so they execute the published bin through its Bun shebang and need **Bun >=1.4.0** on PATH; the explicit `node <CLI bundle> mcp` form needs **Node >=24.18.0**. Install commands and per-host config details → [`INSTALL.md` — Installing the MCP tools](../INSTALL.md#installing-the-mcp-tools).
+The JSON configs and OpenCode's hook launch the CLI with `npx @mstar-harness/cli mcp`, so they execute the published Node-shebang bin on the Node already on PATH and need **Node >=24.18.0** (the explicit `node <CLI bundle> mcp` form is equivalent). Install commands and per-host config details → [`INSTALL.md` — Installing the MCP tools](../INSTALL.md#installing-the-mcp-tools).
 
 Context and limits:
 
@@ -161,7 +161,7 @@ Context and limits:
 
 ## Runtime and enforcement
 
-**Runtime floors.** The published `mstar-harness` bin is a Bun shebang script (`#!/usr/bin/env bun`): a normal launch — including `npx` / `bunx`, which fetch the package but still execute that same bin — needs **Bun >=1.4.0** on PATH. An explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>` needs **Node >=24.18.0**. The store uses native `node:sqlite`, which is why the Node floor exists and why there is no fallback for older runtimes. Bun-hosted host plugins run on Bun; a native Node host process is a Node entry. The floors are per-entrypoint, not a demand to install both runtimes. `mstar-harness doctor` checks the runtime that executes it against the matching floor.
+**Runtime floors.** The published `mstar-harness` bin is a Node script (`#!/usr/bin/env node`): every launch form — a plain invocation, `npx @mstar-harness/cli …`, and the explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js <verb>` — executes that same entrypoint on the Node on PATH and needs **Node >=24.18.0**. The store uses native `node:sqlite`, which is why the floor exists and why there is no fallback driver for older runtimes. Host plugins (dsh, omp, OpenCode) run inside their own host process, not in the CLI. `mstar-harness doctor` checks the Node runtime that executes it against the floor.
 
 **Enforcement is opt-in.** The engine validates in warn-only mode by default. Blocking requires an explicit hard setting: `.mstarc` `enforcement=hard` for a repository, or an iteration compass / Assignment header flag for one unit of work. Priority and rollback are owned by `mstar-conventions` (`soft` in `.mstarc` rolls back a hard compass). Where a host cannot refuse an action, the gate degrades to a warning — it never claims to have blocked.
 

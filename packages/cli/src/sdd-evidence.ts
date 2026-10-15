@@ -156,10 +156,17 @@ function v1Limits(timeoutMs: number = TIMEOUT_DEFAULT_MS): EvidenceLimits {
   };
 }
 
-/** Runtime metadata string: never launches a version probe. */
+/** Runtime metadata string: never launches a version probe. Records the
+ * runtime that ACTUALLY executed the supervisor, so a from-source capture
+ * identifies its runner instead of reporting that runner's emulated Node
+ * version as if it were the entry; the published bundle runs on Node and
+ * records `node=` alone. The runtime global is outside this build's ambient
+ * type map, so one named view keeps the read checked at its use site. */
+const RUNTIME_GLOBAL = globalThis as unknown as { Bun?: { version?: string } };
+
 function runnerRuntimeVersion(): string {
-  const bunVersion = (globalThis as { Bun?: { version?: string } }).Bun?.version;
-  return `node=${process.version};bun=${bunVersion ?? "absent"}`;
+  const runner = RUNTIME_GLOBAL.Bun?.version;
+  return runner === undefined ? `node=${process.version}` : `runtime=${runner};node=${process.version}`;
 }
 
 function signalExitNumber(signal: string): number {
