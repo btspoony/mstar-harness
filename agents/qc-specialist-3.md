@@ -8,6 +8,12 @@ permission:
     "*": deny
     ".mstar/sdd/*.md": allow
     ".mstar/sdd/**/*.md": allow
+    ".agents/sdd/*.md": allow
+    ".agents/sdd/**/*.md": allow
+    ".worktrees/**/.mstar/sdd/*.md": allow
+    ".worktrees/**/.mstar/sdd/**/*.md": allow
+    ".worktrees/**/.agents/sdd/*.md": allow
+    ".worktrees/**/.agents/sdd/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only) — L3 is diff review; no test/build/lint CLIs (peer QC share worktree)

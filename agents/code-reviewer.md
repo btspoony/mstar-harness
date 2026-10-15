@@ -9,8 +9,20 @@ permission:
     "*": deny
     ".mstar/sdd/*.md": allow
     ".mstar/sdd/**/*.md": allow
+    ".agents/sdd/*.md": allow
+    ".agents/sdd/**/*.md": allow
+    ".worktrees/**/.mstar/sdd/*.md": allow
+    ".worktrees/**/.mstar/sdd/**/*.md": allow
+    ".worktrees/**/.agents/sdd/*.md": allow
+    ".worktrees/**/.agents/sdd/**/*.md": allow
     ".mstar/plans/*.md": allow
     ".mstar/plans/**/*.md": allow
+    ".agents/plans/*.md": allow
+    ".agents/plans/**/*.md": allow
+    ".worktrees/**/.mstar/plans/*.md": allow
+    ".worktrees/**/.mstar/plans/**/*.md": allow
+    ".worktrees/**/.agents/plans/*.md": allow
+    ".worktrees/**/.agents/plans/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only) — L2 diff review + audit recon; no test/build/lint CLIs
