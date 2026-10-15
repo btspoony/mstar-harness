@@ -20,9 +20,10 @@ name: Release
 # `id-token: write` + `contents: write` could publish an unmerged tree, so the
 # publish path is reachable only through a merged `release vX.Y.Z` PR.
 # A release that fails after some packages published is recovered by preparing
-# the next patch release (`bun run release:prepare -- --patch`), which publishes
-# the remaining packages under the new version; the preflight below always skips
-# a version that is already on the registry.
+# the next patch release: that release publishes the FULL package set at the new
+# version (the packages that already succeeded at the failed version included),
+# so it supersedes the partial state instead of patching it. The preflight below
+# skips only versions that are already on the registry in the run it classifies.
 #
 # NOTE: npm trusted publishing / provenance now runs on the pull_request event
 # instead of push:tags. The workflow filename (`.github/workflows/release.yml`)
