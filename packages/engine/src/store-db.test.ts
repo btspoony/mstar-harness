@@ -119,9 +119,17 @@ describe("store-db runtime floors (declared manifest floor)", () => {
   });
 
   test("a Node refusal names only the Node floor and no other runtime", () => {
+    // Same manifest read as the sibling test: the floor value is the manifest's,
+    // so no version literal is restated here.
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+      engines?: { node?: string };
+    };
+    const floor = (manifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+    if (floor === "") throw new Error("the engine manifest declares no engines.node floor");
+    const belowFloor = `${Number.parseInt(floor.split(".")[0]!, 10) - 1}.0.0`;
     const probes: readonly { info: StoreRuntimeInfo; names: RegExp }[] = [
-      { info: { isBun: false, version: "24.17.9" }, names: /Node >=24\.18\.0/ },
-      { info: { isBun: false, version: "24.18.0", hasSqlite: false }, names: /node:sqlite/ },
+      { info: { isBun: false, version: belowFloor }, names: new RegExp(`Node >=${floor.replaceAll(".", "\\.")}`) },
+      { info: { isBun: false, version: floor, hasSqlite: false }, names: /node:sqlite/ },
     ];
     for (const { info, names } of probes) {
       const message = (() => {
@@ -135,8 +143,9 @@ describe("store-db runtime floors (declared manifest floor)", () => {
       expect(message).toMatch(names);
       expect(message).not.toMatch(/[Bb]un/);
     }
-    // A Bun-hosted plugin host keeps its own floor; a Node entry never sees it.
-    expect(() => assertStoreRuntimeSupported({ isBun: true, version: "1.3.14" })).toThrow(/Bun >=1\.4\.0/);
+    // Bun is a development toolchain and carries no version floor: only the
+    // native-sqlite capability gates it, so an old Bun is not version-refused.
+    expect(() => assertStoreRuntimeSupported({ isBun: true, version: "0.0.0-synthetic" })).not.toThrow();
   });
 });
 

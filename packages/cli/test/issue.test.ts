@@ -100,13 +100,14 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
 }
 
 describe("mstar issue CLI bundle", () => {
-  test("records the runtimes the subprocess launchers use", () => {
+  test("the subprocess launchers this suite uses answer with a version", () => {
     // Evidence: subprocess launchers used below. Print so the report names them.
-    console.log(`issue.test runtimes NODE_BIN=${NODE_BIN} node=${NODE_VERSION} bun=${BUN_VERSION}`);
-    // Only the shape is asserted here: the floor belongs to the owning manifest
-    // (`engines.node`) and the product refuses a below-floor runtime on its own.
-    expect(NODE_VERSION).toMatch(/^v?\d+\.\d+/);
-    expect(BUN_VERSION).toMatch(/^\d+\.\d+/);
+    console.log(`issue.test runtimes NODE_BIN=${NODE_BIN} bun=${process.execPath}`);
+    for (const bin of [NODE_BIN, process.execPath]) {
+      const probe = spawnSync(bin, ["--version"], { encoding: "utf8" });
+      expect(probe.status).toBe(0);
+      expect(probe.stdout.trim()).toMatch(/^v?\d+\.\d+/);
+    }
   });
 
   test("the built bundle carries the Node shebang", () => {

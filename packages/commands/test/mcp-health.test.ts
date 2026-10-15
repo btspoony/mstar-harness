@@ -16,9 +16,9 @@ const engineManifest = JSON.parse(
 const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
 const floorMajor = Number.parseInt(declaredNodeFloor.split(".")[0]!, 10);
 /** Injected CURRENT runtime: must sit at/above the declared floor. */
-const currentRuntime: McpRuntime = { kind: "node", version: `${floorMajor + 1}.0.0` };
+const currentRuntime: McpRuntime = { version: `${floorMajor + 1}.0.0` };
 /** Injected below-floor runtime: the floor major minus one, minor/patch zeroed. */
-const belowFloorRuntime: McpRuntime = { kind: "node", version: `${floorMajor - 1}.0.0` };
+const belowFloorRuntime: McpRuntime = { version: `${floorMajor - 1}.0.0` };
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });

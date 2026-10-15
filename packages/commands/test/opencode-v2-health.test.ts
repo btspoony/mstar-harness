@@ -50,7 +50,7 @@ const declaredNodeFloor = (
 /** Injected current runtime: at/above the declared floor. */
 const MCP_RUNTIME_VERSION = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 
-const MCP_RUNTIME: McpRuntime = { kind: "node", version: MCP_RUNTIME_VERSION };
+const MCP_RUNTIME: McpRuntime = { version: MCP_RUNTIME_VERSION };
 
 function writeMcpConfig(root: string, config: unknown): void {
   const configDir = join(root, ".config", "opencode");
