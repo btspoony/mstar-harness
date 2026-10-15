@@ -6,6 +6,422 @@
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-15
+
+### Fix
+
+- **终态采纳为其终结的 header 写入全新的生命周期时间戳。** 当 `adoptTerminalWorkflow` 结算一个从未关闭的未注册 header 时，采纳时刻现同时成为 `ended_at` 与快照自身的 `updated_at`，而不再复用导入的非终态快照可能仍携带的 `ended_at`、也不再让 `updated_at` 停留在导入时刻。投影与审计不再读到早于后续已记录活动的结束时间。已处于终态的 header 仍逐字节保持其记录的 `status`、`ended_at` 与 `updated_at`。
+- 从共享角色 agent 壳中移除 OpenCode 风格的 `tools:` 映射（`write`/`edit`/`bash: true`）：omp 将 agent 的 `tools` 解析为工具名列表，映射形态在 omp 上无效并导致当前 omp 加载 agents 失败。`mode:` 与 `permission:` 未变，因此没有任何宿主丧失席位限制，各宿主回退到自身默认工具面。
+- **影子 pack 身份确定性**：来源排序现在使用不受 locale 影响的 code-unit 比较，因此相同的冻结输入无论 locale 行为如何都会生成相同的 `packId`。
+- **统一 residual severity 词汇**：文档与引擎使用同一词汇 `critical`、`high`、`medium`、`low` 和 `nit`；枚举外的值会被拒绝，并列出可接受值。
+- **唯一 severity 词汇：`critical | high | medium | low | nit`。** 错误的 `info` 已渗入 residual/issue 的 severity 轴 —— 引擎 SSOT、residual 校验、CLI payload 与汇总计数、dsh view/schema，以及 `mstar-artifacts` 参考文档 —— 现在每个 severity 站点重新使用 `nit`，`info` 作为枚举外取值被拒绝。
+- **已存储的 severity 由新增 schema 迁移转换**，而非手工改数据：该迁移重建 `issues` 表并使用 `nit` CHECK，在拷贝时将已存的 `info` 改写为 `nit`，保留全部行。更早的迁移语句与 `warning → low` 的 legacy 读取归一化保持不变。
+
+### Harness
+
+- 加固 **opencode-v2 写门**的符号链接别名防护：落点解析器现在沿链接链解析真实落点（8 跳上限，环形/越界以 `write.symlink-resolution-refused` fail-close 拒绝），堵住可经外部别名写入 harness 权威文件（`store.db-wal`）的悬空链接绕过 (#438)。
+- 加固 **ZCode git-guard 钩子**的强推检测：对 push argv 做角色分类（选项白名单来自 `git push -h`、值选项消费、首个位置参数为仓库），拒绝 `+refspec` 强推，未知选项形式 fail-close 并指名 token——堵住 `+main:main` 与 `--repo=origin +main:main` 两处绕过 (#439)。
+- MCP 与 CLI 的 **spawn 助手可在子进程提前退出时存活**：`child.stdin` 流错误（EPIPE）由助手接管，不再以未处理异常击穿整个进程 (#441)。
+- **根 `hooks/` 纳入 CI 覆盖**：CI 运行守卫行为测试与 `node --check`；`hooks/session-context.mjs` 在引擎不可解析时 fail-soft 降级（stderr 诊断 + 不可用权威上下文）而非崩溃 (#445，#446 部分)。
+- **status 写锁拒绝信息可诊断**陈旧锁状态（持有者存活 / 确认已死附验证后的移除步骤 / pid 文件缺失），替代裸手改提示；自动接管仍待原子原语后启用 (#447 部分)。
+- 精简清理：移除不可达的 CLI target 交互提示与 `@inquirer/prompts` 依赖，删除死导出 `homeRelativeSourcePath`，统一 judgment shadow 的 digest 助手，修正过时的发布脚本注释 (#453 部分)。
+- **omp 门钩子现在 fail-close**：门内未预期错误返回显式 deny 信封（门名 + 错误摘要）而非被宿主解读为放行的 `undefined`；deny 信封构造失败则重新抛出 (#443)。
+- **dsh `workflow-policy` 获得直接决策测试**：允许清单规范化/边界、各模式行为、未知名称处理、ask 缓存命中/未命中与键规范化、未覆盖计划优先级，附变异咬合证明 (#444)。
+- **codex agent 安装器限制备份保留**：每个目标仅保留最新 3 个（按 mtime 排序、尽力而为的清理不会导致安装失败）(#448，部分——engine 回执/台账保留仍开放)。
+- **projection 读路径在无变化时跳过重写**：代次指纹未变且已发布行完好时不产生 SQL 写；输入变化时渲染字节等同的旧版输出；已发布行被删/损坏时重建 (#449)。
+- **回环 dashboard 现要求每次启动的随机令牌**：CLI 启动时打印带令牌的 URL，有效令牌设置 HttpOnly SameSite=Strict cookie 供页内请求使用，缺失/错误令牌返回无状态泄露的 403；Host/Origin 校验保持不变 (#450)。
+- **安装器现在拒绝破坏用户文件**：符号链接/非常规配置目标会被拒绝并给出恢复指引而非静默替换；不完整的 `~/.mstar/harness` 克隆可自愈（保留为 `.broken-<timestamp>` 并重试一次克隆）而非永久阻塞后续安装；成对的 ZCode marketplace 写入失败时恢复两个文件的先前内容 (#452)。
+- **发布的命令 schema 如实陈述引擎强制约束**：issue closure 载荷按生效 disposition 发布 `requiredWhen` 分支（`anyOf` 派生自引擎 `ClosureEvidence` 注册表，含 disposition 覆盖），`plan.complete` 发布并校验其声明的完成证据结构——按发布 schema 组装调用的客户端不再撞上不可见的拒绝 (#451)。
+- **issue 动作词汇单源化**：engine 导出 `ISSUE_ACTIONS`/`ISSUE_ACTION_NAMES`（每个动作的 payload、read、CAS 与 closure disposition 事实）；CLI 的动词表改为从其派生，替代四份手工清单——漂移现为编译错误，发布 id 由一致性测试钉住。令牌集与行为不变 (#453 余量)。
+- **移除了死命令 `judgment review-advice`**（注册、命令族、CLI 适配器/测试、文档、技能路由全链路）。它从未可能成功——唯一的生产调用传了 null evaluator channel，而运行时在读任何输入前就拒绝 null。`packages/judgment` 的影子评估路径不受影响；沙箱校准 worker（scripts/evaluate.ts）已从被删的 CLI spawn 迁移：现导入构建好的 judgment API bundle 并经 connectEvaluatorChannel 提交，沙箱/supervisor 流程不变 (#440)。
+- **`hooks/session-context.mjs` 现为打包产物**：源码移至 `hooks/src/session-context.ts`，经 ZCode hooks builder 构建（内联 engine），SessionStart 钩子可在无 `node_modules` 时独立运行；fail-soft 不可用权威诊断保留并有裸拷贝冒烟测试覆盖 (#446)。
+- **门路径解析在 engine 单源化**（`host-gate-paths.ts`）并由全部五个执行点采用（opencode v1、opencode-v2、omp、dsh、ZCode 写门）：符号链接链被解析到真实落点并带 8 跳 fail-close 上限——v1/omp/dsh/ZCode 从一跳解析升级，关闭批次 1 在 opencode-v2 修复过的别名绕过类。各宿主保留自己的拒绝信封 (#442)。
+- 新增 `/amazing-test-audit` 入口（含 Codex/dsh 项目级命令安装）与 `mstar-audit` 测试套件深度方法 `references/test-audit.md` —— 价值门槛、撰写门禁、junk 模式扫描、保留门槛、逐候选证据字段、发现泳道，以及整子系统 campaign（逐测试 R/F/C/D 台账）；并接入 SKILL.md 变体分发、playbook § 4 与 full-audit 范围变体。
+- 新增四个规范 audit 命令定义，保留有界 scaffold/promote 写入效果及现有 secret、supply-chain 扫描器。
+- 将 audit CLI 身份接入共享命令定义，并新增基于真实夹具的家族行为覆盖。
+- **测试编写审计检查：**代码库、测试套件及 PR 审查现在须报告偶然性、源码形状、接线或环境常量断言，并给出“删除，或替换为产品行为断言”的结论。实现与审查契约同步纳入 PR #280 的四个反例，同时保留产品行为断言与修复前先失败的回归防线；被拒绝的断言不得改名或重新固定期望值。
+- **PR 审查分数改为递减扣分制并引入分数档位。** `computePrTally` 按类内逐条发现递减扣分——must-fix 首条 45、此后每条 15；should-fix `max(12 − 3·(n−1), 2)` → 12,9,6,3,2,2…；nit 首条 2、此后每条 1（类上限 8）；unverified 每条 5（类上限 15）——`score_pct` 下限为 0，并为结果标注**分数档位**：`mergeable` ≥ 90 · `good` 80–89 · `pass` 60–79 · `fail` < 60。verdict 推导不变（按计数、三个 token），分数与档位永不覆盖 verdict。engine 新增导出 `PrScoreBand` / `PR_SCORE_BANDS` / `scoreBand()`；`PrTallyResult` 新增 `band`。
+- chat 显示首行现为 `{verdict} · {score_pct}% ({band})`，GitHub 报告结论标题现为 `· Score <score_pct>% (<band>)`——该推导值标注为 **Score**（每条发现证据字段中的 `- **Confidence**:` 属另一概念，保持不变）。
+- `mstar pr-review validate-report` 依据同一套锁定扣分表重算 `score_pct`（不存在第二套公式）；`mstar.review/v1` 信封接受可选的 `tally.band`——缺省仍合法，存在时必须是合法档位 token。信封 payload schema/帮助文本现已列出这些档位 token，且 `MstarReviewV1.tally` 采用 band 可选的 envelope tally 形状（`MstarReviewTally`），使缺少 band 的历史信封仍可通过类型检查。
+- 更新 `mstar-audit/references/pr-review.md`（扣分表、档位定义、worked-example 校验表、显示契约）、`commands/amazing-pr-review.md` 与 `docs/commands.md`。
+- 将 CI `test-cli` 任务 —— 在 run 37018503961 实测 **594s**、次慢任务 249s —— 拆为四个独立并行任务，使 CI 墙钟等于最慢分片而非总和：`test-cli-coordination`（`test/plan-coordination.test.ts`，163.6s）、`test-cli-ops`（次重的 8 个文件，合计约 190.4s）、`test-cli-web`（`web/` view-model 批次），以及 `test-cli-suite`（动态余量）。
+- 余量分片在运行时自行计算文件清单 —— 在包根递归 `find`，匹配 `bun test` 的四类文档化文件名（`*.test.*`、`*_test.*`、`*.spec.*`、`*_spec.*`，任意扩展名），并剪除 `node_modules`/`dist`/`.git` 与 `web`，再排除 9 个显式路径 —— 新加入的测试文件会自动归入该分片，无需分片清单登记表，也无需守护脚本。发现过程为失败即停：余量为空时会命中显式守卫，以退出码 1 终止并打印自解释错误，绝不退化为裸 `bun test` 而把其他分片静默重跑一遍；`web/` 批次采用同样的发现方式，为空时打印提示并以通过结束。
+- 各分片原样保留原任务的 setup 链，并显式构建 CLI（`bun run cli:build`，等价于旧命令 `bun run --cwd packages/cli test` 自行执行的包 `build` 脚本），已在 workflow 头部注释中说明。
+- 将 CLI 测试分片从 4 个 job 拆为 6 个（`test-cli-ops` → `test-cli-ops-a` + `test-cli-ops-b`；`test-cli-suite` → `test-cli-suite-a` + `test-cli-suite-b`，动态剩余按 `LC_ALL=C` 排序后的奇偶行对半分配），在两个分片漂移到 5 分钟以上后将 CI 墙钟时间压回约 3 分钟；全量覆盖与空集 fail-closed 守卫语义不变。
+- 按**命令属主组织 CLI 子进程测试**，退役历史 `slice4-cli.test.ts` 容器，同时保留全部分组、参数行、断言和夹具内容。迁入分组复用 CLI spawn harness 与包内断言/内容支持模块；既有 skill、lease、worktree 覆盖与各自独立的 sibling 分组并存。
+- 提高 `CLI init --target dsh` 适配器用例的超时：每个用例都会 spawn `bun run src/index.ts`（冷启动 TypeScript + 适配器自身的子进程工作），默认 5s 预算与 CI runner 的实际开销过于接近，单次启动偏慢即导致套件失败。
+- 从 `packages/engine/test/coordination.test.ts` 移除重新引入的重复 `binding` 测试组（420 行字节级相同副本）；八个 binding 契约继续由 `packages/engine/test/coordination-bind.test.ts` 独家持有，生产 coordination 代码与共享 fixtures 均不变。
+- **隔离 actor-only CLI 回归：** 将 close、triage、supersede 和 link 分别放入独立的 active-store 夹具，避免多条独立子进程工作流共用一个测试的超时预算；保留全部状态断言及默认超时，不改变 CLI 行为。
+- **完成三类 lint 积压整改**，覆盖约 480 个位置：Rule #341 拒绝恢复、帮助可达性，以及冻结不变量 hash-gate 结构。
+- **使门禁真正生效：** refusal-quality 与 help-reachability 现以空 allowlist 通过；hash-gates CI 步骤现会阻断违规。hash-gates 将 3 个已授权门禁和 11 个允许重放的位置与违规项分别报告。
+- **明确标记语义：** `// reachability: manual — <reason>` 仅在理由非空时标记该单一位置的人工恢复；`// hash-gate: authorized — <reason>` 仅在理由非空时授权相邻的不变量门禁。标记只分类其自身位置，不会屏蔽相邻位置的发现。
+- 跟踪内容未加入任何机器本地 store 标识符。
+- 新增**过度设计 lint 家族**在 CI 强制执行 #341/#365 冻结契约：`lint:refusal-quality`（结构化拒绝通道的 cause/recovery 存在性）与 `lint:help-reachability`（恢复文本必须指向可达动词/旗标），并入已接线的 `lint:hash-gates`（`continue-on-error`，待既有 main 违规分诊后翻阻断）；有界豁免清单均以真实跟踪 issue 为凭。
+- 新增 **QC 判例透镜**（`overdesign-judge.md`，engine/commands diff 必读）：承载 AST 无法判定的规则——门限对运行模型的必要性、门限与契约一致性、自写记录重验、协议尺度——设计为 advisory，判例席自身不得成为新的过度门禁。
+- 新增**已知答案回测套件**，证明该家族能抓住 #340/#341 的历史实例类，未覆盖类如实标注并转入判例审查。
+- **Agent 优先的 CLI 可操作性（#393）：** `--help`、`schema` 与准入校验统一由共享注册契约派生（运行时 `tools/list` 实测 118 个命令）；缺失输入以单次聚合拒绝呈现全部缺失字段（path/code/expected/received）、最小必填集、安全默认、条件/备选事实、`helpRoute` 与 `recovery`，CLI 与 MCP 一致。
+- **错误保真（本计划触及的族：session、milestone、pr-review、audit、dashboard、status、workflow）：** 本计划触及的拒绝路径上引擎创作的 `code`/`message`/`details` 原样透传。畸形 attestation/proof/evidence/policy 的解析原因经过消毒：真实解析器语法与解析器上报位置保留，提交的操作数与秘密形状内容被隐藏——以真实 Bun 1.4.0 与 Node 24 畸形输入按运行时分别验证，非普遍声明。schema 不兼容拒绝以三个独立机器事实报告最高已应用 schema、支持上限与首个未知 migration。
+- **公共操作：** `workflow-note.append`/`workflow-note.coverage` 以 CLI 与 MCP 进入规范注册表；环境 `MSTAR_HOST_SESSION_ID` 或 launcher-minted 身份可在不带 `--session-id` 时满足调用者上下文要求（built bundle 实测），显式选择器优先级保留，无身份/畸形选择器拒绝且不写入。`issue.*` 变更发布数字版本 CAS、拒绝空白 replay id、并在回执返回生成 id。`workflow.evidence` 发布按交付类型的文件内容契约，保留记录时可修订与关闭时冻结。
+- **终态恢复与 native coordinator：** `workflow.adopt-terminal` 通过可选操作者证明结算未登记的 ACTIVE 会话，要求目标完备并按操作保留文件恢复指引（保留 POSIX 错误码）；只读 store 打开可跨越 Bun writer 关闭窗口收敛（有界重试，持久损坏仍拒绝）。注册的 `mstar_coordinator` 契约以宿主派生身份绑定/恢复 ACTIVE schema-9 权威，聚合拒绝并携带真实 loadedEntry 溯源——仅在 SDK 18.3 adapter 路由上取证；不替换运行中宿主的缓存注册，其指引不再承诺 reload 式替换。
+- 命令准入现在返回**分组结构化诊断**：每条 schema 违规都在 `details.diagnostics` 中携带安全字段路径、稳定 issue code、消息与数组索引，一次调用即可报告全部缺失或畸形字段，而非仅拼接消息。
+- **CLI 解析错误指名字段**：缺失参数与选项值在可确定时标明输入字段与叶子帮助路由（`mstar <path> --help`）；未知旗标保留诚实的解析诊断，不猜测字段。usage 响应保持 `usage`/exit 2，与引擎拒绝相区分。
+- Plan 写入在已获取身份的 workflow coordinator 下使用明确 plan 地址。稀疏 own-context 推导保留实际 scope、身份、token 与状态冲突的结构化诊断。停止身份恢复仅点名 workflow coordinator 与真实停止见证，不再逐行替换。
+- schema 拒绝的 usage 消息构造现在**有界**：当被拒输入产生超过 20 条 issue 时，首行消息携带前 20 条原因加明确的 `…and N more issues` 指针，`details.diagnostics` 保留全部诊断（不设上限，沿用已有的 secret-shape 脱敏）。`rejected` 摘要字段只报告首条 cause 的 flag/expected/received 事实；逐条完整事实在 `details.diagnostics`。
+- CLI 与 commands 顶层拒绝共用同一信封，提供帮助路由和恢复指引；输入 schema 错误经过集中校验，根级联合约束指引得以保留，schema discovery 会发布准确的协调者和计划恢复 token 类型。
+- 新增运行时 payload schema 与 `mstar-harness schema <TypeName>` 输出；issue 与 plan payload 帮助文本现指向对应 schema。
+- 聚合 issue 与已覆盖 plan payload 的校验，使单次拒绝指出全部无效及缺失字段。
+- **CLI 命令面**：除安装器以外的命令现由规范的 `@mstar-harness/commands` 定义生成。`mstar init` 仍是安装器。解析失败返回 version-1 用法信封并退出 2；命令结果保留已记录的退出码，包括 SDD task 的 3 以及子进程的 124/127/128+n。
+- **运行时会话选择器与生成包**：`plan.bind` 使用调用上下文运行时身份而非请求字段，CLI 声明的会话选择器会传递至处理器上下文（包括 `workflow recover-coordinator --stopped` 多值列表），`packages/commands/dist` 由本地构建生成而不再跟踪。
+- 保留结构化引擎错误详情并派生拒绝响应帮助元数据；覆盖省略参数时的 usage/refused 默认行为。
+- 未知 MCP 工具调用现在会在适用时返回相近工具名称建议，并引导调用者使用 `tools/list`。
+- **提交身份策略**：写仓库的 agent 使用已配置的 Git 作者／提交者身份，禁止编造或逐次提交覆盖。提交前检查 `git config --get user.name` / `git config --get user.email`：空值即 Blocked，防止使用 Git 自动合成的身份；由操作者配置用户身份或改用已配置的检出。完成报告须提供显示作者的 `git log -1 --format='%h %an <%ae>'` 证据。
+- **提交入口覆盖**：分支／worktree 指引、首次及 sticky SDD 提示与文件交接、共享及 Cursor 计划模式桥接与规则、迭代收口与知识初始化配方、PM 派发报告均指向共享 leaf Git 规则这一唯一权威。执行消费者测试 fixture 改用中性测试身份；engine、CLI 与 hook 行为不变。
+- 新增 coordinator-only `mstar session run --workflow W --role coordinator [--harness H] -- <argv>`：子进程本地身份替换伪造/legacy 输入，继承 stdio 并传播退出码/信号。Session recover 在独立获取身份与停止见证下替换明确停止的 workflow coordinator。
+- Plan 文件/ACTIVE 传输保持互斥。普通动作可推导当前 coordinator context；显式 session reference/token/operation 仍作为约束。混合权威或数值 ACTIVE expectation 在 payload IO 前拒绝。
+- `mstar workflow register` / `iteration register` 经原子 DB 注册发布，`workflow evidence` 记录 delivery 转换，`status workflow-close` 执行终态 lifecycle 转换——active 路由上不再有文件 close、不再有 unregister 步骤、不再重写 `--ended-at`。闭合的 `phase`/`lifecycle`/`execution-policy`/`integration-worktree` 语法并入既有 `mstar workflow` 组。
+- `store execution restore-preview` 与 `restore` 使用普通 `store backup` 镜像执行灾难恢复；`export` 报告 live execution state。staged execution migration 动词（`preview`、`apply`、`activate`、`retire`、`abort`）已删除。`store activate` 仅保留 issue/catalog migration 步骤。
+- `status validate` 报告 active 写入作为 CAS 消费的根级与逐 workflow 执行令牌，因此调用方从一次读取取得 `--expect`，而不是自己编一个。
+- **带显式 operation id 的 coordinator bind 重试现在就是已记录的回放。** `bindExecutionSession` 的 `expected` 变为可选，并在写事务内从 workflow 自身 header 解析当前令牌；bind 请求指纹携带"省略新鲜度"的标记而非新推导的令牌，因此首次提交推进 revision 之后，未变更的 `{workflowId, operationId}` 重试会作为回放返回，而不是 `execution.operation-conflict`。显式提供的令牌仍保持严格 CAS 语义：过期值仍以 `execution.stale-token` 拒绝，同一 operation id 携带不同的显式令牌仍是操作冲突。
+- 宿主自有的 `mstar_coordinator` ACTIVE `bind` 在调用方省略 `expected` 时按省略转发（由引擎解析），并在未提供 operation id 时自行铸造；其 `recover` 分支仍从被寻址的权威读取当前令牌，因为 `recoverExecutionCoordinator` 要求显式令牌。注册工具描述、参数广告与 `mstar-host` 的 OMP 参考已陈述同一契约。
+- **不兼容 store 的 FILE 恢复保留引擎事实与已加载模块来源。** stored-target reader 的 §4.3 权威否决现在携带原始抛出的 `StoreError`，FILE 恢复边界通过共享的 engine-refusal 路径投影它，因此 `store.schema-unsupported` 拒绝会连同三个 schema 版本事实、`loadedEntry` 与不兼容已加载构建的指引一起抵达调用方——与 bind / show-recovery / ACTIVE-recovery 分支既有的保真度一致。
+- **协调者身份必须显式获取，不再生成。** 新的协调者绑定必须显式提供 session id：引擎在写入前以 `coordination.identity-missing` 拒绝缺失身份，而不是生成 UUID；`plan bind --coordinator` 不再把继承的 `MSTAR_HOST_SESSION_ID` 当作授权。本地操作者显式传入 `--session-id`；托管宿主会话使用新的宿主工具。
+- **新增仅适配器使用的 `ExecutionIdentity` 类型**（`packages/engine/src/session-identity.ts`）：`(规范 harness 根, workflowId, role, planId, sessionId)` 元组与 `validateExecutionIdentity`，供引擎、CLI 与宿主适配器共用，避免各自声明第二份形状。
+- **新增宿主自有工具 `mstar_coordinator`（`bind`）**：扩展从宿主取得原生 session id、从宿主 cwd 推导规范控制根，拒绝 leaf/scoped-plan 调用者，且不接受 session id、root、调用者角色、授权标志或凭据路径。
+- **移除对裸 `bash` 的环境变量注入。** 通过 `bash`/`functions.bash` 发起的托管 `plan bind --coordinator` 会在执行前被拦截并重定向到 `mstar_coordinator`；无关 shell 调用保持不变，缺失或不支持的 `env` 字段不再产生输入修订。
+- 新增受审计的 **JSON Prepare coordinator 恢复**（`showPrepareCoordinatorRecovery` / `recoverPrepareCoordinator`，前置契约 §3.3）：当被记录的属主已无法通过授权时替换该工作流的 coordinator 绑定——即宿主 handoff 被取消后留下的状态。它刻意比既有的 active-DB 恢复（`execution-workflow.ts`）更窄：后者继续保留完整 execution token 与 stop 证明路径，本入口不做 prepared-plan 接管、不做 lease 转移、不重写原始 session、也没有 force 开关。
+- 写入只在快照写锁内被准入，并要求：文件权威（active execution authority 下直接拒绝并指向既有 DB 恢复动词）、本规范根下已注册且 running 的迭代、已提交的注册、仍能认证**精确**被记录 coordinator 的先前信封、指向该工作流 coordinator 席位的全新获取身份、显式 reason + 授权引用 + 指名该持有者的停止声明、两份新鲜字节版本、以及覆盖**全部行**的原始 `prepareAdmission`。所有语义拒绝都发生在创建任何文件之前。
+- 被接受的效果仅为：通过既有独占创建生成一个按角色区分的信封、替换顶层 coordinator 绑定、追加一条不可变的 `coordination.identity_recoveries` 审计记录（operation id、请求摘要、两个公开 session id、授权引用、reason、停止声明、两份版本、时间——绝不含凭据或信封正文）、刷新 `updated_at`。行、分支锚点、证据与兄弟工作流保持逐字节不变；旧信封字节作为历史保留，因绑定已移动而不再授权。
+- 快照 schema owner（`coordination-write.ts`）对审计做严格校验，普通写入者会将其钉住（通过通用快照写入删除、改写或伪造审计条目一律以 `coordination.direct-write-refused` 拒绝）。独占信封创建与快照提交之间发生崩溃时只报告失败——绝不返回成功回执——并且只回收该操作自身创建的那个信封；精确重试返回已记录回执且不产生版本churn，而变更请求、过期令牌或已被取代的绑定一律拒绝。
+- 新增传输：`mstar workflow recover-coordinator`（显式运维路径，用法错误 exit 2、拒绝 exit 1）以及宿主自有的 `mstar_coordinator` 工具的 `show-recovery` / `recover` 操作；两者都从宿主/引擎事实推导原生 session id、规范控制根与被记录的先前持有者，绝不接受调用方提供的值。公开投影严格限于 §3.3 所列字段：coordinator 信封/凭据路径仍留在 coordinator 自有传输中，CLI 的 JSON 与诊断永不打印它；停止声明的每个条目在参与哈希、存储或回显之前，都必须是公开 session id（单一安全路径组件、长度受限）。
+- 三处接缝的已复核令牌完整性均已闭合：恢复在提交前立即重读 compass（window 内并发编辑 compass 会以 `stale` 拒绝，且只回收本次操作的信封）、崩溃清理仅在文件字节仍等于本次操作写入的字节时才删除遗留信封（路径已被替换则原样保留）、create-only 的通用快照写入一律不得携带 `coordination.identity_recoveries`——恢复历史属于来源证明，而非形状校验。
+- **identity-missing 拒绝信息逐字写明供给路径。** 所有因缺少会话身份而拒绝的 active 路由——各种形态的 `plan bind`（coordinator、identity session、稀疏、resume）、`plan show`、稀疏 plan 操作、workflow transitions/evidence/recovery——现在都在拒绝文本中写明供给方式：CLI `--session-id`（或 `MSTAR_HOST_SESSION_ID`），MCP：宿主每次调用传 `sessionId`。ACTIVE 注册拒绝文本随"creator 可选"契约重塑：只有 `expect` 和 `operation` 可能缺失，并说明未设置身份时将注册 NULL creator、由首个 coordinator bind 收养。
+- **`mstar doctor --target omp` 现报告真实的插件对齐状态。** doctor 的 `pluginVersionNote` 改由新增的 `detectPluginVersion` 效应提供（CLI 侧复用既有按宿主发现逻辑；omp 走 `omp plugin list`），因此"CLI X 比已安装插件 Y 新——请更新插件：omp plugin install @mstar-harness/omp"的过期插件指引与未安装提示都基于实际探测到的版本，而不是永远声称未找到插件。
+- **ACTIVE 注册不再强制会话身份（issue #383c）。** `workflow register` / `iteration.register` 在 ACTIVE DB 路径上接受无会话身份的调用者并写入 NULL `creator_session_id`；传输层提供了显式 id 时仍照常记录为归属。信任边界不变且有端到端回归：首个 coordinator bind 独家收养 NULL-creator 工作流，存在任何 coordinator 记录后再次收养被拒，creator fence 与 duplicate-holder/holder 匹配门禁原样保留。
+- `validateExecutionIdentity` 新增仅限注册的显式放宽（`allowUnsetSessionId`）：归一化后的空字符串在创建路径上视为"未设置"，其余所有调用方仍遵守"身份必须显式获取"的规则。
+- 改写注册拒绝信息，披露状态及受支持的下一步操作。
+- **MCP 会话身份：** MCP 解析路径已移除 `MSTAR_HOST_SESSION_ID` 环境变量回退。`session.recover` 等消费身份的命令仅通过其显式单次调用 `sessionId` 输入（既有的 CLI `--session-id` 标志 / MCP schema 字段对等）获取主对话会话 ID；缺少该参数时现有的安全拒绝行为保持不变。MCP 侧身份测试现已固化身份门专属拒绝、错误会话所有权拒绝与真实 CLI 解析路由。
+- **环境变量带入的 ambient identity 不再阻止 legacy `mstar plan bind --resume`**；该路由忽略 ambient 环境身份，并拒绝已声明的身份（`--session-id` 或宿主提供的身份）。
+- 所有已注册 plan 指针统一走 **唯一** 路径解析器（前置契约 §4）：引擎 barrel 在 `planDeclaredHeaders` 之外导出 `resolveRegisteredPlanFile` / `PlanPathError`，注册、Prepare append 与后续 readiness 共用同一解析器，不再各自复述 `{PLAN_DIR}/<plan-id>.md` 约定。
+- `mstar iteration register` 现在把 **规范化绝对路径** 写入 snapshot，而不再原样复制调用方拼写；catalog 注册预检会在第一条 `prepared` journal 行之前解析并拒绝 iteration 行指针——仓库相对拼写 `.mstar/plans/<id>.md` 会带着（收到的形式、base、期望的规范目标、允许的形式）被拒绝，且不产生 root、snapshot 或 journal 写入；被规范化的请求才是参与哈希、入库并交给 producer 的表示，且 shipped 入口的默认 operation id 也由同一份规范化 workflow 推导，同一目标的等价拼写共享同一 operation 身份。
+- Prepare `appendPlans` 的指针校验改用同一解析器（其私有 fence-aware 解析器已删除）；`invalid-plan` 拒绝词汇与错误码保持不变，并附带解析器的类型化路径详情；缺失或非字符串的 append 指针会返回该错误码，而不再以原生路径 `TypeError` 逃逸。standalone/audit 的 catalog 位置 schema 不变。
+- 解析器在**任何**路径 API 接触之前先确定指针的**形状**：因此持有导出契约的调用方（JavaScript 调用方或解码出的负载）若缺少 `file`、传入 `null`、数字或对象，会以 `plan-path.invalid-pointer` 被拒绝——只说明收到的类型、绝不回显被拒绝的值——而不再抛出无法映射到自身领域拒绝的原生 Node `TypeError`。
+- 为受守卫的 **Prepare workflow 修订入口**（`amendPrepareWorkflow` / `mstar workflow amend-prepare`）新增可选 `correctPlanFiles` 列表（前置契约 §4.1）：每个条目以该行**当前持有的精确指针**（`expectedFile`）和该行自身的规范 plan 文件（`file`）定位一条既有 Todo 行，从而在无需手工改快照的前提下修复畸形的仓库相对指针。`appendPlans` 仍然存在——仅做修正的调用传空数组。
+- 修正只移动被指向行的 `file`（以及常规 `updated_at`）；其余行字段、根注册表与 review 文档全部按值保留。未知行或指向有歧义的行、行指针与 `expectedFile` 不一致、旧指针并不指向同一 plan、不产生变化的指针、与 append 冲突或重复的 id、以及被共享解析器 `resolveRegisteredPlanFile` 拒绝的新指针，一律零写入拒绝；coordinator 身份、Prepare/no-execution admission、双重字节版本 CAS、compass plan-id 集合与最后一次 compass 复检保持不变。
+- 旧指针只接受两种形式：共享解析器接受的形式（规范绝对路径或规范化 harness 相对路径），或由本控制根已配置的 plan 目录与拥有它的仓库根推导出的**精确**仓库相对拼写。越界绝对路径、同名猜测、无关目录前缀、以及带有匹配 header 的复制文档一律拒绝；常规注册与 readiness 仍不接受该拼写。
+- Phase-1 就绪检查现在消费**共享**前置接口，而不再使用自己的路径/基准逻辑（前置契约 §4/§5）：每个已注册计划行的指针都经唯一的 `resolveRegisteredPlanFile` 解析器解析（与注册及受保护的 Prepare 修正同一解析器，包含 `.mstarc` 声明或外部 `{PLAN_DIR}`），coordinator 身份判定则读取引擎自有的只读 `showPrepareCoordinatorRecovery` 视图。
+- 拒绝仍保留调用方依赖的冻结宽码（`binding-invalid`、`prepare-not-locked` 等），并新增类型化 **diagnostic**：指明 §5 子原因、主体、安全的身份来源标签、已在场的公开 id、计划指针的规范 base/target 以及下一步受支持操作。身份细因区分 `identity-missing`、`identity-mismatch`、`foreign-owner`、`recovery-not-prepare`、`recovery-stale`、`recovery-unauthorized`；路径细因区分 `plan-pointer-invalid`、`plan-identity-mismatch` 与真正未锁的 `prepare-unlocked`。
+- 因此过期存储指针（契约前的 `.mstar/plans/<id>.md` 拼写）绝不会被渲染为“未锁指南针”：它保留自己的路径细因，且就绪检查从不规范化或修复该行——受保护的 Prepare 计划文件修正仍是唯一的修复操作。
+- 已注册的 model-handoff 工具把这些 diagnostics 原样转发进 `not-ready` details，并在拒绝文本中点明类型化原因与下一步受支持操作。diagnostics 只渲染公开 id、代码与规范计划指针：绝不包含信封路径、凭据、session JSON 或环境负载。因此被拒绝的计划指针只按其**接收形态**（规范绝对路径或 harness 相对路径）分类，而不携带其持有的值；receipt 与行不一致时也只报告规范期望值——畸形存储行不再可能泄露任意绝对路径。
+- 批量开发依赖更新，将 dependabot PR #455–#460 合并为一次变更：GitHub Actions 版本提升、@types/node 26、js-yaml 5、vitest 5、katex 0.19、shiki/@shikijs/langs 4.5、`@modelcontextprotocol/client` 2.3.1、simple-icons 16.34、`use-sync-external-store` 1.7，以及 `dsh-llm-fallbacks` 0.6.5 pin 与 engine 常量同步。
+- 类型检查与声明产物改用 TypeScript 7（tsgo）；四个基于 AST 的 lint 扫描器在 tsgo 提供 `createSourceFile` 级解析 API 之前，继续通过新增的 `typescript5` 别名使用 TypeScript 5 解析。
+- 中文品牌文案统一重命名为 **晨星**（文档、skill description、宿主参考、marketplace `zh-CN` 显示名与 dsh 面板 locale 值）。
+- 移除英文语境中的中文括注：插件 `longDescription` 与各包 README 直接写 `Morning Star …`，不替换为 `（晨星）`。根 README 双语对保留品牌行 `Morning Star (晨星)`，使两种语言在同一变更集内同步。
+- **面向 runtime 用户的 README。** README.md 与 README_CN.md 重写为给使用 AI 编程工具做开发的人阅读：直白的定位与适用场景、覆盖七个宿主的精简安装/校验说明、三种入口形态（单任务、迭代、审计/Review/验证）、以每语言一张 Mermaid 图呈现的交付流程，以及以 help 为主的 CLI 说明（`--help` 列出命令期望的输入，包括 issue payload 字段的必填性与类型；用法被拒绝时给出问题、help 路径与恢复方式）。
+- **产品标识恢复。** 两份 README 恢复原副标题（`Harness Workflow Engine · Agent Plugin`）与完整 badge 组合 —— CI、license、version、last commit、dshfind、Greptile 以及四个 npm 下载徽章。
+- **保留角色概览。** 两份 README 保留原角色表格，表后简要说明 PM 如何派发工作；移除关于修改 Markdown 来适配团队习惯的措辞。
+- **工作流图。** 编号式流程清单替换为每份 README 一张 Mermaid 图：计划 → 实现 → 独立审查 → 含返工回路的验收 → 迭代重复 → PR 检查与审查修正 → merge-ready → 显式授权后合并 → 核实合并并收尾；另附 hotfix/inline 与 report-only 路线的范围说明。
+- **Dashboard 与 MCP 小节。** 两份 README 新增独立的 Dashboard 与 MCP 小节 —— 用户能看到或能做什么，以及最小启动示例 —— 并以此取代命令行小节中重复的 dashboard/MCP 条目。
+- **参考文档拆分。** 组件、存储、CLI 契约、report 与 enforcement 细节从首页迁入新增的 docs/runtime-reference.md —— 角色与技能的详细参考、MCP 宿主集成说明也在该页，首页保留角色概览与面向用户的简短 MCP 介绍 —— INSTALL.md 的 report 链接改指其 Offline report draft 锚点。
+- **安装事实修正。** omp 需要先安装其 CLI；`init` 默认 `--scope project`，各宿主表现不同（dsh 的 profile 是机器全局的；Codex 的 global scope 不安装命令 skill）；runtime 参考文档记录七个宿主的 MCP 启动配置，含随包提供、经 `@deepseek-ai/dsh-mcp-client` 桥接插件加载的 dsh Cordis 行；迭代措辞改为 Phase 2–6 生命周期。
+- **精简 README 安装入口。** 中英文安装章节直接从宿主表格开始；新增 **Node.js 24+** badge，链接到 `INSTALL.md` 中的完整前置要求。保留现有 badges，并将 MCP 的前置要求链接指向同一参考。运行时要求不变。
+- 在 `AGENTS.md` 记录本仓库的 CLI 使用规则：运行本检出自己的构建（`bun run --cwd packages/cli build`，随后 `packages/cli/dist/mstar-harness.js`），而不是全局安装的 `mstar`/`mstar-harness`。全局安装是给其他项目用的已发布包——把本检出 link 进去会让那些项目跑到未发布代码，而在这里调用全局副本则是用已发布 CLI 去操作未发布的引擎行为。
+- 在 `mstar-compound` 的知识文档质量门新增两条**正文卫生规则**：durable 正文陈述规则与结论，不写撰写日期（时间信息属于 frontmatter 的 `date` / `last_updated` schema 字段）；引用使用 repo-relative 路径或 `{HARNESS_DIR}` 等符号，不写机器专属绝对路径。
+- 把 `CONCEPTS.md` 既有的「no status/date/owner fields」规则落到 compound 写入路径。
+- 新增 **Guard 8**，校验已跟踪 Markdown 中的链接与标题锚点，并使用规范的 `github-slugger` 行为解析标题片段。
+- 同文件片段链接（如 `#section-name`）会针对其源文档进行校验。
+- **`drift-lint` 门禁清零**：dashboard 文件头注释改写为纯行为描述——跟踪文本不再包含本地 plan/iteration id（清除 14 处出处引用，扫描报告 0）。
+- 两个 README 的大标题恢复为产品名 `Morning Star`（原为 `Morning Star (晨星)`）。中文品牌名保留在中文版首句，两处单行改动保持 README 双语对的尺寸镜像。
+- 在仓库根忽略瞬时 **Bun 缓存输出**（`/Library/Caches/bun/`），会话环境落下的缓存目录不再弄脏 worktree `git status` 或阻塞干净工作树门禁。
+- **`validate` 门禁修复**：engine 重新可构建、可类型检查——根导出 `Severity` 重复（core 与 issue 两套词表）收敛为规范的 core 路径，引擎测试与 `initializeStore` 中的 undefined 收窄 / 匹配器重载错误已修复，运行时语义不变。`packages/cli` 的 `typecheck:src` 现在先生成被 gitignore 的 dashboard 资产模块（`scripts/build-web.ts`；确定性、往返校验），全新检出无需完整构建即可通过类型检查。
+- 移除未被使用的根 `specs/` 跟踪目录：`{SPECS_DIR}` 解析始终优先选中 `{HARNESS_DIR}/specs/`，该根目录副本从未被解析、不随任何包发布、亦无任何引用。
+- **哈希仅作溯源，不作门禁。** 删除已准备文档、已提交证据、workflow/catalog/roadmap 操作、迁移/覆盖/激活、恢复及存储 schema 记录中的内容哈希与规范序列化相等拒绝。普通文档编辑不再要求恢复字节、收养、重封或重签；已有摘要保留为历史信息。
+- **保留真实约束。** 同一 operation-id 的不同请求仍触发 replay 冲突；当前语义 scope/owner/QA/state/path、数字 revision 与 execution-token 约束及真实 Git 交付事实仍有效。删除过时的字节版本、manifest/coverage 哈希及恢复 loss 摘要准入输入，不新增 bypass 或替代封印协议。
+- 对齐 canonical CLI/workflow/evidence 指引，并新增四个含语义负对照的定向路由场景；生成宿主资产继续由 canonical 源派生。
+- 接受语义等价的 session reference 与 execution-token key JSON，不再要求字节规范化。保留中断的 ledger 尾部而非截断或拒绝；仅清退已审查的 index 行，保留后增行与正文内容。
+- 新增有界架构检查，识别哈希、原始字节及规范序列化相等的拒绝/断言；每个 replay 例外均须有 operation-id 查询关联证据。
+- 删除 persist --expect-version、Prepare recovery/amendment 字节版本输入及 store execution restore --accept-loss-digest。额外 primary 启动准入移除，不以另一种 seal 替代。
+- Restore 比较已授权损失的行身份/revision 与 operation ID，盘点并安装同一份私有备份副本，保留即时恢复前安全备份。仅新增待丢失工作或权威世代变化需要重新预览，不因摘要变化要求重签。
+- Legacy 迁移在根锁内派生当前 source，保留 workflow/plan 成员与当前 coordinator 归属。已删除启动 reservation 无 replay/repair 后继。
+- 在 help 中明确 `persist write` 的整文档覆盖语义，迁移消费者测试中的过时 hash/CAS 期望，并转义代码字面量中的非 ASCII 字符以适配 bundled CLI。
+- 在暂存副本前校验 recovery-point 路径，缺失/不可读备份返回类型化拒绝及公开 backup/preview 恢复指引；由当前 engine 重建已提交的 ZCode hook bundle。
+- ledger 在 commit 前保留原文件描述符，避免 inode 复用掩盖目标替换；迁移刷新删除失效的 `ended_at` 并保留作者注释。actor-only mutation 场景保持独立隔离，不再把十三次 CLI 调用集中到一个超时预算下。
+- **面向恢复的引擎接口。** 导出的生命周期操作接受**稀疏意图**（可省略冗余选择器、修订号、会话投影与复制的元数据），依据调用者可信根、持久关联与已记录声明完成解析；事务内实际输入仍严格。已发布解析器：`resolveIntentRoot`、`resolveIntentTarget`、`resolveCurrentAuthority`。
+- **每个结果都带同一份恢复副载。** 成功值携带 `recovery`，拒绝则在 `error.details.recovery` 下携带同一对象（`outcome`、`applied`、`unresolved`、`resolvedFrom`、`warnings`、`commitState`）——部分应用的复合意图绝不报告为「未发生变更的拒绝」。
+- **以语义重放取代传输时效。** 重复意图即当前成功，不推进修订号、不产生回执或字节抖动；意图未变而修订号变化只是漂移告警而非拒绝；载荷或目标确实不同仍会拒绝。
+- **注册自行派生身份。** `derivePlanRegistration` 与 `deriveLifecyclePhase` 以所选文档为权威派生 plan 身份与迭代 phase；被中断的注册在重试时补齐缺失环节，缺 phase 的迭代在读取时派生。
+- **Prepare 修订按组件提交。** 独立组件落地，被扣留组件各给出一个最小决定，使用稳定词汇 `append plan <id>` / `correct-plan-file <id>` / `integration-worktree <path>` / `execution-policy <value>`；两条权威路线各给出一次部分回执，重放绝不二次应用。
+- **每个已声明的生命周期状态在两条路线上都有写入者。** 行 `Done` 前记录证据可完成 report-only 尾段；`closeFileWorkflow` 是文件权威唯一的 close 动词，DB 路线在同一 handle 上组合；显式 `failed`/`stopped` 终态两条路线均可记录，仅结算本生命周期拥有且持有者已不活跃的占用，保留首个 `ended_at`。
+- **仅做增量导出。** 新增 `closeFileWorkflow`、意图解析器、phase 常量、`CloseWorkflowOutcome` 及解析/派生/close 类型；没有任何导出被改名或删除。
+- **CLI 与 MCP 恢复传输。** CLI 与 stdio MCP 共用命令注册表，恢复相关命令返回一致的版本化结果信封；MCP 工具 schema 暴露注册表载荷契约；烟雾探针使用隔离的文件与 SQLite 根目录。
+- **`roadmap replace` 明确声明自身比较基准。** `--expect-project` 与 `--expect-roadmap` 均为不可推导的调用方声明；省略即为一次聚合 usage 拒绝并同时点出两个 flag，过期声明以 `roadmap.revision-conflict` 拒绝且不写入（守卫不再权威自比）。
+- **MCP 工具 schema 不再暴露处理器不读取的字段**；声明的 string-or-null 载荷字段（`IssueTriage.owner`）保持其类型，不再退化为 `z.unknown()`。
+- **仪表板启动期间取消会停止其创建的监听器**，不再泄漏 connection 作用域服务；已被其他调用持有的句柄复用并保持运行。
+- **`plan issue-add` 为每条发现推导计划所属项目**，并在开始捕获前按数组索引汇总独立无效项；DB 捕获与计划关联仍在同一事务中完成，occurrence key 作为稳定事件身份。
+- **声明按 kind 区分的 `persist.write` payload schema**；persist 命令聚合呈现 status 校验错误，保留协调式替换与版本冲突处理。
+- **移除 `judgment review-advice` 命令路由**；历史 `judgment submit` 意图不再注册命令。ReviewDecisionPack 契约字段自动补全与多个缺失 pack 路径聚合诊断仅保留在 judgment API 中。
+- **补充 `mstar-harness schema` 查询指引**（issue 捕获/复现/分诊/关闭/关联及 plan progress 载荷）；按处置类型预先核对字段，不再逐项试错。
+- **测试语料清理。** 所有登记在册的包语料（engine、cli、commands、omp、opencode、judgment）按同一条书面保留/删除规则完成清扫：仅固定源码形态、措辞/帮助文案、转发回声、重复注册表副本、导出元数或环境常量的断言一律删除而非重新固化；面向使用者的行为、边界、原子性、授权、重放与可操作诊断均予保留。
+- **开发验收保持隔离。** 验收语言对齐隔离的产品行为证据，不要求真实供应商、已认证宿主、已安装产物或设备收据；另行授权的运维验证保持独立。
+- **原生模型交接偏好关闭即成功形态无操作**，direction-lock 与 phase-1-lock 均返回中性通知；开启时仍校验协调者身份与真实就绪条件。
+- 活跃 workflow 修改与关闭允许稀疏调用：省略时从当前作用域派生令牌并生成一次操作 ID；显式会话引用和令牌仍作为约束校验。
+- ACTIVE 清理读取权威 store；启动时铸造的 coordinator 身份优先于环境身份，不因此授予其他 workflow 权限。
+- 执行权威位于 store.db：普通 primary coordinator prepare/progress/complete 与 workflow 转换使用原子 SQLite 事务、CAS 和收据；逐行 PM 身份/转交/execution lease 准入已移除。
+- 注册原子发布 catalog delta、普通 workflow/row metadata、根成员关系与收据。Catalog 编辑不静默移动登记的 plan 指针；不要求 sealed Assignment。
+- 新增权威执行读取路由：workflow/plan 状态在一个读事务内取自 store；权威缺失、处于 staged、损坏或繁忙时以 `execution.consumer-not-ready` 拒绝，而**不**降级到残留的 root/snapshot JSON、猜测最新 workflow 或看板投影。权威 active 时，已退役的文件写入在每个入口边界被拒绝。
+- 将分段执行迁移的 preview/apply/activate/retire/abort 协议替换为唯一静态 `mstar store upgrade --operator <name>` 路径：一次打开或创建 store、导入已停止工作区中可识别的状态并激活权威，让跳过的源字节留在原处。独立备份冻结 SQLite 副本不携带的文件原生正文（ledger、身份索引、游标、历史分片、选择正文）及其已接受记录身份。
+- 完成态以 **sealed Git proof** 见证（checkout/git/common-dir 身份、`HEAD` 及其 ref、index、每条 tracked 路径的内容与模式、新 untracked 文件会改变的目录条目、merge/rebase 哨兵、对象清单），并在完成事务前**仅从文件系统**重读（无子进程、无 await）：该窗口内工作树、index、untracked 或对象库的任何变化都会拒绝，不产生 `Done`、回执或租约释放。
+- 新增执行覆盖基底：18 个 surface 的闭合清单与逐 surface 字节 codec，以及**从留存字节重算**覆盖的校验器（对每个命名 witness 重新哈希、据字节内容推导 result hash）——伪造结果、字节变更、借用或未 pin 的 witness、外来 workflow 身份、错标能力，均以 `execution.coverage-incomplete` 拒绝。
+- 经 `setArtifactStore` / `--store` / `MSTAR_STORE_MODULE` 注入的 `ArtifactStore` 由门禁包装：当规范化控制根的执行权威为 active 时，其 `put`/`get`/`delete` 拒绝根 register、workflow snapshot 及二者的 `json` 别名；该控制根从进程侧解析，绝不采信注入方自述的 root。
+- 更新 `mstar-artifacts` `references/status-and-residuals.md`：transport 划分（active DB 权威 vs pre-activation 文件路线）现已在 v2 文件形状、lease 字段与 lockdir 正文的引入处说明，而非只出现在后文协调节——其余 snapshot 权威表述均限定在 pre-activation transport 或 legacy 历史。
+- 活跃 workflow 注册时将 catalog plan 路径规范为相对 plans 根目录的路径，并接受规范绝对路径；不改变执行解析器的输入形式。
+- 协调者恢复是显式的存证引导：必须命名前任持有者，只接管由撤销该持有者而孤儿化的所有权，且绝不复活旧 epoch 的租约。
+- 源码就绪不切换已安装消费方、不推进版本面，也不声称 live 激活或发布。已提交的 ZCode hook bundle `hooks/mstar-write-gate.mjs` 从当前 engine 重建；已安装隔离与消费方刷新仍属于独立运维工作。
+- 保留独立备份恢复（`store backup`、`store execution restore-preview`、`store execution restore`）与 live-state 导出（`store execution export`），不与 upgrade 路径耦合。
+- 新增全库恢复（`previewExecutionRestore` / `restoreExecutionBackup` / `exportExecutionState`）：备份包含已提交的 WAL 可见工作，恢复在内部核对已授权损失的行身份/revision 与 operation ID 并保留即时安全备份，诊断导出为惰性且不含凭据；不要求调用方提供 CLI loss-digest 标志。
+- CLI/session/host 写入使用独立获取的 workflow coordinator 身份、明确 plan 地址和显式约束或推导的当前传输 context。不再保留逐行 PM 身份或子级转交。
+- 文件形态仅保留在显式标注的 pre-activation 章节，并同处声明 active 权威会拒绝它们；不再有任何 active 指令让读者手改 snapshot 或把 legacy 信封当作现行路由。
+- 会话引用是**查找**而非持有凭据：它只命名一行已存记录，缺少引擎在自己事务内比对的调用方则不授予任何东西；引用、期望值与 operation id 绝不转发进子交接。resume ≠ recovery——已停止的持有者只能由 active 权威上的显式恢复动词替换，或在文件路由上由受守卫的 Prepare 恢复替换。
+- 宿主细节移入其归属的 host reference，并以已评审实现为准；DSh README 双语对在 ledger 身份/去重权威、持久游标与归档显示尾部上重新对齐。
+- 向 `CONCEPTS.md` 补入两个词条：**Consulted header set**（按标签解析计划时只咨询一个封闭且精确匹配的标签集合，绝不前缀匹配，因此 `Working branch policy` 这类描述性兄弟标签不会别名成被咨询字段）与 **Maintenance exclusion**（引擎生命周期操作持有的最外层单一锁，使任何包的协作写者都无法在其窗口内追加；它是协作纪律，不是权限）。
+- 在技能正文中记录已交付的 coordinator 身份路径：宿主自有入口 `mstar_coordinator`（`bind`、`show-recovery`、`recover`）、本地 `plan bind --coordinator --session-id` 形态、`mstar workflow recover-coordinator` 动词，以及注册 plan 的指针形式。正文把激活前路线与 active-store DB 恢复（完整 execution token + stop 证明）及原生一次性模型交接区分开（`mstar-host/references/omp.md`、`mstar-use-cli/references/plan-and-workflow.md`、`mstar-use-cli/references/preconditions.md`）。
+- 注册 plan 的指针记录为**规范绝对路径** `{PLAN_DIR}/<plan-id>.md`——接受规范绝对路径或规范化 harness 相对路径，仓库相对拼写 `.mstar/plans/<id>.md` 在第一条 journal／snapshot／根写入之前即被拒绝；受守卫的 `correctPlanFiles` 修正是同行修复手段，在既有 Prepare 准入与当前语义/revision 约束下只改动 `row.file` 与 `updated_at`，不再使用过时的字节版本输入（`mstar-artifacts/references/status-and-residuals.md`、`mstar-iteration/references/phase-1-prepare.md`）。
+- Workflow coordinator 身份必须明确获取；公开恢复输出只含安全事实，不含 envelope 路径/正文。Assignment 或逐行身份不构成 bind 输入。
+- 文档对齐本身不改源码行为、标志或拒绝码，也不声称已安装代次、已发布动词可用性或真实 handoff。
+- 从 engine `compoundRefreshScope` 允许列表移除 `status.json`（ACTIVE 文件路由守卫本就拒绝该路径）；回归覆盖断言收窄后的 scope，并经真实写入端口验证 ACTIVE 拒绝。
+- 向冻结的 plan-workflow lifecycle 契约追加 `Amendment 2026-10-06 — ACTIVE store execution authority`：store 注册/关闭 seam 为主，文件路由降为激活前/无引擎回退。
+- knowledge_refs 载体决策收口于 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 在 artifacts/compound/compound-refresh 三技能统一标注为 legacy 只读。
+- `status validate` 新增 execution authority 状态与受支持的升级入口；明确按路由区分的 token 和计划文件路径。
+- `mstar store upgrade --operator <name>` 是唯一默认执行状态升级路径：一次命令打开或创建 store、导入可识别记录、激活 authority，并返回包含跳过项的一行结果。未知与无法解析的源文件保留在原路径；无需 attestation、inventory、staged manifest、coverage gate、激活屏障或命令自带恢复点。
+- 删除 `store safe-upgrade` 及 staged execution 的 `preview`、`apply`、`activate`、`retire`、`abort` 动词。独立 `store backup` 保留；execution 的 `restore-preview`、`restore` 与 `export` 作为独立备份/灾难恢复及 live-state 报告工具保留。
+- **Canonical store 管理入口：** CLI 和 MCP 的 store 操作现在支持通过 `--harness` 显式选择或正常项目发现定位 canonical control root。备份校验、维护锁及迁移/激活 attestation 守卫保持生效；命令帮助明确说明支持的目标。
+- Store 升级迁移退休现在要求当前快照或根执行记录作为证据；仅有陈旧日志历史不再符合条件。
+- 新增 `workflow adopt-terminal`，为未注册的 workflow header 记录接管收据，并通过 revision CAS 与状态读面如实呈现。
+- 将 `mstar persist` 家族限制为 `review` 和 `json`；engine 的 `status` 与 `snapshot` kind 仍仅用于迁移路径，其永久调用方为 `migrate.ts`。
+- 退役 coordinated artifact 读取/替换链及其公共导出。coordinated purge-entry veto 仍延期至 T21 terminal sweep 处理。
+- 注册重放不再对**终态生命周期快照**作出"已注册且活跃"的应答：close 窗口内（磁盘快照已终态、root 登记仍在）已提交的注册以 `catalog.registration-terminal-lifecycle` 拒绝；已提交的 reconcile 重放也应用相同守卫。让正在执行的 close 完成；若 close 中断，则运行 `mstar status workflow-close --workflow <workflow-id> --harness '<harness-root>'` 完成注销后重试注册。普通 plan 行进度重放仍照常返回已提交回执（#323）。
+- **Dashboard 视图：** 工作流和迭代视图现在会在 ACTIVE harness 上从执行权威读取数据，不再拒绝请求。修复 #354。
+- **ACTIVE projection：**移除不可达的合成 plan 校验和冗余 lease 查询；保留 released lease 的已完成计划仍可见，且不展示历史归属。
+- 新增文件原生 workflow notes ledger（`appendWorkflowNote`）：每条 note 追加一行规范记录，位于执行维护排除与逐 workflow 状态锁之下，同步的当前会话断言是 fsync 字节写入前的最后一步。迁移过来的 legacy 行与内联 plan notes 逐字节保留——不重写、不重排、不压缩已留存 ledger，也不把任何 note 变成 DB 事件。
+- note 的身份就是调用方的稳定 id：同 id 同正文重放而不追加，同 id 正文改变则拒绝，已被别处记录的 id 也拒绝而非任选一个。被崩溃截断的「正在写入记录」的不完整行会被修复为恰好一条已接受行；跟在记录自身已接受行之后的不完整前缀只通过删除该前缀治愈；不属于该记录前缀的未终止尾部则拒绝，且所有留存字节原地保留。
+- 留存叶的可信判定**就是它的打开方式**：`O_NOFOLLOW` 加上对同一描述符的 device/inode **与字节**复核——因此读与提交之间被换成符号链接、被替换或被删除的叶会被拒绝，而不是被跟随、截断或写入。
+- 持久化写入会**写满短写**（受容量限制的描述符可能只接受少于给定长度的字节），并对「一个字节都不接受」的写入拒绝——ledger 追加与原子替换助手都如此。
+- DSh agent-flow ledger 现在从**已核验的原生事实**派生每一行的身份（日志的已核验化身 + 承载会话与 call id），把已接受身份索引作为去重权威、把游标副文件降为逐化身的扫描边界，并把追加、身份提交与扫描边界推进放在同一个共享锁临界区内。显示压缩是记录在瞬时日志中的单个事务（尾部前后哈希 + 精确归档区间），被淘汰行在显示尾部重写之前按字节原样归档进密封历史分片。
+- 两条 agent-flow 写路径在各自锁之前先取与引擎 activation/restore/migration 相同的执行维护排除，因此该窗口内的插件写入会以有界建议被拒绝，而不会落进正被重写的目录。
+- 从 engine 包入口导出了 lifecycle branch fact 类型，供 commands consumer 使用。
+- 删除了已退役的 file-route Prepare recovery suite 和 `lease.verify-integration` setup verb 测试；保留的 L1 lease 覆盖由 `worktree check` 提供。
+- ACTIVE iteration registration 现在会将 compass reference 规范化为相对于 harness 的路径，并拒绝越出 harness 的路径（包括经由符号链接越界）。
+- 将已退役的恢复指引替换为 ACTIVE 状态/令牌读取、协调者恢复，以及缺少交付类型时可执行的失败关闭并重新注册路径。
+- `mstar worktree check --entry` 的准入改为按工作流类型区分：standalone plan 工作流只要求其注册可记录的 source/target anchor（主 worktree 驻留校验使用 `target`）；iteration 工作流仍要求 base/target/integration anchor 与集成检出校验。缺失 anchor 的拒绝文案按类型给出可执行的恢复指引。
+- audit-promote CLI 测试改为断言 ACTIVE 执行图（单次 store 初始化 + 读取已激活 token），不再断言已退役的 snapshot / `status.json` 投影。
+- 将状态写入门禁切换为仅使用执行权限路由，并重新生成打包钩子。
+- 从 MCP 身份测试中移除了已退役的 lease verify-integration 断言，并保留现行 worktree check 接口。
+- 为 `milestone.assign` 注入已获取的会话身份，同时保留可选的会话引用校验约束。
+- 移除了已退役的空状态模板夹具及其验证用例。
+- **OMP**：`mstar_coordinator` 新增 active 形态的 `bind` / `recover`，在宿主派生的执行身份下直接调用 DB 动词；`show-recovery` 在 active root 上从 DB 应答，在文件路由上保持未变的 Prepare 视图。路由取自被寻址的 control root，绝不由 tool 参数选择：混用或不全的字段、在 pre-activation root 上用 active 形态、在 active root 上用 Prepare 形态，都在任何 IO 之前拒绝。
+- **OMP**：`mstar_phase2 {operation:"bind"}` 不再接受调用方提供的 session path，而是采用被寻址 root 自身的权威（active 路由取 DB 协调者绑定，文件路由取 workflow 自身记录的 envelope）。持久记录为 version 2；更早记录仅作 legacy 历史可读、绝不升级为 DB 绑定；active 绑定永远优先。
+- **OMP**：新增只读的 hidden-history 读取/导出：按精确的 hidden entry 类型分类单个 session ledger，逐条原样保留 payload 及其摘要，且只解码已核验 producer schema 允许的内容。producer 未知或 payload 无法接受的 entry 会完整保留并给出诊断，而不是被猜成某个 session 或另一种类型；导出器在证据缺失时拒绝导出。
+- **DSh**：会话选择与排除下限独立于可重建的 engine-status 输出持久化；只存储规范执行绑定见证，陈旧、被撤销、缺失、损坏或 scope 不匹配的权威一律拒绝，**不**回退到根 register 或最新 workflow。legacy 目标路由仅在没有 active 权威时保留。
+- **DSh**：新增 plugin-owned `/mstar-execution` 人类命令（闭合 JSON `adopt | clear | run`）——身份来自承载的原生会话，已知 leaf/subagent 席位在任何解析或 harness 探测之前拒绝，`run` 启动无 shell 子进程并覆盖执行身份传输、移除所有伪装与 legacy 键。
+- **OpenCode**：执行身份由原生 hook session id 加独立获取的 scope 派生，会话自身引用从其 CLI 流量习得并带入真实共享 CLI 调用；两个 legacy 键都被移除，根只来自显式旗标或子进程工作目录。
+- omp 为符合条件的 Morning Star MCP 调用注入宿主原生会话身份，并在 ACTIVE workflow 身份注入路径缺失时给出诊断指引。
+- **omp 现按调用为 Morning Star MCP `sessionId` 供给原生会话 id（issue #383a）。** 新增 `mcp-identity` 扩展（注册进 `omp.extensions`），把符合条件的 `mcp__morning_star_mstar_*` `tool_call` 输入修订为 `{ ...input, sessionId: <原生 id> }`，使独立 plan 工作流链路——`workflow register -> coordinator bind -> plan prepare -> progress`——无需 agent 手工传 id 即可携带调用方身份。资格判定是 schema 感知的：仅当工具声明的 `ToolInfo.parameters` schema 声明了 `sessionId` 才注入（宿主会按 schema 复检修订后的输入，未声明的键会被宿主侧拒绝）；名称前缀只是预过滤。注入仅做增量：不覆盖显式传入的 id，绝不设置 `block`，且每次事件从 `ctx.sessionManager.getSessionId()` 读取，叶子会话携带自己的 id。
+- 恢复 shell 命令中的宿主会话身份注入并加入幂等保护，避免重复修订堆叠 `MSTAR_HOST_SESSION_ID` 导出语句，同时不修改 `env` 输入。
+- 调整协调者可见的 OMP 通知**标题栏类型**为共享类型：phase-2 诊断通知与 model-handoff 通知现发送 `customType` `mstar:notice`，有界 phase-2 advisory 发送 `mstar:advisory`（原为 `mstar:phase2-notice` / `mstar:model-handoff-notice` / `mstar:phase2-advisory`）。标题栏打印所发送的类型，因此可见标题现在与共享的 Morning Star 通知族一致。
+- 保持不变：隐藏的持久账本标识 `mstar:phase2` / `mstar:model-handoff`、其恢复与去重标识、正文观察到的 workflow id/status/fallback、投递/续接选项以及全部机器拒绝码（含 `phase2.workflow-terminal`）。可见标题改名不是账本或拒绝码变更。
+- 仅改动所发送的值与其对应的 host 参考段落；正文只陈述自身 workflow 状态一次。本条目不声称任何已安装 UI、渲染器注册、已打包宿主副本或发布。
+- 移除 omp 校验器工具的死源码（`src/tools/`：`mstar_iteration_gate`、`mstar_worktree_check`、`mstar_status_validate`、`mstar_lease_verify`、`mstar_path_resolve`、`mstar_dispatch_validate`）。自 MCP stdio 服务器并入 CLI 起，构建不再编译和发布它们；同等能力由 `npx @mstar-harness/cli mcp` 经包内 `mcp.json` 提供（`iteration.gate`、`worktree.check`、`status.validate`、`lease.verify`、`path.resolve`、`dispatch.validate`）。范围说明：CLI `path.resolve` 命令解析四个顶层目录符号（`{HARNESS_DIR}` / `{SPECS_DIR}` / `{WORKFLOW_DIR}` / `{PROJECT_DIR}`）；per-plan 的 `{PLAN_DIR}` / `{SDD_DIR}` 与 `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` 符号遵循自 `{HARNESS_DIR}` 出发的既定解析约定（engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir`；SSOT `mstar-conventions`）。同步删除钉住这些工具的 omp 侧测试臂（`execution-read` 校验器套件、`worktree-check`、`store-cutover` 的工具路由、bundle-smoke 的 custom-tool 探针）以及 `packages/cli/test/tools-v2-smoke.test.ts` 中的跨包测试臂；omp `tool_call` pre-hook 覆盖不变。
+- 将可选宿主 peer 放宽为 `@oh-my-pi/pi-coding-agent@^18.3.0`（任意 18.x 宿主），并把 `devDependencies` 中的开发基线升至 `18.3.0`，使测试套件在用户实际运行的宿主上验证。精确的 `18.2.1` pin 早已与现实漂移：omp 18.3.0 线宿主会拒绝任何输入携带 `env` 但缺少服务名 `name` 的 `bash` 工具调用（`ready and env require a service name.`），本包的 shell 传输代码必须遵守这一参数面契约。
+- `@deepseek-ai/dsh-*` peer 依赖整组升级到 `^0.2.0-rc.2`（走廊 `dsh-v0.2.0-rc.1` → `dsh-v0.2.0-rc.2`：桌面菜单栏 bundled dsh 安装、实验性异步问答、模型选择器模糊搜索、体验/桌面修复、pi-ai → 0.87.1；等 npm 发布 0.2.0-rc.2 后补做）。Session 格式仍为 v4。
+- `@deepseek-ai/dsh-*` peer 包更名：`dsh-agent-presets` → `dsh-agent-preset`、`dsh-code-runtime` → `dsh-ptc-runtime`。
+- planMode bridge 从 `agent/session-start` 迁移到串行 `agent/created`。
+- `dsh-llm-fallbacks` 开发依赖 `0.5.2` → `0.6.4`（首个与 `0.2.0-rc.1` peer 走廊匹配的 fallbacks 代次），engine 侧 `DSH_LLM_FALLBACKS_VERSION` 锁定值同步跟进。
+- 活动工作流选择器改走 ACTIVE 执行状态：派发台账目标缺失时安全失败（fail closed），保留按分支形态的 lease 匹配，并在派发门禁与记录之间复用同一次 ACTIVE workflow 读取。
+- 记录 issue/catalog SQLite 路径 `{HARNESS_DIR}/store.db` 及其与执行 JSON（`ArtifactStore`）的权威分界。
+- 索引 `mstar issue …` CLI 族（动词以 `--help` 为准；技能文不复述标志）。
+- 按入口记录 CLI 运行时下限：shebang 为 Bun `>=1.4.0`，显式 `node` 跑 CLI bundle 为 Node `>=24.18.0`——不是要求两套运行时都装。
+- 新增 **catalog 权威**（`{HARNESS_DIR}/store.db`，migration 2）：project/iteration/plan/document 的身份、路径、归属、spec/knowledge 关系与 catalog 生命周期是 DB 行；正文仍是文件，执行路由、lease 与冻结输入仍是 JSON。
+- 把需维护的 Markdown 索引义务（迭代 README 行、package Documents 表、specs/knowledge 索引表）替换为 **catalog discover / import / register / query** 职责；完整性改为 DB 查询，README 缺失不再是失败。
+- 新增 `mstar catalog` 动词族（list、show、register、update、link、discover、import、export、reconcile）——动词与标志以 `--help` 为准。
+- 新增 **registration journal**：snapshot/根 entry 写入与 catalog delta 经同一个可恢复操作发布（`catalog.registration-pending`，用 `mstar catalog reconcile` 收口），且 prepare 的 plan 把执行输入 pin 到某个 catalog revision。
+- 新增 **可丢弃的执行/roadmap 投影**（migration 3），诚实报告新鲜度与诊断；新增 `withStoreRead` 读边界与 dashboard DTO。
+- 记录跨 clone 限制：`store.db` 本地且默认 gitignored，仅凭 tracked 正文无法重建本地 catalog 历史，discovery 以显式 unknowns 报告。live 索引退役与激活归 cutover plan。
+- 按 compass D18 落地 **capture duty**：确认的 finding 在确认当刻落为 `{HARNESS_DIR}/store.db` 的 issue —— 捕获只记证据，处置是独立的授权动作；同一 finding 再次出现追加 occurrence，而不是新开第二个 issue。
+- **`mstar-project-governance`「Issue capture」成为唯一权威**（issue contract §6 逐字）：确认其结论的席位负责捕获 —— PM 席位，以及 PR-review 轮次 Stage 3 的 main agent；leaf audit/QC/QA 席位只回证据、不写 store。其余五处只做指针落点。
+- `mstar-artifacts` 家族（`SKILL.md` + `references/status-and-residuals.md`）、`mstar-audit`（含 PR-review 参考）与 `mstar-review-qc` 的 residual register 表述改为指向 issue store，并在 `mstar-harness-core` 补最小交付循环句：register 是**迁移历史**，open item 是 store 的 **issue**，`mstar status tech-debt` / `mstar status findings-cleanup` 读 store。已退役的 register 写入动词（`mstar status backlog-register` / `backlog-close`）拒绝并指向 issue 动词；技能文不复述标志。
+- Plan issue 变更仅使用已记录的 workflow coordinator envelope 或 ACTIVE coordinator reference，加上已获取身份和明确 plan 地址。已删除逐行身份及其历史 envelope alias 不授予权限。
+- **Dashboard 行按所属 workflow 取数**（PR #266 评审 RV-1）：projection 的 plan/lease 行改用表自身的 `(workflow_id, plan_id)` 键匹配——同一 plan id 同时存在于 plan workflow 与 iteration workflow 时，workflows 视图与 iteration 执行 overlay 不再附着另一个 workflow 的 lease、状态、进度或 pin revision。
+- **拒绝符号链接跨 harness 的 register 写入**（PR #266 评审 RV-2）：pre-activation register 经符号链接落到另一 harness 的 active/不可读 issue authority 时，由落点上下文拒绝（`project.register.retired` / `store.authority-unavailable`），三份执行副本（ZCode hook、omp gate、dsh store-authority）语义一致；双方都 pre-activation 时保留 §7 legacy register 路径。
+- **目录导入不再留下静默前缀**（PR #266 评审 RV-3）：`importCatalog` 中途失败改以 `catalog.import-partial` 显式抛出，携带已应用的 receipt 与恢复指引——已应用部分是持久化的 journal 进度，用同一 operationId 重跑同一评审 plan 即可幂等收敛到完整 plan、恰好一次。
+- **OpenCode 插件声明 Node 版本下限**（PR #266 评审 RV-4）：`@mstar-harness/opencode` 的 `engines` 在 Bun 之外新增 `node >=24.18.0`（`node:sqlite`），包内 INSTALL/README 同步写明该下限。
+- 新增本地只读治理面板的 **DESIGN.md**：定义浅色主题令牌、四视图导航、证据与历史展示、可访问性，以及明确的空数据、过期和错误状态。
+- 新增离线 `mstar report` 草稿生成器：仅使用调用方明确提供的字段，应用有限的 secret 脱敏模式，并要求用户检查；不会收集本地数据或提交 issue。
+- 补充 CLI 与 MCP 报告用法、`absent`/`unknown` 值，以及脱敏计数的含义与局限。
+- **Issue 写入改为仅基于 actor：**所有非 plan-scoped issue 写动词（包括 `link`）均直接记录到 store，不再要求 session envelope 或 workflow。
+- Plan issue-add/issue-close 使用 workflow 的唯一 primary coordinator 与明确 plan 地址；plan/iteration 链接目标仍为标签，不构成独立权限校验。
+- **工作流创建者信息保真。** 导入时保留工作流创建者身份；首次绑定仅允许创建者为 NULL 的工作流采用。
+- **Plan provenance 按来源隔离：**只有 plan-scoped 写入能建立 scoped 成员关系；actor-only 链接保持 unscoped，历史 provenance 保持 plan-scoped。
+- 依赖 origin 的 issue 读取会拒绝旧 schema，并提示使用公开的 `mstar store upgrade --operator <name>` 恢复入口。
+- 移除过时的 `triageIssueExecution`、`closeIssueExecution`、`linkIssueExecution` engine 导出。
+- 公开的 `IssueProvenance` 类型通过 `"scoped" | "unscoped"` 声明 `origin`，供类型化调用方使用。
+- **Issue revision 冲突**现在会提供保留原命令的 `--operation-id`、`--actor` 与 payload、仅替换 `--expect <current-revision>` 的恢复说明；CAS 帮助仅对引擎实际执行 revision CAS 的 issue 动词显示（triage、close、waive、duplicate、supersede、reopen、link）。
+- 新增带 revision 守卫的 `issue reopen`，可凭可审计原因重新打开终态 issue，并通过操作收据保证幂等。
+- `mstar issue <verb> --help` 现在逐字段列出 payload 字段名、类型与条件必填性，直接派生自 `ISSUE_PAYLOAD_SCHEMAS`（如 `references (requiredWhen: resolved)`），取代含糊的 `Payload fields: payload`（#420）。
+- Closure payload 的必填性现全程跟随**实际 disposition**：`--disposition` 覆写在解码层选择必填字段，静态传输 schema 将 disposition 条件字段保持可选，使 MCP/CLI 组合准入与 `assertClosureAuthority` 一致（#420）。
+- **迭代登记现在写入 `phase-1-prepare` 并存储仓库相对的 `compass_ref`**：生产者把根内绝对路径规范化为契约形式，拒绝逃逸 harness 根的指针（含符号链接），新登记的 workflow 天然可修订。
+- **Prepare 命令对遗留快照自愈而非死路**：`workflow show-prepare` 在阶段标签缺失或指南针指针为根内绝对路径时报告 `derived`，下一条普通 `workflow amend-prepare` 在既有锁内写中一并采纳——已存在的非 Prepare 阶段仍然拒绝且绝不改写，真实执行事实（lease、非 `Todo` 行）依旧先行拒绝。
+- **Phase 1 的写入全部落在 gitignored 迭代 package**：§2.3 integration-worktree checklist step 7（经 `iteration-start` §6 进入）现在只 push 新建的 `spec_integration_branch`（`git push -u`；分支 tip 停留在记录的 base，从而满足 `phase-1-lock` 就绪检查——已 push 的 remote tip 等于 live integration HEAD，由 omp model-handoff 运行时校验）。Phase 1 角色写入 compass / plans / `<iteration-id>/` package（specs 在 `<iteration-id>/specs/`）——均为默认 gitignored 的本地工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入，随 close commit 进入 integration 分支（Phase 3 §3.2 现承载显式 specs 提升步骤：compound 结构化重写**直接写入 integration worktree 中 tracked 的 `{SPECS_DIR}`**——`{KNOWLEDGE_DIR}` 提升同为 integration worktree 直写，主 checkout 只承载 gitignored 进程产物——由 §3.5 close commit 进入 integration 分支；同步骤补齐既有登记面：package `Promoted to:` 标注、plan `primary_spec` / `spec_refs` 与 compass 引用、catalog `register` / `link`）。`iteration-start` / `iteration-loop` 的 pre-commit checklist 更名 pre-integration checklist（loop 的 `phase-1-autonomous-start` todo 现以 compass lock + integration 分支已 push 收口），§1.6 链条与 writing-specialist corpus hygiene 收敛到迭代 package（`iteration-artifact-boundaries.md` / `iteration-corpus-hygiene.md` 同步同一边界），并删除各 plan-mode bridge（`_shared/plan-mode-bridge-core.md` 门禁 + 反模式行、`cursor.md` Phase 1 Plan-mode 门禁、`cursor-`/`omp-`/`kimi-`/`zcode-plan-mode-bridge.md`）中过时的 Phase 1 "commit"。
+- **原型先行准备：** 交互式 Phase 1 反复更新留存的人话与图形 HTML 原型，当前设计明确确认后才编写正式产物；显式自主模式保留适合的 HTML/Markdown/JSON 原型供规划与追溯，不索取例行人类确认。
+- **按需专业审查：** PM 复用原型阶段贡献，按剩余缺口选择 product-manager/architect；选中的审查角色真实串行执行，writing-specialist 最后必经，OMP readiness 按其有序完成收据验收。
+- **移除失效的 `judgment review-advice` 命令路由**；judgment runtime 与 shadow-supervisor API 保持可用。
+- 导出 judgment runtime、审计、评估器通道与 shadow supervisor API；通过 `@mstar-harness/judgment/shadow` 提供 shadow runner。
+- **`@mstar-harness/judgment`**：新增分片级作者派发前隔离门（`author-gate.ts`、`author-sink.ts`、`scripts/author-gate.ts`），复用 shadow supervisor Docker 启动边界——在 Q2 分片派发前配置无工具作者输入、执行禁止路径拒绝探测、校验仅创建输出 sink，并记录监督方访问 transcript。
+- **`@mstar-harness/judgment`**：新增座位级标注派发前隔离门（`annotation-seat-gate.ts`、`annotation-sink.ts`、`scripts/annotation-seat-gate.ts`），复用作者门 Docker 探测启动器——配置无工具座位输入（brief + 投影分片视图）、对禁止的 qualification 路径执行拒绝探测（另一座位、crosswalk、gold、sources、authoring、协议工件、tuner、模型输出）、校验仅创建标注 sink，并在座位不可达处记录监督方访问 transcript。
+- **Judgment runtime：**在输入收集期间观察到 `jev_mode=off` 时会中止正在进行的文件和标准输入读取、阻止后续收集，并丢弃迟到的读取结果。
+- **Judgment**：拒绝响应模型与请求的原生模型不匹配的 TypeSafe 响应。
+- **修复校准 shadow 暂存**：引用文件、清单标识符和受限只读运行时资产现与 supervisor 契约一致。
+- 注释投影测试改用生成的本地 fixture，不再依赖维护者专属的 qualification 证据。
+- **修复 shadow receipt reconciliation**：强制核对必需回执，同时将冻结清单中遗漏的工作保留为未完成；不再拒绝有效取消处置，也不再将零工作运行误判为未完成。
+- 在 PR 审查合成阶段记录**可选、有限的 A05 影子步骤**；评估关闭或不可用时，原有核证、语义去重、否决记录、计数和发布职责保持不变。
+- 补充无账户组件演练指引和仅限合成数据的证据边界；组件收据不授予 Jev 工作量，也不能替代具名宿主/W5 验证。
+- 修复 judgment 包中的严格 TypeScript 错误，并将声明输出根目录对齐到其 engine 导入路径。
+- 修复新注册的 `test-judgment` / `test-commands` 任务首轮红榜：shadow-supervisor 禁闭用例探测其声明环境（Linux 平台、可列出 `/proc`、可写 `/mnt/output`——CI 任务预置 runner 可写目录），能力守卫在 CI 缺失能力时以点名原因红榜而非静默跳过见证；study 闭环用例改经 supervisor 公开受控 provider 输入与真实 mailbox 协议全平台执行（live provider 见证仍为显式记录缺口），并修复其中两个从未被执行到的断言缺陷（缺失评估证据字段、receipt 记账不平衡）；synthesis-pack 测试改为断言 `validatePack` 内容相等（`toEqual`），因为校验有意返回规范化的派生副本而非同一引用。study 闭环用例原先行使的容器/挂载隔离语义在本重写中不被行使（该测试任务未配置容器 worker 镜像/namespace 启动路径）；仍然验证的是宿主侧能力探测与响亮守卫，以及 supervisor 对有效请求的 mailbox 闭环和对失败或 run 身份不匹配 study 结果的 assessor 拒绝。受控邮箱集成测试放宽其 worker 轮询预算（1s→6s）、child 上限（2s→pilot 的 10s 上限）与测试超时：高负载 CI runner 的往返实测 1.1s 会超出旧预算，其见证的生命周期契约不变。
+- **开发校准**将真正全新的冻结资格根目录识别为首次运行，并从最新的单次运行目录加载先前的清单和请求哈希，同时保留冻结身份校验。
+- **冻结校验**现在会拒绝存在标注但缺少 gold 行的语料变体，不再静默排除其标签覆盖检查。
+- **安全性：**移除基于调用方可控环境变量和文件系统形状的 worker CLI 认证。shadow runtime 仍会在收集 pilot/pack 前拒绝未经认证的 evaluator channel；在提供认证启动适配器前，worker 侧提交不可用。
+- 新增 **`commands` 与 `judgment` 包的 CI 测试路由**：两个包清单现在声明 `test: "bun test"`，CI 以独立的 `test-commands` / `test-judgment` 任务运行这两个测试面，与现有按包任务并列。
+- 修正包发布面、托管安装依赖规格、CLI 选项类型解码、宿主已安装 MCP doctor 路径、请求级 store 选择、子进程 stdin 策略与 dashboard 生命周期清理；CI 命令清单改为读取规范命令定义。
+- 将 stdio MCP server 整合进 `@mstar-harness/cli`，以 `mstar mcp` 启动；宿主配置改为运行 `npx @mstar-harness/cli mcp`，并移除独立 MCP 包、宿主专属 bundles 和原生桥接。
+- **MCP 健康检查改为校验宿主真实配置。** `mstar doctor` 的 MCP 检查现在验证各宿主实际的 MCP 配置文件及其 `npx @mstar-harness/cli mcp` 启动项（从 `command`/`args` 数组解析服务条目），取代已删除的 `build-info.json`/`stdio.js` bundle 探测，并拒绝低于各打包目标原生最低版本的运行时。`evidence.verify` 对不合格证据改为返回 `ok` 数据并附 `assessmentPassed` 标记，而非 `refused` envelope。
+- **DSH 获得 Cordis MCP client 行。** dsh bundle patch 在插件行旁插入 `mstar-mcp` 行（`@deepseek-ai/dsh-mcp-client`，stdio `npx @mstar-harness/cli mcp`，serverName `mstar`）；`mstar-harness doctor --target dsh` 结构化解析 profile 的 Cordis 源（不受注释干扰），仅在桥接插件已安装时报 aligned。`spawnProcess` 将 ENOENT 规范为确定性的 `executable not found in $PATH` 错误；dev 命令相对路径参数按 `MSTAR_CLI_PROJECT_ROOT` 解析。
+- 补充六个 JSON 宿主与 OpenCode 插件动态配置的 CLI MCP 启动路径，并记录 DSH Cordis YAML 后续接入；说明运行时前置条件、doctor 状态含义、host/session 边界及独立的已安装宿主验证边界。
+- 记录 OpenCode V1 `@opencode-ai/plugin` 1.4.8 pin，并说明已移除全局 CLI 回退。
+- 新增 `consumer-v1` 源/包清单生产者（`scripts/execution-consumer-manifest.ts`）：对每个消费者（engine、CLI、DSh、OMP、OpenCode、ZCode）记录规范构建输入闭包、生成输出闭包、入口点、确切的运行时 target 与下限、声明的能力，以及各包从仓库根 `skills/`、`commands/`、`agents/`、`assets/` 语料复制的指令树——复用既有构建布局，不引入第二套构建系统。`--write` 产出清单；`--check` 在不写入任何字节的前提下对照磁盘字节复核每一份清单。
+- 生产者同时发布由聚合清单派生的逐消费者证据文档，使交接形态不可能与面向操作者的制品不一致。
+- 装配包 Node 回归驱动构建 CLI 的 coordinator 注册、绑定、普通 source/configuration/progress 与精确重试，比较公开/store 事实、当前 consumer manifest 和已提交 ZCode hook 的 stdin/退出行为，不启动逐行 PM。
+- 该回归明确写出它**不是**什么：没有原生宿主进程、没有已安装二进制、不 import TypeScript 源码。宿主入口点由生成清单一致性加一个「OMP 形状的 populated 数据库夹具」在已构建引擎世代上运行来覆盖。
+- 已声明任一 harness 根规则（`.mstar` 或 `.agents`，含前导斜杠、否定或部分规则）的 `.gitignore` 属**作者所有**：scaffold、安装围栏与 `doctor` 完全不做改动——不追加、不重排、不去重、不规范化，文件字节保持作者原样。无关路径与单独出现的 `.mstarc` 条目不构成声明；自定义布局跳过行为不变。
+- 在 engine path 模块新增导出谓词 `hasHarnessRootDeclaration(content)`：机械、只读的逐行扫描，可识别两种布局的根规则（含前导斜杠、否定与部分声明），且不引入 glob、转义或优先级语义。
+- `validateGitignore` 现在对已声明文件在任何缺失条目计算之前返回 `gitignore.author-declared`，且不提出任何重写；文件缺失仍为 `gitignore.missing`，未声明文件仍报告其缺少的 canonical 条目。canonical 完整性成功分支已因不可达而退役——canonical 内容本身就是一种声明。
+- **最小完整实现：**将 Ponytail 的受影响消费者与数据风险范围、首个完整可用方案的复用阶梯、易读最小解、保护措施保留、实际检查与未验证风险简报提炼到 `mstar-coding-behavior`，开发及运维角色仅补充 API/数据、项目组件与恢复方面的小职责；现有 preset 和 `simplify:` 约定保持不变。
+- **证据驱动审计与审查：**在 `mstar-audit` 中强化预期负载与真实调用流推理、可达发现案例、有价值的回归测试缺口、按职责划分的最小修复，不改只读边界、范围预算、严重性或报告 schema。全库审计 prompt 传递权威预期负载与发现报告规则及发现模板；生成的 PR 席位 prompt 传递共享调查规则与关注透镜。`ATTRIBUTION.md` 记录三个钉选来源 skill、目标文件及完整上游 MIT 声明；不增加外部运行时 skill 或命令族。
+- **执行回执载荷瘦身**：graph 级回执（workflow 创建、生命周期转换、terminal adoption）不再持久化完整 root graph，改为瘦身 envelope —— `{slim, token, storeId, epoch, operationRecovery?}`；这些行的 replay 改从 live data/token 对重新提供。单行体积变为小常量（由 bounded-size 测试固定），不再随项目 graph 增长；plan 动词、bind/recovery 与 catalog 回执保持字节原样，供解析它们的消费者使用。
+- **混合回执形态已声明**：`result_json` 载荷按写入时版本化 —— 瘦身前写入的行保持完整形态并从存储字节 replay，瘦身后的行携带 envelope；`store execution restore-preview` 的三个面（engine 模块头、CLI 帮助、`docs/commands.md`）已声明该事实，混合形态造成的 inventory 差异是显式的。版本化仅向前兼容：旧引擎读到瘦身行会拒绝 `store.corrupt`，需恢复匹配构建。
+- **执行回执保留**：terminal close 与 adoption 现在在同一事务内清理已关闭 workflow 的 `execution_operations` 回执；epoch-bump 清理语句固化"原地 epoch 推进不残留 replay 死行"的不变量。RUNNING workflow 保留全部回执（replay 与恢复证据不受影响）；单 workflow 累积按设计线性增长，由 #466 跟踪。
+- **恢复预览声明回执差异**：`store execution restore-preview` 帮助、engine 模块契约与 `docs/commands.md` 现在声明回执保留是 backup-only `execution` operation 行的预期来源（restore 保留旧 epoch 回执行；replay 仅限当前 epoch），清理后的备份差异是显式声明的，不再无声。
+- **notes 账本预期文档化**：`workflow-note append`/`coverage` 帮助与 engine 账本头部现在写明 append-only 增长模型与整文件读取成本（id 去重扫描、全文件 coverage 哈希）属契约行为。
+- **发布工作流现在会把内联的 changelog 段落裁剪到平台正文上限。** `scripts/extract-changelog-section.ts` 新增 `--max-bytes <n>`：`Release prep` 传 `60000`（GitHub 拒绝超过 65536 字符的 PR 正文），`Release` 传 `120000`（Release 正文上限 125000）。4.0.0 规模发布行约 133 KB，因此 `gh pr create` 报 `Body is too long` 失败，Release 发布也会以同样方式失败。
+- 裁剪落在行边界——绝不截断行或码点——并追加 `> Truncated at <n> bytes to fit the platform body limit. Full section: \`CHANGELOG.md\`.`；不传 `--max-bytes` 时输出与旧脚本逐字节一致。不可用的上限会被拒绝，并指明越界值与确切补救方式：非整数或非正值会报出收到的输入；若上限小到连它必须携带的截断提示都放不下，则会被拒绝并报出最小可用值——该提示是操作者指向完整 `CHANGELOG.md` 段落的指引。
+- **`release:prepare` 现在拒绝 registry 已发布的版本。** 该检查位于版本选择点、任何 changelog 或清单被改写之前：目标版本若已存在于任一已发布 surface 上，则带恢复指引拒绝（换一个版本后重跑）；registry 不可读时打印明确的跳过行——读取有超时上限、并行探测共用一个截止时间，registry 挂起会退化为该声明而不会卡住发布。`release:validate` 的离线 tag 门禁仍不发网络请求。
+- **`env-injection-seams-removed` 碎片现声明 `packages: engine`**（中文块置于标记之后），因此引擎变更被装配进 `packages/engine/CHANGELOG.md`，不再进入根 changelog。
+- **`INSTALL.md` 新增 3.x → 4.x 升级章节**：plan-PM 产品路线移除（唯一 workflow coordinator 通过普通 prepare/progress/issue/complete 推进行）、无参数的 `/iteration-drive`，以及逐宿主刷新表——插件安装器会复用已有 checkout、marketplace 或 linked 树，因此各宿主的 3.x 副本须显式更换（Codex 需拉取共享 checkout、执行 `codex plugin marketplace upgrade` 并重新复制 agent 文件；omp 需先重建共享 checkout 再重新 link；dsh 与 Kimi 经各自插件管理器重装）——并以发布版 CHANGELOG 条目为完整清单。
+- **Release prep 与 Release 改为经一条自准备命令做类型检查。** `bun run typecheck` 现在自行构建其解析所需的 workspace 声明产物（`typecheck:prepare`：engine → judgment → commands），不再依赖各调用方自己维护的步骤顺序——该顺序在 CLI command-adapter 切换后漏改，导致 `Release prep` 一直因 `Cannot find module '@mstar-harness/commands'` 失败。
+- 删除 `ci.yml`、`release.yml`、`release-prep.yml` 中重复的声明构建步骤；前置链现在只有一处实现。
+- **完整移除应用层文件/目录互斥锁**，不引入替代互斥协议。保留 SQLite 原生事务/CAS、授权及真实 workflow integration ownership；普通笔记与文档不成为权威。
+- **Workflow notes 改为普通追加日志**：重复 ID/提交再次追加，一次带 LF 边界的 `O_APPEND` 写入在失败时保留其他写者字节，容错读取越过不完整记录，回执仅返回笔记 ID，不承诺 accepted-operation 回放。已获准追加可在之后 session 撤销后完成；记录不代表当前执行权威。原生设备/inode 观察在追加期间发现目标替换时拒绝；这不是互斥，也不阻止之后的外部轮转。
+- **生产 note、catalog purge 与 execution restore 不再读取已删除的测试控制环境值**：工作目录中的 `.env` 无法执行测试脚本、截断无关文件、暂停生产操作或选择 recovery 故障注入。失败及交错写入的注入仅存在于测试套件。
+- **Dsh host 状态使用现有 control-root 数据库**保存事件、已接受来源身份、扫描下界、绑定与最新状态发射，不再使用 JSONL tail/index/cursor/cache 权威或文件压缩。Dispatch、settle 与 workflow-verdict 证据遵循选中的逻辑 workflow ID，绝不使用目标目录 basename。ACTIVE 权威建立前原生会话日志继续记录，持久化不可用如实提供 init/upgrade 恢复；engine-status 读取保留原生拒绝原因，并区分真实定址无记录与 authority 缺失、staged、损坏和 schema 拒绝。旧绑定导入拒绝已绑定其他 cwd 的同一 session，同时保留同一配对的回放和现有显式跳过恢复。
+- **旧 Dsh 导入保留仅存于 tail 的回放身份**，并通过 no-follow 文件描述符读取来源文件；相同原生回放保留原事件，身份相同但字节冲突时拒绝，被替换为符号链接的文件不被跟随。
+- **旧执行状态经 `store upgrade` 直接导入**，保留原始 v1/v2 来源字节；退役独立 `mstar migrate` staging 与内部 status/snapshot writer，引擎 `ArtifactKind` 仅保留 `review | json`。Active standalone v1 lift 必须按原 workflow ID 各提供一个定址 `--delivery` JSON 对象，支持同一来源重试时声明不同交付意图，在执行登记前验证；kind 不推断，不适用的声明明确拒绝。声明拒绝时 store 初始化可能已提交。现有 Dsh 跳过确认可恢复未登记且使用符号链接的 Dsh 来源，包括以 `--ack-skip-dsh dsh-workflows` 跳过整个 `workflows/` 根，不跟随链接也不修改链接/目标字节；已登记的执行来源继续执行 containment/no-follow 检查，不允许由 Dsh 跳过确认丢弃。数据库备份生成一致原生镜像；restore 在同一 live 数据库内以事务替换全部权威域并提交新 epoch，不冻结或回滚普通文件。已提交的 restore 不因可选文件回执副本写入失败而误报失败，而是返回 `recoveryReceiptPath: null`；仅在原生 store generation 证明未提交时清理本次自己的安全镜像，权威已变代或无法读取时保留镜像。新建 store 的失败区分未发布的文件系统故障与已发布但无法打开句柄的 store，并提供各阶段对应的公共恢复路径。
+- **不安全的已登记来源与原生 ID 冲突有明确导入恢复路径**：可选 `--ack-skip-workflow <id...>` 仅跳过点名且被拒绝的执行导入，与 Dsh 数据丢弃分别确认；保留来源、链接、目标字节及现有原生行。未知或不构成冲突的确认 ID 优先于已登记不安全来源报 usage 错误。回执明确列出失去的导入；默认 no-follow 与普通路径的真实 containment 保留，不伪造恢复运行。
+- **嵌套执行来源的拒绝沿用同一 workflow 确认恢复**，包括符号链接或非普通文件的 snapshot。旧 status、snapshot 及 session 字节通过 no-follow 且身份校验过的描述符读取；session 验证使用已读字节，不重新打开路径。已 checkpoint 权威的回归验证不再等待垃圾回收，也不把 SQLite 清理时机当成断言。
+- **旧来源叶子改为非阻塞打开**：登记叶子若为 FIFO 等特殊文件，按类型拒绝并给出恢复路径，而不是挂住命令；同一次运行中可判定的同源来源仍然正常导入。v1 的 `iterations/<id>/delivery-compass.md` 叶子同样走这条有界、带类型检查且不跟随链接的读取，否则该路径上的特殊文件仍会挂住命令。
+- **v1 转换消费已校验的 register 字节**，不再按路径二次读取 `status.json`，因此分类与转换出的行来自同一次描述符校验过的读取。
+- **store upgrade 回执绑定被导入的来源**：来源摘要纳入请求身份，因此同一 `operationId` 配上改动过的旧字节会冲突，而不是用一份描述本次从未导入字节的回执作答；输入未变时仍回放保留的回执。
+- **已确认跳过的 disposition 只描述被拒来源、不推断原因**：嵌套来源跳过不再声称其（真实且在根内的）所属目录不安全；具体原因由逐项 reason 承载。
+- **两处来源摘要一律按码点排序，绝不受进程 locale 影响**：同一批旧字节在不同机器、locale 与 ICU 版本下保持同一身份，同输入重试不再被误判为 `execution.operation-conflict`。
+- **v1 compass 拒绝给出三条受支持出口**，且竞态换入的链接与静态链接同样按名拒绝：替换为普通文件（保留该 iteration 归组）、移除它（那些 plan 转为 standalone 行），或显式选择不导入任何旧来源（`store init --harness <new-empty-control-root>`，既有数据不动）。描述符还会与探测结果校验身份，换入的普通文件无法贡献其字节。
+- **发布竞态下 upgrade 重试仍然有效**：输掉 `initializeStore` create-only 发布竞态的 upgrade 会被指回 `store upgrade`（其旧数据导入可能未完成），而不是收到本应属于 `store init` 的「不要初始化或迁移现有 store」提示。
+- **已枚举的历史 chunk 消失即拒绝**：DSH 导入不再把该 `ENOENT` 当作「该 workflow 没有保留历史」，因此消失 chunk 中的身份不会被静默跳过；历史目录确实缺失时保持原行为。
+- **probe 之后发生变化的 v1 compass 即拒绝**：类型探测已观察到该 compass 后，若它在读取前消失或被替换为链接，按名拒绝而不是当作缺失（否则会静默改变该 iteration 的 plan 归组）；非普通 compass 的拒绝同时给出两条受支持修复：替换为普通文件，或移除它并把那些 plan 转为 standalone 行。
+- **畸形的 v1 plan 行可按 id 跳过**：某个 v1 lifecycle 的行无法导入时，以该 lifecycle 自身作为被拒来源，可用 `--ack-skip-workflow <原 id>` 跳过，与畸形 v2 snapshot 一致；一处 agent 写的坏行不再阻塞其他有效 workflow。
+- **根 `status.json` 的 `residual_findings` 如实披露而非丢弃**：v1 转换给出确切条数与受支持路径（项目 register 文档 `projects/<id>/residuals.json`，或 issue 动词），旧字段原样保留。
+- **upgrade 的恢复文本与帮助列出完整跳过词汇**：面向机器的 DSH 恢复同时给出 `--ack-skip-workflow`（针对本次已提交的 id），命令描述列出该确认接受的每一类来源。
+- **被拒的旧来源始终可按其 id 跳过**：已登记 snapshot 的 plan 行缺失、重复或无法转换时，改为以该 workflow 自身作为被拒来源（默认拒绝文本给出 `--ack-skip-workflow`），因此一处畸形行不再中止整次 upgrade，也不阻塞其他健康来源导入。
+- **不承载任何来源的 `workflows/` 条目按缺失处理**，不再是冲突：根下没有登记项时，普通文件（或其他非目录）不再中止 upgrade；根下有登记项时仍保留原有按来源拒绝。
+- **upgrade 回执绑定它实际消费的字节**：每个来源哈希取自产出该行的那一次描述符读取（v1 的 compass 读取同样在读取处记录），摘要不再二次打开同一路径；执行导入已提交后发生的 DSH 拒绝，会同时列出其宣称重试所需的两个确认。
+- 退役的 `mstar migrate` 现识别原 delivery/branch 参数后返回明确的无写入拒绝。旧状态与 Dsh workflow 选择诊断现指向 `mstar store upgrade --operator <name> --harness <control-root>`。
+- **catalog purge-registration 仅结算原生执行 journal**，不读取、不哈希、不改写记录的 snapshot：失败 producer 的来源字节原样保留，编辑过的文档不再阻塞 journal 清理。记录摘要仅作为 receipt 的历史失败证据，绝非对当前文件的重新认证；身份、generation、catalog revision、ACTIVE 与已记录 receipt 回放守卫均保留。
+- **新的 store 发布先同步父目录**，再删除 fallback 镜像。同步失败如实报告已发布的部分结果，保留可读数据及 fallback，并支持通过同一公共 upgrade 入口恢复。
+- **里程碑机制**落进项目存储：`mstar milestone add|update|assign` 在 store revision CAS 下写 milestone 元数据与唯一的 issue 关联；只读 `list`/`status` 提供 open / resolved / other-retired rollup。交付是显式状态变更，要求至少一个关联 issue 且零 open。
+- **组合式路线图面**：`mstar roadmap export`（JSON v2 / 分组 Markdown）与 roadmap 仪表盘在保留 Direction 的同时渲染 milestone（目标、状态、关联 issue、计数）；无 Markdown 正文也可用，且从不修改 milestone 记录。
+- **治理措辞**改为引用 milestone：Durable Roadmap Gate 接受 milestone ID + 关联 issue 的 acceptance / owner / dependency / trigger 证据；退役的 `roadmap.md` stub 仅作历史 / 导入传输。
+- **项目路线图权威**现为项目存储记录，而非实时 `roadmap.md`：CLI、仪表盘和 dsh 读取同一正文；已知项目无路线图时明确报告缺失。
+- **路线图编写**采用只读导入预览与审核后应用、受版本保护的整份替换，以及 Markdown/JSON 传输导出。初始化仅登记 `_default`，不写路线图 Markdown；遗留文件仅作导入候选或历史。
+- **迭代收口**读取存储中的路线图，导出独立候选并按已观察版本替换，不再编辑实时项目路线图文件。运行时指引统一指向项目治理规则。
+- 修复路线图 CLI 发现、导入预览往返、仪表板缺失状态处理及旧版路线图迁移披露，且未创建第二内容权威。
+- 当忽略文件可能丢失时拒绝清理 worktree；刷新已提交的 hook bundle 及迁移/脚手架预期。
+- 修正路线图仪表板与项目汇总的缺失提示，并更新迁移 6 的测试预期。
+- dsh 从 store 权威读取项目路线图里程碑，并在面板中披露缺失、部分与不可用的路线图覆盖。
+- 恢复路线图视图中的目录事实，修正空项目汇总提示，并在成功的 JSON 迁移输出中保留步骤列表。
+- 新增只读本地看板：`mstar dashboard` 仅在 `127.0.0.1` 上（仅回环绑定，无 bind 选项）提供 issue 列表/详情（含真实记录历史）、workflow / iteration / roadmap 视图，以及一张累计捕获 vs 退役的 issue-flow 图表；数据源为 issue store 与惰性刷新的执行/roadmap 投影。看板不做任何变更；未知历史日期会被披露并单独计数，store 之前的桶标记为 register history，issue-flow 图表附带可访问的数据表格。
+- **Dashboard roadmap 改为里程碑看板**：roadmap 页面按 store 的 ordinal 顺序为每个里程碑渲染一列，列内即该里程碑已关联的 issue 条目（mono id、disposition 徽标、存储标题），取代原先的纵向卡片列表。项目的未分配 issue 以显式命名的尾列呈现；在没有里程碑的分支上也会写出计数，不会静默丢弃。
+- **Direction 降级到看板下方**：内容权威的 Direction 与存储的历史文档改为看板下方的折叠区块，各自保留标题与原有“内容权威 ≠ 里程碑数据”的措辞。Catalog 事实与 store/projection 新鲜度区块保持不变；roadmap 读取被拒绝时仍渲染其通知——既不渲染空看板，也不进入"无里程碑"状态。
+- **Dashboard roadmap 入口改为 projects-first**：不带 `?project=` 打开 `#roadmap` 时列出全部 catalog 项目（标题、id、生命周期、open issue 数），每项链接进入该项目的只读 roadmap，取代原先"手动改 URL"的死路。
+- **新增 `projects` dashboard 读视图**（端到端）：engine `DashboardView` + `ProjectListDTO`/`ProjectListItem`（对 catalog 表的完整、刻意不分页读取，含 open issue 计数）、零查询参数的 `/api/projects` 传输路由，以及重新生成的离线 dashboard 资产包。
+- **门禁路径解析在引擎里单源化**：`@mstar-harness/engine` 现在拥有落点解析器（`landedPathOf`，链式形式）与大小写折叠的权威命名/分类，OpenCode v1、OpenCode v2、omp、dsh 与 ZCode 写门改为导入它，不再各自保留手工副本。这些副本已经漂移——四份只跟随一跳符号链接，而 v2 跟随整条链——因此两跳别名链指向 harness 权威文件（`store.db` / `-wal` / `-shm`）时能绕过门禁。现在所有门禁都解析完整链接链（8 跳上限，环形/越界以 `write.symlink-resolution-refused` fail-close 拒绝），大小写变体权威名在各宿主分类一致；各宿主保留自己的拒绝外形 (#442)。
+- 历史 R3（3 次调用，通过）和中间 R4（initialize 基础设施错误，0 次调用）证据仍分别保留在各自运行目录；R4 发生在 initialize 响应修复之前。
+- 已在完整 SHA `3c0f0eea8c9f6298d701e472da81f2a8ffd8de73` 上，将当前验收证据刷新到 `eval/r5-guess-path/`：本地构建 CLI 的 stdio MCP 猜测路径记录 3 次调用（近似错误工具名、目录恢复、修正后的调用），判定通过，run/report 退出码均为 0。
+- 使评估驱动可在任意检出中运行：从 `import.meta.url` 推导仓库根目录，支持 `MSTAR_SKILL_EVAL_REPO_ROOT` 和 `MSTAR_SKILL_EVAL_DURABLE_DIR`，并记录当前完整 SHA 与已构建 CLI 身份 / 帮助哈希。克隆后运行 `bun run --cwd packages/cli build && bun scripts/skill-eval/run-bounded-resolution-real.ts`。
+- **模型遵循情况仍未验证（脚本化客户端，未调用 LLM）**。
+- 将 skill-eval 闭包清单重新冻结到可达的 `origin/main`（`c42c16b4`）：此前 BASE 版本在历史改写后已不可达。BASE 树文件哈希现与该可达版本一致，当前字节哈希继续固定。对于在此 BASE 中已不存在的锚点，检查用于防止重新引入，而非证明其历史删除。当前文件包含 35 个测试；历史上的 37 个测试数不是修复后门禁的要求。由于 CI 不执行 `scripts/skill-eval`，此闭包检查仅通过手动本地运行执行；漂移或重新引入只会在本地运行时被发现（#357）。
+- 在 `AGENTS.md` 新增**容错与可发现性优先**工作规则：agent 执笔的修改必须可经公开操作修正；除最小 required 集外参数一律可选且带安全默认；能力必须可从 `--help` 与拒绝文案发现。原则锚点：#365。
+- 新增维护策略：任何面向用户的拒绝都必须说明**实际原因**，并给出可通过**受支持且已文档化**的接口执行的确切恢复步骤。没有配套恢复的门禁、让操作者无事可做的拒绝、以及用通用"blocked"文案掩盖已知原因的写法，均属缺陷；新增硬性限制必须同一次变更带上恢复方案与测试。
+- 新增**架构师的消融式设计最小化纪律**：若移除候选组件不会破坏已确认且明确具名的需求（含已批准的长期目标态或已记录的非功能约束），则删除该组件；为每个非显然必要的保留组件记录一行证据。最小设计仍须对齐长期目标状态，而非临时补丁。
+- 授权**裁剪架构输出模板**：在 Prepare & Plan 和 Architecture Spec 两类输出中，将不适用于当前任务规模的章节标记为 `N/A — <one-line reason>`，不编造填充内容；实现层操作指引引用 `mstar-coding-behavior` § Decision Rules。
+- **独立编码行为技能：** 将 `mstar-coding-behavior` 压缩为围绕原始用户目标、第一性原理、奥卡姆剃刀/YAGNI、根因修复及定向证据的工作流；移除强制 harness 加载、重复模板与引擎预检，保留精简的依赖论证、受限解法标记及按需工作流权威引用。
+- **Agent 产品设计：** 优先保证命令与恢复路径可发现、必要输入最少且默认安全、公开操作可修订、错误与部分结果保真；禁止臆测功能和门禁，同时保留必要安全护栏。
+- **精确加载例外：** 仅豁免名称完全匹配的 `mstar-coding-behavior` 的强制 Load Order/core-first 校验；其它专题及角色 hub 校验保持不变，将既有加载文案对齐精确身份例外，补充行为回归并同步 Cursor PM 路由场景。
+- **行为导向的漂移检查：** 删除会把正常技能精简误判为失败的全仓文档数量及加载文案锁定测试；保留无效命令回归、真实加载顺序行为检查和实际语料校验，不重新锁定偶然的数量或措辞。
+- Plan 模板采用三种直接 coordinator 完成路由：迭代证明实际串行集成；standalone development 证明登记 source 并保留交付尾段；standalone report-only 在 Done 前记录匹配策略履行，不虚构 Git/PR。
+- 更新 `mstar-artifacts/templates/plan.main.md`（Engine lifecycle 块）与 `mstar-artifacts/references/plan-quality-bar.md`（第 8 条 Engine lifecycle ownership）以与权威契约保持一致。
+- 稀疏意图动作在无歧义时推导已获取身份的 coordinator 自身 context。显式 scope/token/operation 约束仍校验；缺少 source 事实使用可修订 prepare，不逐行 bind/claim 或强制通用修复链。
+- 用动作局部语义替换 `mstar-use-cli` 中"拒绝即无变更"的决策规则：拒绝的提交状态以回执为准——引擎协调的 plan 路由拒绝是事务性的（不写任何行、回执或计数器），动作局部部分回执保留已提交的组件，且只重放文档记载的剩余动作；过期显式令牌通过重读后以新令牌重试恢复。
+- 删除了"参数解析器可能因缺失必需参数而退出码 1"的过期决策规则：对当前构建 CLI 的探测表明，缺失位置参数会以 usage 信封（`command.invalid-input`，退出码 2）应答。
+- 将 `mstar-use-cli/references/preconditions.md` 的活跃路由身份与令牌指导对齐到已验证传输：CLI/MCP 传输不携带环境身份，独立获取的调用方身份以动词自身的 `--session-id`/`sessionId` 按调用提供（绝不读自会话文件，绝不由会话引用携带或推导）；plan 变更仅在显式约束时提供执行令牌——省略时引擎从计划自身的读取推导当前令牌——而全新活跃绑定与 workflow 级活跃写入（registration、evidence）须自行提供完整执行令牌：前者连同独立获取的会话身份、workflow 与调用方自有的 operation id，后者连同显式 expectation、operation 与主会话身份（evidence 另须其 session reference）。
+- 将 `mstar-use-cli/references/plan-and-workflow.md` 对齐到同一传输：plan 变更仅在显式约束时提供执行令牌（省略时引擎推导），workflow 级写入与全新活跃绑定仍以 `--expect` 提供完整执行令牌（预激活绑定保持免令牌）；每次活跃调用都提供独立获取的 `--session-id`/`sessionId`，因此 plan 变更省略 `--expect` 与活跃路由携带 `--session-id` 不再是 usage 错误，"拒绝即无变更"的笼统声明改为动作局部提交状态语义。
+- 使其余 `mstar-use-cli` 参考与探测行为一致：`checks-and-lints.md` 删除解析器退出码 1 的附注（缺失必需参数以 `command.invalid-input`、退出码 2 应答），`status-and-registers.md` 的 plan 范围 capture 条目改为相同的显式约束令牌规则。
+- 将 **harness 技能语料与迭代命令**对齐 ACTIVE `store.db` 执行权威：workflow/plan 行、root register、lease、session 与分支锚点均以 store 为载体；root `status.json` / workflow `snapshot.json` / `sessions/*.json` 指令仅保留为显式标注的激活前或无引擎回退。
+- 用 **store issue 与 catalog 动词**（`mstar plan issue-add`、`mstar issue add`、`mstar catalog discover/import/link`）替代已退役 residual register 与 README 登记义务，保留 append-only workflow notes 与 authored plan/assignment 面，并删除 `mstar-iteration` 中重复的 lease 协议正文。
+- 澄清 `mstar-conventions` / `mstar-artifacts` 中 store `init`/`upgrade`/`activate` 与激活前 bootstrap 模板的分工，补齐 `mstar-use-cli` 命令族与执行拒绝码索引，并将 findings-cleanup 语义集中到 artifacts 权威。
+- 将 `.cursor/skills/mstar-routing-eval/` 门禁 fixtures 同步到该拆分：ACTIVE 用 store 事务 / execution lease 仲裁措辞，文件 flock 场景显式标注 pre-activation（case ID 与期望路由不变）。
+- 让 `mstar-compound` **只拥有 compound 步骤**：`mstar-compound/references/compound-workflow.md` 顶部以一行接口边界声明"触发时机 / cwd / 写入面 / 记录面属**调用方**流程，由调用方自身声明并引用本步骤文件"。compound 侧不再复述调用方上下文（integration worktree、compass 摘要、workflow delivery 记录、PR head 时点），消除反向依赖及其第二维护面。
+- `mstar-iteration` Phase 3 §3.2 改为引用步骤 SSOT，并把迭代调用面作为自身声明保留；单 plan 交付尾段在 `mstar-roles/references/project-manager/plan-management.md` 引用同一步骤文件，`mstar-harness-core` 与 `mstar-conventions` 补上指引。
+- 移除 compound 侧残余的调用方注册表：接口边界句、生命周期集成段、`description` 与 package 盘点前言不再点名调用方文件或其 gate 标签。依赖保持单向 —— 调用方指向步骤文件，compound 只拥有步骤，不持有"谁调用我"的信息。
+- **L1 worktree 所有权：** 检查驻留状态时忽略声明为已记录主工作树分支的计划行；真实所有权冲突会指出所属 workflow 与计划。
+- **计划准备：** 禁止任何计划行使用控制检出的当前分支（包括仅报告工作流）；无法解析该分支时也会安全拒绝。
+- **L1 worktree 检查**现在从 ACTIVE 执行权限图派生 workflow、plan、lease 和生命周期分支输入，不再读取已退役快照或扫描兄弟快照。
+- **同级 worktree 根目录**：feature/L2 worktree 与 `pr-review worktree-setup` 的默认位置改为 checkout 外的 `<parent>/<repo>.worktrees/`。仓库根目录为 Git top-level 的 realpath；仓库内 `.worktrees/` 仍是合法的手动或覆盖位置。移除默认创建流程对 `.git/info/exclude` 的追加，因为仓库外的位置不再需要它。
+- **约定对齐**：更新 skills 与 `AGENTS.md`，统一教授同级根目录约定，避免仓库扫描或编辑触及 linked checkout，并使权限指导不依赖 cwd 或未经验证的 glob 解析语义。
+- 新增**承接方侧 worktree 检出门禁**：Assignment 含 `Worktree path` 时，leaf 角色须在首次仓库写入或提交前 `cd` 到该目录并用 `git rev-parse --show-toplevel` 校验检出根一致，并在 Completion Report 回报 `Worktree path used`（绝对路径）——修复 subagent 继承宿主 cwd 而误写 primary checkout 的缺口。
+- 更新 `mstar-branch-worktree`（可写角色执行规则 + 回报要求）、共享块 `mstar-roles/references/_shared/leaf-executor-core.md` Git NEVER 段，以及 `frontend-dev` / `ops-engineer` 角色文件，与既有 `fullstack-dev-shared.md` 指令对齐。
+- 修复停止和失败（终态取消）的注册被新注册取代后的 worktree cleanup 归属判定：终态 owner 不再导致共享 worktree/branch 被误判为 foreign。真实存储 dry-run 现在会将已合并的 worktree 规划为移除；分支删除仍须等 worktree 移除后重新规划。
+- **更可靠的工作树回收归属：** 完成计划时，在释放租约后仍保留其准确的分支与工作树路径。回收也可从有效的已完成 Done 行交接记录恢复归属；可解析但无效的快照会将交接资源保留为保护性、非终态元数据，但绝不授权删除。除非显式忽略，否则无法读取的快照会阻止删除。执行回收时，在移除延后处理的集成工作树后重新规划，再删除因此解除检出的分支。归属冲突仍拒绝移除。
+- **忽略文件的回收：** 仅有被忽略文件时，工作树不再被判为脏。执行符合条件的移除会删除这些文件，且 Git 不提供恢复保障；已跟踪改动和非忽略的未跟踪文件仍阻止移除，回收绝不强制执行。
+
+### Added
+
+- 新增 **`@mstar-harness/opencode-v2`** —— OpenCode **2.x** 原生插件包，基于锁定的 `@opencode/plugin` **2.0.26** SDK 编写。经 V2 原生 editor 接口注册同一套打包的 `mstar-*` skills、角色 agents 与 iteration commands；其 `write`/`edit`/`subagent` 门禁通过类型化 `Tool.Error` 通道**真正拒绝**（V1 包"无拒绝通道、仅告警"的限制不适用于此）。`patch`、`shell` 与 Code Mode 仍为明确的不承诺面；installed-host 行为未经验证。
+- `mstar init --target opencode` / `doctor --target opencode` 现为**代际感知**：`--opencode-generation <v1|v2>` 始终优先；真实安装否则探测 `opencode --version`（主版本 ≥ 2 → `@mstar-harness/opencode-v2`，1.x → `@mstar-harness/opencode`）；探测失败以该 flag 作为恢复方式拒绝——没有静默回退到 v1；`--dry-run` 跳过探测，未解析的代际以注解如实呈现而绝不猜测。配置 markers 仅作一致性护栏。
+- V2 配置写入集不触碰 V1 键并保留用户取值：复数 `plugins`（owned-slot 去重）、仅在调用方提供时写入 `agents.<role>.model`、非破坏性合并 `mcp.servers["morning-star"]`、`$schema` 只保留不发明。
+- 文档：新增 `packages/opencode-v2/README.md` 与 `INSTALL.md`、OpenCode（V1）包文档的双代际指针、`mstar-host` OpenCode 参考的 V2 章节，以及根 README 安装行。
+
+### Breaking
+
+- **破坏变更：完整移除 plan-PM 产品路线。** 唯一 workflow primary coordinator 通过普通 `prepare`、`progress`、`issue-add`、`issue-close` 与直接 `complete` 推进行。逐行 session/role/claim/bind、sealed Assignment 准入及 handoff/accept/return/integration-start/integration-accept/reconcile/repair/release 协议删除，不留 alias 或移位转交链。保留 coordinator bootstrap/resume 与明确停止的 workflow coordinator 恢复。
+- **Iteration drive 仅无参数调用。** `/iteration-drive` 在 boot 前拒绝全部非空输入；旧 scoped flags 不会静默变成整个迭代授权。OMP 移除额外 primary 设置、容量/终端传输与 launch journal；保留原生 leaf 派发、有界 bind/checkpoint/只读 history 观察器。Model-handoff 行为不变。
+- **普通可修订配置。** Source branch/worktree metadata 与 QA/cleanup 经 prepare 配置，active 时仍可修订。默认 mandatory QA 与 allow-residual cleanup。有效 metadata/defaults 不要求仪式化 prepare record 或冻结 plan/Assignment 字节。保留 transaction、CAS、精确请求收据、明确授权、L1/L2 隔离、SDD、QC 三审与 QA。
+- **三种完成义务仍不同。** 迭代 complete 验证已实际执行的串行双亲合并及干净登记 integration checkout，保留父级 compound/PR/核实合并/close，不建子 PR。Standalone development 验证登记 source，不走迭代集成，保留自身交付尾段。Standalone report-only 消费 Done 前明确记录的匹配策略履行，再凭证据 close，不虚构 Git/integration/compound-before-PR/PR。Complete 仅释放适用集成排他、保留归属，精确 replay 不改时间戳；不执行或重复 Git merge。
+- **明确 authority 与历史切换。** 已选 store root 不再重新发现：缺失或空 `--harness` 目标不会打开另一个 ACTIVE store，拒绝后仍可经公开 store upgrade 恢复。Schema-8 退役要求完整 operator-stop attestation 并保留业务来源；导入的已完成归属使用当前 metadata/completion，不保留 plan-PM handoff 读取路线。
+- **Authority、阶段与 retained track 修正。** ACTIVE authority 拒绝先于无效 plan-read 参数校验；已记录的数值 progress 参与迭代阶段推导。FILE worktree check 保留所选行的 track 归属，并公开携带明确 control root、使用已观察 revision 的普通 progress 恢复，不清除活跃 track、不放宽 checkout/identity 保护。
+- **策略与宿主一致。** Canonical skills、commands、templates、routing pressure data、有界评测 dispositions 与 README pairs 在所有宿主使用同一直接路线。DSh 保留 row metadata 的真实可写 scope 检查及现有公开拒绝码，不再检查逐行 holder。退役已替代的未发布 seal/admission/stopped-plan-owner 碎片，保留无关 issue/transport/model-handoff 行为。
+- **审查席位最小权限。** 删除 QC 三席及 code-reviewer 薄壳对已删除逐行 lease verifier 的精确/通配 Bash 授权，不以集成/业务变更或 build/test 权限替代；角色仍保持薄壳，既有审查边界不变。
+- **Report-only 策略证据保持幂等。** 履行记录在两条传输上仍是授权 `Done` 的依据：完成后重新指向证据引用以同一稳定码拒绝，完全相同的重录则为无副作用的幂等操作；development 尾段仍只在写入期发生。
+- **直接完成仍正向校验完成行的一致性。** `Done` 的 standalone 行须符合声明的完成类型及适用的 integration/无租约约束，不能用其他状态标签绕过。此前 `validateStandaloneCompletedCoherence` 的 handoff 状态漏洞可通过改写一个词绕过 integration 污染、`integration_worktree_path` / `branch.integration` 与无租约检查，让 close 在 handoff 仍为 `accepted` 时写入 `completed`/`ended_at`、注销根条目并通过 phase 6；直接路线保留完成一致性，不恢复已退役的 handoff 读取器。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.0**。
+
 ## [3.11.2] - 2026-09-19
 
 ### Harness
