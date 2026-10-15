@@ -18,7 +18,11 @@
  * must carry would not fit.
  */
 
-/** Body of `## [version]` in `changelog`, or undefined when absent/empty. */
+/**
+ * Body of `## [version]` in `changelog`: `undefined` when the heading is
+ * absent, `""` when it is present with an empty body — the caller needs both
+ * to name the right cause.
+ */
 export function extractSection(changelog: string, version: string): string | undefined {
   const header = `## [${version}]`;
   const start = changelog.indexOf(header);
@@ -27,9 +31,8 @@ export function extractSection(changelog: string, version: string): string | und
 
   const afterHeader = changelog.slice(start + header.length);
   const nextSection = afterHeader.search(/\n## \[/);
-  const body = (nextSection === -1 ? afterHeader : afterHeader.slice(0, nextSection)).trim();
 
-  return body || undefined;
+  return (nextSection === -1 ? afterHeader : afterHeader.slice(0, nextSection)).trim();
 }
 
 /** The truncation notice for a given `maxBytes` cap — the single source of its text. */
@@ -60,6 +63,15 @@ async function main(): Promise<void> {
   const version = argv[0] ?? process.env.RELEASE_VERSION;
   const usage = "Usage: bun run scripts/extract-changelog-section.ts <version> [--max-bytes <n>]";
 
+  // Checked first, and before the file is read: without a version there is no
+  // heading to look for, so a section-lookup refusal would name the wrong cause.
+  if (!version) {
+    console.error(
+      "A release version is required — pass it as the first argument (e.g. `bun run scripts/extract-changelog-section.ts 4.0.0`) or set RELEASE_VERSION.",
+    );
+    process.exit(1);
+  }
+
   if (maxBytesIndex !== -1) {
     const maxBytes = Number(maxBytesArg);
     if (maxBytesArg === undefined || !Number.isInteger(maxBytes) || maxBytes <= 0) {
@@ -85,20 +97,36 @@ async function main(): Promise<void> {
     return run(version, maxBytes);
   }
 
-  if (!version) {
-    console.error(usage);
-    process.exit(1);
-  }
-
   return run(version, 0);
 }
 
 async function run(version: string, maxBytes: number): Promise<void> {
-  const changelog = await Bun.file("CHANGELOG.md").text();
+  let changelog: string;
+
+  try {
+    changelog = await Bun.file("CHANGELOG.md").text();
+  } catch (error) {
+    // Strip the errno prefix so a raw stack/ENOENT never reaches the operator.
+    const reason = (error as Error).message.split("\n")[0].replace(/^[A-Z][A-Z0-9]+:\s*/, "");
+    console.error(
+      `CHANGELOG.md is not readable in ${process.cwd()} (${reason}) — run this from the repository root that holds CHANGELOG.md.`,
+    );
+    process.exit(1);
+  }
+
   const section = extractSection(changelog, version);
 
-  if (!section) {
-    console.error(`No CHANGELOG section found for ## [${version}]`);
+  if (section === undefined) {
+    console.error(
+      `No CHANGELOG section found for ## [${version}] in CHANGELOG.md — check the version against an existing \`## [x.y.z]\` heading, or set RELEASE_VERSION to that version.`,
+    );
+    process.exit(1);
+  }
+
+  if (section === "") {
+    console.error(
+      `CHANGELOG section for ${version} is empty in CHANGELOG.md — add its bullets (or the matching fragments) before extracting.`,
+    );
     process.exit(1);
   }
 
