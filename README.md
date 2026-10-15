@@ -132,7 +132,7 @@ Details: [`docs/runtime-reference.md`](docs/runtime-reference.md#cli-contract).
 
 From a coding tool that supports MCP, look up issues, the roadmap, and workflows, and run the matching CLI operations and checks, without writing a shell command. `mstar-harness mcp` is the stdio server in this package. It follows the same rules as the CLI — not a new permission — and there is no separate MCP package.
 
-After install, a host usually already has its launch configuration; see [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools). Static JSON configs use the shape below (`npx` needs Bun on `PATH`, as in [Prerequisites](INSTALL.md#prerequisites)). Do not paste it over a file the host already wrote. OpenCode does not read a static file — its plugin injects the server from the `config` hook. dsh is the exception: the shipped row stays inert until the profile includes `@deepseek-ai/dsh-mcp-client` (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`).
+After install, a host usually already has its launch configuration; see [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools). Static JSON configs use the shape below (`npx` runs the bin on the Node on `PATH`, as in [Prerequisites](INSTALL.md#prerequisites)). Do not paste it over a file the host already wrote. OpenCode does not read a static file — its plugin injects the server from the `config` hook. dsh is the exception: the shipped row stays inert until the profile includes `@deepseek-ai/dsh-mcp-client` (`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`).
 
 ```json
 {

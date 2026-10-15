@@ -12,12 +12,7 @@ Populate `study-manifest.json` with schema `mstar.shadow-study/v1`, one common v
 
 `baseline` contains the original work inventory, actual seat outputs, original consumption and final report. A unit is complete only when its original output was consumed and that output appears in seat outputs. Obtain a vetted component worker and pinned image from a prior confinement proof, or run that proof first; launch arguments alone do not establish isolation. Never put source, evaluator data or credentials in a worker-readable mount, Docker environment, status or report. Fresh runs need fresh roots because baseline, receipts and assessment are write-once artifacts.
 
-From the repository worktree, exercise the actual finite supervisor (replace the example path with that fresh **absolute** root):
-
-```sh
-bun run packages/judgment/scripts/shadow.ts exercise --root /absolute/synthetic-component-root
-bun run packages/judgment/scripts/shadow.ts assess --root /absolute/synthetic-component-root
-```
+From the repository worktree, exercise the actual finite supervisor with the maintainer script `packages/judgment/scripts/shadow.ts`, run through the repository's development toolchain ([`AGENTS.md`](../AGENTS.md) names it) — `exercise --root <fresh-absolute-root>` first, then `assess --root <the same root>` (replace the example root with your fresh **absolute** root).
 
 `exercise` runs the approved Docker child, freezes and seals `baseline.json` before its request lifecycle, records `probe-events.json`, `study-result.json`, `receipts.json` and `assessment.json`, and prints bounded status/metrics. `assess` rechecks identity, completed-study status, original consumption, receipts and child lifecycle; it refuses an incomplete/failed study rather than upgrading it. Both paths reject `evidenceClass: "named-host"`. Check every receipt's `owner: "original"`, `jevWorkCredit: 0`, the assessment's `evidenceClass: "component"`, `qualification: "component-only"`, `w5: false`, and any actual failure codes; do not call an unavailable result a success. A probe may exercise the child lifecycle and confinement **without making an attributed provider call**; it is not proof of any of the six quality buckets. Those require separately authorized, measured evaluator responses. A controlled stub/fixture can test classification mechanics but never serves as calibration, holdout or actual TypeSafe evidence.
 

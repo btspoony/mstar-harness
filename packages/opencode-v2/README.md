@@ -4,7 +4,7 @@ Morning Star harness plugin for [OpenCode](https://opencode.ai) 2.x, authored on
 
 This is the harness's second, independent host package. It projects the same canonical assets — `mstar-*` skills, role agents, iteration commands — and the same engine-backed runtime gates as [`@mstar-harness/opencode`](../opencode/README.md), which stays the entry for OpenCode 1.x hosts on the V1 plugin API (`@opencode-ai/plugin` 1.4.8). The two packages share no runtime entry: install the one that matches your host generation.
 
-Development and asset bundling use **Bun >=1.4.0**. The published plugin is a `--target node` bundle for the OpenCode 2.x host process — a Node entry with a **Node >=24.18.0** floor (`node:sqlite`), not a second demand to install Bun on every OpenCode user machine. CLI shebang launch and this plugin entry are two entrypoints with two floors: this plugin is the Node one, the installer CLI below is the Bun-shebang one.
+The published plugin is a `--target node` bundle for the OpenCode 2.x host process — a Node entry with a **Node >=24.18.0** floor (`node:sqlite`). The installer CLI is the same Node entrypoint with the same floor, including when it is invoked through `npx`: there is no second runtime to install for either entry.
 
 ## Install
 

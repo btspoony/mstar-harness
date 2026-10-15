@@ -4,16 +4,14 @@ import { createRequire } from "node:module";
 import { delimiter } from "node:path";
 import os from "node:os";
 import path from "node:path";
-import { MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
+import { MIN_NODE_VERSION } from "@mstar-harness/engine";
 import { DSH_BIN, DSH_DUMP_FLAG, DSH_HOME_ENV, DSH_PROFILE, DSH_PROFILE_FLAG, resolveDshProfileDir } from "./dsh.js";
 import { resolveOpencodePluginPackageRoot } from "./plugin-version-alignment.js";
 import { compareSemver } from "./version-compare.js";
 import type { HostTarget } from "./plugin-version-alignment.js";
 
-type RuntimeKind = "node" | "bun";
-
 export type McpHealthStatus = "unavailable" | "mismatch" | "aligned";
-export type McpRuntime = Readonly<{ kind: RuntimeKind; version: string }>;
+export type McpRuntime = Readonly<{ version: string }>;
 export type McpTargetHealth = Readonly<{
   target: HostTarget;
   status: McpHealthStatus;
@@ -37,10 +35,11 @@ function readJson(file: string): Record<string, unknown> | null {
   }
 }
 
+/** The runtime every host's MCP config resolves to when it launches the CLI:
+ * the published bin is a Node-shebang entry, so this is the Node runtime the
+ * doctor itself runs on. */
 function actualRuntime(): McpRuntime {
-  return process.versions.bun === undefined
-    ? { kind: "node", version: process.versions.node }
-    : { kind: "bun", version: process.versions.bun };
+  return { version: process.versions.node };
 }
 
 /**
@@ -317,9 +316,9 @@ export function diagnoseMcpTarget(
     ?? "mstar doctor --target opencode --opencode-generation v2 --scope global (global file) or mstar doctor --target opencode --opencode-generation v2 --scope project (project file)";
   const otherScopeInitCommand = options.otherScopeInitCommand
     ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or mstar init --target opencode --opencode-generation v2 --scope project (project file)";
-  const runtimeFloor = runtime.kind === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const runtimeFloor = MIN_NODE_VERSION;
   const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
-    ? `${runtime.kind === "bun" ? "Bun" : "Node.js"} runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
+    ? `Node.js runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
     : null;
 
   if (target === "dsh") {

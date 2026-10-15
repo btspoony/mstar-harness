@@ -133,7 +133,7 @@ mstar-harness dashboard
 
 在支持 MCP 的编程工具中，可以查看 issue、roadmap 和 workflow，并调用对应的 CLI 操作与检查，而不必编写 shell 命令。`mstar-harness mcp` 是本包中的 stdio 服务。它遵守与 CLI 相同的规则 —— 不是一项新权限 —— 也没有单独的 MCP 包。
 
-安装之后，宿主通常已经带有启动配置，见 [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools)。带静态 JSON 配置的宿主使用下面这种形式（`npx` 需要 PATH 上有 Bun，见 [安装前置要求](INSTALL.md#prerequisites)）。不要把它粘贴到宿主已经写好的文件上。OpenCode 不读取静态文件 —— 它的插件通过 `config` hook 注入该服务。dsh 是例外：自带的配置行在 profile 包含 `@deepseek-ai/dsh-mcp-client` 之前不会生效（`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`）。
+安装之后，宿主通常已经带有启动配置，见 [`INSTALL.md`](INSTALL.md#installing-the-mcp-tools)。带静态 JSON 配置的宿主使用下面这种形式（`npx` 使用 PATH 上的 Node 执行该 bin，见 [安装前置要求](INSTALL.md#prerequisites)）。不要把它粘贴到宿主已经写好的文件上。OpenCode 不读取静态文件 —— 它的插件通过 `config` hook 注入该服务。dsh 是例外：自带的配置行在 profile 包含 `@deepseek-ai/dsh-mcp-client` 之前不会生效（`dsh plugin --profile web add @deepseek-ai/dsh-mcp-client`）。
 
 ```json
 {

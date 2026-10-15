@@ -40,7 +40,7 @@ import {
 import { diagnoseMcpTarget, type McpRuntime } from "../src/host-health/mcp.js";
 import { getLocalCommandDefinitions } from "../src/index.js";
 
-const MCP_RUNTIME: McpRuntime = { kind: "node", version: "24.18.0" };
+const MCP_RUNTIME: McpRuntime = { version: "24.18.0" };
 
 function writeMcpConfig(root: string, config: unknown): void {
   const configDir = join(root, ".config", "opencode");

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import fs from "node:fs";
 import cliManifest from "../package.json" with { type: "json" };
 import engineManifest from "../../engine/package.json" with { type: "json" };

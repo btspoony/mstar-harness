@@ -17270,11 +17270,12 @@ function compareVersions(a, b) {
 function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
   const kind = info.isBun ? "Bun" : "Node";
   const floor = info.isBun ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
-    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime (https://bun.sh or https://nodejs.org). No fallback runtime or driver is supported.`);
+    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
   }
   if (compareVersions(info.version, floor) < 0) {
-    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on Bun >=${MIN_BUN_VERSION} or Node >=${MIN_NODE_VERSION}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (https://bun.sh or https://nodejs.org). No older-runtime fallback exists and Node 18 compatibility is not a supported contract.`);
+    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind} >=${floor}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
   }
 }
 async function loadSqliteDriver() {

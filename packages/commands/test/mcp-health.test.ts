@@ -7,7 +7,7 @@ import type { HostTarget } from "../src/host-health.js";
 
 const targets: readonly HostTarget[] = ["opencode", "cursor", "codex", "zcode", "omp", "kimi", "dsh"];
 const roots: string[] = [];
-const currentRuntime: McpRuntime = { kind: "node", version: "24.18.0" };
+const currentRuntime: McpRuntime = { version: "24.18.0" };
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -79,7 +79,7 @@ describe("MCP doctor health", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-floor-"));
     roots.push(root);
     writeMstarConfig(root, "omp");
-    const result = diagnoseMcpTarget("omp", root, { kind: "node", version: "24.17.0" });
+    const result = diagnoseMcpTarget("omp", root, { version: "24.17.0" });
     expect(result.status).toBe("mismatch");
     expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
   });
@@ -201,7 +201,7 @@ describe("MCP doctor health", () => {
         "    command: npx",
         "    args: ['-y', '@mstar-harness/cli', 'mcp']",
       ].join("\n"), "utf8");
-      expect(diagnoseMcpTarget("dsh", profileDir, { kind: "node", version: "24.17.0" }).status).toBe("mismatch");
+      expect(diagnoseMcpTarget("dsh", profileDir, { version: "24.17.0" }).status).toBe("mismatch");
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;

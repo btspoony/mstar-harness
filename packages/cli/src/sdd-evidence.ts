@@ -158,8 +158,7 @@ function v1Limits(timeoutMs: number = TIMEOUT_DEFAULT_MS): EvidenceLimits {
 
 /** Runtime metadata string: never launches a version probe. */
 function runnerRuntimeVersion(): string {
-  const bunVersion = (globalThis as { Bun?: { version?: string } }).Bun?.version;
-  return `node=${process.version};bun=${bunVersion ?? "absent"}`;
+  return `node=${process.version}`;
 }
 
 function signalExitNumber(signal: string): number {
