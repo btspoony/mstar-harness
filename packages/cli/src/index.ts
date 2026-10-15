@@ -65,7 +65,9 @@ async function runInit(options: InitOptions) {
     console.log(`Target: ${target}`);
     console.log(`Install location: ${installResult.location}`);
     for (const note of installResult.notes) console.log(`  - ${note}`);
-    const latest = options.dryRun ? null : detectPublishedLatest();
+    // --no-global-cli is a no-network opt-out: the probe exists only to inform
+    // the global install, so it is skipped with it.
+    const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
     const skew = formatVersionSkewWarning(packageVersion, latest);
     if (skew !== null) console.log(skew);
     ensureGlobalCli({ version: packageVersion, latest, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
@@ -102,7 +104,7 @@ async function runInit(options: InitOptions) {
   console.log(`Config file: ${configPath}`);
   if (adapter.printPostSetupSummary) adapter.printPostSetupSummary(updated);
   for (const [roleId, modelId] of Object.entries(assignments)) console.log(`  - ${roleId}: ${modelId}`);
-  const latest = options.dryRun ? null : detectPublishedLatest();
+  const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
   const skew = formatVersionSkewWarning(packageVersion, latest);
   if (skew !== null) console.log(skew);
   ensureGlobalCli({ version: packageVersion, latest, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });

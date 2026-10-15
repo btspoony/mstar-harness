@@ -358,8 +358,9 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
   it('the below-floor/capability refusal is the engine\'s actionable one, not a local restatement', () => {
     // The readers never re-implement the floor: they surface whatever
     // `openStore` raises, and that raise is this text (issue contract §8).
-    // Bun carries no version floor: only the sqlite capability gates it.
-    expect(() => assertStoreRuntimeSupported({ isBun: true, version: '1.3.0' })).not.toThrow()
+    // Bun carries no version floor: only the sqlite capability gates it. The
+    // token is deliberately not a release-shaped version.
+    expect(() => assertStoreRuntimeSupported({ isBun: true, version: '0.0.0-synthetic' })).not.toThrow()
     try {
       assertStoreRuntimeSupported({ isBun: true, version: '1.4.0', hasSqlite: false })
       throw new Error('expected the missing capability to be refused')

@@ -76,7 +76,10 @@ function defaultInstall(spec: string): void {
  */
 export function detectPublishedLatest(): string | null {
   try {
-    const out = execFileSync("npm", ["view", `${CLI_PACKAGE}`, "version"], {
+    // `--prefer-online` revalidates the packument: the same stale npm cache
+    // that can hand `npx` an old resolution would otherwise answer this probe
+    // with the very tag this check exists to catch.
+    const out = execFileSync("npm", ["view", "--prefer-online", `${CLI_PACKAGE}`, "version"], {
       encoding: "utf8",
       env: process.env,
       timeout: LATEST_PROBE_TIMEOUT_MS,

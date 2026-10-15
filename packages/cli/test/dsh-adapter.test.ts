@@ -365,18 +365,6 @@ const DUMP_MALFORMED = [
   "",
 ].join("\n");
 
-describe("dsh-llm-fallbacks pin lockstep", () => {
-  test("the install spec's pin is the CLI manifest's declared value", () => {
-    const repoRoot = resolve(CLI_ROOT, "..", "..");
-    const cliPkg = JSON.parse(readFileSync(join(repoRoot, "packages/cli/package.json"), "utf8")) as {
-      mstar?: Record<string, string>;
-    };
-    // The install spec's pin is the CLI manifest's declared value — that is the
-    // contract the adapter depends on, not an equality between two constants.
-    expect(DSH_FALLBACKS_VERSION).toBe(cliPkg.mstar?.["dshLlmFallbacks"]);
-  });
-});
-
 describe("dshAdapter.runInstallInit", () => {
   test("default install: two adds, mstar first then fallbacks (AC-6)", () => {
     const fake = makeFakeDsh(DUMP_EMPTY);

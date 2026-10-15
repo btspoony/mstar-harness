@@ -38,7 +38,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 每个宿主都有两条安装路径：本 CLI 的 `init` 流程，或宿主自带的插件管理器。`init` 还会写入基线配置、跑 doctor 检查、补上 harness 的 gitignore 条目；原生命令只装插件本身。`init` 被阻塞时用原生命令 —— 它完全绕过本 CLI。
 
-`npx` 可能命中较旧的缓存解析，而 `init` 的每一步都跟随实际运行的那个 CLI；需要最新版时加 `@latest`（`npx @mstar-harness/cli@latest init …`）。`init` 会打印自己运行的 CLI 版本。
+`npx` 可能命中较旧的缓存解析，而 `init` 的每一步都跟随实际运行的那个 CLI；`init` 会在已发布 latest 与正在运行的版本不同时报告，并把该 latest 装到全局 —— 若要让**运行的那个 CLI 本身**是最新版，用 `npx @mstar-harness/cli@latest init …`。
 
 - **dsh（DeepSeek Harness）** —— 需要 PATH 上有 `dsh` CLI
   - CLI：`npx @mstar-harness/cli init --target dsh` —— 安装插件与 LLM fallbacks；`--no-fallbacks` 跳过后者
