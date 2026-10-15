@@ -4,7 +4,7 @@
  * (Release body: 125000 character limit) inside the platform limits.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -160,7 +160,10 @@ describe("CLI", () => {
 
       expect(await refused.exited).toBe(1);
       expect(stderr).toContain("No CHANGELOG section found for ## [9.9.8] in CHANGELOG.md");
-      expect(stderr).toContain("check the version against an existing `## [x.y.z]` heading");
+      expect(stderr).toContain("check the version against an existing `## [x.y.z]` heading in CHANGELOG.md");
+      // The positional argument wins over RELEASE_VERSION, so the env-var
+      // recovery only works once the positional is dropped.
+      expect(stderr).toContain("drop the positional argument and set RELEASE_VERSION instead");
     });
 
     // Heading present but empty: distinct from absent, matching the pre-refactor cause.
@@ -171,6 +174,11 @@ describe("CLI", () => {
       expect(await refused.exited).toBe(1);
       expect(stderr).toContain("CHANGELOG section for 9.9.9 is empty in CHANGELOG.md");
       expect(stderr).not.toContain("No CHANGELOG section found");
+      // Recovery must point at the fragment workflow, never at hand-editing
+      // the assembled changelog.
+      expect(stderr).toContain("add the matching fragment under .changes/unreleased/");
+      expect(stderr).toContain("bun run release:prepare -- 9.9.9");
+      expect(stderr).not.toContain("add its bullets");
     });
 
     // No readable CHANGELOG.md: cause + recovery, never a raw errno or stack frame.
@@ -184,5 +192,25 @@ describe("CLI", () => {
       expect(stderr).not.toMatch(/ENOENT|EPERM|EACCES/);
       expect(stderr).not.toMatch(/^\s+at /m);
     });
+
+    // CHANGELOG.md present but unreadable: the repository-root advice would
+    // name the wrong cause, so the recovery must address the read failure.
+    // A directory is used (not chmod) so the case holds under root, where
+    // permission bits do not deny reads.
+    const dirAsFile = scratchDir();
+    try {
+      mkdirSync(join(dirAsFile, "CHANGELOG.md"));
+      const refused = await runCli(dirAsFile, ["9.9.9"]);
+      const stderr = await new Response(refused.stderr).text();
+
+      expect(await refused.exited).toBe(1);
+      expect(await new Response(refused.stdout).text()).toBe("");
+      expect(stderr).toContain(`CHANGELOG.md is not readable in ${dirAsFile}`);
+      expect(stderr).toContain("check read permissions on the file or use a checkout you can read");
+      expect(stderr).not.toContain("run this from the repository root");
+      expect(stderr).not.toMatch(/^\s+at /m);
+    } finally {
+      rmSync(dirAsFile, { recursive: true, force: true });
+    }
   });
 });

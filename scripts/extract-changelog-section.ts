@@ -108,8 +108,13 @@ async function run(version: string, maxBytes: number): Promise<void> {
   } catch (error) {
     // Strip the errno prefix so a raw stack/ENOENT never reaches the operator.
     const reason = (error as Error).message.split("\n")[0].replace(/^[A-Z][A-Z0-9]+:\s*/, "");
+    // Only a missing file is answered by "wrong directory"; any other read
+    // failure (permissions, CHANGELOG.md being a directory) has the file right
+    // there, so pointing at the repository root would name the wrong cause.
     console.error(
-      `CHANGELOG.md is not readable in ${process.cwd()} (${reason}) — run this from the repository root that holds CHANGELOG.md.`,
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+        ? `CHANGELOG.md is not readable in ${process.cwd()} (${reason}) — run this from the repository root that holds CHANGELOG.md.`
+        : `CHANGELOG.md is not readable in ${process.cwd()} (${reason}) — check read permissions on the file or use a checkout you can read.`,
     );
     process.exit(1);
   }
@@ -118,14 +123,14 @@ async function run(version: string, maxBytes: number): Promise<void> {
 
   if (section === undefined) {
     console.error(
-      `No CHANGELOG section found for ## [${version}] in CHANGELOG.md — check the version against an existing \`## [x.y.z]\` heading, or set RELEASE_VERSION to that version.`,
+      `No CHANGELOG section found for ## [${version}] in CHANGELOG.md — check the version against an existing \`## [x.y.z]\` heading in CHANGELOG.md, or drop the positional argument and set RELEASE_VERSION instead.`,
     );
     process.exit(1);
   }
 
   if (section === "") {
     console.error(
-      `CHANGELOG section for ${version} is empty in CHANGELOG.md — add its bullets (or the matching fragments) before extracting.`,
+      `CHANGELOG section for ${version} is empty in CHANGELOG.md — add the matching fragment under .changes/unreleased/ and re-run \`bun run release:prepare -- ${version}\` (or the Release prep workflow).`,
     );
     process.exit(1);
   }
