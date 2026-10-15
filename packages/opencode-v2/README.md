@@ -24,7 +24,7 @@ Or use the generation-aware installer CLI:
 npx @mstar-harness/cli init --target opencode --opencode-generation v2
 ```
 
-That command executes the CLI's Bun-shebang bin, so it needs **Bun >=1.4.0** on PATH — `npx` fetches the package but does not supply the runtime. On a Node-only machine run the installed bundle under Node instead: `node node_modules/@mstar-harness/cli/dist/mstar-harness.js init --target opencode --opencode-generation v2`.
+That command executes the CLI's Node-shebang bin, so it needs **Node >=24.18.0** on PATH — `npx` fetches the package but does not supply the runtime. The equivalent explicit form is `node node_modules/@mstar-harness/cli/dist/mstar-harness.js init --target opencode --opencode-generation v2`.
 
 See [`INSTALL.md`](./INSTALL.md) for the full setup flow and the installer's write set.
 
@@ -77,8 +77,8 @@ Explicit **non-claims**: **`patch`** (its `2.0.26` input shape is not contract-v
 
 ## Runtime floors
 
-- **Node >=24.18.0** — the OpenCode 2.x process runs the bundle; the engine store API uses in-process `node:sqlite` and is loaded lazily, so an engine without that surface still mounts the plugin while a store-backed check refuses with upgrade guidance.
-- **Bun >=1.4.0** — monorepo `bundle-assets` / `bun build`, and the installer CLI's Bun shebang.
+- **Node >=24.18.0** — both entries on this host: the OpenCode 2.x process runs the plugin bundle, and the installer CLI is the same Node entrypoint. The engine store API uses in-process `node:sqlite` and is loaded lazily, so an engine without that surface still mounts the plugin while a store-backed check refuses with upgrade guidance.
+- **Development only**: the monorepo's own build and `bundle-assets` scripts run under the repository's development toolchain; installing or running the published plugin does not need it.
 
 ## Verification status
 
