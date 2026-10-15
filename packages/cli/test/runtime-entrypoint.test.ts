@@ -10,7 +10,7 @@
  */
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,9 +21,9 @@ const NODE_BIN = process.env.MSTAR_TEST_NODE_BIN ?? "node";
 
 test("the CLI entry point is a Node script", () => {
   expect(readFileSync(join(CLI_ROOT, "src", "index.ts"), "utf8").split("\n")[0]).toBe("#!/usr/bin/env node");
-  if (existsSync(DIST)) {
-    expect(readFileSync(DIST, "utf8").split("\n")[0]).toBe("#!/usr/bin/env node");
-  }
+  // `dist/` is this package's own build output and its test script builds it
+  // first: a missing or stale bundle must fail here, never report green.
+  expect(readFileSync(DIST, "utf8").split("\n")[0]).toBe("#!/usr/bin/env node");
 });
 
 test("the published CLI manifest declares one runtime requirement", () => {
@@ -34,7 +34,6 @@ test("the published CLI manifest declares one runtime requirement", () => {
 });
 
 test("a below-floor Node runtime refuses a store command with a Node-only recovery", () => {
-  if (!existsSync(DIST)) throw new Error(`${DIST} is missing: run this package's test script, which builds first`);
   const root = mkdtempSync(join(tmpdir(), "mstar-cli-runtime-floor-"));
   try {
     // Spoof only the reported version: the real Node runs the published bundle,
@@ -46,7 +45,7 @@ test("a below-floor Node runtime refuses a store command with a Node-only recove
       ["--import", preload, DIST, "store", "upgrade", "--operator", "fixture-operator", "--harness", join(root, ".mstar")],
       { encoding: "utf8" },
     );
-    if (proc.error !== undefined) return; // no Node on PATH here
+    expect(proc.error).toBeUndefined();
     expect(proc.status).toBe(1);
     const envelope = JSON.parse(proc.stdout) as {
       status: string;
