@@ -25,6 +25,17 @@ import { resolveContext } from "../src/mcp/stdio";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+type EngineManifest = { engines?: { node?: string } };
+// Repo manifest read at runtime: no test pins the runtime floor, and
+// package.json stays the sole version authority.
+const CLI_ROOT = path.resolve(import.meta.dir, "..");
+const declaredNodeFloor = (
+  (JSON.parse(readFileSync(path.join(CLI_ROOT, "..", "engine", "package.json"), "utf8")) as EngineManifest)
+    .engines?.node ?? ""
+).replace(/^>=\s*/, "").trim();
+/** Injected current runtime: at/above the declared floor. */
+const AT_OR_ABOVE_RUNTIME = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
+
 const effects = {
   async readInput() { return ""; },
   async spawn() { throw new Error("unused"); },
@@ -53,7 +64,10 @@ function writeAttestation(root: string, stoppedSessions: readonly string[] = ["s
     operator: { actor: "ops-engineer", authorizationRef: "test recovery fixture" },
     consumers: [{
       entryId: "coordinator-test", kind: "coordinator", entrypoint: "/opt/mstar/coordinator.js",
-      runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded",
+      // Runtime version derived from the engine manifest floor; the plugin
+      // version is synthetic, not a release number.
+      runtime: "node", runtimeVersion: AT_OR_ABOVE_RUNTIME, version: "0.0.0-synthetic",
+      current: true, disposition: "reloaded",
     }],
     stoppedSessions: stoppedSessions.map((sessionId) => ({ sessionId, host: "omp", state: "stopped" })),
   };

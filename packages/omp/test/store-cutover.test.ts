@@ -20,10 +20,10 @@
  *    the runtime probe of the single store path is counted).
  * 4. The runtime floor is read from the ACTUAL runtime (the Bun global first,
  *    never Bun's emulated `process.versions.node`): the injected below-floor
- *    cases pin the actionable Bun AND Node floors of the same code path.
+ *    case pins the actionable Node floor of the same code path.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -38,6 +38,15 @@ import mstarGates, { storeRuntimeProbe as hookRuntimeProbe } from "../src/hooks/
 
 const VALID_STATUS = JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] });
 const VALID_REGISTER = JSON.stringify({ entries: {} });
+
+// The declared Node floor, read from the engine manifest at runtime: no test
+// pins the floor value, and package.json stays the sole version authority.
+type EngineManifest = { engines?: { node?: string } };
+const engineManifest = JSON.parse(
+  readFileSync(join(import.meta.dir, "..", "..", "engine", "package.json"), "utf8"),
+) as EngineManifest;
+const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+const belowFloorNodeVersion = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) - 1}.0.0`;
 const BAD_JSON = "{ not json";
 
 /** The Bun global is not in the Node type set — one deliberate boundary read. */
@@ -316,20 +325,18 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     }
   });
 
-  test("a below-floor ACTUAL runtime refuses with that runtime's own actionable floor", async () => {
+  test("a below-floor ACTUAL runtime refuses with the declared floor", async () => {
     const fixture = makeHarness("below-floor", "hard");
     const handler = loadHandler();
 
-    hookRuntimeProbe.info = (): StoreRuntimeInfo => ({ isBun: true, version: "1.3.14" });
-    const bun = await runWrite(handler, fixture.register, VALID_REGISTER);
-    expect(bun?.reason).toContain("store.authority-unavailable");
-    expect(bun?.reason).toContain("store.runtime-unsupported");
-    expect(bun?.reason).toContain("Bun >=1.4.0");
-
-    hookRuntimeProbe.info = (): StoreRuntimeInfo => ({ isBun: false, version: "24.17.0" });
+    hookRuntimeProbe.info = (): StoreRuntimeInfo => ({ isBun: false, version: belowFloorNodeVersion });
     const node = await runWrite(handler, fixture.register, VALID_REGISTER);
     expect(node?.reason).toContain("store.authority-unavailable");
-    expect(node?.reason).toContain("Node >=24.18.0");
+    expect(node?.reason).toContain("store.runtime-unsupported");
+    // The refusal names the runtime it refused; the floor value is the engine
+    // manifest's, so no floor literal is restated here.
+    expect(node?.reason).toContain("Node");
+    expect(node?.reason).toContain(declaredNodeFloor);
     // A refused probe writes nothing.
     expect(existsSync(fixture.storeDb)).toBe(false);
   });

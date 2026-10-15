@@ -317,19 +317,28 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             otherScopeInitCommand,
           });
         // The published V2 plugin runs in OpenCode's Node process and needs
-        // node:sqlite (Node >=24.18.0) — INSTALL.md:70 promises doctor checks
-        // it. Probe the PATH node independently of the doctor's own process
-        // runtime: that runtime is not the one a host launch resolves.
+        // node:sqlite (Node >= the floor this CLI declares) - INSTALL.md:70
+        // promises doctor checks it. Probe the PATH node independently of the
+        // doctor's own process runtime: that runtime is not the one a host
+        // launch resolves. A layout that cannot resolve the floor says so
+        // instead of passing silently.
         const pluginRuntimeErrors: string[] = [];
-        if (input.target === "opencode" && v2AmongResolved) {
+        const v2Floor = OPENCODE_V2_NODE_FLOOR;
+        if (input.target === "opencode" && v2AmongResolved && v2Floor === null) {
+          pluginRuntimeErrors.push(
+            "OpenCode V2 plugin requires a Node with native node:sqlite, but this CLI resolves no declared floor " +
+              "(its manifest carries no `engines.node`), so the PATH node was not checked. " +
+              "Reinstall the CLI (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.",
+          );
+        } else if (input.target === "opencode" && v2AmongResolved && v2Floor !== null) {
           const nodeProbe = probePathNodeRuntime();
           if (nodeProbe.unverifiedCause !== null) {
             pluginRuntimeErrors.push(
-              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); " + nodeProbe.unverifiedCause + ".",
+              "OpenCode V2 plugin requires Node >=" + v2Floor + " on PATH (node:sqlite); " + nodeProbe.unverifiedCause + ".",
             );
-          } else if (compareSemver(nodeProbe.version, OPENCODE_V2_NODE_FLOOR) < 0) {
+          } else if (compareSemver(nodeProbe.version, v2Floor) < 0) {
             pluginRuntimeErrors.push(
-              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeProbe.version + ".",
+              "OpenCode V2 plugin requires Node >=" + v2Floor + " (node:sqlite); the PATH node reports " + nodeProbe.version + ".",
             );
           }
         }

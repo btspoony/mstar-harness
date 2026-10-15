@@ -37,7 +37,7 @@ function fixture() {
     endpoint: NATIVE_ENDPOINT, model: NATIVE_MODEL, useCases: ["JEV-A05"], recipients: [{ id: "synthesis-main", phase: "synthesis" }],
     policyVersion: "policy-1", permission: { ref: "permission-1", purpose: "synthetic qualification", dataClass: "synthetic-only" },
     isolation: { ref: "isolation-1" }, packManifest: [{ packId: "pack-1", packSha256: createHash("sha256").update(canonicalJsonBytes(pack)).digest("hex") }],
-    rubricVersion: "rubric-1", builderVersion: "builder-1", implementationVersion: "judgment-0.0.0",
+    rubricVersion: "rubric-1", builderVersion: "builder-1", implementationVersion: "synthetic-implementation-1",
     limits: { timeoutMs: 10_000, maxRunElapsedMs: 10_000_000, maxCallsPerRun: 1, maxConcurrentRequests: 1, maxTasksPerPack: 4, maxPacksPerRun: 1, maxPairs: 4, maxPackBytes: 65_536, maxRequestBytes: 32_768, maxResponseBytes: 65_536, maxAttempts: 1 },
     tokenPolicy: { method: TOKEN_POLICY_METHOD, perAttemptReservation: TOKEN_RESERVATION_PER_ATTEMPT, maxRunReservedInputTokens: TOKEN_RESERVATION_PER_ATTEMPT },
     sourcePolicy: { minimization: "synthetic excerpts only", retention: "run-bound" }, protocolVersion: "protocol-1", splitId: "split-1", calibrationId: "calibration-1",

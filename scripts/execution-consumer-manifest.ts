@@ -54,17 +54,34 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { MIN_BUN_VERSION, MIN_NODE_VERSION, serializeExecutionValue } from "../packages/engine/src/index.ts";
+import { serializeExecutionValue } from "../packages/engine/src/index.ts";
 
 export const CONSUMER_MANIFEST_PROTOCOL = "consumer-v1" as const;
 
-/** Canonical runtime floors (contract Global Constraints; engine §8 owns the
- * constants). `target` names the runtime the entrypoint is actually launched
- * with, never a demand to install both runtimes. */
-export const CANONICAL_RUNTIME_FLOOR = {
-  node: `>=${MIN_NODE_VERSION}`,
-  bun: `>=${MIN_BUN_VERSION}`,
-} as const;
+/**
+ * Canonical runtime floors, read at runtime from the manifest that owns the
+ * store-runtime contract (`packages/engine/package.json` `engines`) —
+ * `package.json` is the sole version authority, so nothing here is compiled in.
+ * `target` names the runtime the entrypoint is actually launched with, never a
+ * demand to install both runtimes. A manifest that declares no floor refuses.
+ */
+function canonicalRuntimeFloor(repoAbs: string, target: "node" | "bun"): string {
+  const manifestAbs = resolve(repoAbs, "packages", "engine", "package.json");
+  let engines: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(manifestAbs, "utf8"));
+    if (parsed === null || typeof parsed !== "object") throw new Error("manifest is not an object");
+    engines = (parsed as Record<string, unknown>)["engines"] as Record<string, unknown>; // parsed JSON; reads narrowed below
+    if (engines === null || typeof engines !== "object") throw new Error("manifest declares no engines");
+  } catch (error) {
+    refuse("consumer.runtime-mismatch", `cannot read ${manifestAbs} engines: ${String(error)}`);
+  }
+  const declared = engines[target];
+  if (typeof declared !== "string" || declared.length === 0) {
+    refuse("consumer.runtime-mismatch", `${manifestAbs} declares no engines.${target} floor`);
+  }
+  return declared;
+}
 
 /** Declared consumer capability (contract §4.2). `decision-only` marks a
  * consumer whose write path is unsupported: it observes and refuses, and the
@@ -609,7 +626,7 @@ function hashFile(repoAbs: string, relPath: string): ConsumerDigest {
 
 /** The floor a package's own metadata declares for `target`; a missing key or
  * a value that is not the canonical floor refuses rather than defaulting. */
-function declaredFloor(packageJsonAbs: string, target: "node" | "bun"): string {
+function declaredFloor(repoAbs: string, packageJsonAbs: string, target: "node" | "bun"): string {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(packageJsonAbs, "utf8"));
@@ -631,10 +648,10 @@ function declaredFloor(packageJsonAbs: string, target: "node" | "bun"): string {
       `${packageJsonAbs} declares no engines.${target} floor for its runtime target`,
     );
   }
-  if (declared !== CANONICAL_RUNTIME_FLOOR[target]) {
+  if (declared !== canonicalRuntimeFloor(repoAbs, target)) {
     refuse(
       "consumer.runtime-mismatch",
-      `${packageJsonAbs} engines.${target} is ${declared}, not the canonical ${CANONICAL_RUNTIME_FLOOR[target]}`,
+      `${packageJsonAbs} engines.${target} is ${declared}, not the canonical ${canonicalRuntimeFloor(repoAbs, target)}`,
     );
   }
   return declared;
@@ -654,13 +671,13 @@ function buildConsumer(repoAbs: string, layout: ConsumerLayout): ExecutionConsum
     }
     runtime = {
       target: layout.runtime.target,
-      floor: declaredFloor(resolveInsideRepo(repoAbs, packageJson, packageJson), layout.runtime.target),
+      floor: declaredFloor(repoAbs, resolveInsideRepo(repoAbs, packageJson, packageJson), layout.runtime.target),
       declaration: layout.runtime.declaration,
     };
   } else {
     runtime = {
       target: layout.runtime.target,
-      floor: CANONICAL_RUNTIME_FLOOR[layout.runtime.target],
+      floor: canonicalRuntimeFloor(repoAbs, layout.runtime.target),
       declaration: layout.runtime.declaration,
     };
   }
@@ -862,6 +879,7 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
             target: layout.runtime.target,
             declaration: "package-engines",
             floor: declaredFloor(
+              repoAbs,
               resolveInsideRepo(repoAbs, layout.packageJson as string, layout.packageJson as string),
               layout.runtime.target,
             ),
@@ -869,7 +887,7 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
         : {
             target: layout.runtime.target,
             declaration: "canonical-floor",
-            floor: CANONICAL_RUNTIME_FLOOR[layout.runtime.target],
+            floor: canonicalRuntimeFloor(repoAbs, layout.runtime.target),
           };
     if (
       runtime.target !== expectedRuntime.target ||

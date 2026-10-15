@@ -287,7 +287,8 @@ describe("terminal adoption session settlement", () => {
       operator: { actor: "recovery-operator", authorizationRef: "operator-authorization-fixture" },
       consumers: [{
         entryId: "mstar-cli", kind: "coordinator", entrypoint: "packages/cli/src/index.ts",
-        runtime: "bun", runtimeVersion: "99.0.0", version: "0.0.0-test", current: true, disposition: "reloaded",
+        // Synthetic runtime/bundle versions carried as payload — not real versions.
+        runtime: "bun", runtimeVersion: "0.0.0-synthetic-a", version: "0.0.0-synthetic-b", current: true, disposition: "reloaded",
       }],
       stoppedSessions: stoppedSessionIds.map((sessionId) => ({ sessionId, host: "fixture-host", state: "stopped" as const })),
     };

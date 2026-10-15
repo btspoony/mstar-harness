@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { diagnoseMcpTarget, probePathNodeRuntime, type McpRuntime } from "../src/host-health.js";
@@ -7,7 +7,18 @@ import type { HostTarget } from "../src/host-health.js";
 
 const targets: readonly HostTarget[] = ["opencode", "cursor", "codex", "zcode", "omp", "kimi", "dsh"];
 const roots: string[] = [];
-const currentRuntime: McpRuntime = { version: "24.18.0" };
+type EngineManifest = { engines?: { node?: string } };
+// Repo-controlled manifest read at runtime: no test pins the floor, and
+// package.json stays the sole version authority.
+const engineManifest = JSON.parse(
+  readFileSync(path.join(import.meta.dir, "..", "..", "engine", "package.json"), "utf8"),
+) as EngineManifest;
+const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+const floorMajor = Number.parseInt(declaredNodeFloor.split(".")[0]!, 10);
+/** Injected CURRENT runtime: must sit at/above the declared floor. */
+const currentRuntime: McpRuntime = { kind: "node", version: `${floorMajor + 1}.0.0` };
+/** Injected below-floor runtime: the floor major minus one, minor/patch zeroed. */
+const belowFloorRuntime: McpRuntime = { kind: "node", version: `${floorMajor - 1}.0.0` };
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -79,9 +90,12 @@ describe("MCP doctor health", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-floor-"));
     roots.push(root);
     writeMstarConfig(root, "omp");
-    const result = diagnoseMcpTarget("omp", root, { version: "24.17.0" });
+    const result = diagnoseMcpTarget("omp", root, belowFloorRuntime);
     expect(result.status).toBe("mismatch");
-    expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
+    // The refusal names the runtime and the floor it found it beneath; the
+    // floor value itself is the manifest's, so no version literal is restated.
+    expect(result.errors.join(" ")).toContain(`Node.js runtime ${belowFloorRuntime.version}`);
+    expect(result.errors.join(" ")).toContain(declaredNodeFloor);
   });
 
   test("an unprobed launch runtime is a mismatch with its cause and recovery", () => {
@@ -230,7 +244,7 @@ describe("MCP doctor health", () => {
         "    command: npx",
         "    args: ['-y', '@mstar-harness/cli', 'mcp']",
       ].join("\n"), "utf8");
-      expect(diagnoseMcpTarget("dsh", profileDir, { version: "24.17.0" }).status).toBe("mismatch");
+      expect(diagnoseMcpTarget("dsh", profileDir, belowFloorRuntime).status).toBe("mismatch");
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;

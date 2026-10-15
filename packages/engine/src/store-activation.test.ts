@@ -126,6 +126,15 @@ async function stagedFixture(name: string): Promise<Fixture & { manifest: Migrat
   return { ...fixture, manifest, apply };
 }
 
+/**
+ * The declared Node floor, read from this package's manifest at runtime. No
+ * test pins a floor value: `package.json` stays the sole version authority.
+ */
+const engineManifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+  engines?: { node?: string };
+};
+const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+
 /** A conforming installed-consumer attestation: one current coordinator, one upgraded CLI. */
 function attestation(overrides: Partial<ActivationAttestation> = {}): ActivationAttestation {
   return {
@@ -138,8 +147,8 @@ function attestation(overrides: Partial<ActivationAttestation> = {}): Activation
         kind: "cli",
         entrypoint: "/usr/local/lib/node_modules/@mstar-harness/cli/dist/index.js",
         runtime: "bun",
-        runtimeVersion: "1.4.0",
-        version: "3.11.0",
+        runtimeVersion: "0.0.0-synthetic", // no version gate on a Bun consumer
+        version: "0.0.0-synthetic", // fixture payload carried through, never compared
         current: false,
         disposition: "upgraded",
       },
@@ -148,8 +157,8 @@ function attestation(overrides: Partial<ActivationAttestation> = {}): Activation
         kind: "coordinator",
         entrypoint: "/Users/op/.omp/plugins/mstar/packages/cli/dist/index.js",
         runtime: "node",
-        runtimeVersion: "24.18.0",
-        version: "3.11.0",
+        runtimeVersion: declaredNodeFloor,
+        version: "0.0.0-synthetic", // fixture payload carried through, never compared
         current: true,
         disposition: "reloaded",
       },
@@ -360,13 +369,19 @@ describe("store activation barrier", () => {
 
   test("activation refuses a below-floor consumer as incompatible, and a running session as unquiesced", async () => {
     const { context, apply } = await stagedFixture("activation-floor-");
+    // Synthetic below-floor probe: not a repository version, only an input to
+    // the floor comparator. Only the Node consumer carries a floor.
+    const syntheticBelowFloor = "0.0.0-synthetic";
     const belowFloor = attestation().consumers.map((consumer, index) =>
-      index === 0 ? { ...consumer, runtimeVersion: "1.3.14" as const } : consumer,
+      index === 1 ? { ...consumer, runtimeVersion: syntheticBelowFloor } : consumer,
     );
     const floorError = await refusalOf("store.activation-blocked", () =>
       activateStore(context, apply, attestation({ consumers: belowFloor })),
     );
-    expect(floorError.message).toContain("below the 1.4.0 floor");
+    // The refusal names the runtime it refused; the floor value itself comes
+    // from the manifest, so no version literal is restated here.
+    expect(floorError.message).toContain(`reports node ${syntheticBelowFloor}`);
+    expect(floorError.message).toContain(`below the ${declaredNodeFloor} floor`);
 
     const runningSession = { ...attestation(), stoppedSessions: [{ sessionId: "sess-1", host: "omp", state: "running" }] } as unknown as ActivationAttestation;
     const sessionError = await refusalOf("store.activation-blocked", () => activateStore(context, apply, runningSession));

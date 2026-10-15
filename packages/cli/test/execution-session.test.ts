@@ -317,8 +317,10 @@ function attestationFor(priorSessionId: string): Record<string, unknown> {
         kind: "coordinator",
         entrypoint: "packages/cli/src/index.ts",
         runtime: "bun",
-        runtimeVersion: "1.4.0",
-        version: "0.0.0-test",
+        // Synthetic runtime/plugin versions, not release numbers; bun consumers
+        // carry no runtime floor.
+        runtimeVersion: "0.0.0-synthetic",
+        version: "0.0.0-synthetic",
         current: true,
         disposition: "reloaded",
       },

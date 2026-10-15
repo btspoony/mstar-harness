@@ -22,7 +22,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -40,6 +40,16 @@ import {
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+
+type EngineManifest = { engines?: { node?: string } };
+// Repo manifest read at runtime: no test pins the runtime floor, and
+// package.json stays the sole version authority.
+const declaredNodeFloor = (
+  (JSON.parse(readFileSync(join(CLI_ROOT, "..", "engine", "package.json"), "utf8")) as EngineManifest)
+    .engines?.node ?? ""
+).replace(/^>=\s*/, "").trim();
+/** Injected current runtime: at/above the declared floor. */
+const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 
 const WORKFLOW_ID = "wf-exec-workflow";
 const PLAN_ID = "20260922-execution-workflow-plan";
@@ -760,8 +770,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
         kind: "coordinator",
         entrypoint: "/opt/mstar/coordinator/dist/index.js",
         runtime: "node",
-        runtimeVersion: "24.18.0",
-        version: "3.11.2",
+        runtimeVersion: atOrAboveRuntime,
+        // Synthetic carried plugin version, not a release number.
+        version: "0.0.0-synthetic",
         current: true,
         disposition: "reloaded",
       }],

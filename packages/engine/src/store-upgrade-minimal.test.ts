@@ -21,6 +21,19 @@ import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.j
 import type { DeliveryLiftDeclaration } from "./migrate.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
+/** Declared Node floor from the owning manifest (package.json is the sole
+ * version authority); a node consumer below it would be refused. */
+function declaredNodeFloorFromManifest(file: string): string {
+  const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+  if (typeof parsed !== "object" || parsed === null) return "";
+  const engines = "engines" in parsed ? parsed.engines : undefined;
+  if (typeof engines !== "object" || engines === null) return "";
+  const node = "node" in engines ? engines.node : undefined;
+  return typeof node === "string" ? node.replace(/^>=\s*/, "").trim() : "";
+}
+const declaredNodeFloor = declaredNodeFloorFromManifest(join(import.meta.dir, "..", "package.json"));
+/** Injected current runtime for `node` consumers: at/above the declared floor. */
+const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 afterAll(() => {
   setArtifactStore(undefined);
   rmSync(ROOT, { recursive: true, force: true });
@@ -139,7 +152,7 @@ function stopDocument(sessionId: string, attestedAt = "2026-10-04T04:00:00Z"): A
     operator: { actor: "fixture-operator", authorizationRef: "schema-cutover-authorization" },
     consumers: [{
       entryId: "fixture-coordinator", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js",
-      runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded",
+      runtime: "node", runtimeVersion: atOrAboveRuntime, version: "0.0.0-synthetic", current: true, disposition: "reloaded",
     }],
     stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
   };
@@ -527,7 +540,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     attestedAt: "2026-10-04T04:00:00Z",
     operator: { actor: "ops-engineer", authorizationRef: "compass D29 / schema-8 cutover" },
     consumers: [
-      { entryId: "coordinator-omp", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js", runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded" },
+      { entryId: "coordinator-omp", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js", runtime: "node", runtimeVersion: atOrAboveRuntime, version: "0.0.0-synthetic", current: true, disposition: "reloaded" },
     ],
     stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
   };
@@ -822,7 +835,7 @@ test("an unattested retired plan-PM integration mutex refuses the upgrade and ke
     version: ACTIVATION_PROTOCOL_VERSION,
     attestedAt: "2026-10-04T04:00:00Z",
     operator: { actor: "ops-engineer", authorizationRef: "compass D29 / schema-8 cutover" },
-    consumers: [{ entryId: "coordinator-omp", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js", runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded" }],
+    consumers: [{ entryId: "coordinator-omp", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js", runtime: "node", runtimeVersion: atOrAboveRuntime, version: "0.0.0-synthetic", current: true, disposition: "reloaded" }],
     stoppedSessions: [{ sessionId: "some-other-session", host: "omp", state: "stopped" }],
   };
   await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan-2", attestation: wrongHolder }))

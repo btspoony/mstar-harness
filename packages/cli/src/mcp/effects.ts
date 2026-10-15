@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { dirname, join, relative, isAbsolute, basename } from "node:path";
-import { assessSddEvidenceReuse, checkSddAction, evidenceInputDigest, resolveSddExecutionContext, SddScriptError, validateSddEvidenceRecord, verifySddEvidence, type EvidenceArtifactFact, type EvidenceAssessment, type EvidenceCaptureRequest, type EvidenceEnvironmentKey, type EvidenceInputSnapshot, type EvidenceLimits, type SddExecutionContext, type SddEvidenceRecord } from "@mstar-harness/engine";
+import { assessSddEvidenceReuse, checkSddAction, evidenceInputDigest, resolveSddExecutionContext, readHarnessVersion, SddScriptError, validateSddEvidenceRecord, verifySddEvidence, type EvidenceArtifactFact, type EvidenceAssessment, type EvidenceCaptureRequest, type EvidenceEnvironmentKey, type EvidenceInputSnapshot, type EvidenceLimits, type SddExecutionContext, type SddEvidenceRecord } from "@mstar-harness/engine";
 import { startDashboard, type CommandEffects } from "@mstar-harness/commands";
 
 type ProcessRequest = {
@@ -143,7 +143,7 @@ function captureRecord(request: EvidenceCaptureRequest, argv: readonly string[],
   const before = captureSnapshot(request, argv);
   return {
     schema: RECORD_SCHEMA,
-    producer: { name: "mstar-harness", version: "3.11.2" },
+    producer: { name: "mstar-harness", version: readHarnessVersion() },
     runId,
     request,
     command: { argv: [...argv], cwd: request.context.featureCwd },

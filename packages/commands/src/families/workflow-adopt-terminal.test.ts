@@ -144,7 +144,9 @@ function attestationDocument(stoppedSessionIds: readonly string[]): Record<strin
     operator: { actor: "recovery-operator", authorizationRef: "operator-authorization-fixture" },
     consumers: [{
       entryId: "mstar-cli", kind: "coordinator", entrypoint: "packages/cli/src/index.ts",
-      runtime: "bun", runtimeVersion: "99.0.0", version: "0.0.0-test", current: true, disposition: "reloaded",
+      // Synthetic runtime/plugin versions, not release numbers; bun consumers
+      // carry no runtime floor.
+      runtime: "bun", runtimeVersion: "0.0.0-synthetic", version: "0.0.0-synthetic", current: true, disposition: "reloaded",
     }],
     stoppedSessions: stoppedSessionIds.map((sessionId) => ({ sessionId, host: "fixture-host", state: "stopped" })),
   };

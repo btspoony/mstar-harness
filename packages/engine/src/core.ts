@@ -196,10 +196,33 @@ export function readHarnessVersion(): string {
 }
 
 /**
- * Exact `dsh-llm-fallbacks` version shared by the workspace pin and the
- * published CLI `init --target dsh` install spec. Two literals only: this
- * constant and `packages/dsh/package.json` `devDependencies["dsh-llm-fallbacks"]`.
- * A drift test asserts they match. CLI src must not import JSON (no
- * resolveJsonModule; published dist cannot see the repo).
+ * The Node floor the owning manifest declares (`engines.node`), as a bare
+ * dotted version (`>=24.18.0` → `24.18.0`), or `null` when no visible manifest
+ * declares one — never an invented fallback.
+ *
+ * Same resolution as `harnessVersionFrom`: the module's OWN manifest first (a
+ * published install ships `package.json` next to the bundle), then the monorepo
+ * root walk. A runtime floor is a version, so `package.json` owns it; nothing
+ * here is compiled in. Bun has no counterpart: it is a development toolchain,
+ * so product code never gates on the Bun version.
  */
-export const DSH_LLM_FALLBACKS_VERSION = "0.6.5";
+export function readDeclaredNodeFloor(): string | null {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const own = join(moduleDir, "..", "package.json");
+  const root = findRootPackageJson(moduleDir);
+  for (const manifestPath of root === null || root === own ? [own] : [own, root]) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue; // unreadable or unparseable manifest — try the next candidate
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const manifest = parsed as Record<string, unknown>; // parsed JSON; every read below is narrowed
+    const engines = manifest["engines"];
+    if (engines === null || typeof engines !== "object" || !("node" in engines)) continue;
+    const node = engines.node;
+    if (typeof node === "string" && node !== "") return node.replace(/^\D+/, "");
+  }
+  return null;
+}

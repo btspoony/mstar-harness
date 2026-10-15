@@ -4,17 +4,19 @@
  *
  * This module is bundled once per test run with `bun build --target node`
  * into a temporary directory and then executed as a child process under the
- * ACTUAL Node >=24.18.0 and Bun >=1.4.0 binaries. Each invocation runs one
- * scenario against the real `store-db.ts` implementation and the real
- * `node:sqlite` driver in a temporary directory — no mock database exists
- * anywhere in the C1 proof. It is never imported by production code and is
- * cleaned up with its bundle and temporary databases after the test run.
+ * ACTUAL Node/bun binaries (the Node floor is the manifest-declared one, read
+ * at runtime). Each invocation runs one scenario against the real `store-db.ts`
+ * implementation and the real `node:sqlite` driver in a temporary directory — no
+ * mock database exists anywhere in the C1 proof. It is never imported by
+ * production code and is cleaned up with its bundle and temporary databases
+ * after the test run.
  *
  * Usage: node|bun <bundle> <scenario> <root-dir>
  */
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { readDeclaredNodeFloor } from "./core.js";
 import type { StoreError as StoreErrorClass } from "./store-db.js";
 
 const {
@@ -26,6 +28,10 @@ const {
   StoreError,
   MIGRATIONS,
 } = await import("./store-db.js");
+
+/** The floor the owning manifest declares, or `null` when it declares none:
+ * the scenario below drives the gate from the declared floor, never a literal. */
+const DECLARED_NODE_FLOOR = readDeclaredNodeFloor();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -76,18 +82,26 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     return "module imported without acquiring SQLite";
   },
 
-  /** Below-floor and missing-capability runtimes are refused actionably and write nothing. */
+  /** Below-floor and missing-capability runtimes are refused actionably and write nothing.
+   * The below-floor input is DERIVED from the declared floor (never a literal);
+   * a manifest that declares no floor leaves that branch unenforced, so the
+   * scenario skips it and proves the capability refusal alone. */
   async "below-floor-refusal"(rootDir) {
-    const belowNode = expectStoreError("store.runtime-unsupported", () =>
-      assertStoreRuntimeSupported({ isBun: false, version: "24.17.0" }),
-    );
-    if (!/Node >=24\.18\.0/.test(belowNode.message)) throw new Error(`not actionable: ${belowNode.message}`);
-    const belowBun = expectStoreError("store.runtime-unsupported", () =>
-      assertStoreRuntimeSupported({ isBun: true, version: "1.3.14" }),
-    );
-    if (!/Bun >=1\.4\.0/.test(belowBun.message)) throw new Error(`not actionable: ${belowBun.message}`);
+    if (DECLARED_NODE_FLOOR !== null) {
+      const belowNode = expectStoreError("store.runtime-unsupported", () =>
+        assertStoreRuntimeSupported({ isBun: false, version: `0.0.1` }),
+      );
+      if (!belowNode.message.includes(`Node >=${DECLARED_NODE_FLOOR}`)) {
+        throw new Error(`not actionable: ${belowNode.message}`);
+      }
+    }
     expectStoreError("store.runtime-unsupported", () =>
-      assertStoreRuntimeSupported({ isBun: false, version: "24.18.0", hasSqlite: false }),
+      assertStoreRuntimeSupported({ isBun: false, version: DECLARED_NODE_FLOOR ?? "0.0.1", hasSqlite: false }),
+    );
+    // Bun carries no version floor (it is a development toolchain): the only
+    // Bun refusal left is the missing-capability one.
+    expectStoreError("store.runtime-unsupported", () =>
+      assertStoreRuntimeSupported({ isBun: true, version: "0.0.1", hasSqlite: false }),
     );
     if (dbFilesUnder(rootDir).length > 0) throw new Error("a refused store access wrote a file");
     // Public-path spoof where the runtime permits it: a real below-floor
@@ -98,8 +112,8 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     const originalNode = versions.node;
     let spoofed = false;
     try {
-      Object.defineProperty(versions, "node", { value: "22.5.0", configurable: true });
-      spoofed = detectStoreRuntime().version === "22.5.0";
+      Object.defineProperty(versions, "node", { value: "0.0.1", configurable: true });
+      spoofed = detectStoreRuntime().version === "0.0.1";
     } catch {
       spoofed = false;
     }

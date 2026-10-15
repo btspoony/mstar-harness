@@ -1639,7 +1639,8 @@ describe("execution-restore", () => {
           kind: "coordinator",
           entrypoint: "/opt/mstar/coordinator",
           runtime: "bun",
-          runtimeVersion: "99.0.0",
+          // Synthetic runtime version carried as payload — not a real version.
+          runtimeVersion: "0.0.0-synthetic-a",
           version: "test",
           current: true,
           disposition: "reloaded",

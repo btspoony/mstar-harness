@@ -9,20 +9,18 @@
  * - `ValidationResult` / `GateResult` shapes: roadmap
  *   §8.5 C4 — engine returns `{ ok: boolean, severity, code, message, fix? }`;
  *   §8.5 C2 — engine unit tests cite the source section as spec.
- * - `readJson`/`writeJson`/`resolveProjectRoot`/`readHarnessVersion`:
+ * - `readJson`/`writeJson`/`resolveProjectRoot`/`harnessVersionFrom`:
  *   roadmap §8.2 core row + §8.5 C6
- *   (version single-source in engine; CLI re-exports).
+ *   (own-manifest-first version resolution in engine; CLI re-exports it).
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
-  DSH_LLM_FALLBACKS_VERSION,
   SEVERITY_ORDER,
   applyEnforcement,
   harnessVersionFrom,
-  readHarnessVersion,
   readJson,
   resolveProjectRoot,
   writeJson,
@@ -270,18 +268,7 @@ describe("resolveProjectRoot", () => {
   });
 });
 
-describe("readHarnessVersion / harnessVersionFrom", () => {
-  test("returns the root morning-star package.json version (derived, no literal)", () => {
-    // Spec: roadmap §8.5 C6 — single source for the harness version; the root
-    // package.json (`name: "morning-star"`) is the version anchor. Engine,
-    // cli, opencode and root all share it (single-version invariant). Derived
-        // comparison only — no hardcoded version literal.
-    const repoRoot = resolve(import.meta.dir, "..", "..", "..");
-    const rootPkg = readJson(join(repoRoot, "package.json"));
-    expect(rootPkg.name).toBe("morning-star");
-    expect(readHarnessVersion()).toBe(rootPkg.version);
-  });
-
+describe("harnessVersionFrom", () => {
   test("own manifest first: a published engine layout resolves without any morning-star package ", () => {
     // Simulates `node_modules/@mstar-harness/engine/dist/engine.js` with the
     // engine's own package.json next to it and NO morning-star manifest
@@ -290,13 +277,15 @@ describe("readHarnessVersion / harnessVersionFrom", () => {
     try {
       const engineRoot = join(dir, "node_modules", "@mstar-harness", "engine");
       const distDir = join(engineRoot, "dist");
+      // Synthetic version written into the fixture manifest — not a real release.
+      const ownVersion = "0.0.0-synthetic";
       mkdirSync(distDir, { recursive: true });
       writeFileSync(
         join(engineRoot, "package.json"),
-        JSON.stringify({ name: "@mstar-harness/engine", version: "9.9.9" }),
+        JSON.stringify({ name: "@mstar-harness/engine", version: ownVersion }),
         "utf8",
       );
-      expect(harnessVersionFrom(distDir)).toBe("9.9.9");
+      expect(harnessVersionFrom(distDir)).toBe(ownVersion);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -307,19 +296,23 @@ describe("readHarnessVersion / harnessVersionFrom", () => {
     try {
       const root = join(dir, "repo");
       mkdirSync(join(root, "lib", "dist"), { recursive: true });
+      // Synthetic version written into the fixture manifest — not a real release.
+      const anchorVersion = "0.0.0-synthetic-a";
       writeFileSync(
         join(root, "package.json"),
-        JSON.stringify({ name: "morning-star", version: "5.5.5" }),
+        JSON.stringify({ name: "morning-star", version: anchorVersion }),
         "utf8",
       );
       // No package.json next to the module dir — the walk finds morning-star.
-      expect(harnessVersionFrom(join(root, "lib", "dist"))).toBe("5.5.5");
+      expect(harnessVersionFrom(join(root, "lib", "dist"))).toBe(anchorVersion);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test("returns 0.0.0 when neither own manifest nor morning-star package exists", () => {
+    // "0.0.0" is harnessVersionFrom's own documented no-manifest sentinel, not a
+    // claim about any released version.
     const dir = mkdtempSync(join(tmpdir(), "core-version-none-"));
     try {
       const moduleDir = join(dir, "somewhere");
@@ -328,14 +321,5 @@ describe("readHarnessVersion / harnessVersionFrom", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-});
-
-describe("DSH_LLM_FALLBACKS_VERSION", () => {
-  test("matches packages/dsh/package.json dsh-llm-fallbacks pin", () => {
-    const repoRoot = resolve(import.meta.dir, "..", "..", "..");
-    const dshPkg = readJson(join(repoRoot, "packages/dsh/package.json"));
-    const pin = (dshPkg.devDependencies as Record<string, string> | undefined)?.["dsh-llm-fallbacks"];
-    expect(DSH_LLM_FALLBACKS_VERSION).toBe(pin);
   });
 });

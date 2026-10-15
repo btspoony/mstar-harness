@@ -25,7 +25,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -64,6 +64,19 @@ afterAll(() => {
 });
 
 const TS = "2026-01-02T03:04:05.000Z";
+/** Declared Node floor, read from the owning manifest at runtime (package.json
+ * is the sole version authority); a node consumer below it would be refused. */
+function declaredNodeFloorFromManifest(file: string): string {
+  const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+  if (typeof parsed !== "object" || parsed === null) return "";
+  const engines = "engines" in parsed ? parsed.engines : undefined;
+  if (typeof engines !== "object" || engines === null) return "";
+  const node = "node" in engines ? engines.node : undefined;
+  return typeof node === "string" ? node.replace(/^>=\s*/, "").trim() : "";
+}
+const declaredNodeFloor = declaredNodeFloorFromManifest(join(import.meta.dir, "..", "package.json"));
+/** Injected current runtime for `node` consumers: at/above the declared floor. */
+const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 const WORKFLOW_ID = "wf-1";
 const PLAN_ID = "p-1";
 const COORDINATOR_ID = "host-coord";
@@ -366,8 +379,10 @@ function attestation(stopped: readonly string[]): ActivationAttestation {
         kind: "coordinator",
         entrypoint: "/opt/mstar/coordinator/dist/index.js",
         runtime: "node",
-        runtimeVersion: "24.18.0",
-        version: "3.11.2",
+        // Synthetic carried plugin version; the runtime is the manifest-derived
+        // at-or-above value so the activation floor check accepts this consumer.
+        runtimeVersion: atOrAboveRuntime,
+        version: "0.0.0-synthetic-b",
         current: true,
         disposition: "reloaded",
       },

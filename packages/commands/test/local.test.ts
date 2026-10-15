@@ -2,9 +2,10 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import {
   compareSemver,
+  DSH_FALLBACKS_SPEC,
+  DSH_FALLBACKS_VERSION,
   diagnoseZcodeHost,
   diagnoseOpencodeHost,
   diagnoseCodexHost,
@@ -83,26 +84,41 @@ describe("shared host-health helpers", () => {
   });
 
   test("shared semver comparison applies prerelease precedence", () => {
-    expect(compareSemver("2.0.0-rc.2", "2.0.0-rc.10")).toBeLessThan(0);
-    expect(compareSemver("2.0.0", "2.0.0-rc.10")).toBeGreaterThan(0);
+    // Comparator spec vectors: a zero core plus synthetic prerelease
+    // identifiers. The bare core is the release counterpart any prerelease
+    // sorts below — none of these is a repository version.
+    const a = "0.0.0-synthetic-a";
+    const a1 = "0.0.0-synthetic-a.1";
+    const b = "0.0.0-synthetic-b";
+    const release = "0.0.0";
+    expect(compareSemver(a, a1)).toBeLessThan(0);
+    expect(compareSemver(a1, b)).toBeLessThan(0);
+    expect(compareSemver(release, a)).toBeGreaterThan(0);
   });
 
   test("shared manifest discovery selects the highest installed version and preserves note wording", () => {
     const project = fixture();
     const global = fixture();
-    writeJson(project, ".cursor-plugin/plugin.json", { version: "1.2.0" });
-    writeJson(global, "package.json", { version: "1.3.0" });
-    expect(detectCursorPluginVersionForScope("project", { project, global })).toBe("1.2.0");
-    expect(detectCursorPluginVersionForScope("global", { project, global })).toBe("1.3.0");
-    expect(formatPluginVersionDoctorNote("cursor", "1.3.0", "1.3.0")).toBe("Plugin/CLI versions aligned (1.3.0).");
-    expect(formatPluginVersionDoctorNote("cursor", "1.3.0", null)).toContain("No installed Morning Star plugin found");
+    // Synthetic version constants, not release numbers.
+    const projectVersion = "0.0.0-synthetic-a";
+    const globalVersion = "0.0.0-synthetic-b";
+    writeJson(project, ".cursor-plugin/plugin.json", { version: projectVersion });
+    writeJson(global, "package.json", { version: globalVersion });
+    expect(detectCursorPluginVersionForScope("project", { project, global })).toBe(projectVersion);
+    expect(detectCursorPluginVersionForScope("global", { project, global })).toBe(globalVersion);
+    expect(formatPluginVersionDoctorNote("cursor", globalVersion, globalVersion))
+      .toBe(`Plugin/CLI versions aligned (${globalVersion}).`);
+    expect(formatPluginVersionDoctorNote("cursor", globalVersion, null)).toContain("No installed Morning Star plugin found");
   });
 
   test("shared ZCode discovery tolerates missing manifests and orders cache versions", () => {
     const root = fixture();
-    writeJson(root, "marketplace/morning-star-harness/1.0.0/.zcode-plugin/plugin.json", { version: "1.0.0" });
-    mkdirSync(path.join(root, "marketplace", "morning-star-harness", "2.1.0"), { recursive: true });
-    expect(detectZcodePluginVersion(root)).toBe("2.1.0");
+    // Synthetic version constants: the cache-dir name is the version candidate.
+    const lower = "0.0.0-synthetic-a";
+    const higher = "0.0.0-synthetic-b";
+    writeJson(root, `marketplace/morning-star-harness/${lower}/.zcode-plugin/plugin.json`, { version: lower });
+    mkdirSync(path.join(root, "marketplace", "morning-star-harness", higher), { recursive: true });
+    expect(detectZcodePluginVersion(root)).toBe(higher);
     expect(detectZcodePluginVersion(path.join(root, "missing"))).toBeNull();
   });
 
@@ -129,7 +145,8 @@ describe("codex host health", () => {
       plugins: [{ name: "morning-star-harness" }],
     });
     const result = diagnoseCodexHost((args) => {
-      if (args[0] === "--version") return "codex 0.144.1";
+      // Synthetic probe output; the version is never compared to a real one.
+      if (args[0] === "--version") return "codex 0.0.0-synthetic";
       if (args[1] === "marketplace") return JSON.stringify({ marketplaces: [{ name: "mstar-repo" }] });
       return JSON.stringify({ installed: [{ pluginId: "morning-star-harness@mstar-repo" }] });
     }, legacyPath);
@@ -137,9 +154,11 @@ describe("codex host health", () => {
     expect(result.notes).toEqual([
       `Legacy personal marketplace entry found at ${legacyPath} — the morning-star-harness plugin now installs from the repo marketplace (btspoony/mstar-harness). Remove the entry, then install: codex plugin add morning-star-harness@mstar-repo`,
     ]);
+    // Synthetic installed-plugin version, echoed back by the detector.
+    const installedVersion = "0.0.0-synthetic";
     expect(detectCodexPluginVersion(() => JSON.stringify({
-      installed: [{ pluginId: "morning-star-harness@mstar-repo", version: "3.6.3" }],
-    }))).toBe("3.6.3");
+      installed: [{ pluginId: "morning-star-harness@mstar-repo", version: installedVersion }],
+    }))).toBe(installedVersion);
   });
 
   test("reports unavailable Codex and missing legacy artifacts from a synthetic root", () => {
@@ -163,10 +182,12 @@ describe("kimi host health", () => {
   test("discovers the Kimi managed root and installed plugin from a synthetic host root", () => {
     const home = fixture();
     const managedRoot = kimiManagedRoot(home);
-    writeJson(home, "plugins/managed/morning-star-harness/.kimi-plugin/plugin.json", { version: "3.7.0" });
+    // Synthetic version constant, not a release number.
+    const installedVersion = "0.0.0-synthetic";
+    writeJson(home, "plugins/managed/morning-star-harness/.kimi-plugin/plugin.json", { version: installedVersion });
 
     expect(managedRoot).toBe(path.join(home, "plugins", "managed"));
-    expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+    expect(detectKimiPluginVersion(home)).toBe(installedVersion);
     expect(diagnoseKimiHost(home)).toEqual({ location: managedRoot, errors: [], notes: [] });
   });
 
@@ -187,7 +208,8 @@ describe("cursor host health", () => {
     const projectRoot = fixture();
     const pluginRoot = projectInstallPath(projectRoot);
     mkdirSync(path.join(pluginRoot, ".git"), { recursive: true });
-    writeJson(pluginRoot, ".cursor-plugin/plugin.json", { version: "1.0.0" });
+    // Synthetic version constant, not a release number.
+    writeJson(pluginRoot, ".cursor-plugin/plugin.json", { version: "0.0.0-synthetic" });
     for (const agent of ["fullstack-dev", "qc-specialist"]) {
       const file = path.join(pluginRoot, "agents", `${agent}.md`);
       mkdirSync(path.dirname(file), { recursive: true });
@@ -222,7 +244,8 @@ describe("opencode host health", () => {
     const root = fixture();
     writeJson(root, "opencode.json", {
       $schema: "https://opencode.ai/config.json",
-      plugin: ["@mstar-harness/opencode@3.11.2"],
+      // Synthetic slot version; the detector only matches the owned spec shape.
+      plugin: ["@mstar-harness/opencode@0.0.0-synthetic"],
     });
 
     expect(diagnoseOpencodeHost(root, [])).toEqual({
@@ -421,7 +444,8 @@ const DSH_DUMP_FALLBACKS_DISABLED = [
 
 function dshProbe(dump: string): (args: string[]) => string {
   return (args) => {
-    if (args[0] === "--version") return "dsh 0.1.0-rc.6";
+    // Synthetic probe output; the version is never compared to a real one.
+    if (args[0] === "--version") return "dsh 0.0.0-synthetic";
     if (args.includes("--dump-config")) return dump;
     throw new Error(`unexpected dsh args: ${args.join(" ")}`);
   };
@@ -431,7 +455,7 @@ describe("dsh host health", () => {
   test("discovers dsh diagnostics from a synthetic host root", () => {
     const root = fixture();
     writeJson(root, "profiles/web/node_modules/dsh-llm-fallbacks/package.json", {
-      version: DSH_LLM_FALLBACKS_VERSION,
+      version: DSH_FALLBACKS_VERSION,
     });
     const profileDir = resolveDshProfileDir(root);
     expect(profileDir).toBe(path.join(root, "profiles", "web"));
@@ -441,16 +465,16 @@ describe("dsh host health", () => {
     expect(mounted.errors).toEqual([]);
     expect(mounted.notes).toEqual([
       "@mstar-harness/dsh: mounted",
-      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}: mounted`,
+      `${DSH_FALLBACKS_SPEC}: mounted`,
     ]);
 
     const disabled = diagnoseDshHost(dshProbe(DSH_DUMP_FALLBACKS_DISABLED), { dshHome: root });
     expect(disabled.notes).toEqual([
       "@mstar-harness/dsh: mounted",
-      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}: disabled`,
+      `${DSH_FALLBACKS_SPEC}: disabled`,
     ]);
     expect(disabled.errors).toEqual([
-      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION} is disabled. Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.`,
+      `${DSH_FALLBACKS_SPEC} is disabled. Enable it (e.g. remove the disable entry from cordis.patch.yml) and re-run doctor.`,
     ]);
     expect(parseDshLoaderEntries(DSH_DUMP_FALLBACKS_DISABLED)?.find((entry) => entry.name === "dsh-llm-fallbacks")?.enabled)
       .toBe(false);
@@ -465,10 +489,10 @@ describe("dsh host health", () => {
     expect(missing.location).toBe(profileDir);
     expect(missing.notes).toEqual([
       "@mstar-harness/dsh: mounted",
-      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}: drifted (installed unknown, pinned ${DSH_LLM_FALLBACKS_VERSION})`,
+      `${DSH_FALLBACKS_SPEC}: drifted (installed unknown, pinned ${DSH_FALLBACKS_VERSION})`,
     ]);
     expect(missing.errors).toEqual([
-      `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION} is drifted (profile has unknown, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
+      `${DSH_FALLBACKS_SPEC} is drifted (profile has unknown, harness pins ${DSH_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
     ]);
 
     const unavailable = diagnoseDshHost(() => {

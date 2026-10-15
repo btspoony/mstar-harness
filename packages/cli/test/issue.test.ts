@@ -9,13 +9,19 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { compareVersions, initializeStore, MIN_BUN_VERSION, MIN_NODE_VERSION } from "@mstar-harness/engine";
+import { initializeStore } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
 const NODE_BIN = process.env.NODE_BIN ?? "node";
-const NODE_VERSION = spawnSync(NODE_BIN, ["--version"], { encoding: "utf8" }).stdout.trim();
-const BUN_VERSION = spawnSync("bun", ["--version"], { encoding: "utf8" }).stdout.trim();
+// The declared Node floor, read from the engine manifest at runtime: no test
+// pins the floor value, and package.json stays the sole version authority.
+type EngineManifest = { engines?: { node?: string } };
+const engineManifest = JSON.parse(
+  readFileSync(resolve(CLI_ROOT, "..", "engine", "package.json"), "utf8"),
+) as EngineManifest;
+const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+const belowFloorNodeVersion = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) - 1}.0.0`;
 
 
 interface RunResult {
@@ -94,21 +100,13 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
 }
 
 describe("mstar issue CLI bundle", () => {
-  test("records runtimes >= the issue-store floors (Node 24.18.0, Bun 1.4.0)", () => {
+  test("records the runtimes the subprocess launchers use", () => {
     // Evidence: subprocess launchers used below. Print so the report names them.
     console.log(`issue.test runtimes NODE_BIN=${NODE_BIN} node=${NODE_VERSION} bun=${BUN_VERSION}`);
-    // The recorded floor metadata itself is pinned (store-db.ts §8).
-    expect(MIN_NODE_VERSION).toBe("24.18.0");
-    expect(MIN_BUN_VERSION).toBe("1.4.0");
-    // The actual runtimes only promise >= the floor (package.json engines:
-    // node >=24.18.0 / bun >=1.4.0) — an exact-equality pin fails on every
-    // newer runtime, which is not a contract violation. A version-shaped
-    // string is required first so a failed `--version` read cannot silently
-    // compare as 0.
+    // Only the shape is asserted here: the floor belongs to the owning manifest
+    // (`engines.node`) and the product refuses a below-floor runtime on its own.
     expect(NODE_VERSION).toMatch(/^v?\d+\.\d+/);
     expect(BUN_VERSION).toMatch(/^\d+\.\d+/);
-    expect(compareVersions(NODE_VERSION.replace(/^v/, ""), MIN_NODE_VERSION)).toBeGreaterThanOrEqual(0);
-    expect(compareVersions(BUN_VERSION, MIN_BUN_VERSION)).toBeGreaterThanOrEqual(0);
   });
 
   test("the built bundle carries the Node shebang", () => {
@@ -576,7 +574,7 @@ describe("mstar issue CLI bundle", () => {
     const preload = join(root, "below-floor.mjs");
     writeFileSync(
       preload,
-      `Object.defineProperty(process, "versions", { value: { ...process.versions, node: "18.20.0" } });\n`,
+      `Object.defineProperty(process, "versions", { value: { ...process.versions, node: "${belowFloorNodeVersion}" } });\n`,
     );
     const result = runBundle(
       "node",
@@ -588,7 +586,10 @@ describe("mstar issue CLI bundle", () => {
     const body = jsonOf(result);
     expect(body.status).not.toBe("ok");
     expect(body.code).toBe("store.runtime-unsupported");
-    expect(String(body.message)).toMatch(/24\.18\.0/);
+    // The refusal names the runtime it refused and the declared floor; the
+    // floor value comes from the manifest, so no version literal is restated.
+    expect(String(body.message)).toContain("Node");
+    expect(String(body.message)).toContain(declaredNodeFloor);
     expect(String(body.message)).toMatch(/nodejs\.org|upgrade/i);
   });
 

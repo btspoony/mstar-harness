@@ -58,7 +58,7 @@ export {
 } from "./roadmap-store.js";
 export { parseRoadmapContent } from "./roadmap-content.js";
 export type { GateResult, Severity, ValidationResult } from "./core.js";
-export { DSH_LLM_FALLBACKS_VERSION, SEVERITY_ORDER, applyEnforcement, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
+export { SEVERITY_ORDER, applyEnforcement, readDeclaredNodeFloor, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {
   HarnessKind,
   ResolveHarnessDirOptions,
@@ -558,8 +558,6 @@ export type { StoreContext, StoreErrorCode, StoreHandle, StoreRuntimeInfo, Store
 export {
   MIGRATION_2_SQL,
   MIGRATIONS,
-  MIN_BUN_VERSION,
-  MIN_NODE_VERSION,
   SCHEMA_VERSION_TABLE_SQL,
   StoreError,
   assertStoreRuntimeSupported,

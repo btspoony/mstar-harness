@@ -1077,8 +1077,9 @@ function activationAttestation(
         kind: "coordinator",
         entrypoint: "extensions/model-handoff.js",
         runtime: "bun",
-        runtimeVersion: "1.4.0",
-        version: "3.11.2",
+        // Synthetic runtime/bundle versions carried as payload — not real versions.
+        runtimeVersion: "0.0.0-synthetic-a",
+        version: "0.0.0-synthetic-b",
         current: true,
         disposition: "reloaded",
       },

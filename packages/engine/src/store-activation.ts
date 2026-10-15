@@ -60,11 +60,9 @@ import {
   type IndexFamily,
   type RawTable,
 } from "./catalog-import.js";
-import { writeJson } from "./core.js";
+import { readDeclaredNodeFloor, writeJson } from "./core.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
-  MIN_BUN_VERSION,
-  MIN_NODE_VERSION,
   MIGRATIONS,
   assertStoreRuntimeSupported,
   compareVersions,
@@ -1036,8 +1034,10 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
     if (runtime !== "bun" && runtime !== "node") attestationRefusal(`${what}.runtime must be "bun" or "node"`);
     const entryId = attestationString(consumer, "entryId", what);
     const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
-    const floor = runtime === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
-    if (compareVersions(runtimeVersion, floor) < 0) {
+    // `bun` consumers carry no version gate (Bun is a development toolchain);
+    // a Node consumer's floor is the declared one, read from the manifest.
+    const floor = runtime === "bun" ? null : readDeclaredNodeFloor();
+    if (floor !== null && compareVersions(runtimeVersion, floor) < 0) {
       activationBlocked(
         `${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` +
           `compatible consumer. Upgrade/reload it or exclude it explicitly.`,

@@ -14,6 +14,7 @@ import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { basename as basename2, dirname as dirname4, join as join4, resolve as resolve3 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname5, join as join5, resolve as resolve4, sep as sep2 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
@@ -9971,6 +9972,44 @@ function writeJson(filePath, value) {
     throw error;
   }
 }
+function findRootPackageJson(startDir) {
+  let dir = startDir;
+  for (;; ) {
+    const candidate = resolve3(dir, "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync3(candidate, "utf8"));
+      if (pkg.name === "morning-star")
+        return candidate;
+    } catch {}
+    const parent = dirname4(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function readDeclaredNodeFloor() {
+  const moduleDir = dirname4(fileURLToPath(import.meta.url));
+  const own3 = join4(moduleDir, "..", "package.json");
+  const root = findRootPackageJson(moduleDir);
+  for (const manifestPath of root === null || root === own3 ? [own3] : [own3, root]) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync3(manifestPath, "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object")
+      continue;
+    const manifest = parsed;
+    const engines = manifest["engines"];
+    if (engines === null || typeof engines !== "object" || !("node" in engines))
+      continue;
+    const node2 = engines.node;
+    if (typeof node2 === "string" && node2 !== "")
+      return node2.replace(/^\D+/, "");
+  }
+  return null;
+}
 var SEVERITY_ORDER;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
@@ -11332,8 +11371,8 @@ function validateActivationAttestation(value) {
       attestationRefusal(`${what}.runtime must be "bun" or "node"`);
     const entryId = attestationString(consumer, "entryId", what);
     const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
-    const floor = runtime === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
-    if (compareVersions(runtimeVersion, floor) < 0) {
+    const floor = runtime === "bun" ? null : readDeclaredNodeFloor();
+    if (floor !== null && compareVersions(runtimeVersion, floor) < 0) {
       activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` + `compatible consumer. Upgrade/reload it or exclude it explicitly.`);
     }
     const disposition = consumer.disposition;
@@ -15021,13 +15060,13 @@ function compareVersions(a, b) {
 }
 function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
   const kind = info.isBun ? "Bun" : "Node";
-  const floor = info.isBun ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  const floor = kind === "Node" ? readDeclaredNodeFloor() : null;
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
-    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
+    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
   }
-  if (compareVersions(info.version, floor) < 0) {
-    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind} >=${floor}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
+  if (floor !== null && compareVersions(info.version, floor) < 0) {
+    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
   }
 }
 async function loadSqliteDriver() {
@@ -15620,8 +15659,6 @@ async function openStoreOnce(dbPath, mode, timeout) {
     throw error;
   }
 }
-var MIN_BUN_VERSION = "1.4.0";
-var MIN_NODE_VERSION = "24.18.0";
 var DEFAULT_BUSY_TIMEOUT_MS = 5000;
 var StoreError;
 var RUNTIME_GLOBAL;
@@ -16210,6 +16247,7 @@ var probeConnection = null;
 var dshTransactions;
 var init_store_db = __esm(() => {
   init_coordination();
+  init_core();
   StoreError = class StoreError2 extends Error {
     code;
     details;

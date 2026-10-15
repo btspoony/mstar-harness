@@ -1,7 +1,8 @@
-import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolveProjectRoot } from "./paths.js";
 import { compareSemver } from "./version-compare.js";
 
 export const DSH_BIN = "dsh";
@@ -17,10 +18,69 @@ export const DSH_PROFILES_DIR = "profiles";
 export const DSH_INSTALL_HINT =
   "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
 
+/** The CLI package that ships this module's consumer (the install runs there). */
+const CLI_PACKAGE_NAME = "@mstar-harness/cli";
+
+/** Read `mstar.dshLlmFallbacks` — the pinned `dsh-llm-fallbacks` version — from a
+ * manifest. Missing key or unreadable manifest → `null` (never a placeholder). */
+function readDshFallbacksPin(manifestPath: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const manifest = parsed as Record<string, unknown>; // parsed JSON; every read below is narrowed
+    const namespaced = manifest["mstar"];
+    if (namespaced === null || typeof namespaced !== "object" || !("dshLlmFallbacks" in namespaced)) return null;
+    const pin = namespaced.dshLlmFallbacks;
+    return typeof pin === "string" && pin !== "" ? pin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Candidate CLI manifests, most specific first: the manifest beside this module's
+ * published layout (the CLI inlines this package into its own bundle), then the
+ * monorepo source layout (`packages/commands/dist/…` → `packages/cli`), then the
+ * selected project root for a test process with no CLI on disk. */
+function dshFallbacksManifestCandidates(): string[] {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const own = path.join(moduleDir, "..", "package.json");
+  const repoCheckout = [
+    path.join(moduleDir, "..", "..", "cli", "package.json"),
+    path.join(moduleDir, "..", "..", "..", "packages", "cli", "package.json"),
+  ];
+  let projectRoot = "";
+  try {
+    projectRoot = resolveProjectRoot();
+  } catch {
+    projectRoot = ""; // no project root (e.g. a deleted cwd) — the layouts above still stand
+  }
+  return [...new Set([own, ...repoCheckout, ...(projectRoot === "" ? [] : [path.join(projectRoot, "packages", "cli", "package.json")])])];
+}
+
+/**
+ * The exact `dsh-llm-fallbacks` version shared by the CLI install spec and the
+ * pinned re-add. `package.json` owns the value (`packages/cli/package.json`
+ * `mstar.dshLlmFallbacks` — the CLI is what runs the install); it is read at
+ * runtime, never compiled in, and the CLI source must not import JSON (no
+ * resolveJsonModule; a published dist cannot see the repo). No manifest carries
+ * the key → refuse by name rather than install an unpinned (boot-breaking) spec.
+ */
+export const DSH_FALLBACKS_VERSION: string = (() => {
+  const candidates = dshFallbacksManifestCandidates();
+  for (const manifestPath of candidates) {
+    const pin = readDshFallbacksPin(manifestPath);
+    if (pin !== null) return pin;
+  }
+  throw new Error(
+    `Cannot resolve the dsh-llm-fallbacks pin: no manifest in ${candidates.join(", ")} declares \`${CLI_PACKAGE_NAME}\` ` +
+      `\`mstar.dshLlmFallbacks\`. Add the key to the CLI package.json at runtime path, or reinstall the CLI package.`,
+  );
+})();
+
 /** Install/doctor row order: mstar first, fallbacks second. The fallbacks spec is an
- * exact pin (`DSH_LLM_FALLBACKS_VERSION`) because an unpinned `dsh plugin add` follows
- * the dsh CLI's own range and can boot-break the installed artifact. */
-export const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
+ * exact pin (`DSH_FALLBACKS_VERSION`, read from the CLI manifest) because an unpinned
+ * `dsh plugin add` follows the dsh CLI's own range and can boot-break the installed artifact. */
+export const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_FALLBACKS_VERSION}`];
 export const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
 
 /** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's spec; fallbacks carries the pin). */
@@ -75,10 +135,10 @@ export function readInstalledFallbacksVersion(profileDir: string): string | null
 
 /** True when the profile's installed fallbacks version is missing or differs from the harness pin. */
 export function fallbacksVersionDrifted(profileDir: string): boolean {
-  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION)) return false;
+  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_FALLBACKS_VERSION)) return false;
   const installedVersion = readInstalledFallbacksVersion(profileDir);
   if (installedVersion === null) return true;
-  return compareSemver(installedVersion, DSH_LLM_FALLBACKS_VERSION) !== 0;
+  return compareSemver(installedVersion, DSH_FALLBACKS_VERSION) !== 0;
 }
 
 /** Probe whether dsh is executable; diagnostic failures are reported as unavailable. */
@@ -173,9 +233,9 @@ export function diagnoseDshHost(
     if (spec === DSH_FALLBACKS_SPEC && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
       const installedVersion = readInstalledFallbacksVersion(profileDir);
       const installedLabel = installedVersion ?? "unknown";
-      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_LLM_FALLBACKS_VERSION})`);
+      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_FALLBACKS_VERSION})`);
       errors.push(
-        `${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
+        `${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
       );
       continue;
     }
