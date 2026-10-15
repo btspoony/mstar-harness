@@ -2,22 +2,12 @@
 name: qc-specialist
 description: "Quality Control Specialist (Reviewer #1) - code review (diff, logic, maintainability). Not a test runner."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   # `edit` covers write/patch/multiedit. Only `.md` under resolved `{SDD_DIR}/review/` bundle roots.
   edit:
     "*": deny
     ".mstar/sdd/*.md": allow
     ".mstar/sdd/**/*.md": allow
-    ".agents/sdd/*.md": allow
-    ".agents/sdd/**/*.md": allow
-    ".worktrees/**/.mstar/sdd/*.md": allow
-    ".worktrees/**/.mstar/sdd/**/*.md": allow
-    ".worktrees/**/.agents/sdd/*.md": allow
-    ".worktrees/**/.agents/sdd/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only) — L3 is diff review; no test/build/lint CLIs (peer QC share worktree)

@@ -2,10 +2,6 @@
 name: code-reviewer
 description: "Code Reviewer - SDD per-task review (L2) + codebase audit execution (audit). Read-only seat: does not implement, fix, or occupy a QC seat."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   # `edit` covers write/patch/multiedit. Only `.md` under resolved `{SDD_DIR}` review roots
   # and `{PLAN_DIR}` audit plan roots (`.md`-only mirrors the qc-specialist minimal-permission style).
@@ -13,20 +9,8 @@ permission:
     "*": deny
     ".mstar/sdd/*.md": allow
     ".mstar/sdd/**/*.md": allow
-    ".agents/sdd/*.md": allow
-    ".agents/sdd/**/*.md": allow
-    ".worktrees/**/.mstar/sdd/*.md": allow
-    ".worktrees/**/.mstar/sdd/**/*.md": allow
-    ".worktrees/**/.agents/sdd/*.md": allow
-    ".worktrees/**/.agents/sdd/**/*.md": allow
     ".mstar/plans/*.md": allow
     ".mstar/plans/**/*.md": allow
-    ".agents/plans/*.md": allow
-    ".agents/plans/**/*.md": allow
-    ".worktrees/**/.mstar/plans/*.md": allow
-    ".worktrees/**/.mstar/plans/**/*.md": allow
-    ".worktrees/**/.agents/plans/*.md": allow
-    ".worktrees/**/.agents/plans/**/*.md": allow
   bash:
     "*": deny
     # Git inspection (read-only) — L2 diff review + audit recon; no test/build/lint CLIs

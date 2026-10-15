@@ -2,10 +2,6 @@
 name: fullstack-dev
 description: "Fullstack Developer - backend-led fullstack implementation (API/business/data). PM should split UI-heavy or new-page work to `@frontend-dev`, and use `@fullstack-dev-2` for the second parallel track. One developer can handle hotfixes or small single-stream updates."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   task:
     "*": deny

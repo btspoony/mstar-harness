@@ -2,10 +2,6 @@
 name: writing-specialist
 description: "Writing Specialist - documentation, fiction, copywriting, and script writing."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   bash:
     "*": allow

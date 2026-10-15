@@ -2,10 +2,6 @@
 name: qa-engineer
 description: "QA Engineer - tiered L4 acceptance (DoD mapping, residual verify, report-only); dispatched when PM sets QA gate mandatory."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   bash:
     "*": allow

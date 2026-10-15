@@ -2,10 +2,6 @@
 name: product-manager
 description: "Product Manager - requirements analysis, product planning, market/user research, and product-facing documentation."
 mode: subagent
-tools:
-  write: true
-  edit: true
-  bash: true
 permission:
   bash:
     "*": allow
