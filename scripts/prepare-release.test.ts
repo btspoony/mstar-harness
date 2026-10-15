@@ -82,7 +82,6 @@ packages: root, , cli,
 describe("syncRootDependencySpecs (hosted root manifest)", () => {
   const manifest = (spec: string) => `{
   "dependencies": {
-    "@mstar-harness/commands": "${spec}",
     "@mstar-harness/engine": "${spec}",
   },
   "devDependencies": {
@@ -93,10 +92,14 @@ describe("syncRootDependencySpecs (hosted root manifest)", () => {
 
   test("rewrites every workspace runtime dependency and leaves build links untouched", () => {
     const out = syncRootDependencySpecs(manifest("workspace:*"), "3.5.0");
-    for (const name of ["commands", "engine"]) {
-      expect(out).toContain(`"@mstar-harness/${name}": "^3.5.0"`);
-    }
+    expect(out).toContain('"@mstar-harness/engine": "^3.5.0"');
     expect(out).toContain('"devDependencies": {\n    "@mstar-harness/commands": "workspace:*"\n  }');
+  });
+
+  test("leaves the internal commands devDependency workspace link untouched", () => {
+    const out = syncRootDependencySpecs(manifest("^3.4.0"), "3.5.0");
+    expect(out).toContain('"@mstar-harness/commands": "workspace:*"');
+    expect(out).not.toContain('"@mstar-harness/commands": "^3.5.0"');
   });
 
   test("rewrites stale ranges to stable and prerelease release ranges", () => {
