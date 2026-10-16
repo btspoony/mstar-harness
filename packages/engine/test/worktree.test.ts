@@ -1519,6 +1519,36 @@ describe("workflowEntryPreDispatchCheck", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  test("passes a standalone plan registered after the rename using work/target anchors", () => {
+    const root = tmpRoot("wt-entry-standalone-work-");
+    try {
+      const checkouts = worktreeFixture(root, []);
+      const repo = join(root, "repo");
+      const main = mainInfo(repo);
+      const result = workflowEntryPreDispatchCheck({
+        workflowId: "wf-plan",
+        workflowType: "plan",
+        branch: { base: main.branch, work: "feature/plan", target: main.branch },
+        mainWorktree: main,
+        lifecycleBranches: [],
+      });
+      expect(result.violations).toEqual([]);
+      expect(result.ok).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("refuses a standalone plan that records its delivery anchor in neither spelling", () => {
+    const result = workflowEntryPreDispatchCheck({
+      workflowId: "wf-plan",
+      workflowType: "plan",
+      branch: { target: "main" },
+      mainWorktree: { root: "/repo/main", branch: "main" },
+      lifecycleBranches: [],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((entry) => entry.code)).toContain("worktree.entry.branch-work-missing");
+  });
+
   test("iteration missing integration anchor refuses with achievable iteration recovery", () => {
     const result = workflowEntryPreDispatchCheck({
       workflowId: "wf-iteration",

@@ -44,7 +44,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
-import { validateIntegrationMergeLease, type WorkflowLifecycleType } from "./workflow.js";
+import { deliveryBranchOf, validateIntegrationMergeLease, type WorkflowBranchAnchors, type WorkflowLifecycleType } from "./workflow.js";
 
 /**
  * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
@@ -231,7 +231,7 @@ export type BranchProbeOptions = {
 export type WorkflowEntryPreDispatchInput = {
   workflowId: string;
   workflowType: WorkflowLifecycleType;
-  branch: { base?: string; source?: string; target?: string; integration?: string };
+  branch: WorkflowBranchAnchors;
   integrationWorktreePath?: string;
   mainWorktree: MainWorktreeInfo | null;
   lifecycleBranches: readonly ActiveLifecycleBranch[];
@@ -257,11 +257,14 @@ function probeStatus(worktreePath: string, opts: BranchProbeOptions): { status: 
 /** Engine-enforced workflow-entry subset; this does not clear the full pre-dispatch checklist. */
 export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInput, opts: BranchProbeOptions = {}): WorkflowEntryPreDispatchResult {
   const violations: ValidationResult[] = [];
-  const { base = "", source = "", target = "", integration = "" } = input.branch;
+  const { base = "", target = "", integration = "" } = input.branch;
   const iteration = input.workflowType === "iteration";
+  // The delivery branch resolves through the one rule that knows both spellings
+  // (`work` is current, `source` the pre-rename key), so a standalone plan is
+  // judged by the same value however it was registered.
   const anchors = iteration
     ? [["base", base], ["target", target], ["integration", integration]] as const
-    : [["source", source], ["target", target]] as const;
+    : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]] as const;
   for (const [key, value] of anchors) {
     if (value.trim() === "") {
       const recovery = iteration
