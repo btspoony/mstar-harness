@@ -20,14 +20,20 @@
  * The invariant is about the artifact at initialization, not about source
  * style: the engine legitimately acquires `node:sqlite` through a *lazy,
  * function-scoped* `createRequire(import.meta.url)("node:sqlite")` on Node. So
- * the guard rejects a `createRequire(import.meta.url)` that is **not
- * immediately invoked**: the banner's `var __require = createRequire(…)` and a
- * module-scope binding both evaluate at initialization, and `bun build` hoists
- * a module-scope binding into an `__esm(...)` init body at indentation — so a
- * column-0 line scan passes a dist that still throws at Worker startup.
+ * the guard checks that property instead of any call shape — it imports a
+ * scratch copy of each artifact with every `import.meta.url` forced to
+ * `undefined` (what the artifact sees under workerd, where the property is not
+ * defined) and fails on any throw. A deferred function-scoped acquisition never
+ * runs there; the banner's `var __require = createRequire(…)`, a module-scope
+ * binding, and a module-scope *immediately invoked* acquisition all do,
+ * whatever they look like, and `bun build` may hoist a module-scope binding
+ * into an indented `__esm(...)` init body where a column-0 line scan would not
+ * see it.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const PACKAGE_ROOT = join(import.meta.dir, "..");
 const DIST = join(PACKAGE_ROOT, "dist");
@@ -60,24 +66,51 @@ for (const { entrypoint, name } of ENTRIES) {
   console.log(`  ${name}  ${(result.outputs[0].size / 1024).toFixed(2)} KB`);
 }
 
-/** Failures of the interop-free invariant, each with its measured count. */
+/** Failures of the interop-free invariant, each with its measurement. */
 const violations: string[] = [];
-for (const { name } of ENTRIES) {
-  const artifact = join(DIST, name);
-  if (!existsSync(artifact)) {
-    violations.push(`${name}: missing (the build must produce it)`);
-    continue;
+/** Scratch dir for the probe copies; never inside `dist/`, removed either way. */
+const probeDir = mkdtempSync(join(tmpdir(), "mstar-engine-dist-probe-"));
+try {
+  /** `[artifact name, scratch copy path]` for every artifact that built. */
+  const probes: Array<[string, string]> = [];
+  for (const { name } of ENTRIES) {
+    const artifact = join(DIST, name);
+    if (!existsSync(artifact)) {
+      violations.push(`${name}: missing (the build must produce it)`);
+      continue;
+    }
+    const source = readFileSync(artifact, "utf8");
+    for (const token of ["__require(", "__commonJS("]) {
+      const count = source.split("\n").filter((line) => line.includes(token)).length;
+      if (count > 0) violations.push(`${name}: ${count}x ${token}`);
+    }
+    // The invariant is a property of initialization, not of call shape: force
+    // every `import.meta.url` to `undefined` (what a runtime without it sees)
+    // in a scratch copy. All copies are written before the first import — bun's
+    // resolver does not reliably see a sibling written into the probe dir
+    // afterwards, reporting a false resolution failure.
+    const probe = join(probeDir, name);
+    writeFileSync(probe, source.replaceAll("import.meta.url", "undefined"));
+    probes.push([name, probe]);
   }
-  const lines = readFileSync(artifact, "utf8").split("\n");
-  for (const token of ["__require(", "__commonJS("]) {
-    const count = lines.filter((line) => line.includes(token)).length;
-    if (count > 0) violations.push(`${name}: ${count}x ${token}`);
+  for (const [name, probe] of probes) {
+    // Whatever the artifact evaluates at initialization throws here: the
+    // interop banner, a module-scope binding, and a module-scope *immediately
+    // invoked* acquisition alike. A deferred, function-scoped acquisition
+    // never runs during import and stays permitted. The specifier is a runtime
+    // scratch path, so this cannot be a static import.
+    try {
+      const probeModule: object = await import(pathToFileURL(probe).href);
+      console.log(`  ${name}  probe ok: imports without import.meta.url, ${Object.keys(probeModule).length} exports`);
+    } catch (error) {
+      violations.push(
+        `${name}: throws at initialization without import.meta.url — ` +
+          `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
+      );
+    }
   }
-  // A `createRequire(import.meta.url)` not immediately invoked is evaluated at
-  // module initialization instead of lazily — the interop banner's own shape.
-  // The identifier may be bundler-aliased (`createRequire2`), so match the call.
-  const initTime = lines.filter((line) => /createRequire\w*\(import\.meta\.url\)\s*(?!\()/.test(line)).length;
-  if (initTime > 0) violations.push(`${name}: ${initTime}x init-time createRequire(import.meta.url)`);
+} finally {
+  rmSync(probeDir, { recursive: true, force: true });
 }
 
 if (violations.length > 0) {
