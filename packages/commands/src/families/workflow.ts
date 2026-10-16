@@ -389,6 +389,35 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
   z.object({ ...deliveryEvidenceFields, completion: completionEvidenceSchema }).strict(),
 ]);
 
+/**
+ * Non-blocking advisories for a `development` registration whose delivery
+ * anchors cannot describe a delivery PR. The registration still succeeds: these
+ * warnings ride in the ok envelope's `data.warnings` and never refuse.
+ *
+ * Only the equal-pair signal can accompany a success envelope - the engine's
+ * registration-coherence rule refuses a `development` workflow that omits an
+ * anchor before one exists - but both signals are decidable from the caller's
+ * own input, so one predicate carries them.
+ */
+function deliveryAnchorWarnings(deliveryKind: string, source: string | undefined, target: string | undefined): string[] {
+  if (deliveryKind !== "development") return [];
+  if (source === undefined || target === undefined) {
+    return [
+      "--branch-source/--branch-target: a development workflow records both delivery anchors, and this registration leaves " +
+      `branch.source ${source === undefined ? "absent" : JSON.stringify(source)} and branch.target ${target === undefined ? "absent" : JSON.stringify(target)}. ` +
+      "--branch-source is the branch the delivery PR comes from, normally the plan's own feature branch. " +
+      "Repair the registered workflow with `mstar workflow delivery-anchors`.",
+    ];
+  }
+  if (source !== target) return [];
+  return [
+    `--branch-source/--branch-target: both were recorded as ${JSON.stringify(source)}, so branch.source === branch.target and the anchors name no delivery PR. ` +
+    "--branch-source is the branch the delivery PR comes from, normally the plan's own feature branch; " +
+    "`mstar plan complete` compares it with the plan row's recorded working branch. " +
+    "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-source <branch> --reason <text>`.",
+  ];
+}
+
 export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
   const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
   const defs: CommandDefinition[] = [
@@ -406,7 +435,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           workflowId: input.workflow!,
           role: "coordinator",
         };
-        return ok("workflow.register", await registerShippedCatalogExecution(
+        const result = await registerShippedCatalogExecution(
           executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }),
           {
             actor: "mcp:workflow-register",
@@ -414,7 +443,9 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             ...(input.expect === undefined ? {} : { expected: input.expect as never }),
             ...(input.operation === undefined ? {} : { operationId: input.operation }),
           },
-        ));
+        );
+        const warnings = deliveryAnchorWarnings(input.deliveryKind!, input.branchSource, input.branchTarget);
+        return ok("workflow.register", warnings.length === 0 ? result : { ...result, warnings });
       } catch (error) {
         return engineRefusal("workflow.register", error);
       }
