@@ -181,7 +181,7 @@ Install the plugin in Kimi TUI (user-scoped — all projects):
 
 ### omp
 
-User scope (recommended):
+User scope (the only scope omp has):
 
 ```bash
 npx @mstar-harness/cli init --target omp --scope global
@@ -424,7 +424,7 @@ ZCode plugin source in this repository:
 
 ### omp
 
-User scope (recommended):
+User scope (the only scope omp has):
 
 ```bash
 npx @mstar-harness/cli init --target omp --scope global
