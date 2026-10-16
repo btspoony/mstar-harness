@@ -186,6 +186,7 @@ __export(exports_engine, {
   createLocalExecutionIdentity: () => createLocalExecutionIdentity,
   currentAuthorityHandle: () => currentAuthorityHandle,
   decodeExecutionSessionRef: () => decodeExecutionSessionRef,
+  deliveryBranchOf: () => deliveryBranchOf,
   deliveryEvidenceViolations: () => deliveryEvidenceViolations,
   deriveLifecyclePhase: () => deriveLifecyclePhase,
   derivePlanRegistration: () => derivePlanRegistration,
@@ -9708,9 +9709,10 @@ function promotedAuditSnapshot(workflowId, outDir, selected, options, startedAt)
     plans: promotedAuditPlanRows(outDir, selected),
     delivery_kind: options.deliveryKind
   };
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+  if (options.branchBase !== undefined || options.branchWork !== undefined || options.branchTarget !== undefined) {
     snapshot.branch = {
-      ...options.branchSource !== undefined ? { source: options.branchSource } : {},
+      ...options.branchBase !== undefined ? { base: options.branchBase } : {},
+      ...options.branchWork !== undefined ? { work: options.branchWork } : {},
       ...options.branchTarget !== undefined ? { target: options.branchTarget } : {}
     };
   }
@@ -15117,6 +15119,13 @@ function resolveRegisteredPlanFile(input) {
   }
   return { planPath: expected, planDir, declaredPlanId };
 }
+function deliveryBranchOf(branch) {
+  if (!isPlainObject(branch))
+    return;
+  if (nonEmptyString(branch.work))
+    return branch.work;
+  return nonEmptyString(branch.source) ? branch.source : undefined;
+}
 function deriveLifecyclePhase(snapshot) {
   const facts = [`type=${snapshot.type}`, `status=${snapshot.status}`];
   if (snapshot.type !== "iteration" || snapshot.status !== "running") {
@@ -15327,7 +15336,7 @@ function validateWorkflowSnapshot(doc) {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation7("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "source", "integration", "target"]) {
+      for (const key of ["base", "work", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation7("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -15429,13 +15438,13 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 function assertDeliveryRegistrationCoherence(kind, evidence, what) {
-  if (kind === "development" && (!nonEmptyString(evidence.branchSource) || !nonEmptyString(evidence.branchTarget))) {
-    throw new Error(`${what}: a development workflow requires its delivery source and target branches (--branch-source/--branch-target) — missing branch fields are incomplete registration, not an exempt workflow (contract §1/§4a)`);
+  if (kind === "development" && (!nonEmptyString(evidence.branchWork) || !nonEmptyString(evidence.branchTarget))) {
+    throw new Error(`${what}: a development workflow requires its delivery branch and its target branch (--branch-work/--branch-target) — missing branch fields are incomplete registration, not an exempt workflow (contract §1/§4a)`);
   }
   if (kind === "verification/report-only" && !nonEmptyString(evidence.completionPolicy)) {
     throw new Error(`${what}: a verification/report-only workflow requires the completion policy (--completion-policy) naming the evidence that completes it (contract §1)`);
   }
-  for (const [field, value] of Object.entries({ branchSource: evidence.branchSource, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
+  for (const [field, value] of Object.entries({ branchWork: evidence.branchWork, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
     if (value !== undefined && !nonEmptyString(value)) {
       throw new Error(`${what}: ${field} must be a non-empty string when given`);
     }
@@ -15455,10 +15464,11 @@ function consultDeliveryEvidence(snapshot) {
   }
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;
   const delivery = isPlainObject(snapshot.delivery) ? snapshot.delivery : undefined;
+  const deliveryBranch = deliveryBranchOf(branch);
   const missing = [];
   if (kind === "development") {
-    if (!nonEmptyString(branch?.source))
-      missing.push("branch.source");
+    if (!nonEmptyString(deliveryBranch))
+      missing.push("branch.work");
     if (!nonEmptyString(branch?.target))
       missing.push("branch.target");
     if (!isPlainObject(delivery?.compound))
@@ -15467,8 +15477,8 @@ function consultDeliveryEvidence(snapshot) {
     if (pr === undefined) {
       missing.push("delivery.pr (PR repo/head/target identity, §4d)");
     } else {
-      if (nonEmptyString(branch?.source) && pr.head !== branch.source) {
-        missing.push(`delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered branch.source ${JSON.stringify(branch.source)} — §4d: the recorded PR identity must be the registered delivery)`);
+      if (nonEmptyString(deliveryBranch) && pr.head !== deliveryBranch) {
+        missing.push(`delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered delivery branch ${JSON.stringify(deliveryBranch)} — §4d: the recorded PR identity must be the registered delivery)`);
       }
       if (nonEmptyString(branch?.target) && pr.target !== branch.target) {
         missing.push(`delivery.pr.target (recorded ${JSON.stringify(pr.target)}, registered branch.target ${JSON.stringify(branch.target)} — §4d: the recorded PR identity must be the registered delivery)`);
@@ -15542,9 +15552,10 @@ function planWorkflowSnapshot(workflowId, options, startedAt) {
     snapshot.project = options.project;
   if (options.completionPolicy !== undefined)
     snapshot.completion_policy = options.completionPolicy;
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+  if (options.branchBase !== undefined || options.branchWork !== undefined || options.branchTarget !== undefined) {
     snapshot.branch = {
-      ...options.branchSource !== undefined ? { source: options.branchSource } : {},
+      ...options.branchBase !== undefined ? { base: options.branchBase } : {},
+      ...options.branchWork !== undefined ? { work: options.branchWork } : {},
       ...options.branchTarget !== undefined ? { target: options.branchTarget } : {}
     };
   }
@@ -15747,10 +15758,10 @@ function integrationAnchors(snapshot, planId) {
 function standaloneDeliveryAnchors(snapshot, planId) {
   const row = snapshot.plans.find((candidate) => candidate.id === planId);
   const worktreePath = isPlainObject(row?.metadata) ? row.metadata.worktree_path : undefined;
-  const sourceBranch = snapshot.branch?.source;
+  const sourceBranch = deliveryBranchOf(snapshot.branch);
   const targetBranch = snapshot.branch?.target;
   if (!isNonEmptyString(sourceBranch) || !isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
-    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered source/target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, source_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
+    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered delivery and target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, delivery_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
   }
   return { sourceBranch, targetBranch, worktreePath };
 }
@@ -16397,12 +16408,12 @@ function probeStatus(worktreePath, opts) {
 }
 function workflowEntryPreDispatchCheck(input, opts = {}) {
   const violations = [];
-  const { base = "", source = "", target = "", integration = "" } = input.branch;
+  const { base = "", target = "", integration = "" } = input.branch;
   const iteration = input.workflowType === "iteration";
-  const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["source", source], ["target", target]];
+  const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]];
   for (const [key, value] of anchors) {
     if (value.trim() === "") {
-      const recovery = iteration ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-source <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
+      const recovery = iteration ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-work <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
       violations.push(violation8("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, recovery));
     }
   }
@@ -20481,7 +20492,7 @@ function applyDeliveryLiftDeclaration(snapshot, declaration) {
   snapshot.delivery_kind = declaration.deliveryKind;
   if (declaration.branchSource !== undefined || declaration.branchTarget !== undefined) {
     snapshot.branch = {
-      ...declaration.branchSource !== undefined ? { source: declaration.branchSource } : {},
+      ...declaration.branchSource !== undefined ? { work: declaration.branchSource } : {},
       ...declaration.branchTarget !== undefined ? { target: declaration.branchTarget } : {}
     };
   }
@@ -20501,7 +20512,7 @@ function applyDeliveryDeclarations(snapshots, declarations) {
       throw new DeliveryDeclarationError(`deliveryKind for ${JSON.stringify(declaration.workflow)} must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(declaration.deliveryKind)}; ${retry([...declared].sort(compareIds))}`);
     }
     try {
-      assertDeliveryRegistrationCoherence(declaration.deliveryKind, declaration, `delivery declaration for ${declaration.workflow}`);
+      assertDeliveryRegistrationCoherence(declaration.deliveryKind, { branchWork: declaration.branchSource, branchTarget: declaration.branchTarget, completionPolicy: declaration.completionPolicy }, `delivery declaration for ${declaration.workflow}`);
     } catch (error) {
       throw new DeliveryDeclarationError(`${error.message}; ${retry([...declared].sort(compareIds))}`);
     }
@@ -25124,7 +25135,7 @@ async function captureExecutionProjectionSources(context) {
         endedAt: text4(projectionState.ended_at),
         updatedAt: text4(projectionState.updated_at),
         branchBase: text4(branch.base),
-        branchSource: text4(branch.source),
+        branchSource: text4(deliveryBranchOf(branch)),
         branchIntegration: text4(branch.integration),
         branchTarget: text4(branch.target),
         activeRegistration: registryIds.has(item.workflow_id)
@@ -27198,13 +27209,16 @@ function assertWorkflowOperationShape(operation) {
       if (!isPlainObject(op.branch)) {
         throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a branch object naming the anchor(s) to record; retry through mstar workflow delivery-anchors.");
       }
-      assertExactKeys(op.branch, ["source", "target"], "a delivery-anchors branch");
-      const { source, target } = op.branch;
-      if (source === undefined && target === undefined) {
-        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.source or branch.target); retry through mstar workflow delivery-anchors.");
+      assertExactKeys(op.branch, ["base", "work", "target"], "a delivery-anchors branch");
+      const { base, work, target } = op.branch;
+      if (base === undefined && work === undefined && target === undefined) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.base, branch.work or branch.target); retry through mstar workflow delivery-anchors.");
       }
-      if (source !== undefined && !isNonEmptyString(source)) {
-        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.source must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      if (base !== undefined && !isNonEmptyString(base)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.base must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (work !== undefined && !isNonEmptyString(work)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.work must be a non-empty string; retry through mstar workflow delivery-anchors.");
       }
       if (target !== undefined && !isNonEmptyString(target)) {
         throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.target must be a non-empty string; retry through mstar workflow delivery-anchors.");
@@ -27706,10 +27720,13 @@ function applyWorkflowOperation(input) {
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
     case "delivery-anchors": {
-      const registered = isPlainObject(header.branch) ? header.branch : {};
+      const registered = isPlainObject(header.branch) ? { ...header.branch } : {};
+      if (isNonEmptyString(operation.branch.work))
+        delete registered.source;
       header.branch = {
         ...registered,
-        ...isNonEmptyString(operation.branch.source) ? { source: operation.branch.source } : {},
+        ...isNonEmptyString(operation.branch.base) ? { base: operation.branch.base } : {},
+        ...isNonEmptyString(operation.branch.work) ? { work: operation.branch.work } : {},
         ...isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}
       };
       break;
@@ -27854,9 +27871,10 @@ function applyDeliveryEvidence(input) {
     });
   }
   const branch = isPlainObject(header.branch) ? header.branch : {};
+  const registeredWork = deliveryBranchOf(branch);
   if (incomingPr !== undefined) {
-    if (isNonEmptyString(branch.source) && incomingPr.head !== branch.source) {
-      throw invalidWorkflowTransition(`workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery source is ${JSON.stringify(branch.source)} (§4d: the recorded PR identity must be the registered delivery)`, { workflow_id: workflowId });
+    if (isNonEmptyString(registeredWork) && incomingPr.head !== registeredWork) {
+      throw invalidWorkflowTransition(`workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery branch is ${JSON.stringify(registeredWork)} (§4d: the recorded PR identity must be the registered delivery)`, { workflow_id: workflowId });
     }
     if (isNonEmptyString(branch.target) && incomingPr.target !== branch.target) {
       throw invalidWorkflowTransition(`workflow ${workflowId} records delivery.pr.target ${JSON.stringify(incomingPr.target)}, but the registered delivery target is ${JSON.stringify(branch.target)} (§4d)`, { workflow_id: workflowId });
