@@ -45,7 +45,7 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
   - Native: `omp plugin install @mstar-harness/omp`
 - **OpenCode**
   - CLI: `npx @mstar-harness/cli init --target opencode`
-  - Native: `@mstar-harness/opencode` for OpenCode 1.x, `@mstar-harness/opencode-v2` for OpenCode 2.x — add it to `opencode.json`, then restart OpenCode
+  - Native: `@mstar-harness/opencode` for OpenCode 1.x, `@mstar-harness/opencode-v2` for OpenCode 2.x — add it to the plugin list in [`opencode.json`](INSTALL.md#opencode), then restart OpenCode
 - **Cursor** — needs `git`
   - CLI: `npx @mstar-harness/cli init --target cursor`
   - Native: `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`, then **Developer: Reload Window**
@@ -53,7 +53,7 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
   - Native: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`
 - **ZCode**
   - CLI: `npx @mstar-harness/cli init --target zcode`
-  - Native: **Settings → Plugin Management → Discover** → install **morning-star-harness**
+  - Native: add `https://github.com/btspoony/mstar-harness` as a ZCode plugin marketplace, then install **morning-star-harness**
 - **Codex** — needs the `codex` CLI
   - CLI: `npx @mstar-harness/cli init --target codex`
   - Native: `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo`
