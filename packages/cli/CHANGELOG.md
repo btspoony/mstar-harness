@@ -6,6 +6,25 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-10-16
+
+### Changed
+
+- `init` no longer reports success for a failed host install: a refused link, install, or build step ends with a non-zero exit that names the cause and a recovery.
+- omp install is deterministic about a pre-existing plugin tree (removes a stale entry through a supported route before linking, verifies the installed version), and no longer passes a scope flag the install path ignores.
+- The omp coordinator tool's session parameter uses the two-argument `record` form, so the tool schema constructs under every host shim probed.
+- A dsh incompatibility refusal now names the runtime, the plugin spec, and dsh's own `allow-version` recovery instead of relaying the rejection alone.
+- Version values come from `package.json` at runtime; the Bun-version gate and version-comparison tests are gone.
+- `init` installs the published `@mstar-harness/cli` latest globally when a newer version than the one running is published, and warns with both versions when they differ: a cached `npx` resolution can otherwise run an older CLI, and every step of `init` — including the global install — used to follow that older version. The registry probe is bounded, skipped by `--dry-run`, and silent when offline, so it never blocks or fails an init.
+- **A repeat `store upgrade` over an unchanged legacy source is an ordinary success again.** The execution importer's only replay path matched the caller's operation id, which the CLI mints fresh per invocation (`randomUUID()`) and never reports back, so a second upgrade of an already-imported tree always hit the native-id collision refusal and demanded `--ack-skip-workflow` for every already-imported id. The importer now also reads the store's **own retained import receipts**: every committed import already writes a `store_operations` row whose `result_json` carries the consumed `sourceDigest` and the `importedIds` it committed, and that table is never pruned. A colliding id a receipt for **these exact source bytes** already lists is a **proven replay** — the run imports nothing, requires no acknowledgement, and reports each such id in `dispositions` as already held by the native authority from an import of these exact bytes. This is the provenance policy the change settles: a same-ID match is a replay only when stored provenance proves the same source.
+- **Unproven collisions are unchanged.** An unrelated workflow that merely shares the id, or a legacy source whose bytes changed after the recorded import (a different `sourceDigest`), still refuses `execution.migration-conflict` naming `--ack-skip-workflow <that id>`, and its unmatched-acknowledgement usage error (exit 2) is untouched. Receipt candidates are shape-validated in JS (an object whose `sourceDigest` string equals the current digest plus an `importedIds` array of strings) rather than trusted because the JSON happens to mention the digest, and the lookup is never keyed on the caller's operation id. Guard order is preserved: unmatched acknowledgement → unsafe-source refusal → collision handling.
+- **A replay must now prove the input that SHAPED the rows, not only the bytes.** `sourceDigest` covers only the legacy bytes a run read, while `--delivery` declarations and `--ack-skip-compass` acknowledgements change what the conversion produces without touching those bytes — so a repeat over unchanged bytes could previously accept a *different* declaration and discard it silently, leaving the native row as the earlier import left it. The receipt therefore also records an `inputDigest` over the normalized declarations (sorted by lift id, fixed key order) and compass acknowledgements (sorted). A run carrying **neither** still replays on the byte proof alone, so receipts written before this field existed keep working; a run carrying **either** needs the receipt to record the same `inputDigest`, and otherwise the id stays an unproven collision. That refusal now states only what the evidence supports — the retained receipt does not prove the earlier import consumed this input, so this run does not treat the id as a proven replay and leaves the native rows unchanged — alongside the existing `--ack-skip-workflow <id>` recovery. No new refusal code, table, migration or flag.
+- **`MinimalImportResult.verdict` is widened to `"upgraded" | "nothing-to-import"`** (additive), mirroring the DSH importer's existing vocabulary: a run that commits rows keeps reporting `upgraded` with its `imported` count, while a run that commits none but proves at least one replay reports the already-current state. `docs/commands.md` § Store CLI upgrade and recovery describes the proven-replay outcome and keeps `--ack-skip-workflow` for unproven collisions.
+
+- Version alignment with harness **4.0.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.1**.
+
 ## [4.0.0] - 2026-10-15
 
 ### Harness
