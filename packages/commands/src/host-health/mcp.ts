@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter } from "node:path";
@@ -11,7 +11,7 @@ import { compareSemver } from "./version-compare.js";
 import type { HostTarget } from "./plugin-version-alignment.js";
 
 export type McpHealthStatus = "unavailable" | "mismatch" | "aligned";
-export type McpRuntime = Readonly<{ version: string }>;
+export type McpRuntime = Readonly<{ version: string; /** Why an empty version could not be verified. */ unverifiedCause?: string }>;
 export type McpTargetHealth = Readonly<{
   target: HostTarget;
   status: McpHealthStatus;
@@ -35,15 +35,49 @@ function readJson(file: string): Record<string, unknown> | null {
   }
 }
 
+/** Bound for a version probe: a wedged PATH wrapper is force-killed at the
+ * deadline (SIGTERM ignore-safe) instead of blocking the doctor run. */
+const NODE_PROBE_TIMEOUT_MS = 5_000;
+
+/** Probe the `node` executable on PATH — the runtime every host MCP config's
+ * `npx` launch resolves — under a hard deadline. The version is returned with
+ * a null cause when it was read; otherwise the version is empty and the cause
+ * names the recovery fact: ENOENT means install Node, a killed/hung probe means
+ * a wedged PATH wrapper, anything else is an unprobeable environment. */
+export function probePathNodeRuntime(timeoutMs = NODE_PROBE_TIMEOUT_MS): { version: string; unverifiedCause: string | null } {
+  let output = "";
+  try {
+    output = execFileSync("node", ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
+  } catch (error) {
+    const objectError = error !== null && typeof error === "object" ? error : null;
+    const cause = objectError !== null && "code" in objectError && objectError.code === "ENOENT"
+      ? "no node executable was found on PATH"
+      : objectError !== null && (("killed" in objectError && objectError.killed === true) || ("signal" in objectError && objectError.signal !== null && objectError.signal !== undefined))
+        ? "the node --version probe did not complete within the bounded window (a PATH wrapper may be wedged)"
+        : `the node --version probe failed (${error instanceof Error ? error.message : String(error)})`;
+    return { version: "", unverifiedCause: cause };
+  }
+  const version = output.trim().replace(/^v/, "");
+  return version === ""
+    ? { version: "", unverifiedCause: "the node --version probe reported no version" }
+    : { version, unverifiedCause: null };
+}
+
 /** The runtime every host's MCP config resolves to when it launches the CLI:
  * each config launches `npx`, which runs the Node-shebang bin with the `node`
  * executable on PATH — so the probe reads THAT executable, never a version
  * emulated by whatever process happens to run the doctor. An empty version
- * means the launch's `node` could not be probed (unverified, not aligned). */
+ * means the launch's `node` could not be verified (unverified, not aligned). */
 function actualRuntime(): McpRuntime {
-  const probed = spawnSync("node", ["--version"], { encoding: "utf8" });
-  if (probed.error !== undefined || probed.status !== 0) return { version: "" };
-  return { version: (probed.stdout ?? "").trim().replace(/^v/, "") };
+  const probe = probePathNodeRuntime();
+  return probe.unverifiedCause === null
+    ? { version: probe.version }
+    : { version: "", unverifiedCause: probe.unverifiedCause };
 }
 
 /**
@@ -322,7 +356,7 @@ export function diagnoseMcpTarget(
     ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or mstar init --target opencode --opencode-generation v2 --scope project (project file)";
   const runtimeFloor = MIN_NODE_VERSION;
   const runtimeError = runtime.version === ""
-    ? "The `node` executable that this host's launch (`npx`) resolves could not be probed on PATH, so the required Node.js floor is unverified."
+    ? `The \`node\` executable that this host's launch (\`npx\`) resolves could not be verified: ${runtime.unverifiedCause ?? "the probe reported no version"}. Install or select Node.js >=${runtimeFloor} on PATH (https://nodejs.org) — or correct the PATH entry or wrapper the probe hit — then rerun \`mstar-harness doctor\` for this target.`
     : compareSemver(runtime.version, runtimeFloor) < 0
       ? `Node.js runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
       : null;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { diagnoseMcpTarget, type McpRuntime } from "../src/host-health.js";
+import { diagnoseMcpTarget, probePathNodeRuntime, type McpRuntime } from "../src/host-health.js";
 import type { HostTarget } from "../src/host-health.js";
 
 const targets: readonly HostTarget[] = ["opencode", "cursor", "codex", "zcode", "omp", "kimi", "dsh"];
@@ -84,13 +84,33 @@ describe("MCP doctor health", () => {
     expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
   });
 
-  test("an unprobed launch runtime is a mismatch, never aligned", () => {
+  test("an unprobed launch runtime is a mismatch with its cause and recovery", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-unprobed-"));
     roots.push(root);
     writeMstarConfig(root, "omp");
-    const result = diagnoseMcpTarget("omp", root, { version: "" });
+    const result = diagnoseMcpTarget("omp", root, { version: "", unverifiedCause: "no node executable was found on PATH" });
     expect(result.status).toBe("mismatch");
-    expect(result.errors.join(" ")).toContain("could not be probed on PATH");
+    expect(result.errors.join(" ")).toContain("could not be verified");
+    expect(result.errors.join(" ")).toContain("no node executable was found on PATH");
+    expect(result.errors.join(" ")).toContain("Install or select Node.js >=24.18.0 on PATH");
+  });
+
+  test("a wedged node wrapper is bounded, never waited on", () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), "mcp-health-node-shim-"));
+    roots.push(bin);
+    writeFileSync(path.join(bin, "node"), "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      const started = Date.now();
+      const probe = probePathNodeRuntime(300);
+      expect(probe.version).toBe("");
+      expect(probe.unverifiedCause).toContain("bounded window");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
   });
 
   test("malformed and non-launching configs are mismatches, never aligned", () => {
