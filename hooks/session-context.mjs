@@ -7615,6 +7615,9 @@ function readDeclaredNodeFloor() {
     if (parsed === null || typeof parsed !== "object")
       continue;
     const manifest = parsed;
+    const name = manifest["name"];
+    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli")
+      continue;
     const engines = manifest["engines"];
     if (engines === null || typeof engines !== "object" || !("node" in engines))
       continue;

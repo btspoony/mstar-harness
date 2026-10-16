@@ -47,21 +47,25 @@ function runOmp(args: string[], dryRun: boolean): void {
  */
 function ompEntryRoots(scope: Scope, projectRoot: string): string[] {
   const roots: string[] = [];
-  if (scope === "project") {
-    // The project's own plugin root first: a project-scoped run must address the
-    // installation it is about to create, not a user-scope one.
-    roots.push(path.join(projectRoot, ".omp", "plugins"));
-  }
-  const listed = findInstalledPlugin(listInstalledPlugins());
+  // omp's own answer beats a guess, but it must come from the same scope the
+  // verbs use: a project run must not act on a root derived from a user listing.
+  const listed = findInstalledPlugin(probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope).entries);
   const listedPath = listed !== undefined && typeof listed.path === "string" ? listed.path : null;
   if (listedPath !== null) {
-    // omp's own answer beats our guess: an entry it lists may live outside the
-    // documented default root, and that is exactly the entry a link collides with.
-    const parent = path.dirname(listedPath);
-    roots.push(path.dirname(parent));
+    const derived = ompRootOfEntryPath(listedPath);
+    if (derived !== null) roots.push(derived);
   }
-  roots.push(ompPluginsRoot());
+  roots.push(scope === "project" ? path.join(projectRoot, ".omp", "plugins") : ompPluginsRoot());
   return [...new Set(roots)];
+}
+
+/** The managed root an entry path sits in (`<root>/node_modules/<pkg>`), or null. */
+function ompRootOfEntryPath(entryPath: string): string | null {
+  const suffix = path.join("node_modules", OMP_PLUGIN_NAME);
+  const normalized = path.normalize(entryPath);
+  if (!normalized.endsWith(suffix)) return null;
+  const root = normalized.slice(0, normalized.length - suffix.length);
+  return root.endsWith(path.sep) ? root.slice(0, -1) : root;
 }
 
 function ompPluginsRoot(): string {
@@ -86,6 +90,12 @@ function declaredByPluginManager(root: string): boolean {
   }
 }
 
+/** The scope flag as text, for the recoveries that quote a command. */
+function scopeFlagText(scope: Scope): string {
+  const args = scopeArgs(scope);
+  return args.length === 0 ? "" : ` ${args.join(" ")}`;
+}
+
 /** The scope flag every `omp plugin` verb gets, so one run addresses one install. */
 function scopeArgs(scope: Scope): string[] {
   return scope === "project" ? ["--scope", "project"] : [];
@@ -105,6 +115,7 @@ function ompRefusal(step: string, detail: string, recovery: string): Error {
  * and a refusal names every supported route.
  */
 export function clearOmpEntry(root: string, ompPackagePath: string, notes: string[], scope: Scope = "global"): void {
+  const scopeFlag = scopeFlagText(scope);
   const entry = path.join(root, "node_modules", OMP_PLUGIN_NAME);
   try {
     // lstat: a dangling symlink occupies the entry too, and `existsSync` would miss it.
@@ -125,8 +136,8 @@ export function clearOmpEntry(root: string, ompPackagePath: string, notes: strin
     throw ompRefusal(
       `An existing ${OMP_PLUGIN_NAME} entry occupies the plugin path (${declared}), and omp could not remove it`,
       `${entry}: ${message}`,
-      `remove it through omp (\`omp plugin uninstall ${OMP_PLUGIN_NAME}\`), or install the published plugin, which replaces it through omp: ` +
-        `\`omp plugin install ${OMP_PLUGIN_NAME}\`; for a manual link: \`omp plugin link ${ompPackagePath}\``,
+      `remove it through omp (\`omp plugin uninstall ${OMP_PLUGIN_NAME}${scopeFlag}\`), or install the published plugin, which replaces it through omp: ` +
+        `\`omp plugin install ${OMP_PLUGIN_NAME}\` (a global install); for a manual link in the requested scope: \`omp plugin link ${ompPackagePath}${scopeFlag}\``,
     );
   }
 }
@@ -139,12 +150,13 @@ export function verifyOmpInstall(
   linkedTree?: string,
   scope: Scope = "global",
 ): void {
+  const scopeFlag = scopeFlagText(scope);
   const probe = probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope);
   if (probe.error !== null) {
     throw ompRefusal(
       "could not read omp's plugin listing, so the install could not be verified",
       probe.error,
-      `inspect with \`omp plugin list\` (a stalled or failing probe is not a missing install), then reinstall if the entry is absent: \`omp plugin install ${OMP_PLUGIN_NAME}\``,
+      `inspect with \`omp plugin list${scopeFlag}\` (a stalled or failing probe is not a missing install), then reinstall if the entry is absent: \`omp plugin install ${OMP_PLUGIN_NAME}\` (a global install)`,
     );
   }
   const entry = installedPluginEntry(probe.entries);
@@ -152,7 +164,7 @@ export function verifyOmpInstall(
     throw ompRefusal(
       "omp plugin list does not report the Morning Star plugin after installing it",
       "the plugin manager did not register the entry it was given",
-      `inspect with \`omp plugin list\`, then install it yourself: \`omp plugin install ${OMP_PLUGIN_NAME}\``,
+      `inspect with \`omp plugin list${scopeFlag}\`, then install it yourself: \`omp plugin install ${OMP_PLUGIN_NAME}\` (a global install)`,
     );
   }
   if (linkedTree !== undefined) {
@@ -162,7 +174,7 @@ export function verifyOmpInstall(
       throw ompRefusal(
         `omp lists ${OMP_PLUGIN_NAME} but reports no path, so the link cannot be confirmed`,
         `expected the listing to point at ${linkedTree}`,
-        `re-link it (\`omp plugin link ${linkedTree}\`) and re-run, or install the published plugin instead (\`omp plugin install ${OMP_PLUGIN_NAME}\`)`,
+        `re-link it (\`omp plugin link ${linkedTree}${scopeFlag}\`) and re-run, or install the published plugin instead (\`omp plugin install ${OMP_PLUGIN_NAME}\`, a global install)`,
       );
     }
     let listed: string;
@@ -175,7 +187,7 @@ export function verifyOmpInstall(
       throw ompRefusal(
         "omp points at a path that cannot be resolved, so the link cannot be confirmed",
         `linked ${linkedTree}, omp lists ${entry.path}: ${message}`,
-        `link it again: \`omp plugin link ${linkedTree}\`, then \`omp plugin list\``,
+        `link it again: \`omp plugin link ${linkedTree}${scopeFlag}\`, then \`omp plugin list${scopeFlag}\``,
       );
     }
     if (listed !== linked) {
@@ -280,6 +292,7 @@ function installedPluginEntry(entries: Array<Record<string, unknown>>): Record<s
 
 async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
  const notes: string[] = [];
+ let linkedVersion: string | null = null;
  const projectRoot = resolveProjectRoot();
  if (!dryRun) await ensureHostPresent("omp");
  notes.push(...ensureLocalHarnessRepo(dryRun));
@@ -304,6 +317,7 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
 
  if (dryRun) {
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
+ const scopeFlag = scopeFlagText(scope);
  const linkArgs = ["plugin", "link", ompPackagePath];
  if (scope === "project") linkArgs.push("--scope", "project");
  notes.push(
@@ -312,6 +326,7 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  );
  } else {
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
+ const scopeFlag = scopeFlagText(scope);
  // The CLI resolved this before mutating anything: the published latest when
  // it is newer than the running CLI, else the running version.
  const expectedVersion = initFlags?.pluginVersion ?? readHarnessVersion();
@@ -359,13 +374,14 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
           installPublished();
           verifyOmpInstall(notes, expectedVersion, undefined, scope);
           notes.push(...postInstallNotes(scope, dryRun, projectRoot));
-          return { location: HARNESS_REPO_PATH, notes };
+          return { location: HARNESS_REPO_PATH, notes, pluginVersion: expectedVersion };
  }
  }
  notes.push(
  `Linked omp plugin tree resolved via the workspace engine member; dist + root mirrors are gitignored build outputs (rebuilt automatically above when absent)`,
  );
  for (const root of ompEntryRoots(scope, projectRoot)) clearOmpEntry(root, ompPackagePath, notes, scope);
+ let linkedVersion: string | null = null;
  const linkArgs = ["plugin", "link", ompPackagePath];
  if (scope === "project") linkArgs.push("--scope", "project");
  try {
@@ -382,6 +398,11 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
         );
       }
       verifyOmpInstall(notes, expectedVersion, ompPackagePath, scope);
+      // The linked tree's own version is what is installed now — not the version
+      // this run chose for a published install.
+      const linkProbe = probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope);
+      const linkEntry = installedPluginEntry(linkProbe.entries);
+      linkedVersion = linkEntry === undefined ? null : ompEntryVersion(linkEntry);
     }
 
  if (scope === "project") {
@@ -400,7 +421,11 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
  notes.push(`Alternate install without CLI link: omp plugin install @mstar-harness/omp`);
 
- return { location: HARNESS_REPO_PATH, notes };
+ return {
+   location: HARNESS_REPO_PATH,
+   notes,
+   ...(linkedVersion === null ? {} : { pluginVersion: linkedVersion }),
+ };
 }
 
 /**

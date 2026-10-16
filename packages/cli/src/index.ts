@@ -90,22 +90,24 @@ async function runInit(options: InitOptions) {
         : globalResult.reason === "already-matching"
           ? "already matching"
           : globalResult.reason;
-    // Only an adapter that installs a plugin can be reported at that version;
-    // the others register a marketplace or write config and leave the plugin
-    // install as the operator's next step.
+    // Only an adapter that installs a plugin can be reported at a version, and
+    // that version is the one it actually installed (a linked tree carries the
+    // checkout's version, not the one this run chose); the others register a
+    // marketplace or write config and leave the plugin install to the operator.
+    const installedPluginVersion = installResult.pluginVersion ?? chosenCli;
     console.log(
       adapter.installsPlugin === true
-        ? `Plugin version: ${chosenCli}; global CLI: ${globalState}.`
+        ? `Plugin version: ${installedPluginVersion}; global CLI: ${globalState}.`
         : `Global CLI: ${globalState}.`,
     );
-    if (globalResult.action === "failed" && chosenCli !== packageVersion) {
-      // The plugin is already at the newer version; a global CLI left at the old
+    if (globalResult.action === "failed" && installedPluginVersion !== packageVersion) {
+      // The plugin is already at another version; a global CLI left at the old
       // one is exactly the skew this run exists to remove, so this cannot report
       // success.
       throw new Error(
-        `The host plugin was installed at ${chosenCli}, but the global CLI could not be updated to it (${globalResult.spec}); ` +
+        `The host plugin is at ${installedPluginVersion}, but the global CLI could not be updated to ${chosenCli} (${globalResult.spec}); ` +
           `the CLI on PATH stays at ${packageVersion}.\n` +
-          `Recovery: fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`), or re-run with --no-global-cli to install the plugin at the running version ${packageVersion}.`,
+          `Recovery: fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`), or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
       );
     }
     console.log(`Next: npx @mstar-harness/cli doctor --target ${target}${scope === "project" ? "" : " --scope global"}`);
@@ -145,7 +147,21 @@ async function runInit(options: InitOptions) {
   const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
   const skew = formatVersionSkewWarning(packageVersion, latest);
   if (skew !== null) console.log(skew);
-  ensureGlobalCli({ version: packageVersion, latest, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
+  const globalResult = ensureGlobalCli({
+    version: packageVersion,
+    latest,
+    dryRun: !!options.dryRun,
+    noGlobalCli: !!options.noGlobalCli,
+  });
+  // The config-only path mutates no host plugin, but a failed global update still
+  // leaves the newer CLI un-installed: report it as a failure, not as configured.
+  const chosenCli = chooseCliVersion(packageVersion, latest);
+  if (globalResult.action === "failed" && chosenCli !== packageVersion) {
+    throw new Error(
+      `The published CLI ${chosenCli} could not be installed globally (${globalResult.spec}); the CLI on PATH stays at ${packageVersion}.\n` +
+        `Recovery: fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`), or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
+    );
+  }
 }
 
 program.name("mstar-harness").description("Morning Star harness CLI for target-based agent bootstrap").version(packageVersion);

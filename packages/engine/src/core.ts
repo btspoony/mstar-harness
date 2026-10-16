@@ -247,6 +247,12 @@ export function readDeclaredNodeFloor(): string | null {
     }
     if (parsed === null || typeof parsed !== "object") continue;
     const manifest = parsed as Record<string, unknown>; // parsed JSON; every read below is narrowed
+    // Only a manifest that owns this product may declare the floor: a checkout
+    // nested under an unrelated Node project must not inherit that project's
+    // engines.node (a higher one refuses a supported runtime; a lower one
+    // weakens the gate).
+    const name = manifest["name"];
+    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli") continue;
     const engines = manifest["engines"];
     if (engines === null || typeof engines !== "object" || !("node" in engines)) continue;
     const node = engines.node;
@@ -254,3 +260,4 @@ export function readDeclaredNodeFloor(): string | null {
   }
   return null;
 }
+

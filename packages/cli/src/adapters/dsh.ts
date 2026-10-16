@@ -208,7 +208,11 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
     )}`,
   );
 
-  return { location: profileDir, notes };
+  return {
+    location: profileDir,
+    notes,
+    pluginVersion: initFlags?.pluginVersion ?? readHarnessVersion(),
+  };
 }
 
 function runDoctor(scope: Scope): { location: string; errors: string[]; notes: string[] } {
