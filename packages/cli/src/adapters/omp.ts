@@ -311,6 +311,16 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  // `omp plugin install` accepts `--scope` only for marketplace specs: it warns
  // and ignores it otherwise, so the note states where the install actually lands.
  const installPublished = (): void => {
+   if (scope === "project") {
+     // omp ignores `--scope` outside marketplace specs, so this path cannot
+     // address a project-scoped installation: refuse instead of installing into
+     // (or cleaning) the user installation behind the operator's back.
+     throw ompRefusal(
+       `cannot install ${installSpec} for the project scope`,
+       "omp plugin install accepts --scope only for marketplace specs; it warns and ignores it for this package, so the requested project scope cannot be expressed.",
+       `re-run for the user scope (\`mstar-harness init --target omp --scope global\`), or link the built tree instead: \`omp plugin link ${ompPackagePath}\``,
+     );
+   }
    try {
      runOmp(["plugin", "install", installSpec], dryRun);
      notes.push(`Installed ${installSpec} via omp plugin install (omp owns where it lands).`);
@@ -339,7 +349,7 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
             `Warning: could not build packages/omp (${buildMessage}); installing the published plugin instead.`,
           );
           installPublished();
-          verifyOmpInstall(notes, expectedVersion);
+          verifyOmpInstall(notes, expectedVersion, undefined, scope);
           notes.push(...postInstallNotes(scope, dryRun, projectRoot));
           return { location: HARNESS_REPO_PATH, notes };
  }
@@ -347,7 +357,7 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  notes.push(
  `Linked omp plugin tree resolved via the workspace engine member; dist + root mirrors are gitignored build outputs (rebuilt automatically above when absent)`,
  );
- clearOmpEntry(ompPluginsRoot(), ompPackagePath, notes);
+ for (const root of ompEntryRoots(scope, projectRoot)) clearOmpEntry(root, ompPackagePath, notes, scope);
  const linkArgs = ["plugin", "link", ompPackagePath];
  if (scope === "project") linkArgs.push("--scope", "project");
  try {
