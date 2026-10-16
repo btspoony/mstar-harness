@@ -336,10 +336,10 @@ describe("readDeclaredNodeFloor — bundled entrypoints", () => {
       mkdirSync(join(root, "hooks"), { recursive: true });
       mkdirSync(join(root, "packages", "engine"), { recursive: true });
       writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "loose-root" })}\n`);
-      const floorToken = "99.0.0-synthetic";
+      const declaredFloorValue = "99.0.0-synthetic";
       writeFileSync(
         join(root, "packages", "engine", "package.json"),
-        `${JSON.stringify({ name: "@mstar-harness/engine", engines: { node: `>=${floorToken}` } })}\n`,
+        `${JSON.stringify({ name: "@mstar-harness/engine", engines: { node: ">=" + declaredFloorValue } })}\n`,
       );
       const source = join(root, "hooks", "probe.src.ts");
       writeFileSync(
@@ -356,7 +356,7 @@ describe("readDeclaredNodeFloor — bundled entrypoints", () => {
       expect(built.status).toBe(0);
       const ran = spawnSync(process.execPath, [bundle], { encoding: "utf8" });
       expect(ran.status).toBe(0);
-      expect(ran.stdout.trim()).toBe(floorToken);
+      expect(ran.stdout.trim()).toBe(declaredFloorValue);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
