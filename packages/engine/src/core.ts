@@ -216,7 +216,8 @@ export function warnUncheckableNodeFloor(): void {
   process.stderr.write(
     "mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " +
       "so the Node version is not compared (the native node:sqlite capability check still applies). " +
-      "Recovery: run the CLI from its installed package (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.\n",
+      "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " +
+      "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n",
   );
 }
 

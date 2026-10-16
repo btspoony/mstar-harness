@@ -144,12 +144,7 @@ export function compareVersions(a: string, b: string): number {
  * Store access calls this before any file is touched, so a refusal writes
  * nothing.
  */
-export function assertStoreRuntimeSupported(
-  info: StoreRuntimeInfo = detectStoreRuntime(),
-  /** Test seam: the floor the caller would resolve from the manifest. `undefined`
-   *  reads it; `null` exercises the layout that declares none. */
-  floorOverride?: { nodeFloor: string | null },
-): void {
+export function assertStoreRuntimeSupported(info: StoreRuntimeInfo = detectStoreRuntime()): void {
   // Each runtime's refusal names only its own floor and home: the published CLI
   // entrypoint is a Node entry (its shebang), so Bun floors are reachable only
   // from a Bun-hosted plugin host or a development run — never rendered as a
@@ -160,8 +155,7 @@ export function assertStoreRuntimeSupported(
   // toolchain, and product code never gates on the Bun version. A manifest that
   // declares no floor leaves the version comparison unenforced; the capability
   // refusal below is unaffected.
-  const floor =
-    kind === "Node" ? (floorOverride === undefined ? readDeclaredNodeFloor() : floorOverride.nodeFloor) : null;
+  const floor = kind === "Node" ? readDeclaredNodeFloor() : null;
   if (kind === "Node" && floor === null) warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {

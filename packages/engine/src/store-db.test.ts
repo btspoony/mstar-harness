@@ -148,27 +148,6 @@ describe("store-db runtime floors (declared manifest floor)", () => {
     expect(() => assertStoreRuntimeSupported({ isBun: true, version: "0.0.0-synthetic" })).not.toThrow();
   });
 
-  test("an uncheckable Node floor is named on stderr instead of skipped in silence", () => {
-    const written: string[] = [];
-    const spy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
-      // `nodeFloor: null` is the layout that declares no floor — a lone copied
-      // bundle. The version comparison cannot run; the operator must still learn
-      // that, and the capability check must stay in force.
-      expect(() =>
-        assertStoreRuntimeSupported({ isBun: false, version: "0.0.0-synthetic" }, { nodeFloor: null }),
-      ).not.toThrow();
-      const message = written.join("");
-      expect(message).toContain("uncheckable");
-      expect(message).toContain("engines.node");
-      expect(message).toContain("Recovery:");
-    } finally {
-      spy.mockRestore();
-    }
-  });
 });
 
 describe.each([
@@ -1454,4 +1433,37 @@ describe("store-db publication makes the canonical directory entry durable", () 
     }
     expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
   }, 60_000);
+});
+
+describe("uncheckable Node floor", () => {
+  test("a manifest-less layout names the skipped comparison on stderr", () => {
+    // The layout that declares no floor: the built module is copied alone with no
+    // manifest anywhere above it. Run it in its own process so the real
+    // resolution path decides, and so the runtime is the Node the store targets.
+    const dir = mkdtempSync(join(tmpdir(), "mstar-floorless-"));
+    try {
+      const bundle = join(dir, "store-db.mjs");
+      const built = spawnSync(
+        process.execPath,
+        ["build", join(import.meta.dir, "store-db.ts"), "--target", "node", "--outfile", bundle],
+        { encoding: "utf8" },
+      );
+      expect(built.status).toBe(0);
+      const probe = join(dir, "probe.mjs");
+      writeFileSync(
+        probe,
+        `import { assertStoreRuntimeSupported } from ${JSON.stringify(bundle)};\n` +
+          `assertStoreRuntimeSupported({ isBun: false, version: "0.0.0-synthetic" });\n` +
+          `console.log("no refusal");\n`,
+      );
+      const ran = spawnSync(NODE_BIN, [probe], { encoding: "utf8" });
+      expect(ran.status).toBe(0);
+      expect(ran.stdout).toContain("no refusal");
+      expect(ran.stderr).toContain("uncheckable");
+      expect(ran.stderr).toContain("engines.node");
+      expect(ran.stderr).toContain("Recovery:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
