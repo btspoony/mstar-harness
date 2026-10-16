@@ -69,12 +69,40 @@ export function defaultDetectVersion(): string | null {
  * command runs; every PATH entry inside the working directory is skipped.
  */
 function resolveTrustedNpm(): string {
-  const cwd = process.cwd();
   const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  // npm prepends `node_modules/.bin` for every ANCESTOR of the working
+  // directory, so filtering by the cwd alone still accepts a checkout's own npm
+  // when init runs from a subdirectory. Every ancestor is excluded, by realpath
+  // where one is resolvable.
+  const ancestors = new Set<string>();
+  let dir = process.cwd();
+  for (;;) {
+    ancestors.add(dir);
+    try {
+      ancestors.add(fs.realpathSync(dir));
+    } catch {
+      // an unresolvable ancestor contributes its literal path only
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const insideCheckout = (candidate: string): boolean => {
+    let resolved = candidate;
+    try {
+      resolved = fs.realpathSync(candidate);
+    } catch {
+      // a missing entry keeps its literal path
+    }
+    for (const ancestor of ancestors) {
+      if (resolved === ancestor || resolved.startsWith(ancestor + path.sep)) return true;
+    }
+    return false;
+  };
   for (const entry of (process.env["PATH"] ?? "").split(path.delimiter)) {
     if (entry === "") continue;
     const dir = path.resolve(entry);
-    if (dir === cwd || dir.startsWith(cwd + path.sep)) continue;
+    if (insideCheckout(dir)) continue;
     const candidate = path.join(dir, executable);
     if (fs.existsSync(candidate)) return candidate;
   }

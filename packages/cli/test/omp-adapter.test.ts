@@ -162,15 +162,6 @@ describe("clearOmpEntry", () => {
     expect(existsSync(entry)).toBe(false);
   });
 
-  test("every mutating verb carries the selected scope", () => {
-    const root = pluginsRoot();
-    const entry = join(root, "node_modules", PLUGIN_NAME);
-    mkdirSync(entry, { recursive: true });
-    const fake = withFakeOmp(entry);
-    clearOmpEntry(root, "/nonexistent/linked/tree", [], "project");
-    expect(fake.argv()).toContain(`plugin uninstall ${PLUGIN_NAME} --scope project`);
-  });
-
   test("an entry that does not exist is a no-op", () => {
     const root = pluginsRoot();
     const fake = withFakeOmp(join(root, "node_modules", PLUGIN_NAME));
@@ -379,22 +370,19 @@ describe("omp init end-to-end (child process with its own home)", () => {
     rmSync(join(home, ".mstar", "harness", "packages", "omp", "plugin.json"), { force: true });
   }
 
-  test("a project-scoped run refuses the published fallback it cannot scope", () => {
+  test("a project-scoped run refuses before mutating anything (omp has one scope)", () => {
     const fixture = childHome({});
-    stripHarnessPluginMarker(fixture.home);
-    const fakeBun = join(fixture.binDir, "bun");
-    writeFileSync(fakeBun, "#!/bin/sh\nexit 1\n");
-    chmodSync(fakeBun, 0o755);
     const result = fixture.run(
       `import { ompAdapter } from ${JSON.stringify(join(import.meta.dir, "..", "src", "adapters", "omp"))};
 await ompAdapter.runInstallInit("project", false);
 `,
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
-    // omp ignores --scope outside marketplace specs, so the fallback must name a
-    // route that can express the requested scope.
+    // Upstream link/list ignore --scope and always act on the user root, so a
+    // project run would mutate user state while claiming project scope.
+    expect(result.stderr).toContain("has no project-scoped plugin installation");
     expect(result.stderr).toContain("--scope global");
-    expect(fixture.argv().some((line) => line.startsWith("plugin install"))).toBe(false);
+    expect(fixture.argv()).toEqual([]);
   });
 
   test("the published install pins the version the CLI chose, not the running one", () => {

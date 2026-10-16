@@ -10,8 +10,6 @@ import {
  REPO_URL,
  HARNESS_REPO_PATH,
  ensureLocalHarnessRepo,
- appendGitignore,
- appendHarnessProjectGitignore,
  missingHarnessProcessGitignoreEntries,
  validateLocalHarnessRepo,
 } from "./shared-install";
@@ -291,6 +289,17 @@ function installedPluginEntry(entries: Array<Record<string, unknown>>): Record<s
 
 
 async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
+  if (scope === "project") {
+    // omp's plugin manager keeps one user-wide root: its `link` and `list`
+    // implementations ignore `--scope` (upstream `handleLink` always calls the
+    // user-root link), so a project-scoped run would mutate user state while
+    // claiming project scope. Refuse instead, with the scope omp does support.
+    throw ompRefusal(
+      "omp has no project-scoped plugin installation",
+      "omp's plugin manager resolves one user-wide root, and both `omp plugin link` and `omp plugin list` ignore --scope",
+      "re-run for the scope omp supports: `npx @mstar-harness/cli init --target omp --scope global`",
+    );
+  }
  const notes: string[] = [];
  let linkedVersion: string | null = null;
  const projectRoot = resolveProjectRoot();
@@ -319,7 +328,6 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
  const scopeFlag = scopeFlagText(scope);
  const linkArgs = ["plugin", "link", ompPackagePath];
- if (scope === "project") linkArgs.push("--scope", "project");
  notes.push(
  "omp CLI presence is unchecked under --dry-run (would-run preview); install Oh My Pi (`omp`) before executing init.",
  `Would run: omp ${linkArgs.join(" ")}`,
@@ -334,16 +342,6 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  // `omp plugin install` accepts `--scope` only for marketplace specs: it warns
  // and ignores it otherwise, so the note states where the install actually lands.
  const installPublished = (): void => {
-   if (scope === "project") {
-     // omp ignores `--scope` outside marketplace specs, so this path cannot
-     // address a project-scoped installation: refuse instead of installing into
-     // (or cleaning) the user installation behind the operator's back.
-     throw ompRefusal(
-       `cannot install ${installSpec} for the project scope`,
-       "omp plugin install accepts --scope only for marketplace specs; it warns and ignores it for this package, so the requested project scope cannot be expressed.",
-       `re-run for the user scope (\`mstar-harness init --target omp --scope global\`), or link the built tree instead: \`omp plugin link ${ompPackagePath}\``,
-     );
-   }
    try {
      runOmp(["plugin", "install", installSpec], dryRun);
      notes.push(`Installed ${installSpec} via omp plugin install (omp owns where it lands).`);
@@ -373,7 +371,7 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
           );
           installPublished();
           verifyOmpInstall(notes, expectedVersion, undefined, scope);
-          notes.push(...postInstallNotes(scope, dryRun, projectRoot));
+          notes.push(...postInstallNotes());
           return { location: HARNESS_REPO_PATH, notes, pluginVersion: expectedVersion };
  }
  }
@@ -382,11 +380,10 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  );
  for (const root of ompEntryRoots(scope, projectRoot)) clearOmpEntry(root, ompPackagePath, notes, scope);
  const linkArgs = ["plugin", "link", ompPackagePath];
- if (scope === "project") linkArgs.push("--scope", "project");
  try {
  runOmp(linkArgs, dryRun);
  notes.push(
- `Linked local harness omp package into omp plugins (${scope}): omp plugin link ${ompPackagePath}${scope === "project" ? " --scope project" : ""}`,
+ `Linked local harness omp package into omp plugins: omp plugin link ${ompPackagePath}`,
  );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -396,24 +393,13 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
           `replace the existing entry through omp (\`omp plugin uninstall ${OMP_PLUGIN_NAME}\`), or install the published plugin instead: \`omp plugin install ${installSpec}\``,
         );
       }
-      verifyOmpInstall(notes, expectedVersion, ompPackagePath, scope);
+      verifyOmpInstall(notes, expectedVersion, ompPackagePath);
       // The linked tree's own version is what is installed now — not the version
       // this run chose for a published install.
-      const linkProbe = probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope);
+      const linkProbe = probeInstalledPlugins(OMP_LIST_TIMEOUT_MS);
       const linkEntry = installedPluginEntry(linkProbe.entries);
       linkedVersion = linkEntry === undefined ? null : ompEntryVersion(linkEntry);
     }
-
- if (scope === "project") {
- notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
- notes.push(
- ...appendGitignore(
- projectRoot,
- [".omp/plugins/", ".omp/plugin-overrides.json", ".omp/plugins/installed_plugins.json"],
- dryRun,
- ),
- );
- }
 
  notes.push("Verify with: omp plugin list");
  notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
@@ -432,18 +418,8 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  * instead of the link) — mirrors the post-link section of `runInit` so both
  * exits produce the same guidance set.
  */
-function postInstallNotes(scope: Scope, dryRun: boolean, projectRoot: string): string[] {
+function postInstallNotes(): string[] {
  const notes: string[] = [];
- if (scope === "project") {
- notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
- notes.push(
- ...appendGitignore(
- projectRoot,
- [".omp/plugins/", ".omp/plugin-overrides.json", ".omp/plugins/installed_plugins.json"],
- dryRun,
- ),
- );
- }
  notes.push("Verify with: omp plugin list");
  notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
  notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
@@ -452,22 +428,25 @@ function postInstallNotes(scope: Scope, dryRun: boolean, projectRoot: string): s
 }
 
 function runDoctor(scope: Scope) {
- const projectRoot = scope === "project" ? resolveProjectRoot() : undefined;
- const gitignorePath = projectRoot ? path.join(projectRoot, ".gitignore") : undefined;
- const gitignore = gitignorePath && fs.existsSync(gitignorePath)
- ? fs.readFileSync(gitignorePath, "utf8")
- : "";
+ if (scope === "project") {
+   // omp has one user-wide plugin root and init refuses project scope for it, so
+   // there are no project-scoped entries to check: report the scope, not a list
+   // of missing ones the installer will never add.
+   return {
+     location: HARNESS_REPO_PATH,
+     errors: ["omp has no project-scoped plugin installation; run `npx @mstar-harness/cli doctor --target omp` (global) instead"],
+     notes: [],
+   };
+ }
  const ompIsAvailable = ompAvailable();
-
+ void missingHarnessProcessGitignoreEntries; // no project scope above, so no fence check
  return diagnoseOmpHost({
  harnessRepoPath: HARNESS_REPO_PATH,
  scope,
  ompAvailable: ompIsAvailable,
  installedPlugins: ompIsAvailable ? listInstalledPlugins() : [],
  localHarnessRepoErrors: validateLocalHarnessRepo(),
- missingGitignoreEntries: projectRoot
- ? missingHarnessProcessGitignoreEntries(gitignore)
- : [],
+ missingGitignoreEntries: [],
  });
 }
 

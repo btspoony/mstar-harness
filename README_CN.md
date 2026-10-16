@@ -44,7 +44,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
   - CLI：`npx @mstar-harness/cli init --target dsh` —— 安装插件与 LLM fallbacks；`--no-fallbacks` 跳过后者
   - 原生：`dsh plugin --profile web add @mstar-harness/dsh` —— LLM fallbacks 那一行是可选的，且必须是本 CLI 钉住的版本（从 CLI 自身 manifest 读取；该行由 `init` 添加，而未钉版本的 `dsh-llm-fallbacks` 会跟随 dsh 自身的区间）
 - **omp** —— 需要已安装 `omp` CLI
-  - CLI：`npx @mstar-harness/cli init --target omp`
+  - CLI：`npx @mstar-harness/cli init --target omp --scope global` —— omp 的插件管理器只有一个用户级根目录，因此没有 project 作用域（该 target 下 `init` 会拒绝 `--scope project`）
   - 原生：`omp plugin install @mstar-harness/omp`
 - **OpenCode**
   - CLI：`npx @mstar-harness/cli init --target opencode` —— 自行判断已安装的代际使用哪个插件键；`--opencode-generation` 可覆盖

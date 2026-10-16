@@ -197,7 +197,7 @@ omp plugin install @mstar-harness/omp
 #   (the linked tree needs its own build first — see packages/omp/README.md → Maintainers / local checkouts)
 ```
 
-Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
+omp's plugin manager keeps **one user-wide plugin root**: `omp plugin link` and `omp plugin list` ignore `--scope` upstream, so there is no project-scoped omp installation to create. `init --target omp --scope project` therefore refuses before touching anything and names the supported scope (`--scope global`, the form shown above).
 
 **Notes:**
 
@@ -444,8 +444,8 @@ omp plugin list
 Project scope:
 
 ```bash
-npx @mstar-harness/cli init --target omp --scope project
-npx @mstar-harness/cli doctor --target omp --scope project
+npx @mstar-harness/cli init --target omp --scope global
+npx @mstar-harness/cli doctor --target omp
 ```
 
 **Notes:**
