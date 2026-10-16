@@ -32,12 +32,12 @@ const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
 type Verb = (typeof verbs)[number];
 type Input = {
   findings?: string; dir?: string; sha?: string; date?: string; repo?: string;
-  plans?: string; workflow?: string; deliveryKind?: string; branchSource?: string; branchTarget?: string; completionPolicy?: string; harness?: string;
+  plans?: string; workflow?: string; deliveryKind?: string; branchBase?: string; branchWork?: string; branchSource?: string; branchTarget?: string; completionPolicy?: string; harness?: string;
   path?: string;
 };
 const inputSchema = z.object({
   findings: z.string().optional(), dir: z.string().optional(), sha: z.string().optional(), date: z.string().optional(), repo: z.string().optional(),
-  plans: z.string().optional(), workflow: z.string().optional(), deliveryKind: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), harness: z.string().optional(),
+  plans: z.string().optional(), workflow: z.string().optional(), deliveryKind: z.string().optional(), branchBase: z.string().optional(), branchWork: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), harness: z.string().optional(),
   path: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown; context?: "sessionId" }[]; effects: readonly CommandEffect[]; description: string }> = {
@@ -47,10 +47,13 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
   ], effects: ["read", "write"], description: "Scaffold audit plan artifacts from a JSON findings array or {findings:[...]}; each finding requires non-empty title and description plus valid priority, effort, risk and category. Confidence defaults to MED and evidence defaults to []." },
   promote: { args: [{ key: "path", required: true, variadic: false }], options: [
     { key: "plans", flags: "--plans <ids>", required: false, help: "May be inferred only when the audit directory contains one plan; when it contains multiple plans, select explicitly." }, { key: "workflow", flags: "--workflow <id>", required: false },
-    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: true, help: `One of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}.` }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
+    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: true, help: `One of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}.` },
+    { key: "branchBase", flags: "--branch-base <branch>", required: false, help: "The branch the workflow was created from, recorded as branch.base." },
+    { key: "branchWork", flags: "--branch-work <branch>", required: false, help: "The delivery branch recorded as branch.work: the branch the delivery PR comes from." },
+    { key: "branchSource", flags: "--branch-source <branch>", required: false, help: "Deprecated alias of --branch-work: it records the same delivery branch (branch.work)." },
     { key: "branchTarget", flags: "--branch-target <branch>", required: false }, { key: "completionPolicy", flags: "--completion-policy <text>", required: false },
     { key: "harness", flags: "--harness <dir>", required: false }, { key: "sessionId", flags: "--session-id <session-id>", required: false, context: "sessionId" },
-  ], effects: ["read", "write"], description: "Promote selected audit plans; development requires branchSource and branchTarget, while verification/report-only requires completionPolicy." },
+  ], effects: ["read", "write"], description: "Promote selected audit plans; development requires branchWork (or its deprecated --branch-source alias) and branchTarget, while verification/report-only requires completionPolicy." },
   "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values; path defaults to the current directory." },
   "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root; path defaults to the current directory." },
 };
@@ -228,6 +231,10 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         workflowId,
         role: "coordinator",
       };
+      // `--branch-source` is the deprecated alias of `--branch-work`: the two
+      // flags write the one delivery branch, and the current name wins when
+      // both are supplied.
+      const branchWork = input.branchWork ?? input.branchSource;
       const result = await registerShippedCatalogExecution(executionContextFor(
         { harnessDir },
         identity,
@@ -238,7 +245,8 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         workflow: { kind: "audit", outDir: auditDir, selected, options: {
           harnessDir, deliveryKind: deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
           workflowId,
-          ...(input.branchSource !== undefined ? { branchSource: input.branchSource } : {}),
+          ...(input.branchBase !== undefined ? { branchBase: input.branchBase } : {}),
+          ...(branchWork !== undefined ? { branchWork } : {}),
           ...(input.branchTarget !== undefined ? { branchTarget: input.branchTarget } : {}),
           ...(input.completionPolicy !== undefined ? { completionPolicy: input.completionPolicy } : {}),
         } },
@@ -283,7 +291,9 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
       { name: "path", ownership: "caller" as const, route, required: true, constraint: "audit output directory" },
       { name: "deliveryKind", ownership: "caller" as const, route, required: true, constraint: `one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
       { name: "plans", ownership: "caller" as const, route, required: false, constraint: "inferred only for exactly one plan; explicit selection required when multiple plans exist" },
-      { name: "branchSource", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "source branch for development delivery" },
+      { name: "branchBase", ownership: "caller" as const, route, required: false, constraint: "the branch the workflow was created from, recorded as branch.base" },
+      { name: "branchWork", ownership: "caller" as const, route, required: false, condition: { field: "deliveryKind", equals: "development" }, alternatives: { cardinality: "at-least-one" as const, members: [{ name: "branchWork" }, { name: "branchSource" }] }, constraint: "delivery branch for development delivery, recorded as branch.work; --branch-source is the deprecated alias of --branch-work" },
+      { name: "branchSource", ownership: "caller" as const, route, required: false, constraint: "deprecated alias of --branch-work; it records the same delivery branch (branch.work)" },
       { name: "branchTarget", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "target branch for development delivery" },
       { name: "completionPolicy", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "verification/report-only" }, constraint: "registered alternative-completion policy for report-only delivery" },
       { name: "workflow", ownership: "derivable" as const, route, required: false, constraint: "if omitted, defaults to the basename of audit output directory" },

@@ -269,7 +269,7 @@ export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInp
     if (value.trim() === "") {
       const recovery = iteration
         ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.`
-        : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-source <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
+        : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-work <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
       violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, recovery));
     }
   }

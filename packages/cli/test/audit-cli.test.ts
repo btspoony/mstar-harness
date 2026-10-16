@@ -677,13 +677,13 @@ describe("mstar audit promote — ACTIVE workflow registration for selected plan
   test("selected plan registers one Todo row in ACTIVE state", async () => {
     await withTempDir("mstar-slice4-cli-", async (dir) => {
       const { harnessDir, outDir, token } = await scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
+      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir, "--delivery-kind", "development", "--branch-work", "feature/audit-plans", "--branch-base", "main", "--branch-target", "main"]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "audit.promote.ok").data?.workflowId).toBe("audit-2026-08-08");
       const active = await readExecutionState({ harnessDir });
       expect(active.token).not.toBe(token);
       const workflow = active.data.workflows.find(({ state }) => state.id === "audit-2026-08-08");
-      expect(workflow?.state).toMatchObject({ type: "plan", branch: { source: "feature/audit-plans", target: "main" } });
+      expect(workflow?.state).toMatchObject({ type: "plan", branch: { base: "main", work: "feature/audit-plans", target: "main" } });
       expect(workflow?.plans).toHaveLength(1);
       expect(workflow?.plans[0]?.plan).toMatchObject({ id: "001-fix-n-1-query-in-order-list", title: "Fix N+1 query in order list", status: "Todo" });
     });

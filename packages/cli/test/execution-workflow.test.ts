@@ -193,7 +193,7 @@ function registerPlanWorkflow(
       `plans/${PLAN_ID}.md`,
       "--delivery-kind",
       "development",
-      "--branch-source",
+      "--branch-work",
       "feature/exec-workflow",
       "--branch-target",
       "main",
@@ -718,14 +718,14 @@ describe("mstar workflow \u2014 documented invocation", () => {
     const fixture = await activeFixture("mstar-workflow-anchors");
     const identity = coordinatorIdentity();
     expect(registerPlanWorkflow(fixture, identity, await rootTokenOf(fixture)).exitCode).toBe(0);
-    expect((await storedHeader(fixture)).branch).toEqual({ source: "feature/exec-workflow", target: "main" });
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
     const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
 
     // A missing --reason is a usage error: the correction is auditable or it is
     // not admitted.
     const noReason = runCli(
       workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-no-reason", [
-        "--branch-source",
+        "--branch-work",
         "fix/corrected",
       ]),
       fixture,
@@ -738,7 +738,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
     // An empty anchor is refused with the same diagnostic.
     const emptySource = runCli(
       workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-empty", [
-        "--branch-source",
+        "--branch-work",
         "",
         "--reason",
         "operator correction",
@@ -760,23 +760,39 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(jsonOf(noAnchor)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect((jsonOf(noAnchor).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
-    expect((await storedHeader(fixture)).branch).toEqual({ source: "feature/exec-workflow", target: "main" });
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
 
     // The verb reaches the engine: a single named anchor is recorded and the
     // anchor it does not name keeps its registered value.
     const corrected = runCli(
       workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-1", [
-        "--branch-source",
+        "--branch-work",
         "fix/corrected",
+        "--branch-base",
+        "main",
         "--reason",
-        "the registered source was the delivery target",
+        "the registered work branch was the delivery target",
       ]),
       fixture,
       identity,
     );
     expect(corrected.exitCode).toBe(0);
     expect(dataOf(corrected).replayed).toBe(false);
-    expect((await storedHeader(fixture)).branch).toEqual({ source: "fix/corrected", target: "main" });
+    expect((await storedHeader(fixture)).branch).toEqual({ base: "main", work: "fix/corrected", target: "main" });
+
+    // The deprecated --branch-source alias writes the same field as --branch-work.
+    const aliased = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-alias", [
+        "--branch-source",
+        "fix/aliased",
+        "--reason",
+        "operator correction through the deprecated alias",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(aliased.exitCode).toBe(0);
+    expect((await storedHeader(fixture)).branch).toEqual({ base: "main", work: "fix/aliased", target: "main" });
   });
 
   test("the documented registration form answers through the ACTIVE authority; no file-route bytes", async () => {
@@ -800,7 +816,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
         `plans/${PLAN_ID}.md`,
         "--delivery-kind",
         "development",
-        "--branch-source",
+        "--branch-work",
         "feature/x",
         "--branch-target",
         "main",
