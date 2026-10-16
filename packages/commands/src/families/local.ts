@@ -341,6 +341,14 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
               "OpenCode V2 plugin requires Node >=" + v2Floor + " (node:sqlite); the PATH node reports " + nodeProbe.version + ".",
             );
           }
+        } else if (input.target === "opencode" && v2AmongResolved) {
+          // The check cannot run without a declared floor; say so instead of
+          // passing silently, and name the supported recovery.
+          pluginRuntimeErrors.push(
+            "OpenCode V2 plugin requires a Node with native node:sqlite, but this CLI resolves no declared floor " +
+              "(its manifest carries no `mstar.opencodeV2NodeFloor`), so the PATH node was not checked. " +
+              "Reinstall the CLI (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.",
+          );
         }
         const errors = [...result.errors, ...mcpHealth.errors, ...pluginRuntimeErrors];
         const data = {

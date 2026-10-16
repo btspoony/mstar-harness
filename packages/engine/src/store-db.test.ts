@@ -147,6 +147,28 @@ describe("store-db runtime floors (declared manifest floor)", () => {
     // native-sqlite capability gates it, so an old Bun is not version-refused.
     expect(() => assertStoreRuntimeSupported({ isBun: true, version: "0.0.0-synthetic" })).not.toThrow();
   });
+
+  test("an uncheckable Node floor is named on stderr instead of skipped in silence", () => {
+    const written: string[] = [];
+    const spy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      // `nodeFloor: null` is the layout that declares no floor — a lone copied
+      // bundle. The version comparison cannot run; the operator must still learn
+      // that, and the capability check must stay in force.
+      expect(() =>
+        assertStoreRuntimeSupported({ isBun: false, version: "0.0.0-synthetic" }, { nodeFloor: null }),
+      ).not.toThrow();
+      const message = written.join("");
+      expect(message).toContain("uncheckable");
+      expect(message).toContain("engines.node");
+      expect(message).toContain("Recovery:");
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe.each([

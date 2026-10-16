@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolveProjectRoot } from "./paths.js";
+import { readCliManifestField } from "./cli-manifest.js";
 import {
   getOpencodeDoctorWarnings,
   isAnyMstarHarnessOpencodeSlot,
@@ -27,36 +26,12 @@ export const OPENCODE_V2_PLUGIN = "@mstar-harness/opencode-v2@latest";
 
 /** The published V2 plugin runs in OpenCode's Node process and needs node:sqlite
  * (packages/opencode-v2/INSTALL.md:8); doctor promises to check this floor. The
- * floor is a version, so its owning manifest supplies it — read from
- * `engines.node` at runtime, never compiled in. Candidates, most specific
- * first: the layout a bundled consumer sees, this package's source/dist
- * layouts, then the selected project root (a test process with no checkout
- * above it). `null` when no candidate declares one — a published install cannot
- * see a repo manifest, so the caller reports the uncheckable floor instead of
- * comparing against an invented version. */
-export const OPENCODE_V2_NODE_FLOOR: string | null = (() => {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  const relative = [...new Array(3)].map((_, up) =>
-    path.join(moduleDir, ...new Array(up + 1).fill(".."), "opencode-v2", "package.json"),
-  );
-  for (const candidate of [...relative, path.join(resolveProjectRoot(), "packages", "opencode-v2", "package.json")]) {
-    let engines: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(candidate, "utf8"));
-      if (parsed === null || typeof parsed !== "object") continue;
-      engines = (parsed as Record<string, unknown>)["engines"] as Record<string, unknown>; // parsed JSON; reads narrowed below
-      if (engines === null || typeof engines !== "object") continue;
-    } catch {
-      continue; // unreadable or unparseable manifest — try the next candidate
-    }
-    const node = engines["node"];
-    // The manifest's own floor, as the first version-shaped token: a comparison
-    // needs one version, and a declared range may repeat one.
-    const floor = typeof node === "string" ? /\d+\.\d+\.\d+/.exec(node)?.[0] : undefined;
-    if (floor !== undefined) return floor;
-  }
-  return null;
-})();
+ * floor is a version, so a manifest owns it: the CLI manifest declares it at
+ * `mstar.opencodeV2NodeFloor` because the CLI is what performs the check and is
+ * the manifest a published install actually ships. Read at runtime, never
+ * compiled in. `null` when no visible manifest declares it — the caller reports
+ * the uncheckable floor instead of comparing against an invented version. */
+export const OPENCODE_V2_NODE_FLOOR: string | null = readCliManifestField("opencodeV2NodeFloor");
 
 export type OpencodeGeneration = "v1" | "v2";
 

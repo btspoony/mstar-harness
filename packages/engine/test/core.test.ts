@@ -14,6 +14,7 @@
  *   (own-manifest-first version resolution in engine; CLI re-exports it).
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,6 +22,7 @@ import {
   SEVERITY_ORDER,
   applyEnforcement,
   harnessVersionFrom,
+  readDeclaredNodeFloor,
   readJson,
   resolveProjectRoot,
   writeJson,
@@ -320,6 +322,43 @@ describe("harnessVersionFrom", () => {
       expect(harnessVersionFrom(moduleDir)).toBe("0.0.0");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readDeclaredNodeFloor — bundled entrypoints", () => {
+  test("a hooks-style bundle resolves the floor from the sibling engine manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-hook-layout-"));
+    try {
+      // The layout a generated hook bundle sees: the bundle sits in `<root>/hooks`,
+      // the repository root manifest declares no engines, and the engine package
+      // (whose code the bundle inlines) is the manifest that declares the floor.
+      mkdirSync(join(root, "hooks"), { recursive: true });
+      mkdirSync(join(root, "packages", "engine"), { recursive: true });
+      writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "loose-root" })}\n`);
+      const floorToken = "99.0.0-synthetic";
+      writeFileSync(
+        join(root, "packages", "engine", "package.json"),
+        `${JSON.stringify({ name: "@mstar-harness/engine", engines: { node: `>=${floorToken}` } })}\n`,
+      );
+      const source = join(root, "hooks", "probe.src.ts");
+      writeFileSync(
+        source,
+        `import { readDeclaredNodeFloor } from ${JSON.stringify(join(import.meta.dir, "..", "src", "core.js"))};\n` +
+          `console.log(readDeclaredNodeFloor() ?? "none");\n`,
+      );
+      // Bundling is what makes the inlined engine share the bundle's module URL —
+      // exactly how scripts/build-zcode-hooks.ts produces hooks/*.mjs.
+      const bundle = join(root, "hooks", "probe.mjs");
+      const built = spawnSync(process.execPath, ["build", source, "--target", "node", "--outfile", bundle], {
+        encoding: "utf8",
+      });
+      expect(built.status).toBe(0);
+      const ran = spawnSync(process.execPath, [bundle], { encoding: "utf8" });
+      expect(ran.status).toBe(0);
+      expect(ran.stdout.trim()).toBe(floorToken);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

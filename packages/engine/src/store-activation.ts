@@ -60,7 +60,7 @@ import {
   type IndexFamily,
   type RawTable,
 } from "./catalog-import.js";
-import { readDeclaredNodeFloor, writeJson } from "./core.js";
+import { readDeclaredNodeFloor, warnUncheckableNodeFloor, writeJson } from "./core.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIGRATIONS,
@@ -1037,6 +1037,7 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
     // `bun` consumers carry no version gate (Bun is a development toolchain);
     // a Node consumer's floor is the declared one, read from the manifest.
     const floor = runtime === "bun" ? null : readDeclaredNodeFloor();
+    if (runtime === "node" && floor === null) warnUncheckableNodeFloor();
     if (floor !== null && compareVersions(runtimeVersion, floor) < 0) {
       activationBlocked(
         `${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` +

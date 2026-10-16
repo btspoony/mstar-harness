@@ -1,3 +1,4 @@
+import { cliManifestCandidates, readCliManifestField } from "./cli-manifest.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,51 +19,10 @@ export const DSH_PROFILES_DIR = "profiles";
 export const DSH_INSTALL_HINT =
   "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
 
-/** The CLI package that ships this module's consumer (the install runs there). */
-const CLI_PACKAGE_NAME = "@mstar-harness/cli";
 /** The plugin spec's own package name (row order: mstar first, fallbacks second). */
 const DSH_FALLBACKS_PACKAGE = "@mstar-harness/dsh";
 /** Resolved pin, memoised for the process (`undefined` = not resolved yet). */
 let fallbacksPinCache: string | null | undefined;
-
-/** Read `mstar.dshLlmFallbacks` — the pinned `dsh-llm-fallbacks` version — from a
- * manifest. Missing key or unreadable manifest → `null` (never a placeholder). */
-function readDshFallbacksPin(manifestPath: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    if (parsed === null || typeof parsed !== "object") return null;
-    const manifest = parsed as Record<string, unknown>; // parsed JSON; every read below is narrowed
-    const namespaced = manifest["mstar"];
-    if (namespaced === null || typeof namespaced !== "object" || !("dshLlmFallbacks" in namespaced)) return null;
-    const pin = namespaced.dshLlmFallbacks;
-    return typeof pin === "string" && pin !== "" ? pin : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Candidate CLI manifests, most specific first: the manifest beside this module's
- * published layout (the CLI inlines this package into its own bundle), then every
- * ancestor directory, which covers a repo checkout (`…/packages/commands/src/…`
- * and `…/packages/commands/dist`) as well as a test process with no CLI on disk. */
-function dshFallbacksManifestCandidates(): string[] {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  const candidates: string[] = [];
-  let dir = moduleDir;
-  for (let depth = 0; depth < 8; depth += 1) {
-    // A published layout puts the CLI manifest at the package root (one level up
-    // from `dist`); a checkout keeps it beside this package (`packages/cli`).
-    candidates.push(
-      path.join(dir, "..", "package.json"),
-      path.join(dir, "package.json"),
-      path.join(dir, "cli", "package.json"),
-    );
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return [...new Set(candidates)];
-}
 
 /**
  * The exact `dsh-llm-fallbacks` version shared by the CLI install spec and the
@@ -79,20 +39,13 @@ function dshFallbacksManifestCandidates(): string[] {
 export function dshFallbacksVersion(): string {
   let cached = fallbacksPinCache;
   if (cached === undefined) {
-    cached = null;
-    for (const manifestPath of dshFallbacksManifestCandidates()) {
-      const pin = readDshFallbacksPin(manifestPath);
-      if (pin !== null) {
-        cached = pin;
-        break;
-      }
-    }
+    cached = readCliManifestField("dshLlmFallbacks");
     fallbacksPinCache = cached;
   }
   if (cached === null) {
     throw new Error(
-      `Cannot resolve the dsh-llm-fallbacks pin: no manifest in ${dshFallbacksManifestCandidates().join(", ")} declares ` +
-        `\`${CLI_PACKAGE_NAME}\` \`mstar.dshLlmFallbacks\`. Add the key to the CLI package.json at runtime path, or reinstall the CLI package.`,
+      `Cannot resolve the dsh-llm-fallbacks pin: no CLI manifest in ${cliManifestCandidates().join(", ")} declares ` +
+        `\`mstar.dshLlmFallbacks\`. Add the key to the CLI package.json at runtime path, or reinstall the CLI package.`,
     );
   }
   return cached;

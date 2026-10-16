@@ -1,3 +1,4 @@
+export * from "./host-health/cli-manifest.js";
 export * from "./host-health/paths.js";
 export * from "./host-health/version-compare.js";
 export * from "./host-health/plugin-version-alignment.js";

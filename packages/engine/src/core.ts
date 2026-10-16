@@ -206,11 +206,38 @@ export function readHarnessVersion(): string {
  * here is compiled in. Bun has no counterpart: it is a development toolchain,
  * so product code never gates on the Bun version.
  */
+/**
+ * Name an uncheckable Node floor instead of letting the version comparison be
+ * skipped in silence. The layout that cannot resolve one (a lone copied bundle,
+ * a hook entry without the engine package beside it) still runs the capability
+ * check; the operator gets the reason and the supported recovery on stderr.
+ */
+export function warnUncheckableNodeFloor(): void {
+  process.stderr.write(
+    "mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " +
+      "so the Node version is not compared (the native node:sqlite capability check still applies). " +
+      "Recovery: run the CLI from its installed package (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.\n",
+  );
+}
+
 export function readDeclaredNodeFloor(): string | null {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const own = join(moduleDir, "..", "package.json");
   const root = findRootPackageJson(moduleDir);
-  for (const manifestPath of root === null || root === own ? [own] : [own, root]) {
+  const candidates: string[] = [];
+  let dir = moduleDir;
+  for (let depth = 0; depth < 6; depth += 1) {
+    // A published install ships the manifest next to the bundle; the monorepo
+    // layout keeps this package one level down from a bundled entrypoint (a
+    // `hooks/*.mjs` bundle inlines this module, so its own module directory is
+    // the repository root's `hooks/`).
+    candidates.push(join(dir, "..", "package.json"), join(dir, "package.json"));
+    if (depth === 1) candidates.push(join(dir, "packages", "engine", "package.json"));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (root !== null) candidates.push(root);
+  for (const manifestPath of [...new Set(candidates)]) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
