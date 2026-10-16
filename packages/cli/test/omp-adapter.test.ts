@@ -159,6 +159,15 @@ describe("clearOmpEntry", () => {
     expect(existsSync(entry)).toBe(false);
   });
 
+  test("every mutating verb carries the selected scope", () => {
+    const root = pluginsRoot();
+    const entry = join(root, "node_modules", PLUGIN_NAME);
+    mkdirSync(entry, { recursive: true });
+    const fake = withFakeOmp(entry);
+    clearOmpEntry(root, "/nonexistent/linked/tree", [], "project");
+    expect(fake.argv()).toContain(`plugin uninstall ${PLUGIN_NAME} --scope project`);
+  });
+
   test("an entry that does not exist is a no-op", () => {
     const root = pluginsRoot();
     const fake = withFakeOmp(join(root, "node_modules", PLUGIN_NAME));

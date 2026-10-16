@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { runCliCommand } from "../exec";
-import type { AgentAdapter, Scope } from "../types";
+import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 import { readHarnessVersion, resolveProjectRoot } from "../utils";
 import {
  REPO_URL,
@@ -45,8 +45,13 @@ function runOmp(args: string[], dryRun: boolean): void {
  * reports for its own entry is preferred at the call site; this is the fallback
  * for the case where omp lists nothing yet.
  */
-function ompEntryRoots(): string[] {
+function ompEntryRoots(scope: Scope, projectRoot: string): string[] {
   const roots: string[] = [];
+  if (scope === "project") {
+    // The project's own plugin root first: a project-scoped run must address the
+    // installation it is about to create, not a user-scope one.
+    roots.push(path.join(projectRoot, ".omp", "plugins"));
+  }
   const listed = findInstalledPlugin(listInstalledPlugins());
   const listedPath = listed !== undefined && typeof listed.path === "string" ? listed.path : null;
   if (listedPath !== null) {
@@ -81,6 +86,11 @@ function declaredByPluginManager(root: string): boolean {
   }
 }
 
+/** The scope flag every `omp plugin` verb gets, so one run addresses one install. */
+function scopeArgs(scope: Scope): string[] {
+  return scope === "project" ? ["--scope", "project"] : [];
+}
+
 /** A refusal that names the step, the observed cause, and a supported recovery. */
 function ompRefusal(step: string, detail: string, recovery: string): Error {
   return new Error(`${step}: ${detail}\nRecovery: ${recovery}`);
@@ -94,7 +104,7 @@ function ompRefusal(step: string, detail: string, recovery: string): Error {
  * `node_modules`, so the entry is replaced only through omp's uninstall verb,
  * and a refusal names every supported route.
  */
-export function clearOmpEntry(root: string, ompPackagePath: string, notes: string[]): void {
+export function clearOmpEntry(root: string, ompPackagePath: string, notes: string[], scope: Scope = "global"): void {
   const entry = path.join(root, "node_modules", OMP_PLUGIN_NAME);
   try {
     // lstat: a dangling symlink occupies the entry too, and `existsSync` would miss it.
@@ -103,7 +113,10 @@ export function clearOmpEntry(root: string, ompPackagePath: string, notes: strin
     return;
   }
   try {
-    runOmp(["plugin", "uninstall", OMP_PLUGIN_NAME], false);
+    // Every verb that mutates or reads the plugin manager carries the selected
+    // scope; where omp ignores the flag, the verification path comparison is what
+    // decides, and a mismatch is a refusal rather than a silent wrong-install.
+    runOmp(["plugin", "uninstall", OMP_PLUGIN_NAME, ...scopeArgs(scope)], false);
     notes.push(`Replaced the existing ${OMP_PLUGIN_NAME} install in ${root} through omp.`);
     return;
   } catch (error) {
@@ -120,8 +133,13 @@ export function clearOmpEntry(root: string, ompPackagePath: string, notes: strin
 
 /** An install omp does not list did not happen: assert what we asked for.
  *  Exported for tests: the fake `omp` on PATH is the seam. */
-export function verifyOmpInstall(notes: string[], expectedVersion: string, linkedTree?: string): void {
-  const probe = probeInstalledPlugins();
+export function verifyOmpInstall(
+  notes: string[],
+  expectedVersion: string,
+  linkedTree?: string,
+  scope: Scope = "global",
+): void {
+  const probe = probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope);
   if (probe.error !== null) {
     throw ompRefusal(
       "could not read omp's plugin listing, so the install could not be verified",
@@ -211,9 +229,10 @@ export function listInstalledPlugins(timeoutMs: number = OMP_LIST_TIMEOUT_MS): A
  */
 export function probeInstalledPlugins(
   timeoutMs: number = OMP_LIST_TIMEOUT_MS,
+  scope: Scope = "global",
 ): { entries: Array<Record<string, unknown>>; error: string | null } {
   try {
-    const raw = execFileSync("omp", ["plugin", "list", "--json"], {
+    const raw = execFileSync("omp", ["plugin", "list", "--json", ...scopeArgs(scope)], {
       stdio: "pipe",
       encoding: "utf8",
       timeout: timeoutMs,
@@ -251,7 +270,7 @@ function installedPluginEntry(entries: Array<Record<string, unknown>>): Record<s
 
 
 
-async function runInit(scope: Scope, dryRun: boolean) {
+async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
  const notes: string[] = [];
  const projectRoot = resolveProjectRoot();
  if (!dryRun) await ensureHostPresent("omp");
@@ -342,7 +361,7 @@ async function runInit(scope: Scope, dryRun: boolean) {
           `replace the existing entry through omp (\`omp plugin uninstall ${OMP_PLUGIN_NAME}\`), or install the published plugin instead: \`omp plugin install ${installSpec}\``,
         );
       }
-      verifyOmpInstall(notes, expectedVersion, ompPackagePath);
+      verifyOmpInstall(notes, expectedVersion, ompPackagePath, scope);
     }
 
  if (scope === "project") {
@@ -411,6 +430,6 @@ function runDoctor(scope: Scope) {
 export const ompAdapter: AgentAdapter = {
  target: "omp",
  mode: "install",
- runInstallInit: (scope, dryRun) => runInit(scope, dryRun),
+ runInstallInit: (scope, dryRun, initFlags) => runInit(scope, dryRun, initFlags),
  runInstallDoctor: (scope) => runDoctor(scope),
 };

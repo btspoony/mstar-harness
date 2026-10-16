@@ -354,8 +354,12 @@ export function diagnoseMcpTarget(
     ?? "mstar doctor --target opencode --opencode-generation v2 --scope global (global file) or mstar doctor --target opencode --opencode-generation v2 --scope project (project file)";
   const otherScopeInitCommand = options.otherScopeInitCommand
     ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or mstar init --target opencode --opencode-generation v2 --scope project (project file)";
-  const runtimeFloor = readDeclaredNodeFloor() ?? "undeclared";
-  const runtimeError = runtime.version === ""
+  const declaredFloor = readDeclaredNodeFloor();
+  const runtimeFloor = declaredFloor ?? "undeclared";
+  const runtimeError = declaredFloor === null
+    ? "The runtime version floor is uncheckable here: no visible manifest declares `engines.node`, so this runtime's Node version was not compared. " +
+      "Run doctor from an installed CLI (`npm i -g @mstar-harness/cli`) or from the harness checkout, so the manifest that declares the floor is reachable, then rerun `mstar-harness doctor`."
+    : runtime.version === ""
     ? `The \`node\` executable that this host's launch (\`npx\`) resolves could not be verified: ${runtime.unverifiedCause ?? "the probe reported no version"}. Install or select Node.js${runtimeFloor === "undeclared" ? "" : ` >=${runtimeFloor}`} on PATH (https://nodejs.org) - or correct the PATH entry or wrapper the probe hit - then rerun \`mstar-harness doctor\` for this target.`
     : runtimeFloor !== "undeclared" && compareSemver(runtime.version, runtimeFloor) < 0
       ? `Node.js runtime ${runtime.version} is below the required ${runtimeFloor} floor.`

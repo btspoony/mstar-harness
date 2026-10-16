@@ -100,6 +100,16 @@ export function detectPublishedLatest(): string | null {
  * `ensureGlobalCli` so the network probe sits at the CLI edge and the install
  * helper stays injectable without a live registry.
  */
+/**
+ * The version `init` installs: the published `latest` when it is higher than the
+ * running one, else the running version. A leading (or equal) prerelease is never
+ * downgraded, so this is also the version the host install must pin.
+ */
+export function chooseCliVersion(version: string, latest: string | null): string {
+  if (latest === null) return version;
+  return compareSemver(latest, version) > 0 ? latest : version;
+}
+
 export function formatVersionSkewWarning(version: string, latest: string | null): string | null {
   // Only a version BEHIND the published latest is skew: a local (or prerelease)
   // build ahead of it must not be told to move backwards.
@@ -120,10 +130,7 @@ export function formatVersionSkewWarning(version: string, latest: string | null)
 export function ensureGlobalCli(opts: EnsureGlobalCliOpts): EnsureGlobalCliResult {
   // A published version newer than the one running is what the operator asked
   // for (an unpinned `npx` spec means latest), so it is what gets installed.
-  const newer =
-    opts.latest !== undefined && opts.latest !== null && compareSemver(opts.latest, opts.version) > 0
-      ? opts.latest
-      : null;
+  const newer = chooseCliVersion(opts.version, opts.latest ?? null) === opts.version ? null : opts.latest!;
   const target = newer ?? opts.version;
   const spec = `@mstar-harness/cli@${target}`;
   const log = opts.log ?? ((line: string) => console.log(line));

@@ -327,7 +327,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         if (input.target === "opencode" && v2AmongResolved && v2Floor === null) {
           pluginRuntimeErrors.push(
             "OpenCode V2 plugin requires a Node with native node:sqlite, but this CLI resolves no declared floor " +
-              "(its manifest carries no `engines.node`), so the PATH node was not checked. " +
+              "(its manifest declares no `engines.node`), so the PATH node was not checked. " +
               "Reinstall the CLI (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.",
           );
         } else if (input.target === "opencode" && v2AmongResolved && v2Floor !== null) {
@@ -346,7 +346,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           // passing silently, and name the supported recovery.
           pluginRuntimeErrors.push(
             "OpenCode V2 plugin requires a Node with native node:sqlite, but this CLI resolves no declared floor " +
-              "(its manifest carries no `mstar.opencodeV2NodeFloor`), so the PATH node was not checked. " +
+              "(its manifest declares no `engines.node`), so the PATH node was not checked. " +
               "Reinstall the CLI (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.",
           );
         }

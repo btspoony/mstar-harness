@@ -68,6 +68,9 @@ export type ModelSelections = {
 /** Flags forwarded to an install-mode adapter's runInstallInit. */
 export type InstallInitFlags = {
   noFallbacks?: boolean;
+  /** Version the host install must pin, resolved by the CLI before any
+   *  host mutation (published latest when newer, else the running version). */
+  pluginVersion?: string;
 };
 
 export type AgentAdapter = {

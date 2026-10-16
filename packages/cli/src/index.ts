@@ -10,7 +10,7 @@ import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
-import { detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
+import { chooseCliVersion, detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
 import type { InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 import { registerMcpCommand } from "./mcp/command";
@@ -59,18 +59,27 @@ async function runInit(options: InitOptions) {
   if (!options.scope && !options.yes) console.log(pc.dim("Scope not provided; defaulting to project."));
   if (adapter.mode === "install") {
     logStep("Step 2/2 - Run target install flow");
-    const installResult = await adapter.runInstallInit?.(scope, !!options.dryRun, { noFallbacks: options.noFallbacks });
+    // Resolve the version decision BEFORE mutating the host: the plugin the host
+    // installs and the global CLI must end on the same version, and the operator
+    // must see the pairing this run leaves behind.
+    // --no-global-cli is a no-network opt-out: the probe exists only to inform
+    // the global install, so it is skipped with it.
+    const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
+    const chosenCli = chooseCliVersion(packageVersion, latest);
+    const installResult = await adapter.runInstallInit?.(scope, !!options.dryRun, {
+      noFallbacks: options.noFallbacks,
+      pluginVersion: chosenCli,
+    });
     if (!installResult) throw new Error(`Adapter ${target} does not implement install init flow.`);
     console.log(pc.green(`Status: ${options.dryRun ? "ready (dry-run)" : "configured"} (${scope})`));
     console.log(`Target: ${target}`);
     console.log(`Install location: ${installResult.location}`);
     for (const note of installResult.notes) console.log(`  - ${note}`);
-    // --no-global-cli is a no-network opt-out: the probe exists only to inform
-    // the global install, so it is skipped with it.
-    const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
     const skew = formatVersionSkewWarning(packageVersion, latest);
     if (skew !== null) console.log(skew);
     ensureGlobalCli({ version: packageVersion, latest, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
+    console.log(`Plugin and CLI target version: ${chosenCli}.`);
+    console.log(`Next: npx @mstar-harness/cli doctor --target ${target}${scope === "project" ? "" : " --scope global"}`);
     return;
   }
   const useExplicitModels = hasExplicitModelFlags(options);
