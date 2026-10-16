@@ -134,15 +134,19 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
 
   // The mstar row is pinned to the version this run selected: an unpinned add
   // follows dsh's own range, which is what can leave the plugin behind the CLI.
-  const mstarSpec = `@mstar-harness/dsh@${initFlags?.pluginVersion ?? readHarnessVersion()}`;
+  const selectedVersion = initFlags?.pluginVersion ?? readHarnessVersion();
+  const mstarSpec = `@mstar-harness/dsh@${selectedVersion}`;
+  /** The mstar row's version after this run, or undefined when the run could not
+   *  establish one (a skipped row whose manifest is unreadable). */
+  let mstarInstalledVersion: string | undefined;
   const specs = [mstarSpec, dshFallbacksSpec()];
   for (const spec of specs) {
+    const isFallbacks = spec === dshFallbacksSpec();
     if (spec === dshFallbacksSpec() && initFlags?.noFallbacks) {
       notes.push(`skipped-by-flag: ${spec} (--no-fallbacks)`);
       continue;
     }
     if (!dryRun && (installed.has(spec) || installed.has(dshLoaderName(spec)))) {
-      const isFallbacks = spec === dshFallbacksSpec();
       const disabledRow = disabledLoaderNames.has(spec) || disabledLoaderNames.has(dshLoaderName(spec));
       // The enclosing condition already proved this spec's row is present, so
       // drift is the only reason to fall through to the versioned re-add.
@@ -152,10 +156,19 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
           ? fallbacksVersionDrifted(profileDir)
           : installedRow !== null && installedRow !== (initFlags?.pluginVersion ?? readHarnessVersion()));
       if (!needsVersionAlign) {
+        // A skipped mstar row keeps whatever version it had: report that one, and
+        // say so when it could not be read rather than claiming the selected one.
+        if (!isFallbacks) {
+          mstarInstalledVersion = installedRow ?? undefined;
+          if (installedRow === null) {
+            notes.push(`plugin version unconfirmed: ${spec} was skipped and its installed manifest has no readable version`);
+          }
+        }
         notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
         continue;
       }
     }
+    if (!isFallbacks) mstarInstalledVersion = selectedVersion;
     const addArgs = ["plugin", DSH_PROFILE_FLAG, DSH_PROFILE, "add", spec];
     if (dryRun) {
       notes.push(`Would run: ${DSH_BIN} ${addArgs.join(" ")}`);
@@ -211,7 +224,7 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
   return {
     location: profileDir,
     notes,
-    pluginVersion: initFlags?.pluginVersion ?? readHarnessVersion(),
+    ...(mstarInstalledVersion === undefined ? {} : { pluginVersion: mstarInstalledVersion }),
   };
 }
 

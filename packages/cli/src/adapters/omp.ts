@@ -381,7 +381,6 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  `Linked omp plugin tree resolved via the workspace engine member; dist + root mirrors are gitignored build outputs (rebuilt automatically above when absent)`,
  );
  for (const root of ompEntryRoots(scope, projectRoot)) clearOmpEntry(root, ompPackagePath, notes, scope);
- let linkedVersion: string | null = null;
  const linkArgs = ["plugin", "link", ompPackagePath];
  if (scope === "project") linkArgs.push("--scope", "project");
  try {

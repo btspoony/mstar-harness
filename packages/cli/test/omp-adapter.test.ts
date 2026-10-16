@@ -32,6 +32,9 @@ import { HARNESS_REPO_PATH } from "../src/adapters/shared-install";
 import { readHarnessVersion } from "../src/utils";
 
 const PLUGIN_NAME = "@mstar-harness/omp";
+/** The version the fake checkout carries: distinct from any CLI release, so a
+ *  link that reports it cannot be mistaken for the version init chose. */
+const LINKED_VERSION = "0.0.0-linked-synthetic";
 const created: string[] = [];
 
 function tempDir(prefix: string): string {
@@ -299,6 +302,12 @@ describe("omp init end-to-end (child process with its own home)", () => {
     writeFileSync(join(repo, ".omp-plugin", "plugin.json"), "{}\n");
     mkdirSync(join(repo, "packages", "omp"), { recursive: true });
     writeFileSync(join(repo, "packages", "omp", "plugin.json"), "{}\n");
+    // A real checkout carries its own manifest: the link path must report THIS
+    // version, not the one init selected for a published install.
+    writeFileSync(
+      join(repo, "packages", "omp", "package.json"),
+      `${JSON.stringify({ name: PLUGIN_NAME, version: LINKED_VERSION })}\n`,
+    );
     for (const argv of [["init"], ["add", "."], ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "init"]]) {
       execFileSync("git", argv, { cwd: repo, stdio: "pipe" });
     }
@@ -417,6 +426,18 @@ console.log(JSON.stringify(notes));
     expect(result.stderr).toContain("EPERM");
     expect(result.stderr).toContain(`omp plugin uninstall ${PLUGIN_NAME}`);
     expect(result.stderr).toContain(`omp plugin install ${PLUGIN_NAME}`);
+  });
+
+  test("the link path reports the version the checkout carries, not the chosen one", () => {
+    const fixture = childHome({});
+    const result = fixture.run(
+      `import { ompAdapter } from ${JSON.stringify(join(import.meta.dir, "..", "src", "adapters", "omp"))};
+const run = await ompAdapter.runInstallInit("global", false, { pluginVersion: "99.9.9-synthetic" });
+console.log(JSON.stringify({ pluginVersion: run.pluginVersion }));
+`,
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(JSON.parse(result.stdout).pluginVersion).toBe(LINKED_VERSION);
   });
 
   test("a successful link is verified against omp's own listing", () => {

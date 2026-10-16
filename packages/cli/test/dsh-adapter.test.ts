@@ -222,6 +222,12 @@ function seedProfileFallbacksPkg(dshHome: string, version: string): void {
   writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "dsh-llm-fallbacks", version }));
 }
 
+function seedProfileMstarPkg(dshHome: string, version: string): void {
+  const pkgDir = join(dshHome, "profiles", "web", "node_modules", "@mstar-harness", "dsh");
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "@mstar-harness/dsh", version }));
+}
+
 function withDshHomeAndPath(
   dshHome: string,
   fake: FakeDsh,
@@ -372,6 +378,24 @@ const DUMP_MALFORMED = [
 ].join("\n");
 
 describe("dshAdapter.runInstallInit", () => {
+  test("a mstar row at another version is realigned and the installed version reported", () => {
+    const otherVersion = "0.0.0-other-synthetic";
+    const fake = makeFakeDsh(DUMP_BOTH);
+    const dshHome = mkdtempSync(join(tmpdir(), "dsh-home-"));
+    seedProfileMstarPkg(dshHome, otherVersion);
+    try {
+      let result: { pluginVersion?: string } | undefined;
+      withDshHomeAndPath(dshHome, fake, dshFallbacksVersion(), () => {
+        result = dshAdapter.runInstallInit?.("global", false);
+      });
+      expect(addLines(fake)).toContain(`plugin --profile web add ${MSTAR_SPEC}`);
+      expect(result?.pluginVersion).toBe(readHarnessVersion());
+    } finally {
+      rmSync(dshHome, { recursive: true, force: true });
+      fake.remove();
+    }
+  });
+
   test("default install: two adds, mstar first then fallbacks (AC-6)", () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
