@@ -57,6 +57,7 @@ import { prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
+import { integrationAnchors } from "../src/coordination-transitions.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-workflow-"));
 afterAll(() => {
@@ -2691,7 +2692,7 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
  * ------------------------------------------------------------------------ */
 
 describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
-  test("a registered workflow's anchors are replaced as one pair and repaired again later", async () => {
+  test("a registered workflow's anchors are corrected member by member and repaired again later", async () => {
     const fixture = await workflowFixture("delivery-anchors");
     const initial = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
     expect(initial.branch).toMatchObject({ source: SOURCE_BRANCH, target: "main" });
@@ -2703,12 +2704,23 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     });
     expect(receipt.replayed).toBe(false);
     const state = receipt.data.workflows[0]!.state as unknown as Record<string, unknown>;
-    // Wholesale: the pair the operation names IS the whole `branch` member.
-    expect(state.branch).toEqual({ source: "fix/registered-by-mistake", target: "release" });
-    // It is the only identity anchor that moved.
+    // Merged, not replaced: the anchors named here move, and every member the
+    // operation does NOT name keeps the value the header already carried.
+    expect(state.branch).toEqual({
+      base: "main",
+      source: "fix/registered-by-mistake",
+      target: "release",
+      integration: INTEGRATION_BRANCH,
+    });
+    // The anchors it named are the only identity values that moved.
     expect(identityAnchors(state)).toEqual({
       ...identityAnchors(initial),
-      branch: { source: "fix/registered-by-mistake", target: "release" },
+      branch: {
+        base: "main",
+        source: "fix/registered-by-mistake",
+        target: "release",
+        integration: INTEGRATION_BRANCH,
+      },
     });
     // The reason is part of the RECORDED intent, not decoration: reusing this
     // operation id with a different reason is a different request, disclosed as
@@ -2730,8 +2742,10 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
       reason: "the target was wrong too",
     });
     expect((single.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "main",
       source: "fix/registered-by-mistake",
       target: "main",
+      integration: INTEGRATION_BRANCH,
     });
 
     // Revisable and repeatable: a third correction on the same RUNNING workflow
@@ -2745,8 +2759,59 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     expect(again.replayed).toBe(false);
     expect(again.recovery?.outcome).toBe("applied");
     expect((again.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "main",
       source: SOURCE_BRANCH,
       target: "main",
+      integration: INTEGRATION_BRANCH,
+    });
+  });
+
+  test("an iteration workflow's base and integration anchors survive a single-anchor correction", async () => {
+    // The reachable input a wholesale pair replacement destroyed: an iteration
+    // workflow registers its own `{base, integration, target}` anchors, and a
+    // target-only repair names exactly one of them.
+    const fixture = await workflowFixture("delivery-anchors-iteration", [], "iteration");
+    const initial = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(initial.branch).toMatchObject({ base: "main", integration: INTEGRATION_BRANCH, target: "main" });
+    // The consumer of the members the operation does not name resolves before
+    // the repair, on the registered header.
+    expect(integrationAnchors(initial as unknown as WorkflowSnapshot, PLAN_ID)).toEqual({
+      targetBranch: INTEGRATION_BRANCH,
+      worktreePath: fixture.integrationPath,
+    });
+
+    const repaired = await workflowMutation(fixture, "op-anchors-iteration", {
+      kind: "delivery-anchors",
+      branch: { target: "release" },
+      reason: "the iteration's delivery target was registered on the wrong branch",
+    });
+    expect(repaired.replayed).toBe(false);
+    const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.branch).toEqual({
+      base: "main",
+      source: SOURCE_BRANCH,
+      target: "release",
+      integration: INTEGRATION_BRANCH,
+    });
+    // base/integration are exactly where they were, so the integration consumer
+    // still resolves - the call that used to fail once the pair was replaced.
+    expect(integrationAnchors(state as unknown as WorkflowSnapshot, PLAN_ID)).toEqual({
+      targetBranch: INTEGRATION_BRANCH,
+      worktreePath: fixture.integrationPath,
+    });
+
+    // Revisable and repeatable: a further correction preserves what it does not
+    // name just the same.
+    const repeated = await workflowMutation(fixture, "op-anchors-iteration-again", {
+      kind: "delivery-anchors",
+      branch: { target: "release/v2" },
+      reason: "the delivery target moved to its own branch",
+    });
+    expect((repeated.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "main",
+      source: SOURCE_BRANCH,
+      target: "release/v2",
+      integration: INTEGRATION_BRANCH,
     });
   });
 

@@ -1239,18 +1239,19 @@ function applyWorkflowOperation(input: {
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
     case "delivery-anchors": {
-      // The repair writes the RESULTING pair and nothing else: the anchors this
-      // operation names replace the registered ones, an anchor it does not name
-      // keeps the value the workflow already registers, and a pair the stored
+      // The repair MERGES into the registered anchors: an anchor this operation
+      // names replaces that member, and every other member the header carries is
+      // preserved verbatim — an iteration workflow's `base` / `integration`
+      // anchors are not this operation's to delete — while an anchor it does not
+      // name keeps the value the workflow already registers. A member the stored
       // header does not carry stays absent rather than being invented. The
       // candidate header is validated and stored by the shared tail below, so a
       // malformed pair is a refusal, never a half-written header.
       const registered = isPlainObject(header.branch) ? header.branch : {};
-      const source = operation.branch.source ?? registered.source;
-      const target = operation.branch.target ?? registered.target;
       header.branch = {
-        ...(isNonEmptyString(source) ? { source } : {}),
-        ...(isNonEmptyString(target) ? { target } : {}),
+        ...registered,
+        ...(isNonEmptyString(operation.branch.source) ? { source: operation.branch.source } : {}),
+        ...(isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}),
       };
       break;
     }
