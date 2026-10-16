@@ -222,12 +222,13 @@ Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag —
 npx @mstar-harness/cli init --target dsh --no-fallbacks
 ```
 
-Or run the two plugin-manager commands directly (the same contract the CLI executes):
+Or run the plugin-manager commands directly (the same contract the CLI executes):
 
 ```bash
 dsh plugin --profile web add @mstar-harness/dsh
-dsh plugin --profile web add dsh-llm-fallbacks
 ```
+
+The LLM-fallbacks row is optional and must carry the **pinned** version: an unpinned `dsh plugin --profile web add dsh-llm-fallbacks` follows dsh's own range and can boot-break the installed artifact. `init` adds the pinned spec, and `mstar-harness doctor --target dsh` names the pin whenever the profile's row drifts from it.
 
 **Notes:**
 

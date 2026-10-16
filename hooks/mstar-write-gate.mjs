@@ -9988,7 +9988,7 @@ function findRootPackageJson(startDir) {
   }
 }
 function warnUncheckableNodeFloor() {
-  process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run the CLI from its installed package (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.\n");
+  process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
 }
 function readDeclaredNodeFloor() {
   const moduleDir = dirname4(fileURLToPath(import.meta.url));
@@ -15075,9 +15075,9 @@ function compareVersions(a, b) {
   }
   return 0;
 }
-function assertStoreRuntimeSupported(info = detectStoreRuntime(), floorOverride) {
+function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
   const kind = info.isBun ? "Bun" : "Node";
-  const floor = kind === "Node" ? floorOverride === undefined ? readDeclaredNodeFloor() : floorOverride.nodeFloor : null;
+  const floor = kind === "Node" ? readDeclaredNodeFloor() : null;
   if (kind === "Node" && floor === null)
     warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";

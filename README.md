@@ -35,7 +35,7 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 
 ## Install
 
-Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager. `init` also writes baseline config, runs the doctor checks, and adds the harness gitignore entries; the native command installs the plugin only. Use the native command when `init` is blocked — it bypasses this CLI entirely.
+Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager. `init` writes baseline config and adds the harness gitignore entries, then prints the `doctor` command to run next (`init` does not run `doctor` itself - host health and MCP config are what `doctor` checks); the native command installs the plugin only. Use the native command when `init` is blocked — it bypasses this CLI entirely.
 
 `npx` can serve an older cached resolution, and every step of `init` follows the CLI that ran; `init` reports when the published latest differs from the version it is running, and installs that latest globally — use `npx @mstar-harness/cli@latest init …` when the CLI that runs should itself be the newest release.
 

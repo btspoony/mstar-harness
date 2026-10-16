@@ -36,7 +36,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 ## 安装
 
-每个宿主都有两条安装路径：本 CLI 的 `init` 流程，或宿主自带的插件管理器。`init` 还会写入基线配置、跑 doctor 检查、补上 harness 的 gitignore 条目；原生命令只装插件本身。`init` 被阻塞时用原生命令 —— 它完全绕过本 CLI。
+每个宿主都有两条安装路径：本 CLI 的 `init` 流程，或宿主自带的插件管理器。`init` 会写入基线配置、补上 harness 的 gitignore 条目，然后打印下一步要跑的 `doctor` 命令（`init` 本身不跑 `doctor`——宿主健康与 MCP 配置由 `doctor` 检查）；原生命令只装插件本身。`init` 被阻塞时用原生命令 —— 它完全绕过本 CLI。
 
 `npx` 可能命中较旧的缓存解析，而 `init` 的每一步都跟随实际运行的那个 CLI；`init` 会在已发布 latest 与正在运行的版本不同时报告，并把该 latest 装到全局 —— 若要让**运行的那个 CLI 本身**是最新版，用 `npx @mstar-harness/cli@latest init …`。
 
