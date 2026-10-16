@@ -26,7 +26,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/engine.js && bun build src/audit.ts --target node --outfile dist/audit.js && bunx tsc",
+    "build": "rm -rf dist && bun run scripts/build.ts && bunx tsc",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },
