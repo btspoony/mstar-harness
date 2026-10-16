@@ -1282,7 +1282,7 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     }
   }, 30000);
 
-  test("a recorded branch that differs from the registered delivery source names both values and both repairs", async () => {
+  test("a recorded branch that differs from the registered delivery source names both values in details and both repairs in the message", async () => {
     // The issue-#499 mistake: the workflow registered `main` as its delivery
     // source while the row records its real feature branch.
     const fixture = await realStandaloneFixture("complete-anchor-mismatch", "development", "main");
@@ -1300,11 +1300,13 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       planCall(fixture, OWN_PLAN, "complete-mismatch", token, { kind: "complete", evidence } as CoordinationOperation),
     );
     expect(refusal.code).toBe("coordination.scope-mismatch");
+    // The refusal names the two values through `details`; the message cannot interpolate
+    // them, because a message that interpolates them while advertising a command is
+    // exactly what the help-reachability lint refuses (Rule #341 class 4).
     expect(refusal.details).toMatchObject({ expected: "main", actual: `feature/${OWN_PLAN}` });
-    expect(refusal.message).toContain(`feature/${OWN_PLAN}`);
-    expect(refusal.message).toContain("main");
     expect(refusal.message).toContain("mstar workflow delivery-anchors");
     expect(refusal.message).toContain("mstar plan prepare");
+    expect(refusal.message).toContain("mstar plan show");
     expect(footprint(context)).toEqual(before);
   }, 30000);
 
