@@ -14,7 +14,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine";
+import { PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
@@ -340,11 +340,27 @@ describe("mstar pr-review validate-report", () => {
   });
 });
 
+describe("mstar pr-review seat-prompt", () => {
+  test("--remaining-minutes reaches the rendered prompt (shared-clock snapshot at dispatch, exit 0)", () => {
+    const result = runCli(["pr-review", "seat-prompt", "--stage", "2", "--domain", "api", "--seat", "s1", "--tier", "deep", "--remaining-minutes", "4.5"]);
+    expect(result.exitCode).toBe(0);
+    expect(String(data(result).prompt)).toContain("4.5 min left when you were dispatched");
+  });
+
+  test("a malformed --remaining-minutes is a usage refusal (exit 2), never an execution failure", () => {
+    const result = runCli(["pr-review", "seat-prompt", "--stage", "2", "--domain", "api", "--seat", "s1", "--remaining-minutes", "soon"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toContain("--remaining-minutes");
+  });
+});
+
 describe("mstar pr-review budget", () => {
   test("prints one line per tier with the engine numbers (exit 0)", () => {
     const result = runCli(["pr-review", "budget"]);
     expect(result.exitCode).toBe(0);
     // Numbers come from the engine export — a cap change must not break the test shape.
     expect(data(result).budgets).toEqual(PR_REVIEW_TIER_BUDGETS);
+    // Seat supervision reads its tick from here — never hand-copied into prose.
+    expect(data(result).nudgeCadence).toEqual(PR_REVIEW_NUDGE_CADENCE);
   });
 });

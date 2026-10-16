@@ -330,20 +330,27 @@ script for the `default` tier (two seats → `subagent`) or `quick` (one seat).
   "reportsDir": "<absolute directory for the stage-2 evidence files>",
   "auditRef": "<absolute path to the mstar-audit skill references dir>",
   "domains": ["code", "tests"],
-  "security": true
+  "security": true,
+  "budgetLine": "<tier + shared soft wall-clock cap + minutes left of it, from `mstar pr-review budget` and the review's own clock — required: these seats cannot be nudged mid-run>"
 }
 ```
 
 `domains` holds 2–3 domain labels (business domain / change surface / tech stack); with
-`security: true` (the default) the seat count is 3 or 4.
+`security: true` (the default) the seat count is 3 or 4. `budgetLine` is **required** — it carries
+the tier + shared-soft-cap head these seats cannot be nudged with mid-run (dsh seats are
+fire-and-forget); take it from `mstar pr-review budget` plus the review's own clock
+(**`mstar-audit`** `references/pr-review.md` § Seat supervision).
 
 **`script`**
 
 ```js
 const a = args ?? {}
-const missing = ['worktree', 'target', 'diffBase', 'reportsDir', 'auditRef']
+const missing = ['worktree', 'target', 'diffBase', 'reportsDir', 'auditRef', 'budgetLine']
   .filter((key) => typeof a[key] !== 'string' || a[key].length === 0)
-if (missing.length > 0) throw new Error('mstar-pr-seats missing args: ' + missing.join(', '))
+if (missing.length > 0) {
+  throw new Error('mstar-pr-seats missing args: ' + missing.join(', ') +
+    ' — budgetLine is the seat budget head (tier + shared soft wall-clock cap + minutes left of it): take it from `mstar pr-review budget` and the review clock (mstar-audit references/pr-review.md § Seat supervision)')
+}
 
 const domains = Array.isArray(a.domains) ? a.domains : []
 if (domains.length < 2 || domains.length > 3) {
@@ -353,6 +360,7 @@ const withSecurity = a.security !== false
 const diffHint = typeof a.diffFile === 'string' && a.diffFile.length > 0
   ? 'the pinned diff snapshot at ' + a.diffFile + ', plus ' + a.diffBase + ' in ' + a.worktree
   : a.diffBase + ' in ' + a.worktree
+const budgetLine = '\nBudget: ' + a.budgetLine
 
 const SEAT = {
   type: 'object',
@@ -391,7 +399,7 @@ Task category: audit
 Review target: ${a.target}
 Review worktree: ${a.worktree}
 Domain: ${domain}
-Diff basis: ${a.diffBase}
+Diff basis: ${a.diffBase}${budgetLine}
 Stage: Stage 2 domain review — read-only, you never post and never produce the verdict.
 
 Read-only audit seat in the three-stage PR review pipeline; the main agent synthesizes one verdict and posts.

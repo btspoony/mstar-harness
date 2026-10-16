@@ -201,6 +201,31 @@ describe("pr-review command family", () => {
     promptOf(securityStageTwo, "unfolded stage-2 security seat");
   });
 
+  test("seat-prompt states the tier and the shared-clock remainder, and refuses a non-numeric remainder", async () => {
+    const { context } = fixture();
+
+    const remaining = await executeCommand("pr-review.seat-prompt", {
+      stage: "2", domain: "audit", seat: "code-reviewer", tier: "deep", remainingMinutes: "4.5",
+    }, context);
+    const prompt = promptOf(remaining, "seat-prompt with a remainder");
+    expect(prompt).toContain("- Tier: `deep`");
+    expect(prompt).toContain("4.5 min left when you were dispatched");
+
+    // The same shared clock past its cap: an overrun figure, never a fresh allowance.
+    const overrun = await executeCommand("pr-review.seat-prompt", {
+      stage: "2", domain: "audit", seat: "code-reviewer", tier: "deep", remainingMinutes: "-2",
+    }, context);
+    expect(promptOf(overrun, "seat-prompt past its cap")).toContain("2 min over it when you were dispatched");
+
+    const bad = await executeCommand("pr-review.seat-prompt", {
+      stage: "2", domain: "audit", seat: "code-reviewer", remainingMinutes: "soon",
+    }, context);
+    expect(bad).toMatchObject({
+      status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "--remaining-minutes must be a number of minutes",
+    });
+  });
+
   test("unknown outcome after posting does not claim success or retry", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");

@@ -1228,6 +1228,17 @@ export const PR_REVIEW_TIER_BUDGETS: Readonly<
   deep: Object.freeze({ wallClockMinutes: 15, maxSeats: 4, perSeatFindingsCap: 8, evidenceTokensCap: 1200, fileOpenCap: 30 }),
 });
 
+/**
+ * Progress-nudge cadence for the main agent while review seats run (wording
+ * SSOT: pr-review.md § Seat supervision). Numbers only — the remaining-budget
+ * figure the nudge carries comes from {@link PR_REVIEW_TIER_BUDGETS}, so no
+ * caller re-derives either. `overrunSeconds` applies once the tier's shared
+ * wall-clock cap is passed. */
+export const PR_REVIEW_NUDGE_CADENCE: Readonly<{ normalSeconds: number; overrunSeconds: number }> = Object.freeze({
+  normalSeconds: 120,
+  overrunSeconds: 60,
+});
+
 /** Hard Rules 4 and 5 verbatim (mstar-audit SKILL.md § Hard Rules — same
  * text as pr-review-seat-evidence.md § Hard Rules). */
 const HARD_RULE_4 =
@@ -1260,6 +1271,12 @@ export type PrReviewSeatPromptOptions = {
  * the `## Budget` block telling the seat to do its own collection, staying
  * within the budget block. Omitted/`false` → no line. */
   collectFolded?: boolean;
+  /** Minutes left of the tier's SHARED soft wall-clock cap when this seat is
+ * dispatched — one clock for the whole review, started at worktree-setup
+ * (pr-review.md § Review depth Budget column), never a fresh per-seat
+ * allowance; negative = the review is already over cap. Omitted → the
+ * prompt states the shared cap without a remaining figure. */
+  budgetRemainingMinutes?: number;
 };
 
 /**
@@ -1270,7 +1287,13 @@ export type PrReviewSeatPromptOptions = {
  *
  * - Absolute path to `references/pr-review.md` under `skillRoot` + the
  * sections to read; absolute review `worktreePath`.
- * - Per-seat budget block (`## Budget`, tier time budget): findings /
+ * - Tier + shared-budget head of the `## Budget` block: the resolved tier
+ * and the WHOLE-review soft wall-clock cap (`PR_REVIEW_TIER_BUDGETS[tier]
+ * .wallClockMinutes`) — one clock shared by every seat, plus the minutes
+ * left of it at dispatch when `budgetRemainingMinutes` is given (never a
+ * fresh per-seat allowance). The soft-cap bullet promises partial return
+ * with declared truncated coverage at the deadline, not a hard stop.
+ * - Per-seat budget block (`## Budget`): findings /
  * evidence-token / file-open caps interpolated from `PR_REVIEW_TIER_BUDGETS`
  * — expansion stops for the seat, never a host-level hard stop.
  * - `collectFolded: true` (stage 2 only; stage 1, a missing `diffFile`, or
@@ -1314,6 +1337,9 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
  // SSOT pr-review.md § Review pipeline) - refuse the impossible combo
  // like the guards above.
     throw new TypeError("prReviewSeatPrompt: the independent cross-domain security seat is never folded - collectFolded applies to domain seats only");
+  }
+  if (opts.budgetRemainingMinutes !== undefined && !Number.isFinite(opts.budgetRemainingMinutes)) {
+    throw new TypeError(`prReviewSeatPrompt: budgetRemainingMinutes must be a finite number of minutes - got ${JSON.stringify(opts.budgetRemainingMinutes)}`);
   }
   const domain = opts.domain.trim();
   const seat = opts.seat.trim();
@@ -1376,9 +1402,23 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
     }
   }
   const budget = PR_REVIEW_TIER_BUDGETS[tier];
+  const remaining = opts.budgetRemainingMinutes;
+  const remainingClause =
+    remaining === undefined
+      ? ""
+      : remaining < 0
+        ? ` (${-remaining} min over it when you were dispatched)`
+        : ` (${remaining} min left when you were dispatched)`;
   lines.push("");
   lines.push("## Budget");
   lines.push("");
+  lines.push(`- Tier: \`${tier}\` \u2014 review strength for this session.`);
+  lines.push(
+    `- Soft wall-clock cap: ${budget.wallClockMinutes} min for the WHOLE review \u2014 one shared clock started at worktree setup, not a fresh per-seat allowance${remainingClause}.`,
+  );
+  lines.push(
+    "- The cap is soft, never a hard stop: at the deadline stop expanding and return the output contract with truncated coverage declared in the payload tail \u2014 the main agent degrades the pipeline on overrun and may nudge you with the remaining budget while you run.",
+  );
   if (opts.stage === 2) {
  // Findings cap is a Stage-2-only concept: Stage-1 collect seats' output
  // contract is "NO findings table" - the cap line would contradict it.
