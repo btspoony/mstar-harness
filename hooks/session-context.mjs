@@ -21525,8 +21525,14 @@ function planQualityBar(planText) {
   const findings = [];
   const violations = [];
   const lines = planText.split(/\r?\n/);
+  let start = 0;
+  if (lines[0]?.trim() === "---") {
+    const close = lines.findIndex((line, index2) => index2 > 0 && line.trim() === "---");
+    if (close !== -1)
+      start = close + 1;
+  }
   let inFence = false;
-  for (let i = 0;i < lines.length; i++) {
+  for (let i = start;i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) {
       inFence = !inFence;
@@ -26977,7 +26983,7 @@ async function captureCompletionWitnesses(context, read, operation) {
   if (route === "development") {
     const anchors2 = standaloneDeliveryAnchors(snapshot, read.planId);
     if (scope.workingBranch !== anchors2.sourceBranch) {
-      throw new CoordinationError("coordination.scope-mismatch", "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.", { plan_id: read.planId, expected: anchors2.sourceBranch, actual: scope.workingBranch });
+      throw new CoordinationError("coordination.scope-mismatch", "The plan's recorded working branch must match the workflow's registered delivery source. This refusal's details name the two values as expected and actual. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.", { plan_id: read.planId, expected: anchors2.sourceBranch, actual: scope.workingBranch });
     }
     assertSourceReviewProof(scope.worktreePath, evidence, anchors2.sourceBranch, read.planId);
     return { git: [captureGitProofWitness(scope.worktreePath)], planAreas, evidenceRefs };
@@ -27028,7 +27034,7 @@ function completeInTransaction(witness, tx, at, read, operation, witnesses) {
   } else if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, planId);
     if (scope.workingBranch !== anchors.sourceBranch) {
-      throw new CoordinationError("coordination.scope-mismatch", "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.", { plan_id: planId, expected: anchors.sourceBranch, actual: scope.workingBranch });
+      throw new CoordinationError("coordination.scope-mismatch", "The plan's recorded working branch must match the workflow's registered delivery source. This refusal's details name the two values as expected and actual. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.", { plan_id: planId, expected: anchors.sourceBranch, actual: scope.workingBranch });
     }
     const proven = assertSourceReviewProof(scope.worktreePath, evidence, anchors.sourceBranch, planId);
     record.source_sha = proven.source_sha;
@@ -27187,6 +27193,27 @@ function assertWorkflowOperationShape(operation) {
       }
       return;
     }
+    case "delivery-anchors": {
+      assertExactKeys(op, ["kind", "branch", "reason"], "a delivery-anchors operation");
+      if (!isPlainObject(op.branch)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a branch object naming the anchor(s) to record; retry through mstar workflow delivery-anchors.");
+      }
+      assertExactKeys(op.branch, ["source", "target"], "a delivery-anchors branch");
+      const { source, target } = op.branch;
+      if (source === undefined && target === undefined) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.source or branch.target); retry through mstar workflow delivery-anchors.");
+      }
+      if (source !== undefined && !isNonEmptyString(source)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.source must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (target !== undefined && !isNonEmptyString(target)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.target must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (!isNonEmptyString(op.reason)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a non-empty reason; retry through mstar workflow delivery-anchors.");
+      }
+      return;
+    }
     default:
       throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind
@@ -27220,6 +27247,8 @@ function workflowOperationField(operation) {
       return "operation.path";
     case "delivery":
       return "operation.delivery";
+    case "delivery-anchors":
+      return "operation.branch";
   }
 }
 function storedOperationValue(state, operation) {
@@ -27234,6 +27263,8 @@ function storedOperationValue(state, operation) {
       return state.integration_worktree_path;
     case "delivery":
       return state.delivery;
+    case "delivery-anchors":
+      return state.branch;
   }
 }
 function requestedOperationValue(operation) {
@@ -27248,6 +27279,8 @@ function requestedOperationValue(operation) {
       return canonicalTarget(operation.path);
     case "delivery":
       return operation.delivery;
+    case "delivery-anchors":
+      return operation.branch;
   }
 }
 function workflowOperationRequestHash(caller, workflowId, operation) {
@@ -27672,6 +27705,15 @@ function applyWorkflowOperation(input) {
     case "delivery":
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
+    case "delivery-anchors": {
+      const registered = isPlainObject(header.branch) ? header.branch : {};
+      header.branch = {
+        ...registered,
+        ...isNonEmptyString(operation.branch.source) ? { source: operation.branch.source } : {},
+        ...isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}
+      };
+      break;
+    }
   }
   header.updated_at = at;
   assertHeaderValid(workflowId, header);
@@ -34125,7 +34167,8 @@ var init_engine = __esm(() => {
       lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
       "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
       "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
-      delivery: ["workflowId", "operation.kind", "operation.delivery"]
+      delivery: ["workflowId", "operation.kind", "operation.delivery"],
+      "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
     };
   });
   init_catalog_import = __esm2(() => {

@@ -10887,7 +10887,8 @@ var init_recovery_intent = __esm(() => {
     lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
     "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
     "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
-    delivery: ["workflowId", "operation.kind", "operation.delivery"]
+    delivery: ["workflowId", "operation.kind", "operation.delivery"],
+    "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
   };
 });
 function resolveRelativePath(raw, label) {
