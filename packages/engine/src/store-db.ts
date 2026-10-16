@@ -194,7 +194,7 @@ type SqliteModule = {
 /** Load the real driver lazily; a missing capability refuses actionably. */
 async function loadSqliteDriver(): Promise<SqliteModule> {
   try {
-    const mod = (await import("node:sqlite")) as Partial<SqliteModule>;
+    const mod = createRequire(import.meta.url)("node:sqlite") as Partial<SqliteModule>;
     if (typeof mod.DatabaseSync !== "function") throw new Error("DatabaseSync is missing");
     return mod as SqliteModule;
   } catch (error) {
@@ -211,15 +211,16 @@ async function loadSqliteDriver(): Promise<SqliteModule> {
  * (`createRequire`) — the only acquisition path a synchronous guard may use
  * (primary spec §4.3: no promise-returning guard). A static `import` cannot
  * stand in here: it is asynchronous by definition and would make every
- * synchronous file writer an unawaited async guard. Acquisition stays lazy — it
+ * synchronous file writer an unawaited async guard. Acquisition stays lazy: the
+ * loader is created inside this function, never at module scope, and the driver
  * is reached only by a probe that already found a store on disk, so importing
- * this module still neither loads the driver nor opens a database.
+ * this module still neither loads the driver nor opens a database. Module-scope
+ * acquisition is also what makes a bundled dist evaluate `createRequire` during
+ * module initialization, where a non-Node runtime has no `import.meta.url`.
  */
-const requireDriver = createRequire(import.meta.url);
-
 function loadSqliteDriverSync(): SqliteModule {
   try {
-    const mod = requireDriver("node:sqlite") as Partial<SqliteModule>;
+    const mod = createRequire(import.meta.url)("node:sqlite") as Partial<SqliteModule>;
     if (typeof mod.DatabaseSync !== "function") throw new Error("DatabaseSync is missing");
     return mod as SqliteModule;
   } catch (error) {

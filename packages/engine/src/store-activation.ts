@@ -50,6 +50,7 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import {
@@ -631,9 +632,11 @@ function assertCopySchemaIsThisBuild(db: StoreDb, backupPath: string): void {
  * (which resolves exactly that path) cannot read it. Open the copy directly,
  * read-only and capability-checked, exactly like every other store access.
  *
- * The specifier cannot be a static import: contract §2 requires lazy,
- * capability-checked SQLite acquisition at store access — a top-level import
- * would acquire the driver whenever the engine package is imported.
+ * The driver is acquired through a function-scoped `createRequire`: contract §2
+ * requires lazy, capability-checked SQLite acquisition at store access — a
+ * top-level import would acquire the driver whenever the engine package is
+ * imported, and a literal `import("node:…")` specifier would make a bundled
+ * dist emit the CJS interop banner at module scope (issue #491).
  *
  * Exported as `inspectBackupCopy` because the restore protocol reads the same
  * verdict: §8's recovery point acceptance is ONE rule (identity, schema and
@@ -642,7 +645,7 @@ function assertCopySchemaIsThisBuild(db: StoreDb, backupPath: string): void {
  */
 export async function inspectBackupCopy(backupPath: string): Promise<BackupInspection> {
   assertStoreRuntimeSupported();
-  const { DatabaseSync } = (await import("node:sqlite")) as {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
   };
   const db = new DatabaseSync(backupPath, { readOnly: true });

@@ -121,6 +121,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
@@ -1225,16 +1226,17 @@ function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecu
 /**
  * Read a `VACUUM INTO` copy's authority rows in ONE read-only snapshot.
  *
- * The specifier cannot be a static import: contract §2 requires lazy,
- * capability-checked SQLite acquisition at store access, and the store-open
- * boundary resolves exactly `<root>/store.db`, never a copy beside it.
+ * The driver is acquired through a function-scoped `createRequire`: contract §2
+ * requires lazy, capability-checked SQLite acquisition at store access, and a
+ * literal `import("node:…")` specifier would make a bundled dist emit the CJS
+ * interop banner at module scope (issue #491).
  */
 async function readCopyRows(
   backupPath: string,
   availability: TableAvailability,
 ): Promise<{ rows: AuthorityRow[]; operationIds: string[]; coverageDigest: string | null }> {
   assertStoreRuntimeSupported();
-  const { DatabaseSync } = (await import("node:sqlite")) as {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
   };
   const db = new DatabaseSync(backupPath, { readOnly: true });
@@ -1294,7 +1296,7 @@ async function readStagedImage(path: string, pointLabel: string): Promise<Staged
     );
   }
   const availability = availabilityOf(description.schemaVersion);
-  const { DatabaseSync } = (await import("node:sqlite")) as {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
   };
   const db = new DatabaseSync(path, { readOnly: true });
