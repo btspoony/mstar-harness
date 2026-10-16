@@ -9,19 +9,34 @@ import { CompassSkipError, convertLegacyV1Tree, DeliveryDeclarationError, MIGRAT
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
-import { initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
 import { importDshHostStateFiles, type DshHostStateImportReport } from "./host-state-import.js";
 
 /** One registered workflow an execution-specific acknowledgement skipped importing. */
 type MinimalWorkflowSkip = { id: string; path: string };
 export type MinimalImportResult = {
-  verdict: "upgraded";
+  /**
+   * `upgraded` when this run committed execution rows; `nothing-to-import` when
+   * it committed none but PROVED that the native authority already holds the
+   * colliding workflows from an import of these exact source bytes.
+   */
+  verdict: "upgraded" | "nothing-to-import";
   imported: number;
   /** The original workflow ids whose rows this operation committed. */
   importedIds: string[];
   skipped: Array<{ path: string; reason: string }>;
   dispositions: string[];
+  /** The legacy source bytes this run READ (never the caller's own input). */
   sourceDigest: string;
+  /**
+   * The digest of this run's own conversion-shaping caller input — the
+   * normalized `--delivery` declarations plus the normalized `--ack-skip-compass`
+   * acknowledgements. `sourceDigest` names only the bytes read, so a retained
+   * receipt that recorded no such input cannot prove the earlier import consumed
+   * this declaration set, and a repeat over the same bytes would otherwise
+   * discard a changed declaration silently.
+   */
+  inputDigest: string;
 };
 export type MinimalStoreUpgradeResult = MinimalImportResult & { schemaVersion: number; authorityState: "active"; dsh: DshHostStateImportReport };
 
@@ -56,6 +71,99 @@ class WorkflowSkipError extends Error {
 
 function rootOf(context: StoreContext): string {
   return canonicalPath(dirname(storeDbPath(context)));
+}
+
+/**
+ * The normalized caller input that SHAPES the rows this import converts and
+ * that `sourceDigest` therefore cannot cover: the `--delivery` declarations
+ * (sorted by lift id, fixed key order) and the `--ack-skip-compass`
+ * acknowledgements (sorted). Normalizing makes semantically identical inputs
+ * fold to one digest, so one retained receipt can prove the input it consumed.
+ *
+ * `--ack-skip-workflow` and `--ack-skip-dsh` are deliberately absent. An
+ * execution acknowledgement never converts a row differently: it only drops an
+ * import the refusal path would otherwise reject, and every id it dropped is
+ * already visible in the receipt's own `importedIds`/`skipped`, which is what
+ * replay proof reads. The DSH acknowledgements only select legacy host-state
+ * facts and never reach an execution row. The operator names report text only,
+ * the operation id is bound by `requestHash` (and bypassed on purpose), and the
+ * control root is the store that holds the receipt.
+ */
+function conversionInputDigest(declarations: DeliveryLiftDeclarations, acknowledgedCompassSkips: ReadonlySet<string>): { digest: string; carriesInput: boolean } {
+  const deliveryDeclarations = [...declarations]
+    .map((entry) => ({
+      workflow: entry.workflow,
+      deliveryKind: entry.deliveryKind,
+      ...(entry.branchSource === undefined ? {} : { branchSource: entry.branchSource }),
+      ...(entry.branchTarget === undefined ? {} : { branchTarget: entry.branchTarget }),
+      ...(entry.completionPolicy === undefined ? {} : { completionPolicy: entry.completionPolicy }),
+    }))
+    .sort((a, b) => (a.workflow < b.workflow ? -1 : a.workflow > b.workflow ? 1 : 0));
+  const compassSkips = [...acknowledgedCompassSkips].sort();
+  return {
+    digest: createHash("sha256").update(JSON.stringify({ deliveryDeclarations, acknowledgedCompassSkips: compassSkips })).digest("hex"),
+    carriesInput: deliveryDeclarations.length > 0 || compassSkips.length > 0,
+  };
+}
+
+/**
+ * The workflow ids the store's OWN retained import receipts prove were already
+ * imported from the exact source bytes this run is reading, WITH this run's
+ * conversion-shaping input.
+ *
+ * Every committed execution import writes a `store_operations` row whose
+ * `result_json` carries the consumed `sourceDigest`, the `inputDigest` of the
+ * caller input that shaped those rows, and the `importedIds` it committed, and
+ * that table is never pruned (`execution_operations` is the pruned table). The
+ * lookup is therefore keyed on the RECORDED digest and never on the caller's
+ * operation id, which the command surface mints fresh per invocation: a receipt
+ * keyed on that id could never answer a repeat through the public entry. The
+ * SQL prefilter is bounded to the rows whose receipt text mentions this digest,
+ * and every candidate is then shape-validated in JS (an object whose
+ * `sourceDigest` string EQUALS the current digest plus an `importedIds` array of
+ * strings), so unrelated JSON that merely mentions the digest - or a receipt for
+ * different source bytes - proves nothing. The whole array is validated as a
+ * unit: a malformed receipt is rejected outright rather than salvaged per
+ * element, so a mixed array cannot smuggle one id past the collision refusal.
+ *
+ * Source bytes alone are enough only when this run carries NO conversion-shaping
+ * input: nothing of the caller's can then be discarded, and the native row is
+ * already authoritative. A receipt written before `inputDigest` existed is
+ * therefore still proof for such a run. A run that DOES carry input needs a
+ * receipt recording the SAME input digest, because an earlier import of these
+ * bytes may have converted them from a different declaration set; ids whose only
+ * same-bytes receipt lacks that proof are returned in `inputUnproven` so the
+ * refusal can name the unproven input instead of implying the bytes were
+ * discarded.
+ */
+function provenReplayIds(
+  db: StoreDb,
+  sourceDigest: string,
+  inputDigest: string,
+  carriesInput: boolean,
+): { proven: Set<string>; inputUnproven: Set<string> } {
+  const proven = new Set<string>();
+  const inputUnproven = new Set<string>();
+  const candidates = db
+    .prepare("select result_json from store_operations where result_json like ?")
+    .all(`%"sourceDigest":${JSON.stringify(sourceDigest)}%`) as Array<{ result_json?: unknown }>;
+  for (const candidate of candidates) {
+    if (typeof candidate.result_json !== "string") continue;
+    let receipt: unknown;
+    try { receipt = JSON.parse(candidate.result_json); } catch { continue; }
+    if (!isPlainObject(receipt) || receipt.sourceDigest !== sourceDigest) continue;
+    if (!Array.isArray(receipt.importedIds) || !receipt.importedIds.every(isNonEmptyString)) continue;
+    // A receipt that records no input digest proves the BYTES were read, not
+    // that this declaration set was applied: the rows it committed may have been
+    // shaped by any declaration. Only a run with no input to discard may rely on
+    // it, so a receipt lacking the proof is not promoted by a later run's input.
+    if (carriesInput && receipt.inputDigest !== inputDigest) {
+      for (const id of receipt.importedIds) inputUnproven.add(id);
+      continue;
+    }
+    for (const id of receipt.importedIds) proven.add(id);
+  }
+  return { proven, inputUnproven };
 }
 
 /**
@@ -710,6 +818,10 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   const workflowSkips = new Set(input.acknowledgedWorkflowSkips ?? []);
   const compassSkips = new Set(input.acknowledgedCompassSkips ?? []);
   const source = discover(context, operator, input.acknowledgedSkips ?? [], workflowSkips, input.deliveryDeclarations ?? [], compassSkips);
+  // `sourceDigest` covers the legacy bytes READ; the caller's own
+  // conversion-shaping input is hashed separately, so a stored receipt can prove
+  // which declaration set produced the rows it committed.
+  const conversionInput = conversionInputDigest(input.deliveryDeclarations ?? [], compassSkips);
   const requestHash = createHash("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,
@@ -742,16 +854,30 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     // same-operation replay already returned its retained receipt above, so a
     // receipt — not a heuristic — is the only thing that skips this decision.
     const collidingIds = new Set(source.rows.filter((row) => existing.has(row.id)).map(({ id }) => id));
+    // The ONE additional thing that may skip this decision beside the caller's
+    // own operation receipt above: the store's retained import receipts for the
+    // EXACT source bytes this run is reading. A colliding id those receipts
+    // already list as imported is a PROVEN replay — the native authority holds
+    // it because this same input was imported before, not because an unrelated
+    // workflow happens to share the id. Anything else still refuses.
+    const replayProof = provenReplayIds(tx.db, source.sourceDigest, conversionInput.digest, conversionInput.carriesInput);
+    const provenIds = new Set([...replayProof.proven].filter((id) => collidingIds.has(id)));
+    // Same bytes, but a receipt that never recorded THIS run's declaration set:
+    // the refusal names that gap instead of implying the source bytes went
+    // missing.
+    const inputUnprovenIds = new Set([...replayProof.inputUnproven].filter((id) => collidingIds.has(id)));
     const importable = source.rows.filter((row) => !collidingIds.has(row.id));
     const acknowledgedCollisions = source.rows
-      .filter((row) => collidingIds.has(row.id) && workflowSkips.has(row.id))
+      .filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id))
       .map((row) => ({ id: row.id, path: relative(source.root, row.dir).split(/[\\/]+/).join("/") }));
     // The acknowledgement vocabulary is exactly the sources THIS run refuses:
     // the registered sources the preflight classified by lstat before any target
     // access (a linked source, or a non-directory path), plus the recognized ids
     // colliding in this transaction. An acknowledgement naming anything else
     // would silently drop a source this run would otherwise import, so it is
-    // caller input (usage), not a skip.
+    // caller input (usage), not a skip. An acknowledgement naming a PROVEN-replay
+    // collision is accepted (it names a real collision whose import did not
+    // happen) and simply reports the proven disposition instead of a loss.
     const unmatchedWorkflowSkips = [...workflowSkips]
       .filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
     if (unmatchedWorkflowSkips.length > 0) {
@@ -761,10 +887,19 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       );
     }
     if (source.refusal !== undefined) conflict(source.refusal);
-    const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id));
+    const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id) && !provenIds.has(id));
     if (refusedCollisions.length > 0) {
+      // A run that carries --delivery/--ack-skip-compass can collide with a
+      // receipt for these exact bytes that proves only the BYTES were read. Such
+      // a receipt cannot prove the declaration set it committed rows from, so
+      // treating the id as a replay would discard the declaration the caller is
+      // asking for. Say only that: the receipt's silence is not evidence about
+      // the earlier run.
+      const unconsumedInput = conversionInput.carriesInput && refusedCollisions.some((id) => inputUnprovenIds.has(id))
+        ? ` This run carries conversion-shaping input (--delivery/--ack-skip-compass), and the retained import receipt(s) for these exact source bytes record no matching input digest, so they do not prove the earlier import consumed THIS input; this run therefore does not treat the id as a proven replay and leaves the native rows unchanged.`
+        : "";
       conflict(
-        `the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow. ` +
+        `the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow.${unconsumedInput} ` +
           `Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). ` +
           `No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`,
       );
@@ -792,6 +927,28 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       });
       dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the native execution authority already holds that id, so this run kept the native workflow/plan rows, coordination, header and revisions unchanged and imported nothing from the retained legacy source at ${entry.path}. The legacy bytes remain in place and the native progress stays authoritative even if that source body was later edited \u2014 this is import disposal, not deletion, and no prior import or resumption is inferred.`);
     }
+    // A proven replay is NOT an acknowledged loss: the store's own retained
+    // import receipt for THESE exact source bytes AND this run's input already
+    // lists the id, so the native authority holds it because this input was
+    // imported before. It is reported as the ordinary already-current outcome,
+    // never as a skipped or lost import, and it needs no acknowledgement.
+    for (const row of source.rows.filter((entry) => provenIds.has(entry.id))) {
+      const path = relative(source.root, row.dir).split(/[\\/]+/).join("/");
+      // An acknowledgement on a PROVEN collision is honoured (it names a real
+      // collision) but it disposed of nothing: no loss is fabricated for an
+      // import that demonstrably already happened, and the receipt says so
+      // instead of leaving the operator's own input unreported.
+      const acknowledged = workflowSkips.has(row.id)
+        ? " The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id and disposed of no import."
+        : "";
+      // The input digest is named only when this run carried input, so a
+      // declaration-free repeat over an older receipt keeps its established
+      // wording (that receipt proves the bytes, which is all that run needs).
+      const shaped = conversionInput.carriesInput
+        ? ` It also recorded input digest ${conversionInput.digest} for the delivery declarations and compass acknowledgements this run carries.`
+        : "";
+      dispositions.push(`workflow ${row.id}: proven replay \u2014 this store's own retained import receipt for source digest ${source.sourceDigest} already imported this id, so the native execution authority already holds it from an import of these exact source bytes at ${path}.${shaped} This run imported nothing for it and kept the native workflow/plan rows, coordination, header and revisions unchanged; the legacy bytes remain in place.${acknowledged}`);
+    }
     skipped.sort((a, b) => a.path.localeCompare(b.path));
     for (const entry of source.skippedWorkflowAcknowledgements) {
       dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The refused source path was not read or followed (the per-item skip above names it and its exact cause) and its bytes remain in place \u2014 this is import disposal, not deletion, and no resumption is fabricated.`);
@@ -817,7 +974,14 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     } else if (imported > 0) {
       tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     }
-    const result: MinimalImportResult = { verdict: "upgraded", imported, importedIds, skipped, dispositions, sourceDigest: source.sourceDigest };
+    // The report shape mirrors the DSH importer's existing vocabulary: a run
+    // that commits rows is an `upgraded` import; a run that commits none but
+    // proves at least one replay reports the already-current state as
+    // `nothing-to-import` instead of claiming an upgrade that did not happen.
+    const result: MinimalImportResult = {
+      verdict: imported === 0 && provenIds.size > 0 ? "nothing-to-import" : "upgraded",
+      imported, importedIds, skipped, dispositions, sourceDigest: source.sourceDigest, inputDigest: conversionInput.digest,
+    };
     tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash, JSON.stringify(result), new Date().toISOString());
     return result;
   });
@@ -949,7 +1113,7 @@ export async function upgradeStoreMinimal(input: {
     const workflowAcks = [...new Set([...(input.acknowledgedWorkflowSkips ?? []), ...result.importedIds])].sort();
     const committed = workflowAcks.length === 0
       ? ""
-      : ` the same retry must retain every workflow acknowledgement this invocation already used \u2014 the ids this invocation committed, which the next invocation sees as native collisions, together with the original acknowledgements this unchanged root still requires, such as a duplicated v1 plan id \u2014 so include \`--ack-skip-workflow ${workflowAcks.join(" ")}\` in that same retry.`;
+      : ` retry the same entry and include \`--ack-skip-workflow ${workflowAcks.join(" ")}\` in that same retry: it is always safe, because the source-scoped acknowledgements this unchanged root still requires (a duplicated v1 plan id, an unsafe registered source) keep their meaning while the ids this invocation committed are now PROVEN replays by the receipt it retained, so repeating them is accepted and reported as unnecessary rather than as a loss.`;
     // The refusal body lists one `- <selector>: ...` line per fact group it
     // refused. Those selectors stay refused on the unchanged root, and so do the
     // selectors this invocation already acknowledged (an acknowledgement is

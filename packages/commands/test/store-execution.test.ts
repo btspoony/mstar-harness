@@ -547,6 +547,67 @@ describe("store and execution command surface", () => {
     } finally { store.close(); }
   });
 
+  test("a repeat store.upgrade over an unchanged legacy source reports the proven replay as ordinary success, not a refusal", async () => {
+    const root = fixture("store-upgrade-proven-replay");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const workflowId = "wf-proven-command-replay";
+    const planId = `${workflowId}-plan`;
+    const workflowDir = join(harness, "workflows", workflowId);
+    const sessionsDir = join(workflowDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(harness, `${planId}.md`), `# ${planId}\n`);
+    writeFileSync(join(sessionsDir, "plan-pm.json"), JSON.stringify({
+      schema_version: 1, role: "plan-pm", session_id: "session-proven", workflow_id: workflowId, plan_id: planId, harness_root: harness,
+    }));
+    writeFileSync(join(harness, "status.json"), JSON.stringify({
+      version: 2, updated_at: "2026-10-04", workflows: [{ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }],
+    }));
+    writeFileSync(join(workflowDir, "snapshot.json"), JSON.stringify({
+      schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" },
+      plans: [{ id: planId, title: "Proven replay plan", file: `${planId}.md`, status: "Todo",
+        coordination: { revision: 1, session: { session_id: "session-proven", session_file: join(sessionsDir, "plan-pm.json"), bound_at: "2026-10-04T00:00:00Z" } },
+        execution_lease: { holder: "session-proven", claimed_at: "2026-10-04T00:00:00Z", worktree_path: `${root}/worktree-proven`, working_branch: `feature/${workflowId}` } }],
+    }));
+    const legacyBytes = readFileSync(join(workflowDir, "snapshot.json"));
+    const command = definition("store.upgrade");
+
+    // First invocation imports through the public entry (its operation id is
+    // minted inside the command and never reported back).
+    const first = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(first.status).toBe("ok");
+    expect(dataOf(first)).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: [workflowId] });
+
+    const nativeBefore = await openStore({ harnessDir: harness }, "read");
+    let nativeHeader: { state_json: string; revision: number };
+    try {
+      nativeHeader = nativeBefore.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string; revision: number };
+    } finally { nativeBefore.close(); }
+
+    // The repeat run is a NEW operation id over UNCHANGED bytes: the store's own
+    // retained import receipt proves the same-source replay, so the command
+    // returns exit code 0 with the replay signal instead of the former
+    // `execution.migration-conflict` refusal demanding --ack-skip-workflow.
+    const replay = await invoke(command, { harness, operator: "fixture" }, root);
+    expect(replay.status).toBe("ok");
+    expect(replay.exitCode).toBe(0);
+    expect(replay.code).not.toBe("execution.migration-conflict");
+    const replayData = dataOf(replay);
+    expect(replayData).toMatchObject({ verdict: "nothing-to-import", imported: 0, importedIds: [], authorityState: "active" });
+    expect(replayData.dispositions).toContainEqual(
+      expect.stringContaining(`workflow ${workflowId}: proven replay`),
+    );
+
+    // AC5: the native row and the retained legacy bytes are unchanged by the replay.
+    const store = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(store.db.prepare("select state_json, revision from execution_workflows where workflow_id = ?").get(workflowId)).toEqual(nativeHeader);
+      expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+    } finally { store.close(); }
+    expect(readFileSync(join(workflowDir, "snapshot.json"))).toEqual(legacyBytes);
+  });
+
   test("an upgrade that loses the create-only publication race is told to finish the upgrade", async () => {
     const root = fixture("store-upgrade-race");
     const harness = join(root, ".mstar");

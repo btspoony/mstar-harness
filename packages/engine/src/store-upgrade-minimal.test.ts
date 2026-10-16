@@ -1402,29 +1402,55 @@ test("no-store upgrade initializes execution schema and imports every populated 
     store.close();
   }
 
-  // A LATER operation id is not a replay: the recognized legacy source now
-  // collides with the native row this store already holds, so it refuses
-  // instead of silently skipping the source or guessing a prior import from a
-  // matching id.
-  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-no-store-populated-replay" })
-    .then(() => { throw new Error("a repeated legacy import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
-  expect(refused.code).toBe("execution.migration-conflict");
-  expect(refused.message).toContain("--ack-skip-workflow wf-no-store-populated");
-  const afterRefusal = await openStore(context, "read");
+  // A LATER operation id is not itself a replay — but this store's OWN retained
+  // import receipt records that these exact source bytes imported
+  // `wf-no-store-populated`, so the collision is a PROVEN replay: the run
+  // reports the already-current state instead of refusing, names the id in its
+  // dispositions, and needs no `--ack-skip-workflow`. Nothing native is
+  // rewritten and the legacy source bytes stay byte-identical.
+  const nativeBefore = await protectedStore(context);
+  const legacyBytes = readFileSync(join(context.harnessDir, "workflows", "wf-no-store-populated", WORKFLOW_SNAPSHOT_FILE));
+  const replayed = await upgradeStoreMinimal({ ...input, operationId: "op-no-store-populated-replay" });
+  expect(replayed).toMatchObject({ verdict: "nothing-to-import", imported: 0, importedIds: [], authorityState: "active" });
+  expect(replayed.dispositions).toContainEqual(
+    expect.stringContaining("workflow wf-no-store-populated: proven replay"),
+  );
+  expect(replayed.skipped).not.toContainEqual(
+    expect.objectContaining({ path: "workflows/wf-no-store-populated" }),
+  );
+  const afterReplay = await openStore(context, "read");
   try {
-    expect(afterRefusal.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+    expect(afterReplay.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
   } finally {
-    afterRefusal.close();
+    afterReplay.close();
   }
-  // The supported recovery is the ordinary acknowledgement on the same entry:
-  // the native row is kept and only the legacy IMPORT is skipped.
-  const recovered = await upgradeStoreMinimal({
+  expect(readFileSync(join(context.harnessDir, "workflows", "wf-no-store-populated", WORKFLOW_SNAPSHOT_FILE))).toEqual(legacyBytes);
+  // The native authority rows are byte-identical to the pre-replay state. The
+  // replay's own receipt is the ONE expected addition: an operation always
+  // records its result, so that table alone differs.
+  const afterNative = await protectedStore(context);
+  expect(afterNative.schema).toEqual(nativeBefore.schema);
+  for (const table of Object.keys(nativeBefore.tables).filter((table) => table !== "store_operations")) {
+    expect(afterNative.tables[table]).toEqual(nativeBefore.tables[table]);
+  }
+  expect((afterNative.tables.store_operations ?? []).length).toBeGreaterThan((nativeBefore.tables.store_operations ?? []).length);
+  for (const row of nativeBefore.tables.store_operations ?? []) {
+    expect(afterNative.tables.store_operations).toContain(row);
+  }
+
+  // The acknowledgement remains accepted on the proven collision (it names a
+  // real collision), but it disposes of no import: the receipt says so and the
+  // native row is still kept.
+  const acknowledged = await upgradeStoreMinimal({
     ...input, operationId: "op-no-store-populated-ack",
     acknowledgedWorkflowSkips: ["wf-no-store-populated"],
   });
-  expect(recovered.imported).toBe(0);
-  expect(recovered.dispositions).toContainEqual(
-    expect.stringContaining("workflow wf-no-store-populated: skipped by --ack-skip-workflow"),
+  expect(acknowledged).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+  expect(acknowledged.dispositions).toContainEqual(
+    expect.stringContaining("The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id"),
+  );
+  expect(acknowledged.dispositions).not.toContainEqual(
+    expect.stringContaining("skipped by --ack-skip-workflow; the native execution authority already holds that id"),
   );
   const afterRecovery = await openStore(context, "read");
   try {
@@ -2524,16 +2550,21 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
   expect(existsSync(join(context.harnessDir, "archived"))).toBe(false);
 
-  // A LATER operation id is not a replay, and the v1 source this run converts
-  // now collides with the native rows the first upgrade committed: it refuses
-  // and names the same-entry acknowledgement.
-  const refusedRetry = await upgradeStoreMinimal({
+  // A LATER operation id still is not itself a replay, but the v1 source this
+  // run converts is the SAME source bytes the first upgrade imported, and that
+  // retained receipt proves it: both converted lifecycles are proven replays,
+  // so the repeat reports the already-current state instead of refusing.
+  const replayedRetry = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-v1-direct-2",
     deliveryDeclarations: V1_STANDALONE_DECLARATION,
-  }).then(() => { throw new Error("a repeated v1 import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
-  expect(refusedRetry.code).toBe("execution.migration-conflict");
-  expect(refusedRetry.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
-  // The acknowledged retry keeps the native authority and skips only the legacy
+  });
+  expect(replayedRetry).toMatchObject({ verdict: "nothing-to-import", imported: 0, importedIds: [] });
+  expect(replayedRetry.dispositions).toEqual(expect.arrayContaining([
+    expect.stringContaining("workflow iter-v1: proven replay"),
+    expect.stringContaining("workflow v1-standalone: proven replay"),
+  ]));
+  expect(replayedRetry.skipped).toEqual([]);
+  // The acknowledged repeat keeps the native authority and skips only the legacy
   // IMPORTs; the source bytes stay untouched.
   const recovered = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-v1-direct-3",
@@ -2542,8 +2573,8 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
   });
   expect(recovered.imported).toBe(0);
   expect(recovered.dispositions).toEqual(expect.arrayContaining([
-    expect.stringContaining("workflow iter-v1: skipped by --ack-skip-workflow"),
-    expect.stringContaining("workflow v1-standalone: skipped by --ack-skip-workflow"),
+    expect.stringContaining("workflow iter-v1: proven replay"),
+    expect.stringContaining("workflow v1-standalone: proven replay"),
   ]));
   const afterRecovery = await openStore(context, "read");
   try {
@@ -3098,12 +3129,15 @@ try {
   } finally {
     store.close();
   }
-  // A LATER operation id is not a replay: the v1 lifecycles this store already
-  // holds collide with the retained source, so it refuses and names the
-  // same-entry acknowledgement instead of silently skipping them.
-  const refusedRetry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry", deliveryDeclarations: V1_STANDALONE_DECLARATION })
-    .then(() => { throw new Error("a repeated v1 import under a new operation id did not refuse"); }, (error: Error & { code?: string }) => error);
-  expect(refusedRetry.code).toBe("execution.migration-conflict");
+  // A LATER operation id is not itself a replay, but the v1 lifecycles this
+  // store imported came from EXACTLY these source bytes: the retained receipt
+  // proves both are replays, so the repeat reports the already-current state.
+  const replayedRetry = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-concurrent-retry", deliveryDeclarations: V1_STANDALONE_DECLARATION });
+  expect(replayedRetry).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+  expect(replayedRetry.dispositions).toEqual(expect.arrayContaining([
+    expect.stringContaining("workflow iter-v1: proven replay"),
+    expect.stringContaining("workflow v1-standalone: proven replay"),
+  ]));
   const ackedRetry = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-concurrent-retry-ack",
     deliveryDeclarations: V1_STANDALONE_DECLARATION,
@@ -3461,7 +3495,10 @@ test("a DSH refusal names every acknowledgement its advertised retry needs", asy
     context, operator: "operator", operationId: "op-dsh-retry-2",
     acknowledgedSkips: [`dsh-ledger:${workflowId}`], acknowledgedWorkflowSkips: [workflowId],
   });
-  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+  // The execution rows this invocation reads are the ones the first run
+  // committed from these exact bytes, so the retry proves the replay and
+  // reports the already-current state instead of claiming an upgrade.
+  expect(retried).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
 });
 
 test("a v1 root's DSH retry names the delivery declarations the unchanged root still needs", async () => {
@@ -3490,7 +3527,7 @@ test("a v1 root's DSH retry names the delivery declarations the unchanged root s
     acknowledgedSkips: [`dsh-ledger:${workflowId}`],
     acknowledgedWorkflowSkips: ["iter-v1", "v1-standalone"],
   });
-  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(retried).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
 });
 
 test("a duplicated standalone v1 plan id is a skippable source instead of a whole-conversion abort", async () => {
@@ -3588,7 +3625,7 @@ test("the DSH retry names the compass acknowledgement and the delivery declarati
     acknowledgedSkips: [`dsh-ledger:${workflowId}`],
     acknowledgedWorkflowSkips: ["v1-standalone", "wf-dsh-retry-compass"],
   });
-  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(retried).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
 });
 
 test("the advertised DSH retry retains the workflow acknowledgements the unchanged root still requires", async () => {
@@ -3624,7 +3661,7 @@ test("the advertised DSH retry retains the workflow acknowledgements the unchang
     acknowledgedWorkflowSkips: advertisedWorkflowAcks![1]!.split(" "),
     acknowledgedSkips: advertisedDshSelectors,
   });
-  expect(retried).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(retried).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
 });
 
 test("a DSH refusal advertises the acknowledgements this invocation already used together with the selectors it refused", async () => {
@@ -3657,7 +3694,195 @@ test("a DSH refusal advertises the acknowledgements this invocation already used
     acknowledgedSkips: advertisedDshAcks![1]!.split(" "),
     acknowledgedWorkflowSkips: advertisedWorkflowAcks![1]!.split(" "),
   });
-  expect(retried).toMatchObject({ verdict: "upgraded" });
+  expect(retried).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+});
+
+test("a legacy source whose bytes changed after its recorded import still refuses the collision", async () => {
+  const { context } = legacyWorkspace("changed-bytes-after-import");
+  const input = { context, operator: "operator", operationId: "op-changed-bytes-first" };
+  const first = await upgradeStoreMinimal(input);
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-changed-bytes-after-import"] });
+  const nativeBefore = await protectedStore(context);
+
+  // The source bytes change AFTER the recorded import: the retained receipt's
+  // recorded `sourceDigest` no longer equals this run's digest, so it proves
+  // nothing about the id. A matching id alone is never provenance, so the
+  // collision keeps the previous refusal and its named recovery.
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-changed-bytes-after-import", WORKFLOW_SNAPSHOT_FILE);
+  const edited = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  edited.updated_at = "2026-10-11";
+  (edited.branch as Record<string, unknown>).source = "feature/changed-after-import";
+  writeFileSync(snapshotPath, JSON.stringify(edited));
+  const editedBytes = readFileSync(snapshotPath);
+
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-changed-bytes-second" })
+    .then(() => { throw new Error("changed legacy bytes were served by the retained same-id receipt"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain("--ack-skip-workflow wf-changed-bytes-after-import");
+  expect(refused.message).toContain("already exists in the native execution authority");
+  // Nothing committed and nothing rewritten: the native authority and the edited
+  // legacy bytes are exactly as they were before the refused run.
+  expect(await protectedStore(context)).toEqual(nativeBefore);
+  expect(readFileSync(snapshotPath)).toEqual(editedBytes);
+
+  // The acknowledgement remains the supported recovery for that unproven collision.
+  const acked = await upgradeStoreMinimal({
+    ...input, operationId: "op-changed-bytes-ack", acknowledgedWorkflowSkips: ["wf-changed-bytes-after-import"],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("workflow wf-changed-bytes-after-import: skipped by --ack-skip-workflow"));
+  expect(readFileSync(snapshotPath)).toEqual(editedBytes);
+});
+
+test("a malformed retained receipt proves nothing, so its collision still refuses the named recovery", async () => {
+  const { context } = legacyWorkspace("malformed-receipt");
+  const workflowId = "wf-malformed-receipt";
+  const input = { context, operator: "operator", operationId: "op-malformed-receipt-first" };
+  const first = await upgradeStoreMinimal(input);
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: [workflowId] });
+
+  // The retained receipt for THESE exact bytes is damaged: its `importedIds`
+  // mixes a real id with a non-string member. A receipt is proof only as a
+  // whole, so the mixed array is rejected outright instead of being salvaged
+  // per element — `null` must not smuggle the id past the collision refusal.
+  const damaged = await openStore(context, "write");
+  try {
+    damaged.db.prepare("update store_operations set result_json = ? where operation_id = ?").run(
+      JSON.stringify({ ...first, importedIds: [workflowId, null] }),
+      input.operationId,
+    );
+  } finally { damaged.close(); }
+  const damagedBefore = await protectedStore(context);
+
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-malformed-receipt-second" })
+    .then(() => { throw new Error("a malformed retained receipt served replay proof"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  expect(refused.message).toContain("already exists in the native execution authority");
+  // Nothing committed: the damaged receipt vouched for no id at all, so the
+  // refused run added no receipt of its own beside it.
+  expect(await protectedStore(context)).toEqual(damagedBefore);
+
+  // The named acknowledgement remains the supported recovery for that collision.
+  const acked = await upgradeStoreMinimal({
+    ...input, operationId: "op-malformed-receipt-ack", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
+});
+
+test("a changed --delivery declaration over unchanged bytes refuses instead of discarding the declaration", async () => {
+  const { context } = legacyV1Workspace("v1-changed-delivery");
+  const input = { context, operator: "operator", operationId: "op-v1-changed-delivery-first", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  const first = await upgradeStoreMinimal(input);
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
+  expect(first.inputDigest).toMatch(/^[a-f0-9]{64}$/);
+
+  // The SAME bytes under the SAME declaration replay: the retained receipt
+  // records this run's input digest beside the source digest (case a).
+  const replayed = await upgradeStoreMinimal({ ...input, operationId: "op-v1-changed-delivery-same" });
+  expect(replayed).toMatchObject({ verdict: "nothing-to-import", imported: 0, importedIds: [] });
+  expect(replayed.dispositions).toContainEqual(
+    expect.stringContaining(`input digest ${first.inputDigest}`),
+  );
+
+  // A DIFFERENT valid declaration over those same bytes is NOT a replay: the
+  // receipt proves the bytes were read, not that this declaration set was
+  // consumed, so accepting it would silently discard the new declaration.
+  const nativeBefore = await protectedStore(context);
+  const statusBytes = readFileSync(join(context.harnessDir, "status.json"));
+  const changed = [{ workflow: "v1-standalone", deliveryKind: "verification/report-only" as const, completionPolicy: "report at docs/legacy.md" }];
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-v1-changed-delivery-second", deliveryDeclarations: changed })
+    .then(() => { throw new Error("a changed declaration was served by the same-bytes receipt"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  // Both converted lifecycles keep the same id, and the receipt's input digest
+  // no longer matches this run's declaration set, so neither is proven: the
+  // refusal names both and the recoverable acknowledgement is the union.
+  expect(refused.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
+  expect(refused.message).toContain("do not prove the earlier import consumed THIS input");
+  // Nothing committed, and the native row keeps the FIRST declaration's shape.
+  expect(await protectedStore(context)).toEqual(nativeBefore);
+  expect(readFileSync(join(context.harnessDir, "status.json"))).toEqual(statusBytes);
+  const store = await openStore(context, "read");
+  try {
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
+    expect(JSON.parse(header.state_json)).toMatchObject({
+      delivery_kind: "development", branch: { source: "feature/v1-standalone", target: "main" },
+    });
+  } finally { store.close(); }
+});
+
+test("a declaration-free repeat over an older declaration-free receipt stays nothing-to-import", async () => {
+  const { context } = legacyWorkspace("legacy-receipt-no-field");
+  const workflowId = "wf-legacy-receipt-no-field";
+  const input = { context, operator: "operator", operationId: "op-legacy-receipt-first" };
+  expect(await upgradeStoreMinimal(input)).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: [workflowId] });
+  // A receipt written BEFORE this field existed: drop `inputDigest` to model one
+  // retained by an older CLI over the very same bytes (case c).
+  const legacy = await openStore(context, "write");
+  try {
+    const row = legacy.db.prepare("select result_json from store_operations where operation_id = ?").get(input.operationId) as { result_json: string };
+    const receipt = JSON.parse(row.result_json) as Record<string, unknown>;
+    delete receipt.inputDigest;
+    legacy.db.prepare("update store_operations set result_json = ? where operation_id = ?").run(JSON.stringify(receipt), input.operationId);
+  } finally { legacy.close(); }
+
+  // The repeat carries NO declaration and no compass acknowledgement, so nothing
+  // of the caller's can be discarded: the source-bytes proof alone is enough
+  // however old the receipt is.
+  const replayed = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-legacy-receipt-second" });
+  expect(replayed).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+
+  // A declaration-free repeat whose retained receipt HAS the field replays too
+  // (case e): the field is proof, not a requirement.
+  const { context: fresh } = legacyWorkspace("declaration-free-with-field");
+  const base = { context: fresh, operator: "operator", operationId: "op-declaration-free-first" };
+  await upgradeStoreMinimal(base);
+  expect(await upgradeStoreMinimal({ ...base, operationId: "op-declaration-free-second" }))
+    .toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+});
+
+test("a compass acknowledgement whose retained receipt does not record that input refuses", async () => {
+  const { context } = legacyV1Workspace("v1-compass-input");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const relocated = join(context.harnessDir, "relocated-compass.md");
+  writeFileSync(relocated, readFileSync(compass));
+  rmSync(compass);
+  symlinkSync(relocated, compass);
+  const input = { context, operator: "operator", operationId: "op-v1-compass-input-first" };
+
+  // The acknowledgement-bearing run imports the iteration's plans as standalone
+  // rows and records that input on its receipt.
+  const first = await upgradeStoreMinimal({ ...input, deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedCompassSkips: ["iter-v1"] });
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["v1-standalone", "wf-v1-compass-input"] });
+  expect(first.dispositions).toContainEqual(expect.stringContaining("iteration iter-v1: skipped by --ack-skip-compass"));
+
+  // Damage that receipt so it records no input digest, then repeat the SAME
+  // compass acknowledgement: the acknowledgement shapes which lifecycles the
+  // conversion produces, so an id it produced must not be claimed as a replay by
+  // a receipt that proves only the bytes (case d).
+  const damaged = await openStore(context, "write");
+  try {
+    const row = damaged.db.prepare("select result_json from store_operations where operation_id = ?").get(input.operationId) as { result_json: string };
+    const receipt = JSON.parse(row.result_json) as Record<string, unknown>;
+    delete receipt.inputDigest;
+    damaged.db.prepare("update store_operations set result_json = ? where operation_id = ?").run(JSON.stringify(receipt), input.operationId);
+  } finally { damaged.close(); }
+  const damagedBefore = await protectedStore(context);
+
+  const refused = await upgradeStoreMinimal({
+    ...input, operationId: "op-v1-compass-input-second",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedCompassSkips: ["iter-v1"],
+  }).then(() => { throw new Error("an unproven compass-acknowledgement input served replay proof"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  // Both lifecycles the acknowledged conversion produced lose their proof: the
+  // acknowledgement is what made the registered plan a standalone row.
+  expect(refused.message).toContain("--ack-skip-workflow");
+  expect(refused.message).toContain("v1-standalone");
+  expect(refused.message).toContain("wf-v1-compass-input");
+  expect(refused.message).toContain("do not prove the earlier import consumed THIS input");
+  expect(await protectedStore(context)).toEqual(damagedBefore);
+  expect(lstatSync(compass).isSymbolicLink()).toBe(true);
 });
 
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
