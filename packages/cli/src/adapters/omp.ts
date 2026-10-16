@@ -47,7 +47,7 @@ function ompEntryRoots(scope: Scope, projectRoot: string): string[] {
   const roots: string[] = [];
   // omp's own answer beats a guess, but it must come from the same scope the
   // verbs use: a project run must not act on a root derived from a user listing.
-  const listed = findInstalledPlugin(probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope).entries);
+  const listed = installedPluginEntry(probeInstalledPlugins(OMP_LIST_TIMEOUT_MS, scope).entries);
   const listedPath = listed !== undefined && typeof listed.path === "string" ? listed.path : null;
   if (listedPath !== null) {
     const derived = ompRootOfEntryPath(listedPath);
@@ -291,20 +291,23 @@ function installedPluginEntry(entries: Array<Record<string, unknown>>): Record<s
 async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
 const notes: string[] = [];
  let linkedVersion: string | null = null;
- const projectRoot = resolveProjectRoot();
+ // Checked before the host probe and in every mode: without omp installed the
+// presence refusal would send the operator to install it and re-run the same
+// unsupported command, and a dry-run preview of a project-scoped link would
+// describe something that cannot be executed.
+if (scope === "project") {
+  // omp's plugin manager keeps one user-wide root: its `link` and `list`
+  // implementations ignore `--scope` (upstream `handleLink` always calls the
+  // user-root link), so a project-scoped run would mutate user state while
+  // claiming project scope. Refuse instead of pretending the flag worked.
+  throw ompRefusal(
+    "omp has no project-scoped plugin installation",
+    "omp's plugin manager resolves one user-wide root, and both `omp plugin link` and `omp plugin list` ignore --scope",
+    "re-run for the scope omp supports: `npx @mstar-harness/cli init --target omp --scope global`",
+  );
+}
+const projectRoot = resolveProjectRoot();
  if (!dryRun) await ensureHostPresent("omp");
- if (!dryRun && scope === "project") {
-   // omp's plugin manager keeps one user-wide root: its `link` and `list`
-   // implementations ignore `--scope` (upstream `handleLink` always calls the
-   // user-root link), so a real project-scoped run would mutate user state while
-   // claiming project scope. Refuse instead of pretending the flag worked; a
-   // dry-run only previews, so it stays available.
-   throw ompRefusal(
-     "omp has no project-scoped plugin installation",
-     "omp's plugin manager resolves one user-wide root, and both `omp plugin link` and `omp plugin list` ignore --scope",
-     "re-run for the scope omp supports: `npx @mstar-harness/cli init --target omp --scope global`",
-   );
- }
  notes.push(...ensureLocalHarnessRepo(dryRun));
 
  // Keep the shared checkout current so new host markers (`.omp-plugin/`) exist before link/doctor.
@@ -454,6 +457,9 @@ function runDoctor(scope: Scope) {
 export const ompAdapter: AgentAdapter = {
  target: "omp",
  mode: "install",
+ // omp installs a real plugin, and into the one scope its host has.
+ installsPlugin: true,
+ defaultScope: "global",
  runInstallInit: (scope, dryRun, initFlags) => runInit(scope, dryRun, initFlags),
  runInstallDoctor: (scope) => runDoctor(scope),
 };

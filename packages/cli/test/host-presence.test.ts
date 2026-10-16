@@ -115,26 +115,43 @@ describe("shared host-presence probe (injectable runner)", () => {
 });
 
 describe("omp host presence at init", () => {
-  test("real init refuses before writes; dry-run still previews link without probing", async () => {
+  test("the unsupported project scope refuses before probing; the supported scope keeps presence behavior", async () => {
     const root = tempDir("omp-presence-project-");
     const home = useAdapterHome();
     process.env.PATH = tempDir("omp-presence-path-");
     process.env.MSTAR_CLI_PROJECT_ROOT = root;
     // Dynamic import is intentional: shared-install captures its HOME-derived path at module load.
     const adapter = await import("../src/adapters/omp");
-    let refusal: unknown;
-    try {
-      await adapter.ompAdapter.runInstallInit?.("project", false);
-    } catch (error) {
-      refusal = error;
+
+    // omp has one user-wide plugin root: a project-scoped run is refused before
+    // the host probe, so a missing omp cannot send the operator to install it and
+    // re-run an impossible command — and a preview of that command is refused too.
+    for (const dryRun of [false, true]) {
+      let refusal: unknown;
+      try {
+        await adapter.ompAdapter.runInstallInit?.("project", dryRun);
+      } catch (error) {
+        refusal = error;
+      }
+      expect((refusal as Error).message).toContain("omp has no project-scoped plugin installation");
+      expect((refusal as Error).message).toContain("--scope global");
     }
-    expect(refusal).toBeInstanceOf(HostPresenceRefusal);
-    expect((refusal as Error).message).toContain("omp plugin install @mstar-harness/omp");
     expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
     expect(existsSync(path.join(root, ".gitignore"))).toBe(false);
 
-    const result = await adapter.ompAdapter.runInstallInit?.("project", true);
-    const dryRunNotes = result?.notes.join("\n") ?? "";
+    // At the scope omp supports, the presence contract is unchanged.
+    let presenceRefusal: unknown;
+    try {
+      await adapter.ompAdapter.runInstallInit?.("global", false);
+    } catch (error) {
+      presenceRefusal = error;
+    }
+    expect(presenceRefusal).toBeInstanceOf(HostPresenceRefusal);
+    expect((presenceRefusal as Error).message).toContain("omp plugin install @mstar-harness/omp");
+    expect(existsSync(path.join(home, ".mstar", "harness"))).toBe(false);
+
+    const preview = await adapter.ompAdapter.runInstallInit?.("global", true);
+    const dryRunNotes = preview?.notes.join("\n") ?? "";
     expect(dryRunNotes).toContain("presence is unchecked under --dry-run (would-run preview)");
     expect(dryRunNotes).not.toContain("omp CLI not found on PATH");
     expect(dryRunNotes).toContain("Would run: omp plugin link");
@@ -216,7 +233,9 @@ exit 0`,
     }
   }
   const args = [
-    "init", "--target", target, "--scope", "project", "--yes", "--no-global-cli",
+    // omp has one user-wide plugin root: its presence and preview paths are only
+    // reachable at the scope it supports (a project scope refuses up front).
+    "init", "--target", target, "--scope", target === "omp" ? "global" : "project", "--yes", "--no-global-cli",
     ...(dryRun ? ["--dry-run"] : []),
   ];
   const result = Bun.spawnSync([process.execPath, CLI_DIST, ...args], {

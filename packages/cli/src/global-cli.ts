@@ -70,53 +70,79 @@ export function defaultDetectVersion(): string | null {
  */
 function resolveTrustedNpm(): string {
   const executable = process.platform === "win32" ? "npm.cmd" : "npm";
-  // npm prepends `node_modules/.bin` for every ANCESTOR of the working
-  // directory, so filtering by the cwd alone still accepts a checkout's own npm
-  // when init runs from a subdirectory. Every ancestor is excluded, by realpath
-  // where one is resolvable.
-  const ancestors = new Set<string>();
+  // npm prepends `node_modules/.bin` for the checkout the command runs in, so
+  // only paths inside the checkout itself are untrusted — excluding every
+  // ancestor would also drop a user-managed npm (nvm, volta) under the home
+  // directory and then fall back to a name that PATH re-resolves unchecked.
+  let checkout: string | null = null;
   let dir = process.cwd();
   for (;;) {
-    ancestors.add(dir);
-    try {
-      ancestors.add(fs.realpathSync(dir));
-    } catch {
-      // an unresolvable ancestor contributes its literal path only
+    if (fs.existsSync(path.join(dir, ".git"))) {
+      checkout = dir;
+      break;
     }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
+  const resolvedCheckout = ((): string | null => {
+    if (checkout === null) return null;
+    try {
+      return fs.realpathSync(checkout);
+    } catch {
+      return checkout;
+    }
+  })();
   const insideCheckout = (candidate: string): boolean => {
+    if (resolvedCheckout === null) return false;
     let resolved = candidate;
     try {
       resolved = fs.realpathSync(candidate);
     } catch {
       // a missing entry keeps its literal path
     }
-    for (const ancestor of ancestors) {
-      if (resolved === ancestor || resolved.startsWith(ancestor + path.sep)) return true;
-    }
-    return false;
+    return resolved === resolvedCheckout || resolved.startsWith(resolvedCheckout + path.sep);
   };
   for (const entry of (process.env["PATH"] ?? "").split(path.delimiter)) {
     if (entry === "") continue;
-    const dir = path.resolve(entry);
-    if (insideCheckout(dir)) continue;
-    const candidate = path.join(dir, executable);
+    const candidateDir = path.resolve(entry);
+    if (insideCheckout(candidateDir)) continue;
+    const candidate = path.join(candidateDir, executable);
     if (fs.existsSync(candidate)) return candidate;
   }
-  return executable; // last resort: the platform's own resolution
+  // No validated npm: falling back to a bare name lets the shell resolve the
+  // checkout's own npm again, which is the execution vector this avoids.
+  throw new Error(
+    "No npm outside the current checkout was found on PATH, so the version check and the global install cannot run safely.\n" +
+      "Recovery: install npm outside the checkout, or re-run with --no-global-cli to skip both.",
+  );
 }
+
+/** Empty, DISTINCT npm config files: pointing both options at one file makes npm
+ *  refuse the config ("double-loading config ... previously loaded"), which would
+ *  silently disable the version probe. */
+function neutralNpmConfigs(): { user: string; global: string } {
+  if (neutralConfigs !== null) return neutralConfigs;
+  const dir = fs.mkdtempSync(path.join(tmpdir(), "mstar-npm-config-"));
+  const user = path.join(dir, "user-npmrc");
+  const global = path.join(dir, "global-npmrc");
+  fs.writeFileSync(user, "");
+  fs.writeFileSync(global, "");
+  neutralConfigs = { user, global };
+  return neutralConfigs;
+}
+
+let neutralConfigs: { user: string; global: string } | null = null;
 
 /** npm install spawn, bounded by a timeout so a stalled registry surfaces
  * as `action: "failed"` instead of hanging init without output. Runs from a
  * neutral directory so the project's npm config cannot steer a global install. */
 function defaultInstall(spec: string): void {
-  runCliCommand([resolveTrustedNpm(), "i", "-g", spec], {
-    cwd: tmpdir(),
-    timeoutMs: installTimeoutMs(),
-  });
+  const configs = neutralNpmConfigs();
+  runCliCommand(
+    [resolveTrustedNpm(), "i", "-g", spec, "--userconfig", configs.user, "--globalconfig", configs.global],
+    { cwd: tmpdir(), timeoutMs: installTimeoutMs() },
+  );
 }
 
 /**
@@ -143,9 +169,9 @@ export function detectPublishedLatest(): string | null {
         `${CLI_PACKAGE}`,
         "version",
         "--userconfig",
-        "/dev/null",
+        neutralNpmConfigs().user,
         "--globalconfig",
-        "/dev/null",
+        neutralNpmConfigs().global,
       ],
       {
         // An optional probe must not print: capture both streams so an offline

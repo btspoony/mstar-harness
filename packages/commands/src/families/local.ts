@@ -203,6 +203,18 @@ async function diagnose(target: (typeof doctorTargets)[number], scope: "global" 
     return { location: result.location, errors: [...localHarnessErrors(), ...result.errors], notes: result.notes };
   }
   if (target === "dsh") return diagnoseDshHost(runBin("dsh"));
+  if (target === "omp" && scope === "project") {
+    // omp has one user-wide plugin root (its link/listing ignore --scope), so a
+    // project-scoped omp setup cannot exist: report that instead of combining a
+    // global listing with project gitignore checks and calling it healthy.
+    return {
+      location: harnessRepoPath,
+      errors: [
+        "omp has no project-scoped plugin installation; run `npx @mstar-harness/cli doctor --target omp` (global) instead",
+      ],
+      notes: [],
+    };
+  }
   const projectRoot = scope === "project" ? resolveProjectRoot() : undefined;
   const gitignorePath = projectRoot === undefined ? undefined : path.join(projectRoot, ".gitignore");
   const gitignore = gitignorePath !== undefined && fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";

@@ -10,6 +10,7 @@ import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
+import { compareSemver } from "@mstar-harness/commands";
 import { chooseCliVersion, detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
 import type { InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
@@ -97,20 +98,25 @@ async function runInit(options: InitOptions) {
     // that version is the one it actually installed (a linked tree carries the
     // checkout's version, not the one this run chose); the others register a
     // marketplace or write config and leave the plugin install to the operator.
-    const installedPluginVersion = installResult.pluginVersion ?? chosenCli;
+    // An adapter that could not establish the installed version says so: the
+    // version this run *chose* is not evidence of what is on disk.
+    const installedPluginVersion = installResult.pluginVersion;
     console.log(
       adapter.installsPlugin === true
-        ? `Plugin version: ${installedPluginVersion}; global CLI: ${globalState}.`
+        ? `Plugin version: ${installedPluginVersion ?? "unconfirmed (the existing row was skipped and its manifest is unreadable)"}; global CLI: ${globalState}.`
         : `Global CLI: ${globalState}.`,
     );
-    if (globalResult.action === "failed" && installedPluginVersion !== packageVersion) {
-      // The plugin is already at another version; a global CLI left at the old
-      // one is exactly the skew this run exists to remove, so this cannot report
-      // success.
+    // Skew is refused whether or not the global update succeeded: a linked
+    // checkout can lag the version this run selected even when the CLI install
+    // worked, and the two must not be left apart.
+    const pluginBehind = installedPluginVersion !== undefined && compareSemver(installedPluginVersion, chosenCli) < 0;
+    const globalFailed = globalResult.action === "failed" && (installedPluginVersion ?? packageVersion) !== packageVersion;
+    if (pluginBehind || globalFailed) {
       throw new Error(
-        `The host plugin is at ${installedPluginVersion}, but the global CLI could not be updated to ${chosenCli} (${globalResult.spec}); ` +
-          `the CLI on PATH stays at ${packageVersion}.\n` +
-          `Recovery: fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`), or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
+        `The host plugin is at ${installedPluginVersion ?? "an unconfirmed version"}, while this run targets ${chosenCli}` +
+          `${globalResult.action === "failed" ? ` and the global CLI could not be updated (${globalResult.spec}), so the CLI on PATH stays at ${packageVersion}` : ""}.\n` +
+          `Recovery: realign the plugin (\`git -C ~/.mstar/harness pull --ff-only\` then re-run init, or install the published plugin at ${chosenCli}), ` +
+          `or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
       );
     }
     console.log(`Next: npx @mstar-harness/cli doctor --target ${target}${scope === "project" ? "" : " --scope global"}`);
