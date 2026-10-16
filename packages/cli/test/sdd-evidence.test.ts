@@ -83,6 +83,9 @@ import {
 
 const CLI_ROOT = resolvePath(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+/** The runtime global this test process may provide, read through one named
+ * view (it is absent from this build's ambient type map). */
+const RUNTIME_GLOBAL = globalThis as unknown as { Bun?: { version?: string } };
 const PLAN_ID = "evidence-fixture-plan"; // synthetic — never a local plan id
 const TASK_ID = "task-2";
 const TZ_VALUE = "EVIDENCE_TZ";
@@ -630,6 +633,18 @@ describe("capture — one execution, durable facts", () => {
         expect(record.after!.stable).toBe(true);
         expect(record.before.digest).toBe(record.after!.digest);
         expect(record.before.environment).toEqual({ TZ: TZ_VALUE, NODE_ENV: null });
+
+        // The tool fingerprint names the runtime that ACTUALLY ran the capture:
+        // a source/development run records its own runner beside the Node
+        // version that runner emulates, so the record is never mistaken for a
+        // Node-entry run (and the published Node entry records `node=` alone).
+        const recordedRunner = record.before.tool.runnerRuntimeVersion;
+        if (RUNTIME_GLOBAL.Bun === undefined) {
+          expect(recordedRunner).toBe(`node=${process.version}`);
+        } else {
+          expect(recordedRunner).toContain(`runtime=${RUNTIME_GLOBAL.Bun.version}`);
+          expect(recordedRunner).toContain(`node=${process.version}`);
+        }
 
         // The engine validator accepts the captured record as-is.
         expect(validateSddEvidenceRecord(record).ok).toBe(true);

@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "11acdaeacc3d4115ce40206c7494a7eef0ca885b2610f7884efe83518b5366e4",
+            "sha256": "75ff5e1777198fa1f6da5311577cc50bfb1dc06127366ac051e512e23a1a0711",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "c9b5c328541d5f99298e87575578e8075b74e55faa9bb486529139b70776ee53"
+            "sha256": "0ebac587f49f7a6040d82f7b3999f8316c02eb8b5cfc4c823307c0fbbf3856cd"
           }
         ]
       },
@@ -106,7 +106,7 @@
           {
             "root": "packages/dsh/dist",
             "files": 59,
-            "sha256": "0f4e73fed93b1a60078ced983e2be9dd2df860ceab82f0653556df5659e87db8",
+            "sha256": "134d6dfc334ca94b5f8846f68c671bc7101b2c868bdfdc5565266c3afee892a7",
             "exclude": [
               "client.js",
               "execution-consumer.json"
@@ -116,7 +116,7 @@
         "files": [
           {
             "path": "packages/dsh/dist/index.js",
-            "sha256": "ffed8ecddd0d88593e275fe49dbcd567c42b193e6260b2d37dc9ceff9ab4e1a1"
+            "sha256": "eca7b578370550e6b344f9988ac18805fc2d8737437f6508cbf7bec50d0c87c6"
           },
           {
             "path": "packages/dsh/dist/invariant.js",
@@ -250,7 +250,7 @@
           {
             "root": "packages/omp/dist",
             "files": 4,
-            "sha256": "94ca6deea30236b9baf9cc04ec7aa0d295ad43a7c6785fb174fa685e75c52408",
+            "sha256": "1b40f0e601e8b19442c0e82a9c2a5dc8cd8d34ea2d8dd7ced5bf43c74adc6f43",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -258,7 +258,7 @@
           {
             "root": "packages/omp/extensions",
             "files": 3,
-            "sha256": "83c3d941a0539bf0e22b589c351e7002c73833154d3e0e227ede9091b78ef260",
+            "sha256": "87071a9ec9624ecfb101d15d469cde0fdcde52b053cf3dc676eab55be134b3c4",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -266,7 +266,7 @@
           {
             "root": "packages/omp/hooks",
             "files": 1,
-            "sha256": "09a9e6012eae9c90928d6f59b741b84546c019501485d145df5428ce6a3a4973",
+            "sha256": "5ac1a89f14ad1919fb5f46cf470aa1abacd1355549c915a9866505d145e07959",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -275,15 +275,15 @@
         "files": [
           {
             "path": "packages/omp/dist/extensions/model-handoff.js",
-            "sha256": "54dc71ecbb6df3cd0db2871253591f4cdf02fe3e6eab1885dc351f796cc40751"
+            "sha256": "4f5b645c384b0a60e6d9ca2da4a4d7f76985fe3486c6349867848336c3901fef"
           },
           {
             "path": "packages/omp/dist/extensions/phase2-orchestration.js",
-            "sha256": "4ce2555358aeeb238d0b09b672894628401c3685089a0b6ea69ee35d433ba597"
+            "sha256": "2ec44dd79897b55b6a7a7bae7f7b99d5e93c3ee7e3b1737fd3254fc401f15dbd"
           },
           {
             "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "e08deecb92007faacc16d4d072b9871f394b68f36934daa968e82d11843ef502"
+            "sha256": "7370eb80faeb589e58998609a16333aae9e88efcc3349d445696c9f789cc7e35"
           },
           {
             "path": "packages/omp/mcp.json",
@@ -387,7 +387,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "609cc1ab65d946888289e0d44dba2d41571327d34bd21386439f857d24be8116",
+            "sha256": "f42086da0be3b44f64c970c9aae4eb0d297b3cf0c0d271802392bddc0338ffd4",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -396,7 +396,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "7649b60f3fd53e9a4d0a83469314ae74341f245dff3e21ea2cb58688f5d59538"
+            "sha256": "587bc21c90ff6501db28af986ab859ac330e57cb6df87b10417369bfe250ffd2"
           }
         ]
       },

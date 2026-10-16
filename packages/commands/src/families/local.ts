@@ -32,6 +32,7 @@ import {
   diagnoseZcodeHost,
   formatPluginVersionDoctorNote,
   parseOmpPluginList,
+  probePathNodeRuntime,
   resolveDshProfileDir,
   resolveProjectRoot,
   validateAgentPlugin,
@@ -82,17 +83,6 @@ function runBin(bin: string): (args: string[]) => string {
       throw error;
     }
   };
-}
-
-/** Bounded variant for probes: a wedged PATH wrapper is force-killed at the
- * deadline (SIGTERM ignore-safe) instead of blocking the doctor run. */
-function runBinBounded(bin: string, args: string[], timeoutMs: number): string {
-  return execFileSync(bin, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-  });
 }
 
 function localHarnessErrors(): string[] {
@@ -328,29 +318,18 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           });
         // The published V2 plugin runs in OpenCode's Node process and needs
         // node:sqlite (Node >=24.18.0) — INSTALL.md:70 promises doctor checks
-        // it. Probe the PATH node independently of the MCP runtime (the CLI
-        // itself is Bun-hosted, so process.versions cannot certify Node).
+        // it. Probe the PATH node independently of the doctor's own process
+        // runtime: that runtime is not the one a host launch resolves.
         const pluginRuntimeErrors: string[] = [];
         if (input.target === "opencode" && v2AmongResolved) {
-          try {
-            const nodeVersion = runBinBounded("node", ["--version"], 5_000).trim().replace(/^v/, "");
-            if (compareSemver(nodeVersion, OPENCODE_V2_NODE_FLOOR) < 0) {
-              pluginRuntimeErrors.push(
-                "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeVersion + ".",
-              );
-            }
-          } catch (probeError) {
-            const caught = probeError as { code?: string; killed?: boolean; signal?: string; message?: string };
-            // Distinguish the recovery facts: ENOENT means install Node; a
-            // killed/hung probe means the wrapper is wedged and the operator
-            // should fix PATH; anything else is an unprobeable environment.
-            const cause = caught.code === "ENOENT"
-              ? "no node executable was found on PATH"
-              : caught.killed === true || caught.signal !== undefined
-                ? "the node --version probe did not complete within the bounded window (a PATH wrapper may be wedged)"
-                : "the node --version probe failed (" + (caught.message ?? "unknown") + ")";
+          const nodeProbe = probePathNodeRuntime();
+          if (nodeProbe.unverifiedCause !== null) {
             pluginRuntimeErrors.push(
-              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); " + cause + ".",
+              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " on PATH (node:sqlite); " + nodeProbe.unverifiedCause + ".",
+            );
+          } else if (compareSemver(nodeProbe.version, OPENCODE_V2_NODE_FLOOR) < 0) {
+            pluginRuntimeErrors.push(
+              "OpenCode V2 plugin requires Node >=" + OPENCODE_V2_NODE_FLOOR + " (node:sqlite); the PATH node reports " + nodeProbe.version + ".",
             );
           }
         }
