@@ -3771,6 +3771,121 @@ test("a malformed retained receipt proves nothing, so its collision still refuse
   expect(acked.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
 });
 
+test("a changed --delivery declaration over unchanged bytes refuses instead of discarding the declaration", async () => {
+  const { context } = legacyV1Workspace("v1-changed-delivery");
+  const input = { context, operator: "operator", operationId: "op-v1-changed-delivery-first", deliveryDeclarations: V1_STANDALONE_DECLARATION };
+  const first = await upgradeStoreMinimal(input);
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
+  expect(first.inputDigest).toMatch(/^[a-f0-9]{64}$/);
+
+  // The SAME bytes under the SAME declaration replay: the retained receipt
+  // records this run's input digest beside the source digest (case a).
+  const replayed = await upgradeStoreMinimal({ ...input, operationId: "op-v1-changed-delivery-same" });
+  expect(replayed).toMatchObject({ verdict: "nothing-to-import", imported: 0, importedIds: [] });
+  expect(replayed.dispositions).toContainEqual(
+    expect.stringContaining(`input digest ${first.inputDigest}`),
+  );
+
+  // A DIFFERENT valid declaration over those same bytes is NOT a replay: the
+  // receipt proves the bytes were read, not that this declaration set was
+  // consumed, so accepting it would silently discard the new declaration and
+  // leave the native row shaped by the old one.
+  const nativeBefore = await protectedStore(context);
+  const statusBytes = readFileSync(join(context.harnessDir, "status.json"));
+  const changed = [{ workflow: "v1-standalone", deliveryKind: "verification/report-only" as const, completionPolicy: "report at docs/legacy.md" }];
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-v1-changed-delivery-second", deliveryDeclarations: changed })
+    .then(() => { throw new Error("a changed declaration was served by the same-bytes receipt"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  // Both converted lifecycles keep the same id, and the receipt's input digest
+  // no longer matches this run's declaration set, so neither is proven: the
+  // refusal names both and the recoverable acknowledgement is the union.
+  expect(refused.message).toContain("--ack-skip-workflow iter-v1 v1-standalone");
+  expect(refused.message).toContain("do not prove the earlier import consumed THIS input");
+  // Nothing committed, and the native row keeps the FIRST declaration's shape.
+  expect(await protectedStore(context)).toEqual(nativeBefore);
+  expect(readFileSync(join(context.harnessDir, "status.json"))).toEqual(statusBytes);
+  const store = await openStore(context, "read");
+  try {
+    const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
+    expect(JSON.parse(header.state_json)).toMatchObject({
+      delivery_kind: "development", branch: { source: "feature/v1-standalone", target: "main" },
+    });
+  } finally { store.close(); }
+});
+
+test("a declaration-free repeat over an older declaration-free receipt stays nothing-to-import", async () => {
+  const { context } = legacyWorkspace("legacy-receipt-no-field");
+  const workflowId = "wf-legacy-receipt-no-field";
+  const input = { context, operator: "operator", operationId: "op-legacy-receipt-first" };
+  expect(await upgradeStoreMinimal(input)).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: [workflowId] });
+  // A receipt written BEFORE this field existed: drop `inputDigest` to model one
+  // retained by an older CLI over the very same bytes (case c).
+  const legacy = await openStore(context, "write");
+  try {
+    const row = legacy.db.prepare("select result_json from store_operations where operation_id = ?").get(input.operationId) as { result_json: string };
+    const receipt = JSON.parse(row.result_json) as Record<string, unknown>;
+    delete receipt.inputDigest;
+    legacy.db.prepare("update store_operations set result_json = ? where operation_id = ?").run(JSON.stringify(receipt), input.operationId);
+  } finally { legacy.close(); }
+
+  // The repeat carries NO declaration and no compass acknowledgement, so nothing
+  // of the caller's can be discarded: the source-bytes proof alone is enough
+  // however old the receipt is.
+  const replayed = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-legacy-receipt-second" });
+  expect(replayed).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+
+  // A declaration-free repeat whose retained receipt HAS the field replays too
+  // (case e): the field is proof, not a requirement.
+  const { context: fresh } = legacyWorkspace("declaration-free-with-field");
+  const base = { context: fresh, operator: "operator", operationId: "op-declaration-free-first" };
+  await upgradeStoreMinimal(base);
+  expect(await upgradeStoreMinimal({ ...base, operationId: "op-declaration-free-second" }))
+    .toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+});
+
+test("a compass acknowledgement whose retained receipt does not record that input refuses", async () => {
+  const { context } = legacyV1Workspace("v1-compass-input");
+  const compass = join(context.harnessDir, "iterations", "iter-v1", "delivery-compass.md");
+  const relocated = join(context.harnessDir, "relocated-compass.md");
+  writeFileSync(relocated, readFileSync(compass));
+  rmSync(compass);
+  symlinkSync(relocated, compass);
+  const input = { context, operator: "operator", operationId: "op-v1-compass-input-first" };
+
+  // The acknowledgement-bearing run imports the iteration's plans as standalone
+  // rows and records that input on its receipt.
+  const first = await upgradeStoreMinimal({ ...input, deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedCompassSkips: ["iter-v1"] });
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["v1-standalone", "wf-v1-compass-input"] });
+  expect(first.dispositions).toContainEqual(expect.stringContaining("iteration iter-v1: skipped by --ack-skip-compass"));
+
+  // Damage that receipt so it records no input digest, then repeat the SAME
+  // compass acknowledgement: the acknowledgement shapes which lifecycles the
+  // conversion produces, so an id it produced must not be claimed as a replay by
+  // a receipt that proves only the bytes (case d).
+  const damaged = await openStore(context, "write");
+  try {
+    const row = damaged.db.prepare("select result_json from store_operations where operation_id = ?").get(input.operationId) as { result_json: string };
+    const receipt = JSON.parse(row.result_json) as Record<string, unknown>;
+    delete receipt.inputDigest;
+    damaged.db.prepare("update store_operations set result_json = ? where operation_id = ?").run(JSON.stringify(receipt), input.operationId);
+  } finally { damaged.close(); }
+  const damagedBefore = await protectedStore(context);
+
+  const refused = await upgradeStoreMinimal({
+    ...input, operationId: "op-v1-compass-input-second",
+    deliveryDeclarations: V1_STANDALONE_DECLARATION, acknowledgedCompassSkips: ["iter-v1"],
+  }).then(() => { throw new Error("an unproven compass-acknowledgement input served replay proof"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  // Both lifecycles the acknowledged conversion produced lose their proof: the
+  // acknowledgement is what made the registered plan a standalone row.
+  expect(refused.message).toContain("--ack-skip-workflow");
+  expect(refused.message).toContain("v1-standalone");
+  expect(refused.message).toContain("wf-v1-compass-input");
+  expect(refused.message).toContain("do not prove the earlier import consumed THIS input");
+  expect(await protectedStore(context)).toEqual(damagedBefore);
+  expect(lstatSync(compass).isSymbolicLink()).toBe(true);
+});
+
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
   // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
   // so any digest difference comes from the ordering used to fold them.
