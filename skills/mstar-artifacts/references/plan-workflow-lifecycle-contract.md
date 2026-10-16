@@ -30,8 +30,7 @@ Binding rules:
 ## 2. Cardinality stance
 
 - The new normal route is **one independently owned development plan per `type: plan` workflow**. A `type: plan` label alone does not establish cardinality; this contract fixes it for the new normal route only.
-- **Producers.** The known multi-row `type: plan` producer is audit promotion (`promoteAuditPlans`), which constructs one plan row per selected plan file (`packages/engine/src/audit.ts:1250-1272`). Existing specialized producers are `audit promote` and `migrate`; the generic normal-entry register producer is seam S1 (§6).
-- **Decision:** audit promotion is explicitly **grandfathered** as a multi-row specialized producer. No schema-level one-row invariant is imposed on the grandfathered producer; it keeps working and is not silently broken. Any future schema tightening must migrate audit promotion off the multi-row shape first, and must re-inventory producers before enforcement. Until such a migration lands, the one-plan norm governs the new normal route and new registrations, not the grandfathered producer.
+- **Producers.** The generic normal-entry register producer is seam S1 (§6).
 
 ## 3. Lifecycle stages
 
@@ -67,7 +66,7 @@ All routes use coordinator `complete`, not an ownership-transfer protocol. Missi
 
 ## 4. Evidence contracts
 
-**(a) Registration is an authorized domain operation.** It writes the create-only snapshot and the root entry under one lock. The primitive reference is the audit-promotion sequence `packages/engine/src/audit.ts:1250-1324`: plan-row/snapshot construction, entry validation, then the atomic root-lock section — create-only `writeWorkflowSnapshot` → `registerWorkflowEntryLocked`, with rollback that removes only the exact snapshot version that call created. The generic producer (seam S1) reuses these primitives; it does not invent a second registration mechanism.
+**(a) Registration is an authorized domain operation.** It writes the create-only snapshot and the root entry under one lock. The primitive reference is the registration sequence — entry validation, then the atomic root-lock section — create-only `writeWorkflowSnapshot` → `registerWorkflowEntryLocked`, with rollback that removes only the exact snapshot version that call created. The generic producer (seam S1) reuses these primitives; it does not invent a second registration mechanism.
 
 **(b) Admission consumes registration.** `packages/engine/src/sdd.ts:1185-1194` falls back to branch-alignment-only when no active workflow row applies, or a non-InProgress row has no lease — so the SDD seam does not enforce the registration obligation by itself. On the normal plan route that fallback closes with a precise refusal code, and the refusal documents the registration command and the recovery path (seam S2). Registration/recovery semantics: a crash between snapshot creation and root registration leaves no partial activation; recovery re-runs the authorized producer without duplicating identity.
 
@@ -94,7 +93,7 @@ All routes use coordinator `complete`, not an ownership-transfer protocol. Missi
 Three named seams. Per-seam acceptance checks state the observable behavior each seam owes. This section specifies seams; it implements none of them.
 
 **S1 — Generic register producer.** A general authorized registration path for normal plan workflows, reusing the §4a primitives (create-only snapshot + root entry under one lock, rollback of only the created version).
-Acceptance checks: a standalone development plan registers before execution; a missing registration, failed register write, or ambiguous owner blocks execution without partial activation being treated as success; crash/retry between snapshot creation and registration preserves identity, timestamps, ownership and resumability; existing producers (audit promotion) use the same primitives.
+Acceptance checks: a standalone development plan registers before execution; a missing registration, failed register write, or ambiguous owner blocks execution without partial activation being treated as success; crash/retry between snapshot creation and registration preserves identity, timestamps, ownership and resumability; existing producers use the same primitives.
 
 **S2 — Admission consumption.** The SDD admission fallback (`packages/engine/src/sdd.ts:1185-1194`) closes on the normal plan route: execution without a registered running workflow row is refused with a precise refusal code, and the refusal documents the registration command and recovery path.
 Acceptance checks: an unregistered plan's execution is refused, not silently continued on branch alignment alone; the refusal names registration and recovery; no partial activation is treated as success.
@@ -111,7 +110,7 @@ The direction and reason columns record the reasoning behind each answer; the an
 | Decision | Answer | Direction | Reason |
 |---|---|---|---|
 | Does every `type: plan` mean a development PR? | **No.** Delivery kind is declared at registration (§1). Development plans require PR; verification/report-only workflows follow the explicit alternative completion policy recorded at registration. | Declare the delivery obligation explicitly for the workflow's purpose. Development plans require PR; verification/report-only workflows need an explicit alternative completion contract. | `type: plan` is also used for independent verification. Do not force empty PRs or make absence of `branch.target` an implicit escape hatch. The strict universal alternative is possible but must be consciously selected. |
-| Is `type: plan` exactly one plan row? | **One independently owned development plan per workflow for the new normal route; audit promotion grandfathered as an explicitly inventoried multi-row producer (§2).** | Prefer one independently owned development plan for the new normal route; inventory current multi-row producers before tightening schema. | A type label alone does not establish cardinality. Audit promotion must be considered before enforcing a one-row invariant. |
+| Is `type: plan` exactly one plan row? | **One independently owned development plan per workflow for the normal route.** | Prefer one independently owned development plan for the new normal route; inventory current multi-row producers before tightening schema. | A type label alone does not establish cardinality; inventory multi-row producers before enforcing a one-row invariant. |
 | Where does compound run for a standalone plan? | **On its delivery branch/worktree, before the PR head is finalized (§3, §4c).** | On its delivery branch/worktree before the PR head is finalized. | Do not invent an iteration compass or extra integration branch solely to reuse iteration-close. Preserve control-root process artifacts versus tracked-result write ownership. |
 | What completes the workflow? | **Verified merge plus common close; PR submission and merge-ready remain resumable milestones (§3, §4e–g).** | Verified merge plus common close; PR submission and merge-ready remain resumable milestones. | Preserves the stronger existing post-merge-close semantics. A user request to submit a PR is not authorization to merge it. |
 | How should failure/abandonment close? | **Explicit failed/stopped handling with reason, never successful completed-close; no lease release by close (§5).** | Explicit failed/stopped handling with reason, never successful completed-close. | Preserve the existing distinction and do not release another owner's lease to force closure. |
@@ -141,7 +140,7 @@ The direction and reason columns record the reasoning behind each answer; the an
 > **Historical file route.** The file execution route is retired. It is not a live route and not a second execution transport. These frozen descriptions are historical:
 >
 > - §3 lifecycle stages, where they record file evidence or file ordering: create-only snapshot plus root `workflows[]` entry under one lock, and terminal snapshot write → root unregister → projection reconcile.
-> - §4(a) registration primitives: create-only `writeWorkflowSnapshot` → `registerWorkflowEntryLocked`, and the audit-promotion file sequence cited there as the live producer.
+> - §4(a) registration primitives: create-only `writeWorkflowSnapshot` → `registerWorkflowEntryLocked`, and the register sequence cited there as the live producer.
 > - §4(g) terminal-close file ordering: snapshot-terminal `closeWorkflow`, then unregister, then reconcile.
 > - §6 file-route seam members: S1's create-only snapshot + root-entry producer; S2's file-register admission probe; S3's snapshot close path and phase-6 file ordering.
 >

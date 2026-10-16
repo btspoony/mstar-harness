@@ -23,9 +23,9 @@ The highest-trust category — real bugs found by reading, not speculation.
 
 ## 2. Security
 
-Review only what is directly supported by code evidence. Keep findings framed as defensive maintenance: identify the code pattern, explain the production impact, describe the remediation. Keep plans at the level of code changes, configuration changes, and tests.
+Review only what is directly supported by code evidence. Keep findings framed as defensive maintenance: identify the code pattern, explain the production impact, describe the remediation. Keep remediation at the level of code changes, configuration changes, and tests.
 
-**Handling rule:** never copy a secret value into a finding or plan — those files get committed. Reference the `file:line` and credential type only ("Stripe live key at `config.ts:12`"), and the fix sketch always includes rotation, not just removal.
+**Handling rule:** never copy a secret value into a finding or the report — those files get committed. Reference the `file:line` and credential type only ("Stripe live key at `config.ts:12`"), and the fix sketch always includes rotation, not just removal.
 
 **By-design is not a finding:** standard platform conventions are intentional behavior — honoring `https_proxy`/`NO_PROXY`, reading `~/.netrc`, an explicitly local dev tool shelling out to configured package managers. A tradeoff explicitly recorded in an ADR or decision doc is likewise settled. Flag these only when the *implementation* adds risk beyond the convention. Note: a **stale ADR is itself a finding** — if code has drifted from what the decision doc says, report the drift.
 
@@ -67,13 +67,13 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Modules with high churn (git log) + no tests = top refactor risk; flag as "characterization-tests-first" candidates.
 - Existing test quality: tests that assert nothing meaningful, heavy mocking that tests the mocks, snapshot tests nobody reads, flaky patterns (real timers, real network, order dependence).
 - Missing test layers: unit-only suites with zero integration coverage on API boundaries, or the inverse.
-- Verification infrastructure: is there a one-command way to know the codebase works? If not, that's finding #1 and a prerequisite plan for any risky change.
+- Verification infrastructure: is there a one-command way to know the codebase works? If not, that's finding #1 and a prerequisite for any risky change.
 - Real entry path: do tests exercise the shipped entry (CLI, loader, plugin boot) rather than a hand-mounted equivalent?
 - Externally observable state: assertions verify logs, events, files, exit codes — never implementation restatement or agent-reported success.
 - User-visible output is behavior (conditional): in repos shipping UI copy, CLI output, API error shapes, or prompt text, wording is behavior — snapshot or e2e coverage should pin it.
 - Test keep/delete check: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. The auditor reports the non-product-assertion class and concludes **"delete, or replace with a product-behaviour assertion"**. PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression. Classify the assertion against its production-owner contract, not its name; apply the retention and candidate-evidence bars in `references/test-audit.md`.
 
-For the deep method behind this category — value bar, authoring gate (used both to grade existing tests and to gate test proposals in plans), the junk-pattern sweep, the retention bar, per-candidate evidence fields, discovery lanes, and campaign scope — load **`references/test-audit.md`** (load when the category focus is `tests`, via `/amazing-test-audit`, or when the Test Coverage pass needs depth).
+For the deep method behind this category — value bar, authoring gate (used both to grade existing tests and to gate the test changes a finding recommends), the junk-pattern sweep, the retention bar, per-candidate evidence fields, discovery lanes, and campaign scope — load **`references/test-audit.md`** (load when the category focus is `tests`, via `/amazing-test-audit`, or when the Test Coverage pass needs depth).
 
 ## 5. Tech Debt & Architecture
 
@@ -81,7 +81,7 @@ For the deep method behind this category — value bar, authoring gate (used bot
 - Layering violations: UI importing from data layer internals, circular dependencies, "utils" modules that became a junk drawer with high fan-in.
 - Dead code: unexported-and-unused modules, feature flags fully rolled out but still branching, commented-out blocks, deps in the manifest no longer imported.
 - Mixed responsibilities: a function/class/module doing unrelated jobs that obscure independent behavior or tests; identify the responsibility boundary, not a length target. Long but cohesive code does not need helpers merely to shorten it.
-- Inconsistent patterns: three ways of doing data fetching / error handling / styling — pick the winner (the one the team converged on most recently) and plan the consolidation.
+- Inconsistent patterns: three ways of doing data fetching / error handling / styling — pick the winner (the one the team converged on most recently) and recommend the consolidation.
 - Abstraction mismatches: premature abstractions with a single implementation, or missing abstractions where the same change always requires touching N files in lockstep.
 - Public-but-one-caller: a public method on a generic service with a single internal caller is a private-capability closure candidate.
 - Unjustified defaults/public options: flag defaults or public operations/formats with no current-consumer evidence or prior art.
@@ -128,7 +128,7 @@ For the deep method behind this category — value bar, authoring gate (used bot
 - Missing or broken: typecheck script, lint config, formatter, pre-commit hooks, editorconfig.
 - Slow feedback loops: dev-server or test startup measured in minutes, no watch mode, CI without caching.
 - Onboarding friction: README setup steps that are wrong/incomplete, undocumented required env vars, no `.env.example`.
-- Missing `AGENTS.md` / `CLAUDE.md` — for repos where agents will execute the plans, this is high-leverage.
+- Missing `AGENTS.md` / `CLAUDE.md` — for repos where agents execute planned work, this is high-leverage.
 - Error messages/logging: unstructured logs on services, missing request IDs/correlation, debugging requiring code changes.
 
 ## 8. Docs
@@ -149,7 +149,7 @@ Forward-looking: not what's broken, but what this codebase wants to become. **Gr
 - **The adjacent possible**: capabilities the existing architecture makes disproportionately cheap — a plugin system one interface away, a public API one route file from the existing service layer.
 - **Friction worth productizing**: things users evidently do by hand around it (visible in docs, examples, issues).
 
-Direction findings use the standard format with two adaptations: **Impact** is product/user value, and **Confidence** reflects how grounded the evidence is. Plans for selected direction findings are usually a *design/spike plan* (investigate, prototype, define the API, list open questions) rather than a build-everything plan.
+Direction findings use the standard format with two adaptations: **Impact** is product/user value, and **Confidence** reflects how grounded the evidence is. Direction findings are usually pursued as design/spike work (investigate, prototype, define the API, list open questions) rather than as a build-everything change.
 
 ---
 

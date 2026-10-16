@@ -197,7 +197,7 @@ return seats
 
 One read-only audit seat per category (the nine `mstar-audit` categories), each returning findings in
 the audit finding format. Scope comes from `args.categories` (default: all nine); the reconciling,
-vetting and plan-writing stay with the audit executor (main agent).
+vetting and review-report writing stay with the audit executor (main agent).
 
 **`meta`**
 
@@ -263,7 +263,7 @@ const FINDING = {
           effort: { type: 'string', enum: ['XS', 'S', 'M', 'L', 'XL'] },
           risk: { type: 'string', enum: ['LOW', 'MED', 'HIGH'], description: 'What the fix could break, plus one line why.' },
           confidence: { type: 'string', enum: ['HIGH', 'MED', 'LOW'] },
-          fix: { type: 'string', description: 'One to three sentences — a sketch, not the plan.' },
+          fix: { type: 'string', description: 'One to three sentences — a sketch, not the review report.' },
         },
       },
     },
@@ -281,13 +281,13 @@ Audit category: ${category}
 Repo under audit: ${a.repo}
 Reference root: ${a.auditRef}
 
-Read-only audit seat (one category of a parallel fan-out; the audit executor reconciles, vets and writes plans — you do not).
+Read-only audit seat (one category of a parallel fan-out; the audit executor reconciles, vets and writes the review report — you do not).
 
 Recon facts already established: ${a.recon}
 
 Load in order: ${a.auditRef}/audit-playbook.md section for your category plus the section "Finding format" (read it first — findings must match that shape exactly); for the security category also read ${a.auditRef}/security-review.md. Open every location you cite yourself, in ${a.repo}.
 
-Report only what you can evidence: exact file:line anchors, a concrete impact, an honest effort on the XS-XL scale, the risk of the fix, and a HIGH/MED/LOW confidence. LOW-confidence items are allowed but are leads, not plan candidates. Do not edit any file, do not run project-wide suites, never reproduce secret values.
+Report only what you can evidence: exact file:line anchors, a concrete impact, an honest effort on the XS-XL scale, the risk of the fix, and a HIGH/MED/LOW confidence. LOW-confidence items are allowed but are leads, not report findings. Do not edit any file, do not run project-wide suites, never reproduce secret values.
 
 Return ONLY the JSON object matching the provided schema (category, findings, notes). Put the truncated-coverage declaration and any non-finding leads in notes.`
 
@@ -327,7 +327,7 @@ script for the `default` tier (two seats → `subagent`) or `quick` (one seat).
   "target": "<owner>/<repo>#<n> or branch:<slug> or diff:<short-sha>",
   "diffBase": "<base>..<head>",
   "diffFile": "<absolute path to the pinned diff snapshot, when worktree-setup produced one>",
-  "reportsDir": "<absolute directory for the stage-2 evidence files>",
+  "reportsDir": "<the review run directory ({REVIEW_DIR}/<date>-pr<N>/), holding the stage-2 evidence files>",
   "auditRef": "<absolute path to the mstar-audit skill references dir>",
   "domains": ["code", "tests"],
   "security": true,

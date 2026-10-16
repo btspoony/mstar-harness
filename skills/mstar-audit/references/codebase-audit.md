@@ -1,6 +1,6 @@
 # Codebase Audit Variant
 
-Full codebase audit process detail for the `mstar-audit` skill — Phase 2 (audit), scope variants, Phase 4 (variant-specific plan-writing rules), and the audit index output template. Load this file when the task is a full codebase audit (bare / `quick` / `deep` / category focus / `branch` / `next` / `simplify`); the `pr` variant lives in `references/pr-review.md`. The common contract (Load Order, Hard Rules, Phase 1 recon, Phase 3 vet discipline, plan-output contract, output-format contract) is in the `mstar-audit` SKILL.md.
+Full codebase audit process detail for the `mstar-audit` skill — Phase 2 (audit), scope variants, Phase 4 (variant-specific report-writing rules), and the audit index output template. Load this file when the task is a full codebase audit (bare / `quick` / `deep` / category focus / `branch` / `next` / `simplify`); the `pr` variant lives in `references/pr-review.md`. The common contract (Load Order, Hard Rules, Phase 1 recon, Phase 3 vet discipline, review-report contract, output-format contract) is in the `mstar-audit` SKILL.md.
 
 ## Phase 2 — Audit (parallel where possible)
 
@@ -8,7 +8,7 @@ Audit across the categories in **`references/audit-playbook.md`** — read it no
 
 For repos of any real size, `code-reviewer` (the audit executor, PM-dispatched) fans out parallel read-only subagents (`scout` / `explore` type) under Assignment `Delegation: allowed (scout/explore only, read-only)` — one per category or cluster; PM remains orchestrator/entry. **Subagents do not inherit this skill's context.** Resolve the loaded `mstar-audit` skill root and expand the paths below to absolute paths before dispatch, never relative to the reviewed repository. Each subagent prompt must include:
 
-- The **absolute path** to `mstar-audit`'s `SKILL.md` and exact headings **"### Phase 1 — Recon (always)"** and **"### Phase 2 — Audit (per variant)"** for shared load, connected-flow, and investigation rules only — do not execute the root workflow, recon survey, or plan-output duties.
+- The **absolute path** to `mstar-audit`'s `SKILL.md` and exact headings **"### Phase 1 — Recon (always)"** and **"### Phase 2 — Audit (per variant)"** for shared load, connected-flow, and investigation rules only — do not execute the root workflow, recon survey, or report-writing duties.
 - The **absolute path** to `references/audit-playbook.md` plus the exact section headings to read — **always including "## Finding format"** (subagents can read files; this is cheaper than pasting).
 - The **absolute path** to `references/finding-format.md` and exact headings **"## Template"**, **"## Structural remedies"**, **"## Category codes"**, and **"## What disqualifies a finding"**; also **"## Direction findings — adaptations"** for the direction category.
 - For the security category (or a security cluster), also give the **absolute path** to `references/security-review.md` alongside the playbook path.
@@ -40,34 +40,34 @@ Every finding follows **`references/finding-format.md`** — read it before the 
 |---------|-------|-------|
 | Bare invocation | Full codebase | All nine categories |
 | `quick` / `deep` | Same scope, different depth | See effort table above |
-| Category focus (`security`, `perf`, `tests`, ...) | Recon, then that category only, then plan | Useful for targeted sweeps. For the `security` focus, load `references/security-review.md` (deep method + FP discipline) alongside the playbook § 2; for the `tests` focus, load `references/test-audit.md` (test-surface deep method + campaign) alongside the playbook § 4 |
+| Category focus (`security`, `perf`, `tests`, ...) | Recon, then that category only, then the report | Useful for targeted sweeps. For the `security` focus, load `references/security-review.md` (deep method + FP discipline) alongside the playbook § 2; for the `tests` focus, load `references/test-audit.md` (test-surface deep method + campaign) alongside the playbook § 4 |
 | `branch` | Current branch changes only | Files changed since merge-base with default branch + their direct importers. Tag every finding `introduced` or `pre-existing` |
-| `next` / `roadmap` | Direction category only, in depth | 4–6 grounded suggestions; selected ones become design/spike plans |
-| `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1); plans carry behavior-preservation gates (Phase 4) |
+| `next` / `roadmap` | Direction category only, in depth | 4–6 grounded suggestions, each with evidence and trade-offs |
+| `simplify` | DEBT-focused deep pass: dead / duplicated / speculative / over-built / added-then-removed / hand-rolled-where-a-dependency-exists surfaces | Prove-or-reject per playbook §5; findings use Category DEBT; tiny-real items → "considered and rejected" rows, never inline TODOs (Hard Rule 1); the report states behavior-preservation gates (Phase 4) |
 
-## Phase 4 — Write the plans
+## Phase 4 — Write the report
 
-Plan-file layout, Status block, commit stamp, and handoff follow the shared contract in the `mstar-audit` SKILL.md — **`## Plan output (all variants)`**. Variant-specific rules:
+The run's product is one **review report** under `{REVIEW_DIR}` (`{HARNESS_DIR}/reviews/`; `.mstarc` `review_dir` overrides it): the run directory `<YYYY-MM-DD>-codebase-<level>-<round>/` holds `README.md` — this run's audit report index — plus the run's evidence files. Report layout, run-directory naming, and index sections follow the shared contract in the `mstar-audit` SKILL.md — **`## Output format`**. Variant-specific rules:
 
-**Excerpts come from your own reads, never from a subagent's report.** Before writing each plan, open every cited file yourself — subagent line numbers and attributions are leads, not facts.
+**Excerpts come from your own reads, never from a subagent's report.** Before writing each finding into the report, open every cited file yourself — subagent line numbers and attributions are leads, not facts.
 
-If an audit directory from a previous run exists, read its `README.md` before planning this run and carry the prior record over under five rules:
+If a run directory from a previous run exists, read its `README.md` before writing this run's report and carry the prior record over under five rules:
 
 1. **Prior `covered` is priority input, not fresh evidence.** Unchanged prior evidence may shape where this run looks, but a unit not re-examined this run is `deferred` with an explicit reference to the prior evidence and a reason — never marked `covered` this run. Do not relabel earlier checks as current work.
 2. **Prior `deferred`, `blocked` and `out_of_scope` units become current work when now in scope.** They are priority input for this run, never suppression keys.
 3. **A prior rejected claim suppresses only the exact claim with unchanged relevant evidence and control assumptions.** It never exempts the whole unit; changed evidence reopens the question.
 4. **Prior quick/scoped/truncated runs contribute only their recorded evidence and gaps; partial or missing prior coverage implies no clean remainder** — missing coverage means unknown, not clean.
-5. **Match finding fingerprints where present.** A re-considered claim keeps its fingerprint identity even if its disposition changes; legacy findings without fingerprints are compared by evidence and root cause, and never assigned a fabricated identity. The scaffold keeps numbering monotonic and never upserts or re-sorts prior rows; new plans get the next numbers in caller order. Findings already planned or listed as rejected in the prior run are skipped, not re-planned; plans the new run supersedes are marked stale in the index rather than deleted.
+5. **Match finding fingerprints where present.** A re-considered claim keeps its fingerprint identity even if its disposition changes; legacy findings without fingerprints are compared by evidence and root cause, and never assigned a fabricated identity. The scaffold keeps numbering monotonic and never upserts or re-sorts prior rows; new findings get the next numbers in caller order. Findings listed as rejected in the prior run are skipped, not re-reported; findings the new run supersedes are marked stale in the index rather than deleted.
 
 When finalizing the index, write the **Coverage** section per § Output format — and mind the scaffold ordering documented there, since `mstar audit scaffold` rebuilds the README and does not preserve Coverage.
 
-Plans generated from `simplify` / removal findings must carry **behavior-preservation verification gates**: existing tests pass *unmodified*, and characterization tests come first where coverage is thin (playbook §4). When the simplification would touch more than ~500 lines, recommend a codemod/automation pass rather than manual edits.
+Findings from `simplify` / removal passes must state **behavior-preservation verification gates**: existing tests pass *unmodified*, and characterization tests come first where coverage is thin (playbook §4). When the simplification would touch more than ~500 lines, recommend a codemod/automation pass rather than manual edits.
 
 ## Output format
 
 ### Audit index (`README.md`)
 
-**This index is a report artifact, not a registration.** It stays the run's human-readable findings / direction / coverage record, and a candidate source for `mstar catalog discover` (read-only proposal with explicit `unknowns`; register the reviewed mapping with `mstar catalog import`). A promoted plan's **identity, title and path** are `{HARNESS_DIR}/store.db` catalog metadata read from the plan document itself (`mstar catalog show plan <plan-id>`) — never a maintained README index row (state-projection contract §1/§2/§4). The `## Execution order & status` table below is a review/selection surface only: `mstar audit promote` reads plan ids from it, and a hand edit there can no longer rename or re-path a registered plan. `README.md` and the plan bodies remain files.
+**This index is a report artifact, not a registration.** It stays the run's human-readable findings / direction / coverage record, and a candidate source for `mstar catalog discover` (read-only proposal with explicit `unknowns`; register the reviewed mapping with `mstar catalog import`). `README.md` and the finding bodies remain files: a document's **identity, title, path and lifecycle** are `{HARNESS_DIR}/store.db` catalog rows (`mstar catalog show`), never read off this index, and no promotion step reads the report to register anything.
 
 ```markdown
 # Audit Report — <repo> @ <short-sha> (<date>)
@@ -78,6 +78,38 @@ Plans generated from `simplify` / removal findings must carry **behavior-preserv
 |---|---------|----------|--------|--------|------|------------|----------|
 
 The base table has the seven columns above; `Impact` is always prose — what goes wrong and who pays — never a numeric or category label. When at least one displayed finding carries a fingerprint, an optional `Fingerprint` column is appended after `Evidence`; when at least one carries a structured severity, the three columns `Likelihood | Severity impact | Severity` are appended after it (matching `finding-format.md` § Rendering consequences: `# | Finding | Category | Impact | Effort | Risk | Confidence | Evidence [| Fingerprint][| Likelihood | Severity impact | Severity]`). These columns are table-wide: a row without the metadata shows `—` in the new cells, and a table where no row carries it keeps the base header exactly. A fingerprint is optional author-chosen identity per `finding-format.md`; the scaffold never invents one and never re-sorts rows by it.
+
+Below the table, one `## Finding detail` block per finding carries that finding in full: the assessment fields (`Priority` / `Effort` / `Risk` / `Confidence`, plus `Fingerprint` and `Likelihood | Severity impact | Severity` when supplied), the complete Evidence list, an optional Trace table, Fix sketch and Verification. The report is the run's only artifact, so nothing is offloaded to another file; prose and command blocks keep their newlines, and only the block heading is collapsed to one line.
+
+## Finding detail
+
+### 001. <finding title>
+
+- **Priority**: P1
+- **Effort**: M
+- **Risk**: MED
+- **Confidence**: HIGH
+
+**Impact**
+
+<the table's Impact in full>
+
+**Evidence**
+
+- <every evidence entry, rendered as supplied>
+
+**Trace** — when the finding carries one
+
+| Kind | Location | Scope / Description |
+|------|----------|---------------------|
+
+**Fix sketch** — when supplied
+
+<fix approach, verbatim>
+
+**Verification** — when supplied
+
+<verification steps, verbatim>
 
 ## Direction (separate)
 
@@ -98,7 +130,7 @@ Coverage is complete for the declared scope. Every material review question has 
 
 ## Needs verification
 
-[MEDIUM-confidence or runtime-dependent leads — mainly from the Security pass (`references/security-review.md`). One line each; these are not findings and get no plan until verified:]
+[MEDIUM-confidence or runtime-dependent leads — mainly from the Security pass (`references/security-review.md`). One line each; these are not findings, and they stay leads until verified:]
 
 - <lead>: what to verify, how (the exact check), evidence so far (`file:line`).
 
@@ -106,16 +138,10 @@ Coverage is complete for the declared scope. Every material review question has 
 
 ## Hardening & checked notes
 
-[Security-pass leftovers, one line each, no plan unless the user asks. Not findings and not rejected findings — they stay visible so the next run doesn't redo them:]
+[Security-pass leftovers, one line each. Not findings and not rejected findings — they stay visible so the next run doesn't redo them:]
 
 - Hardening: <gap> — why it is not a finding (another layer already prevents exploitation; dev-only posture).
 - Checked and clean: <sink or shape> traced and cleared because <one line> (`file:line`).
-
-## Execution order & status
-
-| Plan | Title | Priority | Effort | Depends on | Status |
-|------|-------|----------|--------|------------|--------|
-| 001  | ...   | P1       | S      | —          | TODO   |
 
 ## Findings considered and rejected
 
@@ -150,8 +176,4 @@ A check is a compact sentence: cited location → question/invariant → observe
 
 **Deferred enforcement.** The Coverage table is a reviewer-checked authoring structure, not a machine guarantee. Status membership, required cell presence, and reference resolution are deterministic checks, but no existing engine or CLI command performs them: `mstar audit scaffold` neither preserves nor validates Coverage, and nothing else in the harness reads the table. Until a validator ships, a completed Coverage section attests only that the author followed this contract — it is never an "audit complete" certificate, and shape enforcement must not be claimed in prose or added ad hoc.
 
-> **Engine check (when available):** run `mstar audit scaffold <findings-file> [--dir <out-dir>]` (or `import { scaffoldAuditPlan, validateAuditFindingGates, validateAuditStatusBlocks } from "@mstar-harness/engine"` in a host hook) to scaffold the `audit-<date>/` plan directory (numbered plan files + README index) from findings, redact credentials from audit excerpts, and run the deterministic finding gates (`validateAuditFindingGates`) before anything is written. The scaffold emits Status blocks that conform to the contract, but it does not re-validate existing plan files: validating audit Status blocks per **`mstar-audit` SKILL.md** `## Plan output (all variants)` is done by a host hook explicitly calling `validateAuditStatusBlocks` (also from `@mstar-harness/engine`) — the CLI command itself never invokes it. The findings file may be a bare array or `{findings, needsVerification?, hardeningChecked?}`; the finding-object field contract — JSON-to-engine mapping, absent-field defaults, string vs structured evidence, fingerprint/trace/severity — is owned by **`mstar-audit` references/finding-format.md § Machine-readable findings file**. Carrier acceptance is engine work; reportability, finding/lead exclusion, and coverage stay reviewer judgement — the engine enforces none of them. Disposition policy: a supplied `needsVerification` / `hardeningChecked` set is authoritative and replaces its index section on rebuild (resolved leads are removed by dropping them); an omitted field carries the previous section's entries over, so hand-added security dispositions survive an index rebuild. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
-
-## Handoff to execution
-
-The four handoff steps (promote via `mstar audit promote` / manual per `mstar-artifacts`, state machine, fast-track Prepare with intent gate + clarify, SDD/inline dispatch) now live in the shared contract — **`mstar-audit` SKILL.md** `## Plan output (all variants)`.
+> **Engine check (when available):** run `mstar audit scaffold <findings-file> [--level <quick|standard|deep>] [--round <n>] [--reviews-dir <dir>]` (or `import { scaffoldAuditReport, validateAuditFindingGates } from "@mstar-harness/engine"` in a host hook) to write this run's audit report — `<reviewsDir>/<date>-codebase-<level>-<round>/README.md` — from findings, redact credentials from audit excerpts, and run the deterministic finding gates (`validateAuditFindingGates`) before anything is written. `--level` defaults to `standard`; an omitted `--round` allocates the next free round for that date+level; `--reviews-dir` overrides the resolved `{REVIEW_DIR}` root, and `--dir` overrides the whole run directory (then `--level` / `--round` / `--reviews-dir` are ignored). The findings file may be a bare array or `{findings, needsVerification?, hardeningChecked?}`; the finding-object field contract — JSON-to-engine mapping, absent-field defaults, string vs structured evidence, fingerprint/trace/severity — is owned by **`mstar-audit` references/finding-format.md § Machine-readable findings file**. Carrier acceptance is engine work; reportability, finding/lead exclusion, and coverage stay reviewer judgement — the engine enforces none of them. Disposition policy: a supplied `needsVerification` / `hardeningChecked` set is authoritative and replaces its index section on rebuild (resolved leads are removed by dropping them); an omitted field carries the previous section's entries over, so hand-added security dispositions survive an index rebuild. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.

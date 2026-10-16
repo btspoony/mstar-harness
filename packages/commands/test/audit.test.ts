@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createFsStore, initializeStore, readExecutionState, scaffoldHarness, setArtifactStore } from "@mstar-harness/engine";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { setArtifactStore } from "@mstar-harness/engine";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getAuditCommandDefinitions, getCommandDefinitions } from "../src/index.js";
-import { failure } from "../src/families/audit.js";
 import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -44,17 +43,61 @@ function gitInit(root: string): void {
 
 describe("audit command family", () => {
 
-  test("scaffold creates plan artifacts only in the declared output directory", async () => {
-
+  test("scaffold writes the run report into the declared --dir override", async () => {
     const root = tempRoot();
     const findings = path.join(root, "findings.json");
     const outDir = path.join(root, "audit-2026-09-27");
     writeFileSync(findings, JSON.stringify([{ title: "Leaked credential", description: "Credential is exposed", priority: "P1", effort: "S", risk: "HIGH", category: "security", evidence: ["settings.ts:9"] }]));
     const result = await command("audit.scaffold").execute({ findings, dir: outDir, sha: "abc1234", date: "2026-09-27", repo: "fixture" }, context(root));
     expect(result.status).toBe("ok");
-    expect(readFileSync(path.join(outDir, "001-leaked-credential.md"), "utf8")).toContain("Credential is exposed");
-    expect(readFileSync(path.join(outDir, "README.md"), "utf8")).toContain("| 001 | Leaked credential |");
+    expect(result.data).toMatchObject({ outDir, file: path.join(outDir, "README.md"), date: "2026-09-27", level: "standard", round: 1 });
+    expect(readFileSync(path.join(outDir, "README.md"), "utf8")).toContain("Credential is exposed");
+    // The report index is the run's only artifact — no per-finding plan files.
+    expect(readdirSync(outDir)).toEqual(["README.md"]);
     expect(existsSync(path.join(root, "unrelated"))).toBe(false);
+  });
+
+  test("--dir ignores --level/--round: they are neither validated nor applied", async () => {
+    const root = tempRoot();
+    const findings = path.join(root, "findings.json");
+    const outDir = path.join(root, "pinned-run");
+    writeFileSync(findings, JSON.stringify([{ title: "Bounded finding", description: "A fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" }]));
+    const result = await command("audit.scaffold").execute({ findings, dir: outDir, level: "thorough", round: "0", date: "2026-09-27" }, context(root));
+    expect(result).toMatchObject({ status: "ok", data: { outDir, level: "standard", round: 1 } });
+  });
+
+  test("scaffold defaults the run dir to {REVIEW_DIR}/<date>-codebase-<level>-<round>", async () => {
+    const root = tempRoot();
+    mkdirSync(path.join(root, ".mstar"), { recursive: true });
+    const findings = path.join(root, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ title: "Bounded finding", description: "A fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" }]));
+    const reviewsDir = path.join(root, ".mstar", "reviews");
+    const runDir = path.join(reviewsDir, "2026-09-27-codebase-standard-1");
+    const result = await command("audit.scaffold").execute({ findings, sha: "abc1234", date: "2026-09-27" }, context(root));
+    expect(result).toMatchObject({ status: "ok", data: { outDir: runDir, file: path.join(runDir, "README.md"), date: "2026-09-27", level: "standard", round: 1 } });
+    expect(readdirSync(runDir)).toEqual(["README.md"]);
+
+    // Another level gets its own run dir; an explicit round reuses that exact dir.
+    const deep = await command("audit.scaffold").execute({ findings, sha: "abc1234", date: "2026-09-27", level: "deep" }, context(root));
+    expect(deep.data).toMatchObject({ outDir: path.join(reviewsDir, "2026-09-27-codebase-deep-1"), level: "deep", round: 1 });
+    const reused = await command("audit.scaffold").execute({ findings, sha: "abc1234", date: "2026-09-27", round: "2" }, context(root));
+    expect(reused.data).toMatchObject({ outDir: path.join(reviewsDir, "2026-09-27-codebase-standard-2"), round: 2 });
+
+    // An --reviews-dir override moves the root; --level / --round stay validated input.
+    const elsewhere = path.join(root, "elsewhere");
+    const moved = await command("audit.scaffold").execute({ findings, sha: "abc1234", date: "2026-09-27", reviewsDir: elsewhere }, context(root));
+    expect(moved.data).toMatchObject({ outDir: path.join(elsewhere, "2026-09-27-codebase-standard-1") });
+
+    for (const bad of [{ level: "thorough" }, { round: "0" }, { round: "two" }]) {
+      const refused = await command("audit.scaffold").execute({ findings, sha: "abc1234", ...bad }, context(root));
+      expect({ input: bad, status: refused.status, exitCode: refused.exitCode }).toEqual({ input: bad, status: "usage", exitCode: 2 });
+    }
+  });
+
+  test("promote is no longer a verb", () => {
+    expect(getAuditCommandDefinitions().map(({ id }) => id)).toEqual(["audit.scaffold", "audit.secret-scan", "audit.supply-chain"]);
+    expect(getCommandDefinitions().map(({ id }) => id)).not.toContain("audit.promote");
+    expect(() => command("audit.promote")).toThrow("missing audit.promote");
   });
 
   test("secret scan reports the actual engine finding for a tracked fixture without disclosing its value", async () => {
@@ -81,64 +124,5 @@ describe("audit command family", () => {
     expect(result.details).toMatchObject({ findings: expect.arrayContaining([
       expect.objectContaining({ kind: "lockfile-duplicate" }), expect.objectContaining({ kind: "action-unpinned", file: ".github/workflows/ci.yml" }), expect.objectContaining({ kind: "pull_request_target-head", file: ".github/workflows/ci.yml" }),
     ]) });
-  });
-
-  test("audit intent derives registration from the selected single-plan artifact", async () => {
-    const root = tempRoot();
-    const harness = path.join(root, ".mstar");
-    mkdirSync(path.join(harness, "plans"), { recursive: true });
-    setArtifactStore(createFsStore(harness));
-    const store = await initializeStore({ harnessDir: harness });
-    store.close();
-    await scaffoldHarness(root);
-    const findings = path.join(root, "findings.json");
-    const auditDir = path.join(root, "audit-2026-09-27");
-    writeFileSync(findings, JSON.stringify([{ title: "Bounded finding", description: "A fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" }]));
-    const scaffolded = await command("audit.scaffold").execute({ findings, dir: auditDir, sha: "abc1234", date: "2026-09-27" }, context(root));
-    expect(scaffolded.status).toBe("ok");
-
-    const promoted = await command("audit.promote").execute({ path: auditDir, deliveryKind: "verification/report-only", completionPolicy: "completion evidence is recorded", harness }, context(root));
-    expect(promoted.status).toBe("ok");
-    // Issue #428: promotion registers the workflow in the ACTIVE execution
-    // store; the retired snapshot.json/status.json artifacts are not written.
-    const state = await readExecutionState({ harnessDir: harness });
-    expect(state.data.workflows.map((workflow: { state: { id: string } }) => workflow.state.id)).toContain("audit-2026-09-27");
-    expect(existsSync(path.join(root, "unrelated"))).toBe(false);
-  });
-
-  test("promote refuses selections outside the declared audit plan directory", async () => {
-    const root = tempRoot();
-    const auditDir = path.join(root, "audit-2026-09-27");
-    mkdirSync(auditDir);
-    writeFileSync(path.join(auditDir, "README.md"), "# Audit\n");
-    const result = await command("audit.promote").execute({ path: auditDir, plans: "001", deliveryKind: "verification/report-only", harness: path.join(root, ".mstar") }, context(root));
-    expect(result.status).toBe("refused");
-    expect(result.message).toContain("001");
-    expect(existsSync(path.join(root, ".mstar", "workflows"))).toBe(false);
-  });
-  test("missing decision is preserved when an audit artifact contains multiple plans", async () => {
-    const root = tempRoot();
-    const findings = path.join(root, "findings.json");
-    const auditDir = path.join(root, "audit-2026-09-27");
-    writeFileSync(findings, JSON.stringify([
-      { title: "First finding", description: "First fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" },
-      { title: "Second finding", description: "Second fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" },
-    ]));
-    const scaffolded = await command("audit.scaffold").execute({ findings, dir: auditDir, sha: "abc1234", date: "2026-09-27" }, context(root));
-    expect(scaffolded.status).toBe("ok");
-    const result = await command("audit.promote").execute({
-      path: auditDir, deliveryKind: "verification/report-only", completionPolicy: "completion evidence is recorded",
-      harness: path.join(root, ".mstar"),
-    }, context(root));
-    expect(result).toMatchObject({ status: "usage", exitCode: 2 });
-    // The delivered aggregated admission names the missing decision in its
-    // diagnostics (the engine shadow-script's decision message moved there).
-    expect(result.message).toContain("Invalid input.");
-    expect(result.details?.diagnostics).toContainEqual(expect.objectContaining({
-      path: "--plans",
-      code: "required",
-      message: expect.stringContaining("2 audit plans are available"),
-    }));
-    expect(existsSync(path.join(root, ".mstar", "workflows"))).toBe(false);
   });
 });

@@ -424,7 +424,7 @@ describe("Empty input", () => {
 // ---------------------------------------------------------------------------
 import { tmpdir } from "node:os";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { afterAll } from "bun:test";
 import { prReviewReportPath, validatePrReviewReport } from "../src/prreview.js";
 import type { PrReportTarget } from "../src/prreview.js";
@@ -449,147 +449,156 @@ describe("prReviewReportPath — target forms (pr-review.md § Local report arch
   const tmp = mkdtempSync(join(tmpdir(), "engine-prreview-path-"));
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-  const reportsDir = (name: string): string => {
+  const reviewsDir = (name: string): string => {
     const dir = join(tmp, name);
     mkdirSync(dir, { recursive: true });
     return dir;
   };
 
-  test("pr target → <date>-pr<N>.md", () => {
-    const dir = reportsDir("pr");
-    expect(prReviewReportPath({ reportsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 134 } })).toBe(
-      join(dir, "2026-08-24-pr134.md"),
+  test("pr target → <date>-pr<N>/report.md", () => {
+    const dir = reviewsDir("pr");
+    expect(prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 134 } })).toBe(
+      join(dir, "2026-08-24-pr134", "report.md"),
     );
   });
 
-  test("branch target → <date>-<branch-slug>.md", () => {
-    const dir = reportsDir("branch");
-    expect(prReviewReportPath({ reportsDir: dir, date: "2026-08-24", target: { kind: "branch", slug: "feat-x" } })).toBe(
-      join(dir, "2026-08-24-feat-x.md"),
+  test("branch target → <date>-branch-<branch-slug>/report.md", () => {
+    const dir = reviewsDir("branch");
+    expect(prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "branch", slug: "feat-x" } })).toBe(
+      join(dir, "2026-08-24-branch-feat-x", "report.md"),
     );
   });
 
-  test("diff target with head SHA → <date>-diff-<short-sha>.md (sha shortened to 7)", () => {
-    const dir = reportsDir("diff-sha");
+  test("diff target with head SHA → <date>-diff-<short-sha>/report.md (sha shortened to 7)", () => {
+    const dir = reviewsDir("diff-sha");
     expect(
       prReviewReportPath({
-        reportsDir: dir,
+        reviewsDir: dir,
         date: "2026-08-24",
         target: { kind: "diff", headSha: "abc1234def5678" },
       }),
-    ).toBe(join(dir, "2026-08-24-diff-abc1234.md"));
+    ).toBe(join(dir, "2026-08-24-diff-abc1234", "report.md"));
   });
 
-  test("diff target without head SHA → bare <date>-diff.md — never fabricates a sha", () => {
-    const dir = reportsDir("diff-nosha");
-    const resolved = prReviewReportPath({ reportsDir: dir, date: "2026-08-24", target: { kind: "diff" } });
-    expect(resolved).toBe(join(dir, "2026-08-24-diff.md"));
- // Pure resolution: nothing is ever written, so nothing — least of all
- // an invented hex segment — appears in the directory.
+  test("diff target without head SHA → bare <date>-diff/report.md — never fabricates a sha", () => {
+    const dir = reviewsDir("diff-nosha");
+    const resolved = prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "diff" } });
+    expect(resolved).toBe(join(dir, "2026-08-24-diff", "report.md"));
+ // Pure resolution: nothing is ever written, not even the run directory.
     expect(readdirSync(dir)).toEqual([]);
   });
 
   test("date defaults to today when omitted; non-YYYY-MM-DD dates are rejected", () => {
-    const dir = reportsDir("dates");
+    const dir = reviewsDir("dates");
     const today = new Date();
     const local = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    expect(prReviewReportPath({ reportsDir: dir, target: { kind: "pr", n: 1 } }).endsWith(`${local}-pr1.md`)).toBe(true);
-    expect(() => prReviewReportPath({ reportsDir: dir, date: "20260824", target: { kind: "pr", n: 1 } })).toThrow(/YYYY-MM-DD/);
+    expect(prReviewReportPath({ reviewsDir: dir, target: { kind: "pr", n: 1 } })).toBe(join(dir, `${local}-pr1`, "report.md"));
+    expect(() => prReviewReportPath({ reviewsDir: dir, date: "20260824", target: { kind: "pr", n: 1 } })).toThrow(/YYYY-MM-DD/);
   });
 
-  test("diff target with EMPTY-string headSha → bare <date>-diff.md too (empty = absent, never fabricates)", () => {
-    const dir = reportsDir("diff-nosha-empty");
-    const resolved = prReviewReportPath({ reportsDir: dir, date: "2026-08-24", target: { kind: "diff", headSha: "" } });
-    expect(resolved).toBe(join(dir, "2026-08-24-diff.md"));
+  test("diff target with EMPTY-string headSha → bare <date>-diff/report.md too (empty = absent, never fabricates)", () => {
+    const dir = reviewsDir("diff-nosha-empty");
+    const resolved = prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "diff", headSha: "" } });
+    expect(resolved).toBe(join(dir, "2026-08-24-diff", "report.md"));
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("the run dir is idempotent: the same target on the same date resolves the same directory", () => {
+    const dir = reviewsDir("idempotent");
+    const first = prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 3 } });
+    expect(prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 3 } })).toBe(first);
   });
 });
 
-describe("prReviewReportPath — collision escalation -r2/-r3 across report AND stage files", () => {
+describe("prReviewReportPath — report escalation inside one run dir (§ 2)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-prreview-collide-"));
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
   let dir: string;
 
-  const seed = (name: string): void => writeFileSync(join(dir, name), "x\n");
+  /** Create the run dir `path` lives in (the resolver itself never writes). */
+  const mkRunDir = (path: string): void => mkdirSync(dirname(path), { recursive: true });
 
-  test("first resolve returns the plain name; second same-day resolve returns -r2 without touching r1", () => {
+  test("first resolve returns report.md; second same-day resolve returns report-r2 without touching r1", () => {
     dir = join(tmp, "escalate");
     mkdirSync(dir, { recursive: true });
-    const first = prReviewReportPath({ reportsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 7 } });
-    expect(first).toBe(join(dir, "2026-08-24-pr7.md"));
+    const first = prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 7 } });
+    expect(first).toBe(join(dir, "2026-08-24-pr7", "report.md"));
+    mkRunDir(first);
     writeFileSync(first, "report v1\n");
-    const second = prReviewReportPath({ reportsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 7 } });
-    expect(second).toBe(join(dir, "2026-08-24-pr7-r2.md"));
+    const second = prReviewReportPath({ reviewsDir: dir, date: "2026-08-24", target: { kind: "pr", n: 7 } });
+    expect(second).toBe(join(dir, "2026-08-24-pr7", "report-r2.md"));
  // The resolver never writes/overwrites: only r1 (written by the caller)
  // exists; r2 exists solely as the NEXT path handed back.
-    expect(readdirSync(dir)).toEqual(["2026-08-24-pr7.md"]);
+    expect(readdirSync(join(dir, "2026-08-24-pr7"))).toEqual(["report.md"]);
   });
 
   test("-r3 follows an existing -r2 (never reuses or overwrites any prior revision)", () => {
-    seed("2026-08-25-pr8-r2.md");
-    const third = prReviewReportPath({ reportsDir: dir, date: "2026-08-25", target: { kind: "pr", n: 8 } });
-    expect(third.endsWith("2026-08-25-pr8-r3.md")).toBe(true);
+    const runDir = join(dir, "2026-08-25-pr8");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "report-r2.md"), "v2\n");
+    const third = prReviewReportPath({ reviewsDir: dir, date: "2026-08-25", target: { kind: "pr", n: 8 } });
+    expect(third).toBe(join(runDir, "report-r3.md"));
     writeFileSync(third, "v3\n");
-    const fourth = prReviewReportPath({ reportsDir: dir, date: "2026-08-25", target: { kind: "pr", n: 8 } });
-    expect(fourth.endsWith("2026-08-25-pr8-r4.md")).toBe(true);
-    // Each existing stem remains reserved for its next revision.
+    const fourth = prReviewReportPath({ reviewsDir: dir, date: "2026-08-25", target: { kind: "pr", n: 8 } });
+    expect(fourth).toBe(join(runDir, "report-r4.md"));
+    // Each existing revision remains reserved for its successor.
   });
 
-  test("collision scan covers stage evidence files too (-stage1/-stage2 escalate on their own stems)", () => {
-    seed("2026-08-26-pr9-stage1-api-seat.md");
-    const stage1Again = prReviewReportPath({
-      reportsDir: dir,
-      date: "2026-08-26",
-      target: { kind: "pr", n: 9 },
-      stage: 1,
-      slug: "api-seat",
-    });
-    expect(stage1Again.endsWith("2026-08-26-pr9-stage1-api-seat-r2.md")).toBe(true);
- // The stage-1 collision must not bleed into the stage-2 stem.
-    const stage2 = prReviewReportPath({
-      reportsDir: dir,
-      date: "2026-08-26",
-      target: { kind: "pr", n: 9 },
-      stage: 2,
-      slug: "api-seat",
-    });
-    expect(stage2.endsWith("2026-08-26-pr9-stage2-api-seat.md")).toBe(true);
- // And a report re-review does NOT collide with an unrelated evidence file.
-    const reportAgain = prReviewReportPath({ reportsDir: dir, date: "2026-08-26", target: { kind: "pr", n: 9 } });
-    expect(reportAgain.endsWith("2026-08-26-pr9.md")).toBe(true);
+  test("stage evidence files are stable per seat: same slug → same file, never escalated", () => {
+    const runDir = join(dir, "2026-08-26-pr9");
+    mkdirSync(runDir, { recursive: true });
+    const stage1 = prReviewReportPath({ reviewsDir: dir, date: "2026-08-26", target: { kind: "pr", n: 9 }, stage: 1, slug: "api-seat" });
+    expect(stage1).toBe(join(runDir, "stage1-api-seat.md"));
+    writeFileSync(stage1, "seat 1 evidence\n");
+ // A seat re-run reuses its own evidence file instead of minting -r2.
+    expect(
+      prReviewReportPath({ reviewsDir: dir, date: "2026-08-26", target: { kind: "pr", n: 9 }, stage: 1, slug: "api-seat" }),
+    ).toBe(stage1);
+ // The stage-1 file never bleeds into the stage-2 name, and neither one
+ // escalates the report name.
+    expect(
+      prReviewReportPath({ reviewsDir: dir, date: "2026-08-26", target: { kind: "pr", n: 9 }, stage: 2, slug: "api-seat" }),
+    ).toBe(join(runDir, "stage2-api-seat.md"));
+    expect(prReviewReportPath({ reviewsDir: dir, date: "2026-08-26", target: { kind: "pr", n: 9 } })).toBe(
+      join(runDir, "report.md"),
+    );
   });
 
   test("same-day re-review never returns an already-existing path ( contract item 6)", () => {
+    const runDir = join(dir, "2026-08-27-branch-topic-a");
+    mkdirSync(runDir, { recursive: true });
     for (let i = 0; i < 5; i++) {
-      const next = prReviewReportPath({ reportsDir: dir, date: "2026-08-27", target: { kind: "branch", slug: "topic-a" } });
+      const next = prReviewReportPath({ reviewsDir: dir, date: "2026-08-27", target: { kind: "branch", slug: "topic-a" } });
+ // Same target, same date → same run dir; only the report revision moves.
+      expect(dirname(next)).toBe(runDir);
       writeFileSync(next, `gen ${i}\n`);
-      expect(readdirSync(dir).filter((f) => f.startsWith("2026-08-27-topic-a"))).toHaveLength(i + 1);
+      expect(readdirSync(runDir)).toHaveLength(i + 1);
     }
-    const names = readdirSync(dir).filter((f) => f.startsWith("2026-08-27-topic-a"));
-    expect(new Set(names).size).toBe(5);
+    // readdir order is filesystem-defined; compare the set, not the listing order.
+    expect(readdirSync(runDir).sort()).toEqual(["report-r2.md", "report-r3.md", "report-r4.md", "report-r5.md", "report.md"]);
   });
 
-  test("a same-stem DIRECTORY occupies the name — non-file dirents count as taken", () => {
+  test("a same-name DIRECTORY occupies report.md — non-file dirents count as taken", () => {
     dir = join(tmp, "occupied-dir");
-    mkdirSync(dir, { recursive: true });
-    mkdirSync(join(dir, "2026-08-28-pr10.md"));
-    const resolved = prReviewReportPath({ reportsDir: dir, date: "2026-08-28", target: { kind: "pr", n: 10 } });
-    expect(resolved.endsWith("2026-08-28-pr10-r2.md")).toBe(true);
+    mkdirSync(join(dir, "2026-08-28-pr10", "report.md"), { recursive: true });
+    const resolved = prReviewReportPath({ reviewsDir: dir, date: "2026-08-28", target: { kind: "pr", n: 10 } });
+    expect(resolved).toBe(join(dir, "2026-08-28-pr10", "report-r2.md"));
   });
 
-  test("a same-stem SYMLINK occupies the name — resolver never hands back a symlink-following path", () => {
+  test("a same-name SYMLINK occupies report.md — resolver never hands back a symlink-following path", () => {
     dir = join(tmp, "occupied-symlink");
-    mkdirSync(dir, { recursive: true });
+    const runDir = join(dir, "2026-08-28-pr11");
+    mkdirSync(runDir, { recursive: true });
     const escapeDir = mkdtempSync(join(tmpdir(), "engine-prreview-outside-"));
-    symlinkSync(join(escapeDir, "target.md"), join(dir, "2026-08-28-pr11.md"));
+    symlinkSync(join(escapeDir, "target.md"), join(runDir, "report.md"));
     try {
-      const resolved = prReviewReportPath({ reportsDir: dir, date: "2026-08-28", target: { kind: "pr", n: 11 } });
+      const resolved = prReviewReportPath({ reviewsDir: dir, date: "2026-08-28", target: { kind: "pr", n: 11 } });
  // Without name-based occupancy the resolver would return the link path
- // itself and a caller write would follow it out of reportsDir.
-      expect(resolved.endsWith("2026-08-28-pr11-r2.md")).toBe(true);
+ // itself and a caller write would follow it out of the run dir.
+      expect(resolved).toBe(join(runDir, "report-r2.md"));
       expect(resolved.startsWith(dir)).toBe(true);
     } finally {
-      rmSync(join(dir, "2026-08-28-pr11.md"));
+      rmSync(join(runDir, "report.md"));
       rmSync(escapeDir, { recursive: true, force: true });
     }
   });
@@ -602,18 +611,18 @@ describe("prReviewReportPath — argument contract errors", () => {
   test("missing --slug with --stage throws (slug <domain>-<seat> is required whenever stage is given)", () => {
     expect(() =>
  // @ts-expect-error — slug deliberately omitted alongside stage to prove runtime enforcement
-      prReviewReportPath({ reportsDir: tmp, date: "2026-08-24", target: { kind: "pr", n: 3 }, stage: 1 }),
+      prReviewReportPath({ reviewsDir: tmp, date: "2026-08-24", target: { kind: "pr", n: 3 }, stage: 1 }),
     ).toThrow(/slug/);
     expect(() =>
  // @ts-expect-error — symmetric case: slug without stage is also rejected
-      prReviewReportPath({ reportsDir: tmp, date: "2026-08-24", target: { kind: "pr", n: 3 }, slug: "api-seat" }),
+      prReviewReportPath({ reviewsDir: tmp, date: "2026-08-24", target: { kind: "pr", n: 3 }, slug: "api-seat" }),
     ).toThrow(/stage and slug go together/);
   });
 
-  test("reportsDir that does not exist yet resolves from an empty scan (no crash, plain name)", () => {
+  test("reviewsDir that does not exist yet still resolves the run dir (no crash, no listing to escalate)", () => {
     const missing = join(tmp, "not-created-yet");
-    expect(prReviewReportPath({ reportsDir: missing, date: "2026-08-24", target: { kind: "pr", n: 5 } })).toBe(
-      join(missing, "2026-08-24-pr5.md"),
+    expect(prReviewReportPath({ reviewsDir: missing, date: "2026-08-24", target: { kind: "pr", n: 5 } })).toBe(
+      join(missing, "2026-08-24-pr5", "report.md"),
     );
   });
 });

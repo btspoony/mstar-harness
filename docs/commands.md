@@ -64,8 +64,8 @@ Workflow notes are ordinary admitted append facts, not execution authority. Curr
 | [`/iteration-start`](#iteration-start) | Start an iteration: interactive direction lock, then the full lifecycle | `mstar-iteration` |
 | [`/iteration-drive`](#iteration-drive) | Drive/resume the selected locked iteration with one primary coordinator | `mstar-iteration` |
 | [`/iteration-loop`](#iteration-loop) | The same lifecycle end to end, autonomous lock, minimal human intervention | `mstar-iteration` |
-| [`/codebase-audit`](#codebase-audit) | Read-only survey of a codebase → prioritized improvement plans | `mstar-audit` |
-| [`/amazing-test-audit`](#amazing-test-audit) | Read-only test-suite audit → plans to delete / repair / consolidate tests | `mstar-audit` (`tests` focus) |
+| [`/codebase-audit`](#codebase-audit) | Read-only survey of a codebase → a prioritized review report | `mstar-audit` |
+| [`/amazing-test-audit`](#amazing-test-audit) | Read-only test-suite audit → findings to delete / repair / consolidate tests | `mstar-audit` (`tests` focus) |
 | [`/amazing-pr-review`](#amazing-pr-review) | Read-only pre-merge review of a PR / branch / diff → one verdict | `mstar-audit` (`pr` variant) |
 | [`/amazing-e2e-check`](#amazing-e2e-check) | Explicitly requested E2E / browser / device / deployment verification | `mstar-e2e` |
 
@@ -138,9 +138,9 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 /codebase-audit [simplify]
 ```
 
-**Purpose** — a read-only survey of a codebase as a senior advisor, producing prioritized, self-contained improvement plans in the plans directory (`{PLAN_DIR}/audit-<date>/`). No source edits, no state machine, no commits: the audit is advisory and its output is plan *candidates*.
+**Purpose** — a read-only survey of a codebase as a senior advisor, producing a prioritized, evidence-backed review report under the review tree (`{REVIEW_DIR}/<date>-codebase-<level>-<round>/`). No source edits, no state machine, no commits: the audit is advisory and its output is a review report.
 
-**When** — before `/iteration-start`, to discover what is worth doing; or standalone, to build a prioritized backlog. Findings feed the normal Prepare → Execute flow. `/amazing-pr-review` reviews an existing change rather than surveying the codebase, `/amazing-test-audit` audits the test suite rather than the whole codebase, and `/amazing-e2e-check` verifies behaviour rather than reading code.
+**When** — before `/iteration-start`, to discover what is worth doing; or standalone, to build a prioritized backlog. `/amazing-pr-review` reviews an existing change rather than surveying the codebase, `/amazing-test-audit` audits the test suite rather than the whole codebase, and `/amazing-e2e-check` verifies behaviour rather than reading code.
 
 **Args** — an optional keyword narrows the pass (a category focus such as `bug`, `security`, `perf`, `tech-debt`); the `simplify` variant runs a debt-focused deep pass over dead, duplicated, speculative and over-built surfaces.
 
@@ -154,11 +154,11 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 /amazing-test-audit [scope|subsystem] [quick|deep] [campaign]
 ```
 
-**Purpose** — a read-only audit of the existing test surface: sweep for junk patterns (assertion-free probes, source restatements, mock-tested mocks, test-only production seams), grade every candidate against the value/retention bar, and produce prioritized plans to delete, repair, consolidate, or relocate tests. No test edits, no source edits, no state machine, no commits: the audit is advisory and its output is plan *candidates*. A baseline test failure is reported as a suspected product bug, never silently deleted.
+**Purpose** — a read-only audit of the existing test surface: sweep for junk patterns (assertion-free probes, source restatements, mock-tested mocks, test-only production seams), grade every candidate against the value/retention bar, and report prioritized findings to delete, repair, consolidate, or relocate tests. No test edits, no source edits, no state machine, no commits: the audit is advisory and its output is a review report under `{REVIEW_DIR}`. A baseline test failure is reported as a suspected product bug, never silently deleted.
 
 **When** — when the suite itself is the question: pruning or repairing test debt before an iteration, after a test-heavy change, or as a standalone backlog pass. `/codebase-audit` surveys the whole codebase rather than the test surface, and `/amazing-pr-review` reviews an existing change rather than the suite.
 
-**Args** — a `scope|subsystem` token narrows the sweep to that area; `quick` / `deep` set the effort level (the audit effort table shared with `/codebase-audit`) and default to a whole-repo sweep; the `campaign` token switches to a whole-subsystem campaign that marks every test declaration in an `R` / `F` / `C` / `D` ledger before any plan is written. `quick` and `campaign` are mutually exclusive — campaign breadth is always the whole subsystem, so the combination hard-stops and asks the user to drop one token.
+**Args** — a `scope|subsystem` token narrows the sweep to that area; `quick` / `deep` set the effort level (the audit effort table shared with `/codebase-audit`) and default to a whole-repo sweep; the `campaign` token switches to a whole-subsystem campaign that marks every test declaration in an `R` / `F` / `C` / `D` ledger before the report findings are written. `quick` and `campaign` are mutually exclusive — campaign breadth is always the whole subsystem, so the combination hard-stops and asks the user to drop one token.
 
 **Hosts** — the lane fan-out follows `/codebase-audit`: read-only `scout` / `explore` seats per lane under the assignment's read-only delegation grant; each host keeps its own invoke tool (no native dsh `workflow` script ships for this entry).
 
@@ -180,7 +180,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Batch** — one session reviews one PR; remaining PRs from a multi-PR input are registered as audit todos, one session each.
 
-**Defined in** — [`commands/amazing-pr-review.md`](../commands/amazing-pr-review.md); procedure → `mstar-audit` (`references/pr-review.md`, the `pr` variant: tier resolution, pipeline, worktree isolation, posting, report archive); findings that need fixing become plans through the shared plan-output contract in `mstar-audit`.
+**Defined in** — [`commands/amazing-pr-review.md`](../commands/amazing-pr-review.md); procedure → `mstar-audit` (`references/pr-review.md`, the `pr` variant: tier resolution, pipeline, worktree isolation, posting, and the report archive under `{REVIEW_DIR}/<date>-pr<N>/`).
 
 ## /amazing-e2e-check
 

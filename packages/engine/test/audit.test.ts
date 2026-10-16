@@ -1,13 +1,14 @@
 /**
- * Engine audit module — audit Status-block validation, secret redaction, and
- * audit-<date>/ plan scaffolding.
+ * Engine audit module — the codebase-audit review report renderer, secret
+ * redaction + credential scanning, supply-chain checks and the
+ * deterministic finding gates.
  *
- * Spec sources (cited per test): mstar-audit SKILL.md (Hard Rules read-only,
- * Status block fields, audit-<date>/ layout, monotonic numbering, index
- * format) and mstar-audit/references/finding-format.md (category codes,
- * evidence requirements, secret-value prohibition).
+ * Spec sources (cited per test): mstar-audit SKILL.md (Hard Rules
+ * read-only, § Output format — the `{REVIEW_DIR}` run dir and the README
+ * report index) and mstar-audit/references/finding-format.md (category
+ * codes, evidence requirements, secret-value prohibition).
  */
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -15,92 +16,16 @@ import { randomBytes } from "node:crypto";
 import { createJwt, createOpenSshPrivateKey, createRsaPrivateKey } from "./fixtures/credentials.js";
 import {
   redactSecrets,
-  scaffoldAuditPlan,
+  scaffoldAuditReport,
   scanSecrets,
   supplyChainChecks,
   validateAuditFindingGates,
-  validateAuditStatusBlocks,
 } from "../src/audit.js";
 import type { AuditFinding } from "../src/audit.js";
-import { getCatalog } from "../src/catalog.js";
-import { registerShippedCatalogExecution } from "../src/execution-registration.js";
-import { readExecutionState, type ExecutionContext } from "../src/execution-store.js";
-import { initializeStore, type StoreContext } from "../src/store-db.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-/** Compliant audit plan Status block (mstar-audit SKILL.md § Plan output (all variants)). */
-const PLAN_GOOD = `# Fix N+1 query in order list
-
-## Status
-- **Priority**: P1
-- **Effort**: M
-- **Risk**: MED
-- **Depends on**: none
-- **Category**: perf
-- **Planned at**: commit \`abc1234\`, 2026-08-08
-
-## Problem
-Every order-list render issues 1+N queries.
-`;
-
-/** Every field invalid — exercises each enum check. */
-const PLAN_BAD_FIELDS = `# Plan with bad fields
-
-## Status
-- **Priority**: P5
-- **Effort**: XXL
-- **Risk**: MAYBE
-- **Depends on**: ../other/plan.md
-- **Category**: nope
-- **Planned at**: yesterday
-
-## Body
-Anything.
-`;
-
-/** Missing the Planned at and Depends on fields entirely. */
-const PLAN_MISSING_FIELDS = `# Plan with missing fields
-
-## Status
-- **Priority**: P2
-- **Effort**: S
-- **Risk**: LOW
-- **Category**: tests
-
-## Body
-Anything.
-`;
-
-/** No Status block at all. */
-const PLAN_NO_BLOCK = `# Plan without status
-
-Some body text.
-`;
-
-/** Two Status blocks — both must be checked. */
-const PLAN_TWO_BLOCKS = `# Two status blocks
-
-## Status
-- **Priority**: P1
-- **Effort**: XS
-- **Risk**: HIGH
-- **Depends on**: none
-- **Category**: security
-- **Planned at**: commit \`abcd1234\`, 2026-08-08
-
-## Body
-
-## Status
-- **Priority**: P3
-- **Effort**: XL
-- **Risk**: LOW
-- **Depends on**: plans/001-fix-n1.md
-- **Category**: docs
-- **Planned at**: commit \`abcd1234\`, 2026-08-08
-`;
 
 /** Secret-laden text covering each redaction pattern. */
 // Disposable values are generated locally, never issued by a remote service.
@@ -131,69 +56,6 @@ const word = "passwordless auth is fine";
 const cfg = { name: "service-account", role: "reader" };
 const md5 = "0123456789abcdef"; // 16 hex chars, but no key= assignment
 `;
-
-const hasCode = (g: { violations: { code: string }[] }, code: string) =>
-  g.violations.some((v) => v.code === code);
-
-// ---------------------------------------------------------------------------
-// validateAuditStatusBlocks — mstar-audit SKILL.md § Plan output (all variants) Status block
-// ---------------------------------------------------------------------------
-
-describe("validateAuditStatusBlocks", () => {
-  test("passes a fully compliant Status block", () => {
-    const result = validateAuditStatusBlocks(PLAN_GOOD);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-
-  test("accepts 'plans/NNN-*.md' as Depends on", () => {
-    const result = validateAuditStatusBlocks(PLAN_TWO_BLOCKS);
-    expect(result.ok).toBe(true);
-  });
-
-  test("flags every invalid enum value", () => {
-    const result = validateAuditStatusBlocks(PLAN_BAD_FIELDS);
-    expect(result.ok).toBe(false);
-    expect(hasCode(result, "audit.status.invalid-priority")).toBe(true);
-    expect(hasCode(result, "audit.status.invalid-effort")).toBe(true);
-    expect(hasCode(result, "audit.status.invalid-risk")).toBe(true);
-    expect(hasCode(result, "audit.status.invalid-depends-on")).toBe(true);
-    expect(hasCode(result, "audit.status.invalid-category")).toBe(true);
-    expect(hasCode(result, "audit.status.invalid-planned-at")).toBe(true);
-  });
-
-  test("flags missing required fields", () => {
-    const result = validateAuditStatusBlocks(PLAN_MISSING_FIELDS);
-    expect(result.ok).toBe(false);
-    expect(hasCode(result, "audit.status.missing-field")).toBe(true);
-    const missing = result.violations
-      .filter((v) => v.code === "audit.status.missing-field")
-      .map((v) => v.message);
-    expect(missing.some((m) => m.includes("Depends on"))).toBe(true);
-    expect(missing.some((m) => m.includes("Planned at"))).toBe(true);
-  });
-
-  test("reports a missing Status block", () => {
-    const result = validateAuditStatusBlocks(PLAN_NO_BLOCK);
-    expect(result.ok).toBe(false);
-    expect(hasCode(result, "audit.status.missing-block")).toBe(true);
-  });
-
-  test("accepts the documented depends-on wildcard and unknown-commit fallback", () => {
-    const plan = `# Plan with scaffold defaults
-## Status
-- **Priority**: P2
-- **Effort**: S
-- **Risk**: LOW
-- **Depends on**: plans/002-*.md
-- **Category**: tests
-- **Planned at**: commit \`unknown\`, 2026-08-08
-`;
-    const result = validateAuditStatusBlocks(plan);
-    expect(result.ok).toBe(true);
-    expect(result.violations).toEqual([]);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // redactSecrets — mstar-audit Hard Rule 4 (never reproduce secret values)
@@ -410,11 +272,11 @@ describe("redactSecrets non-leakage invariants", () => {
 });
 
 // ---------------------------------------------------------------------------
-// scaffoldAuditPlan — mstar-audit SKILL.md § Plan output (all variants) (audit-<date>/ layout,
-// monotonic numbering, README index)
+// scaffoldAuditReport — mstar-audit SKILL.md § Output format
+// ({REVIEW_DIR}/<date>-codebase-<level>-<round>/README.md; no plan files)
 // ---------------------------------------------------------------------------
 
-describe("scaffoldAuditPlan", () => {
+describe("scaffoldAuditReport", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-audit-"));
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -444,84 +306,146 @@ describe("scaffoldAuditPlan", () => {
     },
   ];
 
-  test("scaffolds numbered plan files + README index", () => {
-    const out = join(tmp, "audit-2026-08-08");
-    const result = scaffoldAuditPlan(out, findings, {
-      repoName: "acme",
-      repoShortSha: "abc1234",
+  /** The run dir one codebase run resolves to under `reviewsDir`. */
+  const runDir = (reviewsDir: string, date: string, level = "standard", round = 1): string =>
+    join(reviewsDir, `${date}-codebase-${level}-${round}`);
+
+  /** The rendered report of one run. */
+  const readReport = (reviewsDir: string, date: string, level = "standard", round = 1): string =>
+    readFileSync(join(runDir(reviewsDir, date, level, round), "README.md"), "utf8");
+
+  test("writes ONE report index into the run dir — no plan files, no Status block", () => {
+    const reviews = join(tmp, "reviews-main");
+    mkdirSync(reviews, { recursive: true });
+    const result = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-08", repoName: "acme", repoShortSha: "abc1234" });
+
+    expect(result).toEqual({
+      outDir: runDir(reviews, "2026-08-08"),
+      file: join(runDir(reviews, "2026-08-08"), "README.md"),
       date: "2026-08-08",
+      level: "standard",
+      round: 1,
     });
-    expect(result.files).toEqual(["001-fix-n-1-query-in-order-list.md", "002-rotate-leaked-aws-keys.md"]);
-    expect(result.nextNumber).toBe(3);
+ // The run dir holds the report and nothing else — there are no
+ // `NNN-*.md` plan documents any more.
+    expect(readdirSync(result.outDir)).toEqual(["README.md"]);
 
-    const plan1 = readFileSync(join(out, "001-fix-n-1-query-in-order-list.md"), "utf8");
-    expect(plan1).toContain("# Fix N+1 query in order list");
-    expect(plan1).toContain("- **Priority**: P1");
-    expect(plan1).toContain("- **Effort**: M");
-    expect(plan1).toContain("- **Risk**: MED");
-    expect(plan1).toContain("- **Depends on**: none");
-    expect(plan1).toContain("- **Category**: perf");
-    expect(plan1).toContain("- **Planned at**: commit `abc1234`, 2026-08-08");
-    expect(plan1).toContain("src/orders.ts:42");
-    expect(plan1).toContain("Batch the order items into one query.");
-    expect(plan1).toContain("bun test test/orders.test.ts");
- // no placeholder tokens in plan files (plan-quality-bar)
-    expect(/\b(TODO|TBD|TBA)\b/i.test(plan1)).toBe(false);
-
-    const readme = readFileSync(join(out, "README.md"), "utf8");
-    expect(readme).toContain("# Audit Report — acme @ abc1234 (2026-08-08)");
+    const readme = readFileSync(result.file, "utf8");
+    expect(readme).toContain("# Audit Report \u2014 acme @ abc1234 (2026-08-08)");
     expect(readme).toContain("| 001 | Fix N+1 query in order list | perf |");
     expect(readme).toContain("| 002 | Rotate leaked AWS keys | security |");
-    expect(readme).toContain("| 001 | Fix N+1 query in order list | P1 | M | none | TODO |");
+    expect(readme).toContain("src/orders.ts:42 — list() queries per order");
+    expect(readme).not.toContain("## Status");
+    expect(readme).not.toContain("**Depends on**");
   });
 
-  test("continues numbering monotonically when the directory already has plans", () => {
-    const out = join(tmp, "audit-2026-08-09");
-    mkdirSync(out, { recursive: true });
-    writeFileSync(
-      join(out, "001-earlier-plan.md"),
-      `# Earlier plan\n\n## Status\n- **Priority**: P2\n- **Effort**: S\n- **Risk**: LOW\n- **Depends on**: none\n- **Category**: tests\n- **Planned at**: commit \`deadbee\`, 2026-08-01\n`,
+  test("the detail section carries each finding in full: priority, verbatim multi-line text, every evidence entry", () => {
+    const reviews = join(tmp, "reviews-detail-fidelity");
+    mkdirSync(reviews, { recursive: true });
+    const verification = "```sh\nbun test a\nbun test b\n```";
+    scaffoldAuditReport(
+      [
+        {
+          title: "Multi-line finding",
+          category: "bug" as const,
+          impact: "Line one.\nLine two.",
+          effort: "S" as const,
+          risk: "LOW" as const,
+          confidence: "HIGH" as const,
+          evidence: ["src/a.ts:1 — first", "src/a.ts:2 — second"],
+          priority: "P3" as const,
+          fixSketch: "Do X.\nThen Y.",
+          verification,
+        },
+      ],
+      { reviewsDir: reviews, date: "2026-08-18" },
     );
-    const result = scaffoldAuditPlan(out, findings, { date: "2026-08-09" });
- // prior 001 stays; new batch starts at 002/003
-    expect(result.files).toEqual(["002-fix-n-1-query-in-order-list.md", "003-rotate-leaked-aws-keys.md"]);
-    expect(result.nextNumber).toBe(4);
-    expect(readFileSync(join(out, "001-earlier-plan.md"), "utf8")).toContain("# Earlier plan");
- // rebuilt index includes the pre-existing plan row
-    const readme = readFileSync(join(out, "README.md"), "utf8");
-    expect(readme).toContain("| 001 | Earlier plan |");
-    expect(readme).toContain("| 002 | Fix N+1 query in order list |");
+    const readme = readReport(reviews, "2026-08-18");
+    expect(readme).toContain("## Finding detail");
+    expect(readme).toContain("- **Priority**: P3");
+    // Prose and command blocks keep their newlines — the report is the only artifact.
+    expect(readme).toContain("Line one.\nLine two.");
+    expect(readme).toContain("Do X.\nThen Y.");
+    expect(readme).toContain(verification);
+    expect(readme).toContain("- src/a.ts:2 — second");
   });
 
-  test("re-scaffold with a changed priority refreshes the index row", () => {
-    const out = join(tmp, "audit-2026-08-27");
-    const finding = {
-      title: "Fix N+1 query",
-      category: "perf" as const,
-      impact: "a",
-      effort: "S" as const,
-      risk: "LOW" as const,
-      confidence: "HIGH" as const,
-      evidence: ["x"],
-      priority: "P1" as const,
-    };
-    scaffoldAuditPlan(out, [finding], { date: "2026-08-27" });
-    expect(readFileSync(join(out, "README.md"), "utf8")).toContain("| 001 | Fix N+1 query | P1 | S | none | TODO |");
- // Same title re-scaffolded with a re-triaged priority: numbering is
- // monotonic (001 is never rewritten), so the NEW batch's row must
- // carry the NEW value — finding-authoritative from the redacted
- // finding, not a parse artifact of a previous Status block — while
- // the preserved 001 row keeps its own priority.
-    scaffoldAuditPlan(out, [{ ...finding, priority: "P2" as const }], { date: "2026-08-27" });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
-    expect(readme).toContain("| 002 | Fix N+1 query | P2 | S | none | TODO |");
-    expect(readme).toContain("| 001 | Fix N+1 query | P1 | S | none | TODO |");
+  test("drops the Execution order & status section (plan-only) and keeps the documented order", () => {
+    const reviews = join(tmp, "reviews-sections");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-08" });
+    const readme = readReport(reviews, "2026-08-08");
+    expect(readme).not.toContain("## Execution order & status");
+    expect(readme).not.toContain("| Plan | Title |");
+    const order = ["## Findings", "## Red-team dispositions"].map((heading) => readme.indexOf(heading));
+    expect(order[0]).toBeGreaterThanOrEqual(0);
+    expect(order[1]).toBeGreaterThan(order[0]!);
+  });
+
+  test("level + round shape the run dir: a fresh run allocates the next round, an explicit round reuses it", () => {
+    const reviews = join(tmp, "reviews-rounds");
+    mkdirSync(reviews, { recursive: true });
+    const deep = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-09", level: "deep" });
+    expect(deep.outDir).toBe(runDir(reviews, "2026-08-09", "deep", 1));
+    expect(deep.level).toBe("deep");
+    expect(deep.round).toBe(1);
+ // A second run on the same date + level is a NEW round...
+    expect(scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-09", level: "deep" }).outDir).toBe(
+      runDir(reviews, "2026-08-09", "deep", 2),
+    );
+ // ...while an explicit round is that exact directory (a session's own run).
+    expect(scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-09", level: "deep", round: 1 }).outDir).toBe(
+      runDir(reviews, "2026-08-09", "deep", 1),
+    );
+ // Levels allocate independently of one another.
+    expect(scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-09", level: "quick" }).outDir).toBe(
+      runDir(reviews, "2026-08-09", "quick", 1),
+    );
+  });
+
+  test("a fresh run leaves the previous round's report untouched", () => {
+    const reviews = join(tmp, "reviews-preserve");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport([findings[0]!], { reviewsDir: reviews, date: "2026-08-10" });
+    const firstReport = join(runDir(reviews, "2026-08-10"), "README.md");
+    const before = readFileSync(firstReport, "utf8");
+    scaffoldAuditReport([findings[1]!], { reviewsDir: reviews, date: "2026-08-10" });
+    expect(readFileSync(firstReport, "utf8")).toBe(before);
+    expect(readReport(reviews, "2026-08-10", "standard", 2)).toContain("Rotate leaked AWS keys");
+    expect(readReport(reviews, "2026-08-10")).not.toContain("Rotate leaked AWS keys");
+  });
+
+  test("dir overrides the whole run dir (the CLI --dir path)", () => {
+    const reviews = join(tmp, "reviews-dir-override");
+    mkdirSync(reviews, { recursive: true });
+    const custom = join(tmp, "custom-run-dir");
+    const result = scaffoldAuditReport(findings, { reviewsDir: reviews, dir: custom, date: "2026-08-11" });
+    expect(result).toEqual({
+      outDir: custom,
+      file: join(custom, "README.md"),
+      date: "2026-08-11",
+      level: "standard",
+      round: 1,
+    });
+    expect(readdirSync(custom)).toEqual(["README.md"]);
+ // Nothing is derived from the name, so the reviews root stays untouched.
+    expect(readdirSync(reviews)).toEqual([]);
+  });
+
+  test("date defaults to the local calendar date", () => {
+    const reviews = join(tmp, "reviews-today");
+    mkdirSync(reviews, { recursive: true });
+    const today = new Date();
+    const local = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const result = scaffoldAuditReport([], { reviewsDir: reviews });
+    expect(result.date).toBe(local);
+    expect(result.outDir).toBe(runDir(reviews, local));
   });
 
   test("renders the Direction section when direction findings exist", () => {
-    const out = join(tmp, "audit-2026-08-10");
-    const result = scaffoldAuditPlan(
-      out,
+    const reviews = join(tmp, "reviews-direction");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(
       [
         {
           title: "Ship a status dashboard",
@@ -534,113 +458,84 @@ describe("scaffoldAuditPlan", () => {
           priority: "P3" as const,
         },
       ],
-      { date: "2026-08-10" },
+      { reviewsDir: reviews, date: "2026-08-12" },
     );
-    expect(result.files).toEqual(["001-ship-a-status-dashboard.md"]);
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const readme = readReport(reviews, "2026-08-12");
     expect(readme).toContain("## Direction");
-    expect(readme).toContain("Ship a status dashboard");
+    expect(readme).toContain("- Ship a status dashboard \u2014 Product value for operators.");
   });
 
   test("renders the rejected-findings section when provided", () => {
-    const out = join(tmp, "audit-2026-08-11");
-    scaffoldAuditPlan(out, findings, {
-      date: "2026-08-11",
+    const reviews = join(tmp, "reviews-rejected");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, {
+      reviewsDir: reviews,
+      date: "2026-08-13",
       rejected: [{ title: "Add dark mode", reason: "not worth doing for a CLI" }],
     });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const readme = readReport(reviews, "2026-08-13");
     expect(readme).toContain("## Findings considered and rejected");
     expect(readme).toContain("- Add dark mode: not worth doing for a CLI");
   });
 
-  test("same-slug findings get -2/-3 suffixes instead of overwriting", () => {
-    const out = join(tmp, "audit-2026-08-13");
-    const result = scaffoldAuditPlan(
-      out,
+  test("duplicate titles keep their own numbered row (no slug loss on the report surface)", () => {
+    const reviews = join(tmp, "reviews-dup");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(
       [
         { title: "Fix N+1 query", category: "perf" as const, impact: "a", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: ["x"], priority: "P1" as const },
         { title: "Fix N+1 query!", category: "perf" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: ["y"], priority: "P2" as const },
         { title: "Fix N+1 query??", category: "perf" as const, impact: "c", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: ["z"], priority: "P3" as const },
       ],
-      { date: "2026-08-13" },
+      { reviewsDir: reviews, date: "2026-08-14" },
     );
-    expect(result.files).toEqual(["001-fix-n-1-query.md", "002-fix-n-1-query-2.md", "003-fix-n-1-query-3.md"]);
- // every finding's plan file exists and keeps its own content
-    expect(readFileSync(join(out, "002-fix-n-1-query-2.md"), "utf8")).toContain("# Fix N+1 query!");
-    expect(readFileSync(join(out, "003-fix-n-1-query-3.md"), "utf8")).toContain("# Fix N+1 query??");
- // index rows are unique per file (no silent loss)
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const readme = readReport(reviews, "2026-08-14");
     expect(readme).toContain("| 001 | Fix N+1 query |");
     expect(readme).toContain("| 002 | Fix N+1 query! |");
     expect(readme).toContain("| 003 | Fix N+1 query?? |");
   });
 
-  test("scaffold output round-trips through validateAuditStatusBlocks (defaults included)", () => {
-    const out = join(tmp, "audit-2026-08-12");
-    const result = scaffoldAuditPlan(
-      out,
-      [
-        { title: "Fix N+1 query in order list", category: "perf" as const, impact: "Queries explode.", effort: "M" as const, risk: "MED" as const, confidence: "HIGH" as const, evidence: ["src/orders.ts:42"], priority: "P1" as const, dependsOn: "plans/002-*.md" },
-        { title: "Rotate leaked AWS keys", category: "security" as const, impact: "Credentials in git history.", effort: "S" as const, risk: "HIGH" as const, confidence: "HIGH" as const, evidence: [], priority: "P1" as const },
-      ],
- // no plannedAt / repoShortSha — commit falls back to "unknown", the
- // documented non-git-repo default that the validator accepts
-      { date: "2026-08-12" },
-    );
-    expect(result.files).toHaveLength(2);
-    for (const file of result.files) {
-      const plan = readFileSync(join(out, file), "utf8");
-      const gate = validateAuditStatusBlocks(plan);
-      expect({ file, ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ file, ok: true, violations: [] });
-    }
-  });
-
-  test("omits the Evidence section when a finding carries no evidence", () => {
-    const out = join(tmp, "audit-2026-08-14");
-    scaffoldAuditPlan(
-      out,
-      [{ title: "Document the fixture layout", category: "docs" as const, impact: "Nobody knows the layout.", effort: "XS" as const, risk: "LOW" as const, confidence: "MED" as const, evidence: [], priority: "P3" as const }],
-      { date: "2026-08-14" },
-    );
-    const plan = readFileSync(join(out, "001-document-the-fixture-layout.md"), "utf8");
-    expect(plan).not.toContain("## Evidence");
-  });
-
   test("renders the Red-team dispositions section with the four-state placeholder", () => {
-    const out = join(tmp, "audit-2026-08-15");
-    scaffoldAuditPlan(out, findings, { date: "2026-08-15" });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const reviews = join(tmp, "reviews-redteam");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-15" });
+    const readme = readReport(reviews, "2026-08-15");
     expect(readme).toContain("## Red-team dispositions");
     expect(readme).toContain("- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>");
   });
 
   test("renders Needs verification and Hardening & checked notes from options", () => {
-    const out = join(tmp, "audit-2026-08-16");
-    scaffoldAuditPlan(out, findings, {
+    const reviews = join(tmp, "reviews-dispositions");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, {
+      reviewsDir: reviews,
       date: "2026-08-16",
       needsVerification: [{ lead: "SSRF in webhook fetcher", how: "confirm caller supplies the URL", evidence: "src/hooks.ts:77" }],
       hardeningChecked: [
         { kind: "Hardening", text: "no CSP header - framework middleware already escapes all output" },
-        { kind: "Checked and clean", text: "orders SQL sink parameterized end to end", },
+        { kind: "Checked and clean", text: "orders SQL sink parameterized end to end" },
       ],
     });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const readme = readReport(reviews, "2026-08-16");
     expect(readme).toContain("## Needs verification");
     expect(readme).toContain("- SSRF in webhook fetcher: confirm caller supplies the URL (src/hooks.ts:77)");
     expect(readme).toContain("## Hardening & checked notes");
     expect(readme).toContain("- Hardening: no CSP header - framework middleware already escapes all output");
     expect(readme).toContain("- Checked and clean: orders SQL sink parameterized end to end");
  // section order matches the documented template
-    const nv = readme.indexOf("## Needs verification");
-    const hc = readme.indexOf("## Hardening & checked notes");
-    const dir = readme.indexOf("## Direction");
-    expect(nv).toBeGreaterThan(dir);
-    expect(hc).toBeGreaterThan(nv);
+    // No direction finding is supplied, so the Direction section is absent.
+    const order = ["## Needs verification", "## Hardening & checked notes", "## Red-team dispositions"].map(
+      (heading) => readme.indexOf(heading),
+    );
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  test("re-run without disposition options carries over ALL previously rendered entries", () => {
-    const out = join(tmp, "audit-2026-08-17");
-    scaffoldAuditPlan(out, findings, {
+  test("a re-run of the same round without disposition options carries over ALL previous entries", () => {
+    const reviews = join(tmp, "reviews-carry");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, {
+      reviewsDir: reviews,
       date: "2026-08-17",
       needsVerification: [
         { lead: "lead one", how: "check x" },
@@ -652,11 +547,15 @@ describe("scaffoldAuditPlan", () => {
         { kind: "Checked and clean", text: "sink z cleared" },
       ],
     });
- // re-run with no disposition options — every entry must survive the
- // rebuild (regression: the carry-over regex used to stop after the
- // first entry of each section)
-    scaffoldAuditPlan(out, [{ title: "Second batch plan", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-18" });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+ // Same run dir (explicit round), no disposition options — every entry must
+ // survive the rebuild (regression: the carry-over regex used to stop after
+ // the first entry of each section). A fresh run would allocate the next
+ // round instead, leaving this report alone.
+    scaffoldAuditReport(
+      [{ title: "Second batch finding", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }],
+      { reviewsDir: reviews, date: "2026-08-17", round: 1 },
+    );
+    const readme = readReport(reviews, "2026-08-17");
     expect(readme).toContain("- lead one: check x");
     expect(readme).toContain("- lead two: check y (src/a.ts:9)");
     expect(readme).toContain("- Hardening: gap one");
@@ -664,41 +563,49 @@ describe("scaffoldAuditPlan", () => {
     expect(readme).toContain("- Checked and clean: sink z cleared");
  // section entry counts preserved exactly
     const nvBlock = /## Needs verification\n\n([\s\S]*?)\n\n## Hardening/.exec(readme)?.[1] ?? "";
-    expect(nvBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(2);
-    const hcBlock = /## Hardening & checked notes\n\n([\s\S]*?)\n\n## Execution order/.exec(readme)?.[1] ?? "";
-    expect(hcBlock.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(3);
-    expect(readdirSync(out).filter((f) => f.startsWith("003-"))).toEqual(["003-second-batch-plan.md"]);
+    expect(nvBlock.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(2);
+    const hcBlock = /## Hardening & checked notes\n\n([\s\S]*?)\n\n## Red-team dispositions/.exec(readme)?.[1] ?? "";
+    expect(hcBlock.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(3);
+ // The new batch replaced the findings table of that same report.
+    expect(readme).toContain("| 001 | Second batch finding |");
+    expect(readme).not.toContain("Fix N+1 query in order list");
   });
 
   test("a SUPPLIED disposition array is the authoritative set — it replaces prior entries", () => {
-    const out = join(tmp, "audit-2026-08-19");
-    scaffoldAuditPlan(out, findings, {
+    const reviews = join(tmp, "reviews-supplied");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, {
+      reviewsDir: reviews,
       date: "2026-08-19",
       needsVerification: [
         { lead: "stale lead", how: "check old" },
         { lead: "kept lead", how: "check keep" },
       ],
     });
- // rerun supplies the current truth: stale lead resolved, kept kept,
- // fresh added — omission would have carried all three, supplying
- // replaces with exactly this set (resolved entries CAN be removed)
-    scaffoldAuditPlan(out, [], {
-      date: "2026-08-20",
+ // same run dir, current truth supplied: stale lead resolved, kept kept,
+ // fresh added — omission would have carried all three, supplying replaces
+ // with exactly this set (resolved entries CAN be removed)
+    scaffoldAuditReport([], {
+      reviewsDir: reviews,
+      date: "2026-08-19",
+      round: 1,
       needsVerification: [
         { lead: "kept lead", how: "check keep" },
         { lead: "fresh lead", how: "check new" },
       ],
     });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const readme = readReport(reviews, "2026-08-19");
     expect(readme).not.toContain("- stale lead: check old");
     expect(readme).toContain("- kept lead: check keep");
     expect(readme).toContain("- fresh lead: check new");
   });
 
   test("carry-over tolerates hand-edited headings: case, CRLF, spacing, blank lines", () => {
-    const out = join(tmp, "audit-2026-08-21");
-    scaffoldAuditPlan(out, findings, { date: "2026-08-21" });
- // simulate a hand-edited index: CRLF endings, different heading case,
+    const reviews = join(tmp, "reviews-handedited");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-21" });
+    const report = join(runDir(reviews, "2026-08-21"), "README.md");
+ // simulate a hand-edited report: CRLF endings, different heading case,
  // trailing spaces in the heading, no blank line before the body
     const handEdited = [
       "# Audit Report \u2014 repo @ abc1234 (2026-08-21)",
@@ -714,57 +621,25 @@ describe("scaffoldAuditPlan", () => {
       "## HARDENING & CHECKED NOTES",
       "- Checked and clean: hand cleared sink",
       "",
-      "## Execution order & status",
+      "## Red-team dispositions",
       "",
     ].join("\r\n");
-    writeFileSync(join(out, "README.md"), handEdited);
-    scaffoldAuditPlan(out, [{ title: "Rebuild batch", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }], { date: "2026-08-22" });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    writeFileSync(report, handEdited);
+    scaffoldAuditReport(
+      [{ title: "Rebuild batch", category: "tests" as const, impact: "b", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }],
+      { reviewsDir: reviews, date: "2026-08-21", round: 1 },
+    );
+    const readme = readFileSync(report, "utf8");
     expect(readme).toContain("- hand typed lead: check it (src/x.ts:1)");
     expect(readme).toContain("- Checked and clean: hand cleared sink");
   });
 
-  test("non-default confidence persists in a Status line and survives a no-new-findings rebuild", () => {
-    const out = join(tmp, "audit-2026-08-28");
-    scaffoldAuditPlan(
-      out,
-      [
-        {
-          title: "Unparameterized sink",
-          category: "security" as const,
-          impact: "Raw SQL in the export path.",
-          effort: "S" as const,
-          risk: "HIGH" as const,
-          confidence: "HIGH" as const,
-          evidence: ["src/export.ts:88 — f-string builds the query", "src/export.ts:120 — retry path"],
-          priority: "P1" as const,
-        },
-      ],
-      { date: "2026-08-28" },
-    );
-    const plan = readFileSync(join(out, "001-unparameterized-sink.md"), "utf8");
-    expect(plan).toContain("- **Confidence**: HIGH");
-    expect(validateAuditStatusBlocks(plan).ok).toBe(true);
-    expect(readFileSync(join(out, "README.md"), "utf8")).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
-    // Default output unchanged: MED findings render NO Confidence Status line.
-    scaffoldAuditPlan(
-      out,
-      [{ title: "Default confidence", category: "docs" as const, impact: "d", effort: "XS" as const, risk: "LOW" as const, confidence: "MED" as const, evidence: [], priority: "P3" as const }],
-      { date: "2026-08-29" },
-    );
-    expect(readFileSync(join(out, "002-default-confidence.md"), "utf8")).not.toContain("**Confidence**");
-    // Rebuild with NO new findings: the index row recovers HIGH from the
-    // persisted Status line instead of degrading to "—".
-    scaffoldAuditPlan(out, [], { date: "2026-08-30" });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
-    expect(readme).toContain("| 001 | Unparameterized sink | security |");
-    expect(readme).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
-  });
-
-  test("D-1: scaffold redacts credentials from finding evidence/fix sketch (Hard Rule 4)", () => {
-    const out = join(tmp, "audit-2026-08-25");
-    const result = scaffoldAuditPlan(
-      out,
+  test("D-1: the report redacts credentials in every channel (Hard Rule 4)", () => {
+    const reviews = join(tmp, "reviews-redaction");
+    mkdirSync(reviews, { recursive: true });
+    const leak = "sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2";
+    const otherLeak = "sk_live_" + "B7c8D9e0F1a2B3c4D5e6F7g8";
+    const result = scaffoldAuditReport(
       [
         {
           title: "Rotate the leaked Stripe live key",
@@ -773,45 +648,25 @@ describe("scaffoldAuditPlan", () => {
           effort: "S" as const,
           risk: "HIGH" as const,
           confidence: "HIGH" as const,
-          evidence: ["src/config.ts:12 — sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2 committed"],
+          evidence: [`src/config.ts:12 — ${leak} committed`, `src/config.ts:20 — ${leak} again`],
           priority: "P1" as const,
-          fixSketch: "Rotate the key (sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2), then scrub history.",
         },
       ],
-      { date: "2026-08-11" },
-    );
-    expect(result.files).toEqual(["001-rotate-the-leaked-stripe-live-key.md"]);
-    for (const file of [...result.files, "README.md"]) {
-      const text = readFileSync(join(out, file), "utf8");
- // No raw credential value anywhere in the scaffolded artifact...
-      expect(text).not.toContain("sk_live_" + "A1b2C3d4E5f6G7h8I9j0K1l2");
- // ...but the redaction marker and the non-secret context survive.
-      expect(text).toContain("[REDACTED stripe-live-key@");
-      expect(text).toContain("src/config.ts:12");
-    }
-    const planFile = readFileSync(join(out, result.files[0]!), "utf8");
- // Fix sketch survives redaction too (plan file only — the README
- // index does not render fix sketches).
-    expect(planFile).toContain("Rotate the key ([REDACTED stripe-live-key@1]), then scrub history.");
-  });
-
-  test("D-1: rejected findings + needsVerification/hardeningChecked are redacted in the README ", () => {
-    const out = join(tmp, "audit-2026-08-26");
-    const leak = "sk_live_" + "B7c8D9e0F1a2B3c4D5e6F7g8";
-    scaffoldAuditPlan(
-      out,
-      [{ title: "Benign finding", category: "tests" as const, impact: "i", effort: "S" as const, risk: "LOW" as const, confidence: "HIGH" as const, evidence: [], priority: "P2" as const }],
       {
-        date: "2026-08-26",
-        rejected: [{ title: `Rejected token: ${leak}`, reason: "value was already rotated" }],
-        needsVerification: [{ lead: "AWS key in logs", how: `search ${leak} in CloudWatch` }],
-        hardeningChecked: [{ kind: "Hardening", text: `legacy key ${leak} revoked` }],
+        reviewsDir: reviews,
+        date: "2026-08-22",
+        rejected: [{ title: `Rejected token: ${otherLeak}`, reason: "value was already rotated" }],
+        needsVerification: [{ lead: "AWS key in logs", how: `search ${otherLeak} in CloudWatch` }],
+        hardeningChecked: [{ kind: "Hardening", text: `legacy key ${otherLeak} revoked` }],
       },
     );
-    const readme = readFileSync(join(out, "README.md"), "utf8");
- // No raw value may reach the index through ANY channel.
+    const readme = readFileSync(result.file, "utf8");
+ // No raw credential value reaches the report through ANY channel...
     expect(readme).not.toContain(leak);
+    expect(readme).not.toContain(otherLeak);
+ // ...while the redaction marker and the non-secret context survive.
     expect(readme).toContain("[REDACTED stripe-live-key@");
+    expect(readme).toContain("src/config.ts:12");
   });
 });
 
@@ -994,7 +849,7 @@ describe("validateAuditFindingGates", () => {
     }
   });
 
-  test("non-positive, fractional or unsafe evidence lines → audit.finding.evidence.line; scaffoldAuditPlan rejects via direct engine call", () => {
+  test("non-positive, fractional or unsafe evidence lines → audit.finding.evidence.line; scaffoldAuditReport rejects via direct engine call", () => {
     for (const line of [0, -3, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
       const gate = validateAuditFindingGates([
         enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] }),
@@ -1007,7 +862,7 @@ describe("validateAuditFindingGates", () => {
     const out = join(tmp, "audit-evidence-line");
     for (const line of [0, -3, 1.5]) {
       expect(() =>
-        scaffoldAuditPlan(out, [enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] })], { date: "2026-09-05" }),
+        scaffoldAuditReport([enrichedFinding({ evidence: [{ file: "src/a.ts", line, description: "d" }] })], { reviewsDir: out, date: "2026-09-05" }),
       ).toThrow(/audit\.finding\.evidence\.line/);
     }
   });
@@ -1102,9 +957,9 @@ describe("validateAuditFindingGates", () => {
   const codesOf = (findings: readonly AuditFinding[]): string[] =>
     validateAuditFindingGates(findings).violations.map((v) => v.code);
 
-  test("non-array findings → audit.finding.shape; scaffoldAuditPlan rejects via direct engine call", () => {
+  test("non-array findings → audit.finding.shape; scaffoldAuditReport rejects via direct engine call", () => {
     const out = join(tmp, "audit-shape-findings");
-    expect(() => scaffoldAuditPlan(out, "nope" as unknown as AuditFinding[], { date: "2026-09-15" })).toThrow(
+    expect(() => scaffoldAuditReport("nope" as unknown as AuditFinding[], { reviewsDir: out, date: "2026-09-15" })).toThrow(
       /invalid audit findings — audit\.finding\.shape: findings — audit\.finding\.shape/,
     );
   });
@@ -1126,7 +981,7 @@ describe("validateAuditFindingGates", () => {
     // positive control: string evidence stays legal
     expect(validateAuditFindingGates([legacyFinding()]).ok).toBe(true);
     const out = join(tmp, "audit-shape-evidence");
-    expect(() => scaffoldAuditPlan(out, [malformed({ evidence: [null] })], { date: "2026-09-15" })).toThrow(
+    expect(() => scaffoldAuditReport([malformed({ evidence: [null] })], { reviewsDir: out, date: "2026-09-15" })).toThrow(
       /audit\.finding\.evidence\.shape: findings\[0\]\.evidence\[0\]/,
     );
   });
@@ -1146,9 +1001,9 @@ describe("validateAuditFindingGates", () => {
     const stepGate = validateAuditFindingGates([malformed({ trace: [null] })]);
     expect(stepGate.violations.some((v) => v.message.includes("trace[0]"))).toBe(true);
     const out = join(tmp, "audit-shape-trace");
-    // scaffoldAuditPlan reports the gate's first violation (topology sorts
+    // scaffoldAuditReport reports the gate's first violation (topology sorts
     // before the per-step pass) — still a stable code, never a TypeError.
-    expect(() => scaffoldAuditPlan(out, [malformed({ trace: [42] })], { date: "2026-09-15" })).toThrow(
+    expect(() => scaffoldAuditReport([malformed({ trace: [42] })], { reviewsDir: out, date: "2026-09-15" })).toThrow(
       /invalid audit findings — audit\.finding\.trace\.\w+/,
     );
   });
@@ -1188,151 +1043,115 @@ describe("validateAuditFindingGates", () => {
   });
 });
 
-describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
+describe("scaffoldAuditReport — gate integration + report columns", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-audit-scaffold-gates-"));
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-  test("gate failure throws TypeError with code + field path BEFORE any write; existing README untouched", () => {
-    const out = join(tmp, "audit-gate-fail");
-    mkdirSync(out, { recursive: true });
-    const readme = join(out, "README.md");
-    writeFileSync(readme, "# pre-existing index\n");
+  /** The run dir a default (standard / round 1) report lands in. */
+  const runDir = (reviewsDir: string, date: string): string => join(reviewsDir, `${date}-codebase-standard-1`);
+
+  test("gate failure throws TypeError with code + field path BEFORE any write; no run dir is created", () => {
+    const reviews = join(tmp, "reviews-gate-fail");
+    mkdirSync(reviews, { recursive: true });
     let thrown: unknown;
     try {
-      scaffoldAuditPlan(out, [enrichedFinding(), legacyFinding({ fingerprint: "aa-late" })], { date: "2026-09-01" });
+      scaffoldAuditReport([enrichedFinding(), legacyFinding({ fingerprint: "aa-late" })], { reviewsDir: reviews, date: "2026-09-01" });
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(TypeError);
     expect((thrown as TypeError).message).toContain("audit.finding.fingerprint.order");
     expect((thrown as TypeError).message).toContain("findings[1].fingerprint");
-    expect(readdirSync(out).sort()).toEqual(["README.md"]);
+ // The gate runs before the first mkdirSync: no run dir appears.
+    expect(readdirSync(reviews)).toEqual([]);
+  });
+
+  test("gate failure leaves an existing report of the same run dir untouched", () => {
+    const reviews = join(tmp, "reviews-gate-preserve");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport([legacyFinding()], { reviewsDir: reviews, date: "2026-09-01" });
+    const report = join(runDir(reviews, "2026-09-01"), "README.md");
+    const before = readFileSync(report, "utf8");
+    expect(() =>
+      scaffoldAuditReport([enrichedFinding(), legacyFinding({ fingerprint: "aa-late" })], {
+        reviewsDir: reviews,
+        date: "2026-09-01",
+        round: 1,
+      }),
+    ).toThrow(TypeError);
+    expect(readFileSync(report, "utf8")).toBe(before);
   });
 
   test("supplied fingerprint: null → gate violation TypeError before any write (never silent omission)", () => {
-    const out = join(tmp, "audit-fingerprint-null");
-    mkdirSync(out, { recursive: true });
+    const reviews = join(tmp, "reviews-fingerprint-null");
+    mkdirSync(reviews, { recursive: true });
     let thrown: unknown;
     try {
-      scaffoldAuditPlan(out, [{ ...enrichedFinding(), fingerprint: null } as unknown as AuditFinding], { date: "2026-09-18" });
+      scaffoldAuditReport([{ ...enrichedFinding(), fingerprint: null } as unknown as AuditFinding], { reviewsDir: reviews, date: "2026-09-18" });
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(TypeError);
     expect((thrown as TypeError).message).toContain("audit.finding.fingerprint.grammar");
     expect((thrown as TypeError).message).toContain("findings[0].fingerprint");
-    expect(readdirSync(out)).toEqual([]);
+    expect(readdirSync(reviews)).toEqual([]);
   });
 
-  test("enriched finding renders Fingerprint/Likelihood/Severity Status lines, Trace table, structured evidence bullets; prose Impact retained", () => {
-    const out = join(tmp, "audit-2026-09-02");
-    scaffoldAuditPlan(out, [enrichedFinding()], { date: "2026-09-02", repoShortSha: "deadbee" });
-    const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
-    expect(plan).toContain("- **Fingerprint**: sql-export-sink");
-    expect(plan).toContain("- **Confidence**: HIGH");
-    expect(plan).toContain("- **Likelihood**: high");
-    expect(plan).toContain("- **Severity impact**: high");
-    expect(plan).toContain("- **Severity**: high");
-    expect(plan).toContain("## Impact");
-    expect(plan).toContain("User-controlled CSV export interpolates raw SQL.");
-    // string evidence bullets byte-for-byte; object evidence renders file:line — description
-    expect(plan).toContain("- src/export.ts:88 — f-string builds the query");
-    expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
-    // Trace table with Kind | Location | Scope / Description
-    expect(plan).toContain("## Trace");
-    expect(plan).toContain("| entrypoint | src/routes/export.ts:10 | GET /export — query param reaches the exporter |");
-    expect(plan).toContain("| sink | src/export.ts:88 | runExport — query executed |");
-    // still round-trips through the Status validator
-    expect(validateAuditStatusBlocks(plan).ok).toBe(true);
-  });
-
-  test("trace table cells escape pipes and encode embedded line breaks (\\n and lone \\r) without extra rows", () => {
-    const out = join(tmp, "audit-2026-09-03");
-    scaffoldAuditPlan(
-      out,
-      [
-        enrichedFinding({
-          trace: [
-            { kind: "sink", file: "src/a.ts", line: 1, scope: "with | pipe", description: "line one\nline two\rcol three" },
-          ],
-        }),
-      ],
-      { date: "2026-09-03" },
+  test("enriched findings render Fingerprint + severity columns; structured evidence renders file:line — description", () => {
+    const reviews = join(tmp, "reviews-enriched");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport([enrichedFinding()], { reviewsDir: reviews, date: "2026-09-02", repoShortSha: "deadbee" });
+    const readme = readFileSync(join(runDir(reviews, "2026-09-02"), "README.md"), "utf8");
+    expect(readme).toContain(
+      "| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence | Fingerprint | Likelihood | Severity impact | Severity |",
     );
-    const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
-    expect(plan).toContain("| sink | src/a.ts:1 | with \\| pipe — line one\\nline two\\ncol three |");
-    expect(plan).toContain("## Impact"); // exactly one row: the encoded break never starts a new table line
-    expect(plan).not.toContain("\r"); // a lone CR never survives into a written cell
-  });
-
-  test("MED confidence with no metadata writes no Confidence line; enriched MED finding does", () => {
-    const out = join(tmp, "audit-2026-09-04");
-    scaffoldAuditPlan(
-      out,
-      [
-        legacyFinding({ title: "Legacy shape" }),
-        enrichedFinding({ confidence: "MED", title: "Enriched default confidence" }),
-      ],
-      { date: "2026-09-04" },
+ // prose Impact retained; structured evidence renders the typed location
+    expect(readme).toContain(
+      "| 001 | Unparameterized sink in export path | security | User-controlled CSV export interpolates raw SQL. | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |",
     );
-    const legacy = readFileSync(join(out, "001-legacy-shape.md"), "utf8");
-    expect(legacy).not.toContain("**Confidence**");
-    expect(legacy).not.toContain("## Trace");
-    expect(legacy).not.toContain("**Fingerprint**");
-    const enriched = readFileSync(join(out, "002-enriched-default-confidence.md"), "utf8");
-    expect(enriched).toContain("- **Confidence**: MED");
   });
 
-  test("index gains Fingerprint / Likelihood / Severity impact / Severity columns only when a row has them; unrated rows show —", () => {
-    const out = join(tmp, "audit-2026-09-05");
-    scaffoldAuditPlan(out, [legacyFinding({ title: "Legacy row" }), enrichedFinding()], {
+  test("index gains the Fingerprint / Likelihood / Severity columns only when a row has them; unrated rows show —", () => {
+    const reviews = join(tmp, "reviews-columns");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport([legacyFinding({ title: "Legacy row" }), enrichedFinding()], {
+      reviewsDir: reviews,
       date: "2026-09-05",
       repoShortSha: "deadbee",
     });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
-    expect(readme).toContain("| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence | Fingerprint | Likelihood | Severity impact | Severity |");
-    // prose Impact column retained; legacy row shows — in the new cells
+    const readme = readFileSync(join(runDir(reviews, "2026-09-05"), "README.md"), "utf8");
+    expect(readme).toContain(
+      "| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence | Fingerprint | Likelihood | Severity impact | Severity |",
+    );
     expect(readme).toContain("| 001 | Legacy row | perf | Queries explode on the dashboard. | S | LOW | MED | src/orders.ts:42 — raw loop | — | — | — | — |");
-    expect(readme).toContain("| 002 | Unparameterized sink in export path | security | User-controlled CSV export interpolates raw SQL. | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |");
+    expect(readme).toContain(
+      "| 002 | Unparameterized sink in export path | security | User-controlled CSV export interpolates raw SQL. | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |",
+    );
   });
 
   test("legacy-only batch keeps the old index header (no empty new columns)", () => {
-    const out = join(tmp, "audit-2026-09-06");
-    scaffoldAuditPlan(out, [legacyFinding()], { date: "2026-09-06", repoShortSha: "deadbee" });
-    const readme = readFileSync(join(out, "README.md"), "utf8");
+    const reviews = join(tmp, "reviews-legacy-header");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport([legacyFinding()], { reviewsDir: reviews, date: "2026-09-06", repoShortSha: "deadbee" });
+    const readme = readFileSync(join(runDir(reviews, "2026-09-06"), "README.md"), "utf8");
     expect(readme).toContain("| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |\n");
     expect(readme).not.toContain("Fingerprint");
   });
 
-  test("rerun with no new findings retains stored fingerprint/severity/confidence; legacy row fallbacks unchanged", () => {
-    const out = join(tmp, "audit-2026-09-07");
-    scaffoldAuditPlan(out, [legacyFinding({ title: "Legacy row" }), enrichedFinding()], {
-      date: "2026-09-07",
-      repoShortSha: "deadbee",
-    });
-    // Rerun without new findings rebuilds the index from the stored Status lines.
-    const result = scaffoldAuditPlan(out, [], { date: "2026-09-07", repoShortSha: "deadbee" });
-    expect(result.files).toEqual([]);
-    expect(result.nextNumber).toBe(3);
-    const rebuilt = readFileSync(join(out, "README.md"), "utf8");
-    expect(rebuilt).toContain("| 002 | Unparameterized sink in export path | security | see plan file | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |");
-    expect(rebuilt).toContain("| 001 | Legacy row | perf | see plan file | S | LOW | — | src/orders.ts:42 — raw loop | — | — | — | — |");
-  });
-
-  test("secret-bearing structured description is redacted normally; opaque files/fingerprints never altered", () => {
-    const out = join(tmp, "audit-2026-09-08b");
-    scaffoldAuditPlan(
-      out,
+  test("secret-bearing structured description is redacted; the typed file path is never altered", () => {
+    const reviews = join(tmp, "reviews-typed-redaction");
+    mkdirSync(reviews, { recursive: true });
+    scaffoldAuditReport(
       [
         enrichedFinding({
           evidence: [{ file: "src/config.ts", line: 3, description: "AWS key AKIAIOSFODNN7EXAMPLE committed" }],
         }),
       ],
-      { date: "2026-09-08" },
+      { reviewsDir: reviews, date: "2026-09-08" },
     );
-    const plan = readFileSync(join(out, "001-unparameterized-sink-in-export-path.md"), "utf8");
-    expect(plan).not.toContain("AKIAIOSFODNN7EXAMPLE");
-    expect(plan).toContain("- src/config.ts:3 —");
+    const readme = readFileSync(join(runDir(reviews, "2026-09-08"), "README.md"), "utf8");
+    expect(readme).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(readme).toContain("src/config.ts:3 —");
   });
 });
 
@@ -1492,48 +1311,4 @@ describe("supplyChainChecks action-unpinned trailing comment (fix round)", () =>
   });
 });
 
-// ---------------------------------------------------------------------------
-describe("audit promotion through the ACTIVE registration seam", () => {
-  test("registers the audit workflow and catalog binding atomically on an ACTIVE store", async () => {
-    const root = mkdtempSync(join(tmpdir(), "engine-audit-active-registration-"));
-    try {
-      const harnessDir = join(root, ".mstar");
-      mkdirSync(harnessDir, { recursive: true });
-      const context: StoreContext = { harnessDir };
-      const store = await initializeStore(context);
-      store.close();
-      const outDir = join(harnessDir, "plans", "audit-2026-10-09");
-      mkdirSync(outDir, { recursive: true });
-      writeFileSync(join(outDir, "001-fix-the-duplicate-index.md"), "# Fix the duplicate index\n\n**plan_id:** 001-fix-the-duplicate-index\n");
-      const workflowId = "audit-2026-10-09";
-      const executionContext: ExecutionContext = {
-        ...context,
-        caller: { sessionId: "audit-coordinator", role: "coordinator", workflowId },
-      };
 
-      const receipt = await registerShippedCatalogExecution(executionContext, {
-        actor: "project-manager",
-        workflow: {
-          kind: "audit",
-          outDir,
-          selected: ["001"],
-          options: {
-            harnessDir,
-            deliveryKind: "verification/report-only",
-            completionPolicy: "audit evidence retained in the plan directory",
-          },
-        },
-      });
-
-      expect(receipt).toMatchObject({ workflowId, catalogRevision: 1, recovered: false });
-      const state = await readExecutionState(context);
-      expect(state.data.workflows.map((workflow) => workflow.state.id)).toEqual([workflowId]);
-      expect(state.data.workflows[0]?.plans.map((plan) => plan.plan.id)).toEqual(["001-fix-the-duplicate-index"]);
-      expect((await getCatalog(context, { kind: "plan", id: "001-fix-the-duplicate-index" })).entity.title).toBe(
-        "Fix the duplicate index",
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});

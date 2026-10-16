@@ -25,6 +25,7 @@
 import { readdirSync, type Dirent } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+import { resolveReviewRunDir } from "./path.js";
 import { AUDIT_CATEGORIES, AUDIT_CONFIDENCES, AUDIT_EFFORTS, AUDIT_RISKS } from "./audit.js";
 
 /** Merge classes for accepted PR-review findings (pr-review.md § Merge class). */
@@ -567,9 +568,6 @@ export type PrReportTarget =
   | { kind: "branch"; slug: string }
   | { kind: "diff"; headSha?: string };
 
-/** Short-SHA width for `diff` filenames (git default abbrevation length). */
-const SHORT_SHA_WIDTH = 7;
-
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Local calendar date `YYYY-MM-DD` (same convention as project.ts register dates). */
@@ -588,43 +586,49 @@ function requireSafeComponent(value: string, what: string): string {
   );
 }
 
-/** Base stem (no `.md`, no `-rN`, no stage suffix) for the resolved date. */
-function reportBaseStem(date: string, target: PrReportTarget): string {
-  switch (target.kind) {
-    case "pr":
-      if (!Number.isInteger(target.n) || target.n < 1) {
-        throw new Error(`prReviewReportPath: target.n must be a positive integer PR number - got ${JSON.stringify(String(target.n))}`);
-      }
-      return `${date}-pr${target.n}`;
-    case "branch":
-      return `${date}-${requireSafeComponent(target.slug, "target.slug (branch-slug)")}`;
-    case "diff":
- // Absent OR empty headSha => bare `-diff` stem; never fabricate a SHA.
-      if (!target.headSha) return `${date}-diff`;
-      return `${date}-diff-${requireSafeComponent(target.headSha, "target.headSha").slice(0, SHORT_SHA_WIDTH)}`;
+/**
+ * Next free report file name inside `runDir`: `report.md`, else the first
+ * free `report-r<N>.md` after the highest revision present. Any matching
+ * dirent occupies the name — not just regular files: a same-name directory
+ * or symlink would let `join(runDir, name)` collide or follow a symlink out
+ * of the run dir on the caller's write.
+ */
+function nextReportName(runDir: string): string {
+  let dirents: Dirent[];
+  try {
+    dirents = readdirSync(runDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") dirents = [];
+    else throw error;
   }
+  let maxRevision = 0;
+  for (const dirent of dirents) {
+    const match = /^report(?:-r([0-9]+))?\.md$/.exec(dirent.name);
+    if (match === null) continue;
+    maxRevision = Math.max(maxRevision, match[1] === undefined ? 1 : Number(match[1]));
+  }
+  return maxRevision === 0 ? "report.md" : `report-r${maxRevision + 1}.md`;
 }
 
 /**
  * Resolve the local-report (or evidence-file) path for a reviewed target
- * (pr-review.md § Local report archive — naming rules verbatim, pure read,
- * never writes and never overwrites):
+ * (pr-review.md § Local report archive — naming rules, pure read, never
+ * writes and never overwrites):
  *
- * - `<YYYY-MM-DD>-pr<N>.md` for PR targets; bare branch →
- * `<YYYY-MM-DD>-<branch-slug>.md`; diff with head SHA →
- * `<YYYY-MM-DD>-diff-<short-head-sha>.md`; diff without →
- * `<YYYY-MM-DD>-diff.md` (never fabricate a SHA).
+ * - The run directory is `{REVIEW_DIR}`'s `<date>-pr<N>` /
+ *   `<date>-branch-<slug>` / `<date>-diff[-<short-head-sha>]` — deterministic
+ *   and idempotent: the same target on the same date resolves to the same
+ *   directory, and a missing SHA is never fabricated.
+ * - Report file: `report.md`; when that run dir already holds `report.md`
+ *   (or `-r2`, `-r3`, ...), the next free revision is returned — a prior
+ *   report is never overwritten.
  * - `stage: 1 | 2` requires `slug` (the seat Assignment's `<domain>-<seat>`
- * slug) and produces the Stage 1/2 evidence-file stem
- * `<stem>-stage<1|2>-<slug>.md`.
- * - Same day, same target (same final stem): scans ALL existing files in
- * `reportsDir` with that stem and appends `-r2`, `-r3`, ... on collision —
- * a prior report is never overwritten. Report files and evidence files
- * escalate independently (different stems).
+ *   slug) and produces the seat evidence file `stage<1|2>-<slug>.md` in the
+ *   same run dir — one stable file per seat.
  * - `date` defaults to the local calendar date and must be `YYYY-MM-DD`.
  */
 export function prReviewReportPath(opts: {
-  reportsDir: string;
+  reviewsDir: string;
   date?: string;
   target: PrReportTarget;
   stage?: 1 | 2;
@@ -645,32 +649,9 @@ export function prReviewReportPath(opts: {
     throw new Error(`prReviewReportPath: stage must be 1 or 2 - got ${JSON.stringify(String(opts.stage))}`);
   }
 
-  const stem = reportBaseStem(date, opts.target);
-  const finalStem = hasStage ? `${stem}-stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}` : stem;
-
-  const escaped = finalStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const sameStem = new RegExp(`^${escaped}(?:-r([0-9]+))?\\.md$`);
-
-  let dirents: Dirent[];
-  try {
-    dirents = readdirSync(opts.reportsDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") dirents = [];
-    else throw error;
-  }
- // Any matching name is occupied — not just regular files :
- // a same-stem directory or symlink would let `join(reportsDir, name)`
- // collide or follow a symlink out of reportsDir on the caller's write.
-  let maxRevision = 0;
-  for (const dirent of dirents) {
-    const match = sameStem.exec(dirent.name);
-    if (match === null) continue;
-    maxRevision = Math.max(maxRevision, match[1] === undefined ? 1 : Number(match[1]));
-  }
-
-  const revision = maxRevision + 1;
-  const name = revision === 1 ? `${finalStem}.md` : `${finalStem}-r${revision}.md`;
-  return join(opts.reportsDir, name);
+  const runDir = resolveReviewRunDir({ reviewsDir: opts.reviewsDir, date, spec: opts.target });
+  if (hasStage) return join(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
+  return join(runDir, nextReportName(runDir));
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,7 +1375,7 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
     lines.push(`- Read the pinned diff snapshot FIRST: \`${opts.diffFile}\` \u2014 it is the review's diff basis (already computed at setup); read it before opening files.`);
   }
   if (opts.stage === 2) {
-    lines.push(`3. \`${join(skillRoot, "SKILL.md")}\` \u2014 read \`## Hard Rules (Read-Only)\`, \`### Phase 1 \u2014 Recon (always)\`, and \`### Phase 2 \u2014 Audit (per variant)\` only for the scoped shared investigation boundaries. Do not run the root workflow, start a recon survey, write plans, or decline the assigned review.`);
+    lines.push(`3. \`${join(skillRoot, "SKILL.md")}\` \u2014 read \`## Hard Rules (Read-Only)\`, \`### Phase 1 \u2014 Recon (always)\`, and \`### Phase 2 \u2014 Audit (per variant)\` only for the scoped shared investigation boundaries. Do not run the root workflow, start a recon survey, or decline the assigned review.`);
     lines.push(`4. \`${join(skillRoot, "references", "audit-playbook.md")}\` \u2014 read \`## 1. Correctness / Bugs\`, \`## 4. Test Coverage\`, \`## 5. Tech Debt & Architecture\`, and \`## Finding format\` for relevant investigation lenses and the shared evidence/reporting contract.`);
     lines.push(`5. \`${join(skillRoot, "references", "finding-format.md")}\` \u2014 the template every finding follows.`);
     if (opts.securitySeat === true) {
@@ -1508,7 +1489,7 @@ const MERGE_CLASS_ENUM_RE = /^(must-fix|should-fix|nit)$/;
  * Heading category CODE → `AUDIT_CATEGORIES` member, per finding-format.md
  * § Category codes (`BUG` → Correctness / bugs = "bug", etc.). Both forms
  * are accepted in `[CODE-NN]` headings: the finding-format Code token and
- * the Status-block category word itself.
+ * the category word itself.
  */
 const FINDING_CATEGORY_BY_CODE: Readonly<Record<string, string>> = {
   BUG: "bug",
@@ -1572,7 +1553,7 @@ export function validateFindingDoc(text: string, opts: ValidateFindingDocOptions
     const categoryToken = headingMatch[1];
     const label = `[${categoryToken}-${headingMatch[2]}]`;
     const where = `finding ${label} (line ${headingEntry.index + 1})`;
- // Case-insensitive read: the Status-block word form (bug, security, ...)
+ // Case-insensitive read: the category word (bug, security, ...)
  // or the finding-format Code form (BUG, SEC, ...).
     const mappedCategory = (AUDIT_CATEGORIES as readonly string[]).includes(categoryToken.toLowerCase())
       ? categoryToken.toLowerCase()

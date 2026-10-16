@@ -1332,9 +1332,6 @@
       "audit.scaffold": {
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"
       },
-      "audit.promote": {
-        "excluded": "spawns processes or needs a report corpus; explicit unverified route"
-      },
       "audit.secret-scan": {
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"
       },

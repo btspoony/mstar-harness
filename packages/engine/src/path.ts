@@ -1,6 +1,6 @@
 /**
  * Engine path module — harness directory discovery, spec/plan/sdd/iteration
- * path composition, v3 workflow/project dir resolution, scaffold
+ * path composition, v3 workflow/project/review dir resolution, scaffold
  * generation, canonical `.gitignore` snippet and the plan-writing path
  * gate.
  *
@@ -354,8 +354,9 @@ function resolveHarnessSubdir(
  *
  * Deferred-by-design : the startDir-first signature is asymmetric
  * with the harnessDir-first sibling resolvers — brief-mandated for the CLI
- * consumer (it probes from the cwd). Revisit with a harness-dir-first
- * variant when a third v3 subdir resolver appears.
+ * consumer (it probes from the cwd). `resolveReviewDir` is the third v3
+ * subdir resolver and keeps the same shape: the asymmetry is contract, not
+ * an oversight.
  */
 export function resolveWorkflowDir(
   startDir: string = process.cwd(),
@@ -377,9 +378,145 @@ export function resolveProjectDir(
   return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
 }
 
+/**
+ * Resolve `{REVIEW_DIR}` — default `{HARNESS_DIR}/reviews/`, holding one
+ * run directory per codebase audit / PR review (review-report contract
+ * § 2). A `.mstarc` `[config] review_dir` declaration wins (resolved
+ * against the config file's directory). Same v3 shape as
+ * `resolveWorkflowDir`: the dir need not exist — the run writer creates it.
+ */
+export function resolveReviewDir(
+  startDir: string = process.cwd(),
+  opts: ResolveHarnessDirOptions = {},
+): string {
+  return resolveHarnessSubdir(startDir, opts, "reviewDir", "reviews");
+}
+
+/**
+ * Audit/review run depth — the audit effort level (review-report contract
+ * § 2). A category focus (security / perf / tests / branch / next /
+ * simplify) never enters a run-directory name.
+ */
+export type ReviewRunLevel = "quick" | "standard" | "deep";
+
+/**
+ * Fully resolved run spec — the codebase round is required here (engine API
+ * review-report contract § 3).
+ */
+export type ReviewRunSpec =
+  | { kind: "codebase"; level: ReviewRunLevel; round: number }
+  | { kind: "pr"; n: number }
+  | { kind: "branch"; slug: string }
+  | { kind: "diff"; headSha?: string };
+
+/**
+ * Request form of {@link ReviewRunSpec} — the codebase round may be omitted,
+ * in which case `resolveReviewRunDir` allocates the next free one.
+ */
+export type ReviewRunRequest =
+  | { kind: "codebase"; level: ReviewRunLevel; round?: number }
+  | { kind: "pr"; n: number }
+  | { kind: "branch"; slug: string }
+  | { kind: "diff"; headSha?: string };
+
+const REVIEW_RUN_LEVELS: readonly ReviewRunLevel[] = ["quick", "standard", "deep"];
+const REVIEW_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Short-SHA width for `diff` run names (git's default abbreviation length). */
+const REVIEW_SHORT_SHA_WIDTH = 7;
+
+/** Local calendar date `YYYY-MM-DD` (not UTC — the run dir is a human label). */
+function reviewToday(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/** Guard the `YYYY-MM-DD` run-name date. */
+function assertReviewDate(date: string): void {
+  if (!REVIEW_DATE_RE.test(date)) {
+    throw new Error(`review run dir: date must be YYYY-MM-DD \u2014 got ${JSON.stringify(date)}`);
+  }
+}
+
+/**
+ * Pure run-directory name (review-report contract § 2 — the naming SSOT):
+ * `<date>-codebase-<level>-<round>`, `<date>-pr<N>`,
+ * `<date>-branch-<slug>`, `<date>-diff[-<short-sha>]`. Throws on an invalid
+ * date / level / round, a non-positive PR number, or an unsafe slug / SHA.
+ */
+export function reviewRunDirName(date: string, spec: ReviewRunSpec): string {
+  assertReviewDate(date);
+  switch (spec.kind) {
+    case "codebase": {
+      if (!REVIEW_RUN_LEVELS.includes(spec.level)) {
+        throw new Error(`review run dir: level must be quick | standard | deep \u2014 got ${JSON.stringify(spec.level)}`);
+      }
+      if (!Number.isInteger(spec.round) || spec.round < 1) {
+        throw new Error(`review run dir: codebase round must be a positive integer \u2014 got ${JSON.stringify(String(spec.round))}`);
+      }
+      return `${date}-codebase-${spec.level}-${spec.round}`;
+    }
+    case "pr":
+      if (!Number.isInteger(spec.n) || spec.n < 1) {
+        throw new Error(`review run dir: pr n must be a positive integer \u2014 got ${JSON.stringify(String(spec.n))}`);
+      }
+      return `${date}-pr${spec.n}`;
+    case "branch":
+      assertSafePathComponent(spec.slug, "review run dir branch slug");
+      return `${date}-branch-${spec.slug}`;
+    case "diff":
+      // Absent OR empty headSha => the bare `-diff` name; never fabricated.
+      if (!spec.headSha) return `${date}-diff`;
+      assertSafePathComponent(spec.headSha, "review run dir diff head SHA");
+      return `${date}-diff-${spec.headSha.slice(0, REVIEW_SHORT_SHA_WIDTH)}`;
+  }
+}
+
+/**
+ * Next free codebase round for `date`+`level`: the highest round already
+ * present in `reviewsDir` + 1 (1 when none / the dir does not exist yet).
+ * Read-only — nothing is created.
+ */
+function nextCodebaseRound(reviewsDir: string, date: string, level: ReviewRunLevel): number {
+  const name = new RegExp(`^${date}-codebase-${level}-(\\d+)$`);
+  let entries: string[];
+  try {
+    entries = readdirSync(reviewsDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") entries = [];
+    else throw error;
+  }
+  return (
+    entries.reduce((max, entry) => {
+      const match = name.exec(entry);
+      return match === null ? max : Math.max(max, Number(match[1]));
+    }, 0) + 1
+  );
+}
+
+/**
+ * Absolute run dir under `reviewsDir` (review-report contract § 2/§ 3):
+ * `join(reviewsDir, reviewRunDirName(date, spec))`. An omitted codebase
+ * round is allocated from the existing listing (a fresh run; a supplied
+ * round reuses that exact directory — a session's own dir). `date`
+ * defaults to the local calendar date. Never creates anything: the writer
+ * (e.g. `scaffoldAuditReport`) owns `mkdir`.
+ */
+export function resolveReviewRunDir(opts: { reviewsDir: string; date?: string; spec: ReviewRunRequest }): string {
+  const date = opts.date ?? reviewToday();
+  assertReviewDate(date);
+  const spec = opts.spec;
+  const resolved: ReviewRunSpec =
+    spec.kind === "codebase"
+      ? { kind: "codebase", level: spec.level, round: spec.round ?? nextCodebaseRound(opts.reviewsDir, date, spec.level) }
+      : spec;
+  return join(opts.reviewsDir, reviewRunDirName(date, resolved));
+}
+
 
 /** Subdirectories created under the harness dir by `scaffoldHarness`. */
-const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"] as const;
+const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd", "reviews"] as const;
 
 /**
  * Resolve the scaffold target dirs for `root` — the harness dir and the

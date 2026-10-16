@@ -6,8 +6,7 @@
  * does not create or finish journaled file registrations.
  */
 import { createHash } from "node:crypto";
-import { basename, isAbsolute, resolve, sep } from "node:path";
-import { promotedAuditSnapshot, type AuditWorkflowOptions } from "./audit.js";
+import { isAbsolute, resolve, sep } from "node:path";
 import {
   CatalogError,
   catalogRootDir,
@@ -42,7 +41,12 @@ export const CATALOG_REGISTRATION_JOURNAL_VERSION = 1;
 // Vocabulary (contract §3)
 // ---------------------------------------------------------------------------
 
-/** The three workflow kinds accepted by the ACTIVE execution composer. */
+/**
+ * The workflow kinds recorded in a catalog journal: the two creation intents
+ * accepted by the ACTIVE execution composer, plus the `audit` label still
+ * found in pre-standardization journals — pending-registration reporting
+ * keeps naming stored history faithfully rather than relabelling it.
+ */
 export type CatalogExecutionKind = "plan" | "iteration" | "audit";
 
 /** Journal phases (contract §2 `catalog_operations.phase`). */
@@ -70,14 +74,12 @@ export type CatalogExecutionCatalogDelta = {
 };
 
 /**
- * The workflow intent accepted by the ACTIVE execution composer. Plan and
- * iteration carry their workflow id and producer options; audit carries the
- * selected plan directory and declared workflow options.
+ * The workflow intent accepted by the ACTIVE execution composer: plan and
+ * iteration each carry their workflow id and producer options.
  */
 export type CatalogExecutionWorkflow =
   | { kind: "plan"; workflowId: string; options: RegisterPlanWorkflowOptions }
-  | { kind: "iteration"; workflowId: string; options: RegisterIterationWorkflowOptions }
-  | { kind: "audit"; outDir: string; selected: readonly string[]; options: AuditWorkflowOptions };
+  | { kind: "iteration"; workflowId: string; options: RegisterIterationWorkflowOptions };
 
 /**
  * One execution registration: actor, workflow and reviewed catalog delta, plus
@@ -335,7 +337,7 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
         const value = (options.plan as Record<string, unknown>)[field];
         if (value !== undefined) requireText(value, `request.workflow.options.plan.${field}`);
       }
-      assertDeliveryRegistrationFor(options, "plan", "request.workflow");
+      assertDeliveryRegistrationFor(options, "request.workflow");
       validated = { kind: "plan", workflowId: requireText(workflow.workflowId, "request.workflow.workflowId"), options: options as unknown as RegisterPlanWorkflowOptions };
       break;
     }
@@ -377,29 +379,8 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
       };
       break;
     }
-    case "audit": {
-      const options = workflow.options;
-      if (!isPlainObject(options)) invalid("request.workflow.options (AuditWorkflowOptions) is required");
-      requireAbsoluteDir(options.harnessDir, "request.workflow.options.harnessDir");
-      const outDir = requireAbsoluteDir(workflow.outDir, "request.workflow.outDir");
-      if (!Array.isArray(workflow.selected) || workflow.selected.length === 0) {
-        invalid("request.workflow.selected must be a non-empty array of audit plan ids");
-      }
-      for (const [index, id] of workflow.selected.entries()) {
-        requireText(id, `request.workflow.selected[${index}]`);
-      }
-      if (options.workflowId !== undefined) requireText(options.workflowId, "request.workflow.options.workflowId");
-      assertDeliveryRegistrationFor(options, "audit", "request.workflow");
-      validated = {
-        kind: "audit",
-        outDir,
-        selected: workflow.selected.map((id) => String(id).trim()),
-        options: options as unknown as AuditWorkflowOptions,
-      };
-      break;
-    }
     default:
-      invalid(`request.workflow.kind must be one of plan | iteration | audit \u2014 got ${JSON.stringify(workflow.kind)}`);
+      invalid(`request.workflow.kind must be one of plan | iteration \u2014 got ${JSON.stringify(workflow.kind)}`);
   }
 
   return {
@@ -413,7 +394,7 @@ function validateRequest(request: unknown): CatalogExecutionRequest {
 
 /**
  * Canonicalize selected iteration plan and compass pointers before deriving
- * the snapshot or deterministic operation id. Plan and audit inputs are unchanged.
+ * the snapshot or deterministic operation id. Plan inputs are unchanged.
  */
 function normalizeIterationWorkflow(workflow: CatalogExecutionWorkflow): CatalogExecutionWorkflow {
   if (!isPlainObject(workflow) || workflow.kind !== "iteration") return workflow;
@@ -467,7 +448,7 @@ function normalizeIterationPlanPaths(request: CatalogExecutionRequest): CatalogE
  * `verification/report-only` carry their required evidence. Applied here so an
  * incomplete declaration refuses before the ACTIVE transaction begins.
  */
-function assertDeliveryRegistrationFor(options: Record<string, unknown>, kind: "plan" | "audit", at: string): void {
+function assertDeliveryRegistrationFor(options: Record<string, unknown>, at: string): void {
   const deliveryKind = options.deliveryKind;
   if (typeof deliveryKind !== "string" || (deliveryKind !== "development" && deliveryKind !== "verification/report-only")) {
     invalid(`${at}.options.deliveryKind must be development | verification/report-only \u2014 got ${JSON.stringify(deliveryKind)}`);
@@ -477,7 +458,7 @@ function assertDeliveryRegistrationFor(options: Record<string, unknown>, kind: "
   } catch (error) {
     invalid(`${at}.options: ${(error as Error).message}`);
   }
-  if (kind === "plan" && options.coordinator !== undefined) {
+  if (options.coordinator !== undefined) {
     if (!isPlainObject(options.coordinator)) invalid(`${at}.options.coordinator must be { session_id, session_file }`);
     requireText((options.coordinator as Record<string, unknown>).session_id, `${at}.options.coordinator.session_id`);
     requireText((options.coordinator as Record<string, unknown>).session_file, `${at}.options.coordinator.session_file`);
@@ -506,19 +487,13 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
         "one execution registration, one catalog root",
     );
   }
-  const workflowId =
-    workflow.kind === "audit"
-      ? (workflow.options.workflowId ?? basename(resolve(workflow.outDir)))
-      : workflow.workflowId;
+  const workflowId = workflow.workflowId;
   assertSafePathComponent(workflowId, "workflow id");
-  const requestedStart = workflow.kind === "audit" ? undefined : workflow.options.startedAt;
-  const startedAt = requestedStart ?? new Date().toISOString();
+  const startedAt = workflow.options.startedAt ?? new Date().toISOString();
   const snapshot =
     workflow.kind === "plan"
       ? planWorkflowSnapshot(workflowId, workflow.options, startedAt)
-      : workflow.kind === "iteration"
-        ? iterationWorkflowSnapshot(workflowId, workflow.options, startedAt)
-        : promotedAuditSnapshot(workflowId, workflow.outDir, workflow.selected, workflow.options, startedAt);
+      : iterationWorkflowSnapshot(workflowId, workflow.options, startedAt);
   // Input paths, before any change (contract §3 step 1): each delta location
   // must resolve inside its declared root. The authoritative containment
   // (symlink/canonical) and uniqueness checks stay the catalog domain's.

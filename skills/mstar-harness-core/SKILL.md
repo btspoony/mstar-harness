@@ -110,7 +110,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-compound-refresh` | 知识维护 —— 审查/更新/合并/删除 `{KNOWLEDGE_DIR}` 文档；**项目知识 bootstrap**（无/残旧 STRATEGY.md、CONCEPTS.md、`{KNOWLEDGE_DIR}`）→ `references/project-knowledge-bootstrap.md` |
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
 | `mstar-skill-authoring` | 通用 skill 撰写门控（SkillsBench 六原则）：trigger 契约、紧凑 5 问 body、渐进披露、paired 证据 |
-| `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Plan output (all variants)`（Status block、plan files、handoff）+ `references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` + `plan-quality-bar` |
+| `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Output format`（review report 运行目录 `<date>-codebase-<level>-<round>/`、findings、coverage、leads）+ `references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` |
 | `mstar-e2e` | 用户显式启动的独立真实浏览器 / 真机 / E2E 验证 workflow；PM 编排、ops 执行，不进入迭代 QA gate |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
