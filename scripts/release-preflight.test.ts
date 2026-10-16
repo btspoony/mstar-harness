@@ -96,7 +96,10 @@ describe("readPublishablePackages (reuses publishedPackageNames selection)", () 
     const names = await publishedPackageNames(surfaces);
     const packages = await readPublishablePackages(surfaces);
     expect(packages.map((p) => p.name)).toEqual(names);
-    expect(packages.every((p) => p.version === "4.0.0")).toBe(true);
+    // The release version lives in the root manifest; reading it here keeps the
+    // assertion meaningful across bumps instead of pinning one release.
+    const release = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    expect(packages.every((p) => p.version === release)).toBe(true);
   });
 
   test("the real workspace excludes the private commands package", async () => {
