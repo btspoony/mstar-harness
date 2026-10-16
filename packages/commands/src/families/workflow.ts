@@ -421,6 +421,8 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, [{ key: "sessionId", context: "sessionId" }], {
       expect: `Optional checked CAS constraint: ${TOKEN_SUPPLIES.root}`,
       planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
+      branchSource: "The delivery source anchor recorded as branch.source: the branch the delivery PR comes from, normally the plan's own feature branch. `mstar plan complete` compares it with the plan row's recorded working branch, so a default/protected branch name here is normally wrong — and a wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
+      branchTarget: "The delivery target anchor recorded as branch.target: the branch the delivery merges into. A wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
     }),
     makeDefinition("workflow.evidence", "Record delivery evidence through the ACTIVE coordinator operation. `--file` is a pathname (never inline JSON): it must be absolute and name a UTF-8 JSON file containing a non-empty object with at least one member. For `development`, members are any subset of compound {outcome: created|updated|skipped, reason?: non-empty string; reason is required for skipped}, pr {repo, head, target: non-empty strings}, and merge {provider, evidence: non-empty strings}; for `verification/report-only`, the only member is completion {policy, evidence: non-empty strings}. Omit untouched members; supplied members are complete blocks, not sub-field patches. `completion.policy` must match the registered `completion_policy` for lifecycle completion; a mismatched report may be recorded and corrected by another evidence update before close. A matching non-empty completion on a Done row is frozen; edit its referenced document in place, or use a separate workflow for a different completed intent. Done alone does not freeze other evidence. PR identity is immutable once recorded: keep its registered repo/head/target for that delivery, or use a separate workflow for a different PR. The registered delivery kind selects permitted members. `--expect` and `--operation` optionally constrain this ACTIVE write.", "write", ["workflow", "file", "sessionRef", "expect", "operation", "harness"], async (input, context) => {
       try {
@@ -454,6 +456,54 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
       file: "Path-only wire: absolute path to a UTF-8 JSON file; inline JSON text is not accepted.",
     }, { delivery: deliveryEvidenceSchema }),
+    makeDefinition("workflow.delivery-anchors", "Repair a RUNNING workflow's delivery anchors (`branch.source` / `branch.target`) under the workflow CAS token. Name the anchor(s) to record with `--branch-source` and/or `--branch-target`: an anchor you do not name keeps the value the workflow already registers, and the resulting pair is written in one transaction. Each anchor you do name must be a non-empty branch name. `--reason` is required, and the correction is revisable and repeatable for as long as the workflow keeps running. A closed lifecycle is refused by the pre-existing workflow-wide amend guard.", "write", ["workflow", "branchSource", "branchTarget", "reason", "sessionRef", "expect", "operation", "harness"], async (input, context) => {
+      const id = "workflow.delivery-anchors";
+      try {
+        if (input.workflow === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow is required; inspect registered workflows with mstar status validate." });
+        // One anchor is enough: the operator who mistyped only --branch-source
+        // must not restate a correct --branch-target.
+        if (input.branchSource === undefined && input.branchTarget === undefined) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "at least one delivery anchor is required; name the anchor being recorded, and an anchor you do not name keeps its registered value." });
+        }
+        if (input.reason === undefined || input.reason.trim() === "") {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "a non-empty reason is required: state why the delivery anchors are being corrected, so the repair is auditable." });
+        }
+        if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active anchor repair requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
+        const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+        const acquired = context.executionIdentity;
+        if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator")) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
+        }
+        if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
+        }
+        const root = resolveProcessHarnessDir(context.cwd, input.harness);
+        if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
+        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+        const operation: WorkflowExecutionOperation = {
+          kind: "delivery-anchors",
+          branch: {
+            ...(input.branchSource === undefined ? {} : { source: input.branchSource }),
+            ...(input.branchTarget === undefined ? {} : { target: input.branchTarget }),
+          },
+          reason: input.reason,
+        };
+        return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+          workflowId: input.workflow,
+          ...(ref === undefined ? {} : { session: ref }),
+          ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+          operationId: input.operation ?? randomUUID(),
+          operation,
+        }));
+      } catch (error) { return engineRefusal(id, error); }
+    }, [{ key: "sessionId", context: "sessionId" }], {
+      branchSource: "The delivery source anchor to record, as branch.source: the branch the delivery PR comes from, normally the plan's own feature branch. Omit it to keep the registered branch.source.",
+      branchTarget: "The delivery target anchor to record, as branch.target: the branch the delivery merges into. Omit it to keep the registered branch.target.",
+      reason: "Required. Why the registered delivery anchors are being corrected; recorded with the operation so the repair is auditable.",
+      expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
+      sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
+      harness: "Control harness root whose store owns the addressed workflow.",
+    }),
     makeDefinition(
       "workflow.adopt-terminal",
       "Adopt a header that has no ACTIVE registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. A header that never closed is terminalized to stopped in the same transaction as its adoption record, so the committed state never carries an adoption on a still-running header; an already-terminal header keeps its recorded status and ended_at. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",

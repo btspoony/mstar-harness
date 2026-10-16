@@ -136,6 +136,7 @@ export const WORKFLOW_OPERATION_SEMANTICS: Readonly<Record<WorkflowExecutionOper
   "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
   "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
   delivery: ["workflowId", "operation.kind", "operation.delivery"],
+  "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"],
 };
 
 /**

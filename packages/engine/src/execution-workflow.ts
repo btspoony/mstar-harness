@@ -30,9 +30,12 @@
  *   applies at Prepare: an existing checkout of THIS repository, distinct from
  *   the main/control checkout, on the registered integration branch;
  * - identity is never rekeyed: `id`, `type`, `started_at`, `project`,
- *   `delivery_kind`, `completion_policy` and the branch anchors are not
- *   writable through this route at all, and the candidate header is validated
- *   by the existing snapshot validator before it is stored.
+ *   `delivery_kind` and `completion_policy` are not writable through this route
+ *   at all; the delivery anchors (`branch.source` / `branch.target`) are
+ *   writable ONLY through the guarded `delivery-anchors` member, which names
+ *   exactly those two fields, requires a reason and stays under the workflow CAS
+ *   token. The candidate header is validated by the existing snapshot validator
+ *   before it is stored.
  *
  * §4.1 discipline: every external read (the canonical compass bytes, the Git
  * probes) happens BEFORE SQLite ownership, so a transition never decides
@@ -168,17 +171,27 @@ import type { PlanRow } from "./status.js";
 /**
  * §3 the whole workflow-level verb vocabulary of the DB authority, verbatim:
  * the phase machine, the lifecycle status, the execution policy, the
- * integration checkout and the delivery evidence. Each member is a real
- * transition with one implementation below; there is no header-patch member,
- * because an arbitrary header replacement is exactly what this route must not
- * offer.
+ * integration checkout, the delivery evidence and the delivery anchors. Each
+ * member is a real transition with one implementation below; there is no
+ * header-patch member, because an arbitrary header replacement is exactly what
+ * this route must not offer.
+ *
+ * `delivery-anchors` is deliberately NOT that arbitrary header patch: it names
+ * exactly the two delivery-anchor fields (`branch.source` / `branch.target`),
+ * it requires a non-empty reason so the correction is auditable, every anchor it
+ * supplies must be a non-empty string, and the pair it writes commits under the
+ * SAME workflow CAS token as every other member — so a competing writer still
+ * loses the revision race and a re-read always sees a whole pair. A registered
+ * workflow is REPAIRABLE rather than re-registrable: without it a mistyped
+ * anchor could only be corrected by abandoning the lifecycle.
  */
 export type WorkflowExecutionOperation =
   | { kind: "phase"; phase: NonNullable<WorkflowSnapshot["phase"]>; compassPath: string }
   | { kind: "lifecycle"; status: WorkflowSnapshot["status"]; reason: string }
   | { kind: "execution-policy"; policy: NonNullable<WorkflowSnapshot["execution_policy"]> }
   | { kind: "integration-worktree"; path: string }
-  | { kind: "delivery"; delivery: NonNullable<WorkflowSnapshot["delivery"]> };
+  | { kind: "delivery"; delivery: NonNullable<WorkflowSnapshot["delivery"]> }
+  | { kind: "delivery-anchors"; branch: { source?: string; target?: string }; reason: string };
 
 /** §3 one DB workflow-operation request: the §3.1 envelope plus what it addresses. */
 export type WorkflowOperationRequest<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
@@ -263,6 +276,29 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       }
       return;
     }
+    case "delivery-anchors": {
+      assertExactKeys(op, ["kind", "branch", "reason"], "a delivery-anchors operation");
+      if (!isPlainObject(op.branch)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a branch object naming the anchor(s) to record; retry through mstar workflow delivery-anchors.");
+      }
+      // Exact keys on the pair too: `branch` is the operation's own member, and
+      // an undefined key inside it would be a partial header patch by another name.
+      assertExactKeys(op.branch, ["source", "target"], "a delivery-anchors branch");
+      const { source, target } = op.branch;
+      if (source === undefined && target === undefined) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.source or branch.target); retry through mstar workflow delivery-anchors.");
+      }
+      if (source !== undefined && !isNonEmptyString(source)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.source must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (target !== undefined && !isNonEmptyString(target)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.target must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (!isNonEmptyString(op.reason)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a non-empty reason; retry through mstar workflow delivery-anchors.");
+      }
+      return;
+    }
     default:
       throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind,
@@ -312,6 +348,8 @@ function workflowOperationField(operation: WorkflowExecutionOperation): string {
       return "operation.path";
     case "delivery":
       return "operation.delivery";
+    case "delivery-anchors":
+      return "operation.branch";
   }
 }
 
@@ -328,6 +366,8 @@ function storedOperationValue(state: Record<string, unknown>, operation: Workflo
       return state.integration_worktree_path;
     case "delivery":
       return state.delivery;
+    case "delivery-anchors":
+      return state.branch;
   }
 }
 
@@ -346,6 +386,8 @@ function requestedOperationValue(operation: WorkflowExecutionOperation): unknown
       return canonicalTarget(operation.path);
     case "delivery":
       return operation.delivery;
+    case "delivery-anchors":
+      return operation.branch;
   }
 }
 
@@ -641,8 +683,8 @@ async function readWorkflowEvidence(
       return {};
     default:
       // The other stored transitions (phase-less lifecycle, execution-policy,
-      // delivery) read no external evidence: their inputs are the store's own
-      // rows, which the transaction reads itself.
+      // delivery, delivery-anchors) read no external evidence: their inputs are
+      // the store's own rows, which the transaction reads itself.
       return {};
   }
 }
@@ -1196,6 +1238,22 @@ function applyWorkflowOperation(input: {
     case "delivery":
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
+    case "delivery-anchors": {
+      // The repair writes the RESULTING pair and nothing else: the anchors this
+      // operation names replace the registered ones, an anchor it does not name
+      // keeps the value the workflow already registers, and a pair the stored
+      // header does not carry stays absent rather than being invented. The
+      // candidate header is validated and stored by the shared tail below, so a
+      // malformed pair is a refusal, never a half-written header.
+      const registered = isPlainObject(header.branch) ? header.branch : {};
+      const source = operation.branch.source ?? registered.source;
+      const target = operation.branch.target ?? registered.target;
+      header.branch = {
+        ...(isNonEmptyString(source) ? { source } : {}),
+        ...(isNonEmptyString(target) ? { target } : {}),
+      };
+      break;
+    }
   }
   header.updated_at = at;
   assertHeaderValid(workflowId, header);

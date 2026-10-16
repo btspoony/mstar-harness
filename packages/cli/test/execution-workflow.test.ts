@@ -714,6 +714,71 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(await storedHeader(fixture)).toEqual(headerBeforeDeclare);
   });
 
+  test("the delivery anchors of a running workflow are repairable, and a malformed repair is a usage error", async () => {
+    const fixture = await activeFixture("mstar-workflow-anchors");
+    const identity = coordinatorIdentity();
+    expect(registerPlanWorkflow(fixture, identity, await rootTokenOf(fixture)).exitCode).toBe(0);
+    expect((await storedHeader(fixture)).branch).toEqual({ source: "feature/exec-workflow", target: "main" });
+    const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
+
+    // A missing --reason is a usage error: the correction is auditable or it is
+    // not admitted.
+    const noReason = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-no-reason", [
+        "--branch-source",
+        "fix/corrected",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(noReason)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    // The verb's own refusal — not a parser refusal of an unknown command.
+    expect((jsonOf(noReason).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+
+    // An empty anchor is refused with the same diagnostic.
+    const emptySource = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-empty", [
+        "--branch-source",
+        "",
+        "--reason",
+        "operator correction",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(emptySource)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+
+    // Neither anchor named is a usage error too: the verb always states what it
+    // records, so a call that corrects nothing is never admitted.
+    const noAnchor = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-no-anchor", [
+        "--reason",
+        "operator correction",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(noAnchor)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(noAnchor).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect((await storedHeader(fixture)).branch).toEqual({ source: "feature/exec-workflow", target: "main" });
+
+    // The verb reaches the engine: a single named anchor is recorded and the
+    // anchor it does not name keeps its registered value.
+    const corrected = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-1", [
+        "--branch-source",
+        "fix/corrected",
+        "--reason",
+        "the registered source was the delivery target",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(corrected.exitCode).toBe(0);
+    expect(dataOf(corrected).replayed).toBe(false);
+    expect((await storedHeader(fixture)).branch).toEqual({ source: "fix/corrected", target: "main" });
+  });
+
   test("the documented registration form answers through the ACTIVE authority; no file-route bytes", async () => {
     // ACTIVE disposition: the pre-activation `workflow register` file route is
     // retired — the same documented flags register through the authority's
