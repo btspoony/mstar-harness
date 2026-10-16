@@ -553,7 +553,9 @@ function stripInlineCode(line: string): string {
  * start) is an absence assertion ("no TBD/placeholder/TODO" states the
  * rule), not a placeholder — not flagged.
  * - exemptions: fenced code blocks (```` ``` ```` / `~~~`) and inline code
- * spans are skipped — `...` in a file-list or example is not a placeholder.
+ * spans are skipped — `...` in a file-list or example is not a placeholder;
+ * a leading `---`-fenced frontmatter block is skipped too (a plan's
+ * `status: Todo` value is not a placeholder — issue #499 item 5).
  * - out of scope (judgment stays prompt): "add tests" without code, and
  * `FIXME`/`XXX` code markers.
  */
@@ -561,8 +563,16 @@ export function planQualityBar(planText: string): PlanQualityResult {
   const findings: PlanQualityFinding[] = [];
   const violations: ValidationResult[] = [];
   const lines = planText.split(/\r?\n/);
+  // Skip a leading frontmatter block (`---` on line 1, closed by the next
+  // `---`): a plan's `status:` value is not a placeholder. An unclosed fence
+  // is scanned as body, and line numbers stay the file's own.
+  let start = 0;
+  if (lines[0]?.trim() === "---") {
+    const close = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+    if (close !== -1) start = close + 1;
+  }
   let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = start; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) {
       inFence = !inFence;

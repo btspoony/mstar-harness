@@ -856,6 +856,16 @@ describe("planQualityBar", () => {
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
+
+  test("skips a leading frontmatter block: `status: Todo` is not a placeholder, a body TBD still is", () => {
+    const result = planQualityBar("---\nplan_id: example\nstatus: Todo\n---\n\n# Plan\n\n- [ ] Version: TBD\n");
+    expect(result.findings).toEqual([{ token: "TBD", line: 8, text: "- [ ] Version: TBD" }]);
+  });
+
+  test("an unclosed leading `---` stays body: a frontmatter-shaped file without a closing fence is still scanned", () => {
+    const result = planQualityBar("---\n- [ ] Version: TBD\n");
+    expect(result.findings).toEqual([{ token: "TBD", line: 2, text: "- [ ] Version: TBD" }]);
+  });
 });
 
 // ---------------------------------------------------------------------------
