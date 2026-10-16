@@ -38,7 +38,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 每个宿主都有两条安装路径：本 CLI 的 `init` 流程，或宿主自带的插件管理器。`init` 会写入基线配置、补上 harness 的 gitignore 条目，然后打印下一步要跑的 `doctor` 命令（`init` 本身不跑 `doctor`——宿主健康与 MCP 配置由 `doctor` 检查）；原生命令只装插件本身。`init` 被阻塞时用原生命令 —— 它完全绕过本 CLI。
 
-`npx` 可能命中较旧的缓存解析，而 `init` 的每一步都跟随实际运行的那个 CLI；`init` 会在已发布 latest 与正在运行的版本不同时报告，并把该 latest 装到全局 —— 若要让**运行的那个 CLI 本身**是最新版，用 `npx @mstar-harness/cli@latest init …`。
+`npx` 可能命中较旧的缓存解析，而 `init` 的每一步都跟随实际运行的那个 CLI；`init` 会在已发布 `latest` **比正在运行的版本更新**时报告，并把该 `latest` 装到全局（领先于 `latest` 的版本不会被降级）—— 若要让**运行的那个 CLI 本身**是最新版，用 `npx @mstar-harness/cli@latest init …`。
 
 - **dsh（DeepSeek Harness）** —— 需要 PATH 上有 `dsh` CLI
   - CLI：`npx @mstar-harness/cli init --target dsh` —— 安装插件与 LLM fallbacks；`--no-fallbacks` 跳过后者
@@ -61,7 +61,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
   - CLI：`npx @mstar-harness/cli init --target codex` —— 注册仓库 marketplace 并添加 `morning-star-harness@mstar-repo`
   - 原生：`codex plugin marketplace add btspoony/mstar-harness --ref main`，再执行 `codex plugin add morning-star-harness@mstar-repo`
 
-`init` 默认使用 `--scope project`（`--scope global` 装到宿主全局；Codex 的 global scope 不安装七条斜杠命令 skill；对 dsh 该参数不生效 —— 它的 profile 是机器全局的），成功后还会全局安装同版本的 `@mstar-harness/cli` —— 加 `--no-global-cli` 可跳过。用 `npx @mstar-harness/cli doctor --target <host>` 检查结果，它会同时报告 MCP 配置为 `aligned`、`mismatch` 或 `unavailable`。
+`init` 默认使用 `--scope project`（`--scope global` 装到宿主全局；Codex 的 global scope 不安装七条斜杠命令 skill；对 dsh 该参数不生效 —— 它的 profile 是机器全局的），成功后还会全局安装 `@mstar-harness/cli`，版本为本次运行选定的目标版本（已发布 `latest` 更新时用它，否则用正在运行的版本）—— 加 `--no-global-cli` 可跳过。用 `npx @mstar-harness/cli doctor --target <host>` 检查结果，它会同时报告 MCP 配置为 `aligned`、`mismatch` 或 `unavailable`。
 
 CLI 的正式命令名是 `mstar-harness`。短别名 `mstar` 只在安装了本包的环境中存在，而且有一个同名 npm 包声明了同样的名字 —— 有疑问时用长名。手动安装、路径布局与各宿主说明见 [`INSTALL.md`](INSTALL.md)。
 

@@ -503,7 +503,7 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
 
 | Host | What still holds the 3.x copy | Refresh |
 | --- | --- | --- |
-| CLI | the global npm install | `npm i -g @mstar-harness/cli@latest` (or keep using `npx`, which fetches the current release on every run) |
+| CLI | the global npm install | `npm i -g @mstar-harness/cli@latest` (or keep using `npx`, which resolves the registry on every run but may serve a cached older resolution — `init` reports that skew, and `@latest` forces the current release) |
 | Cursor | the plugin checkout at `~/.cursor/plugins/local/morning-star-harness` (global) or `.cursor/plugins/morning-star-harness` (project) | re-run `npx @mstar-harness/cli init --target cursor --scope <global\|project>` — its adapter `git pull --ff-only`s that checkout — or pull it yourself: `git -C <checkout> pull --ff-only` |
 | Codex | the shared `~/.mstar/harness` checkout (the agent `.toml` source, which `init` does **not** pull) and codex's own marketplace snapshot | `git -C ~/.mstar/harness pull --ff-only`, then `codex plugin marketplace upgrade`, then `codex plugin add morning-star-harness@mstar-repo`, then re-run `npx @mstar-harness/cli init --target codex --scope <global\|project>` to re-copy the agent files — re-running `init` alone keeps the old sources ([Codex: agent files](#codex-agent-files)) |
 | ZCode | the plugin copy installed from the `mstar-local` marketplace (a 3.x snapshot) | re-run `npx @mstar-harness/cli init --target zcode` to rewrite the marketplace catalogs, then reinstall **morning-star-harness** in ZCode (**Settings → Plugin Management → Discover**); ZCode refreshes a `github`-source marketplace itself |

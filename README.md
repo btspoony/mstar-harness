@@ -37,7 +37,7 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 
 Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager. `init` writes baseline config and adds the harness gitignore entries, then prints the `doctor` command to run next (`init` does not run `doctor` itself - host health and MCP config are what `doctor` checks); the native command installs the plugin only. Use the native command when `init` is blocked — it bypasses this CLI entirely.
 
-`npx` can serve an older cached resolution, and every step of `init` follows the CLI that ran; `init` reports when the published latest differs from the version it is running, and installs that latest globally — use `npx @mstar-harness/cli@latest init …` when the CLI that runs should itself be the newest release.
+`npx` can serve an older cached resolution, and every step of `init` follows the CLI that ran; `init` reports when the published `latest` is **newer** than the version it is running, and then installs that `latest` globally (a version ahead of `latest` is left alone) — use `npx @mstar-harness/cli@latest init …` when the CLI that runs should itself be the newest release.
 
 - **dsh (DeepSeek Harness)** — needs the `dsh` CLI on `PATH`
   - CLI: `npx @mstar-harness/cli init --target dsh` — installs the plugin plus LLM fallbacks; `--no-fallbacks` skips the second
@@ -60,7 +60,7 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
   - CLI: `npx @mstar-harness/cli init --target codex` — registers the repo marketplace and adds `morning-star-harness@mstar-repo`
   - Native: `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo`
 
-`init` defaults to `--scope project` (`--scope global` installs host-wide, and Codex's global scope skips the seven slash-command skills; for dsh the flag has no effect — its profile is machine-global), and after a successful run it installs the matching `@mstar-harness/cli` version globally — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
+`init` defaults to `--scope project` (`--scope global` installs host-wide, and Codex's global scope skips the seven slash-command skills; for dsh the flag has no effect — its profile is machine-global), and after a successful run it installs `@mstar-harness/cli` globally at the version the run targeted (the published `latest` when that is newer than the running CLI, otherwise the running version) — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
 
 The published binary is `mstar-harness`. The short alias `mstar` exists only where this package is installed, and an unrelated npm package claims the same name — use the long form when in doubt. Manual installs, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
 
