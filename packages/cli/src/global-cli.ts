@@ -94,6 +94,10 @@ function resolveTrustedNpm(): string {
     }
   })();
   const insideCheckout = (candidate: string): boolean => {
+    // A dependency tree's shim directory is never a trusted npm, whether or not
+    // the surrounding tree has a `.git` marker: `npx` puts those first, and an
+    // archive can arrive without any repository metadata at all.
+    if (candidate.split(path.sep).join("/").includes("node_modules/.bin")) return true;
     if (resolvedCheckout === null) return false;
     let resolved = candidate;
     try {

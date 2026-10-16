@@ -59,8 +59,9 @@ async function runInit(options: InitOptions) {
   const scope = options.scope ?? adapter.defaultScope ?? "project";
   if (!options.scope && adapter.defaultScope !== undefined && adapter.defaultScope !== "project") {
     console.log(pc.dim(`This target installs host-wide; using --scope ${adapter.defaultScope}.`));
+  } else if (!options.scope && !options.yes) {
+    console.log(pc.dim("Scope not provided; defaulting to project."));
   }
-  if (!options.scope && !options.yes) console.log(pc.dim("Scope not provided; defaulting to project."));
   if (adapter.mode === "install") {
     logStep("Step 2/2 - Run target install flow");
     // Resolve the version decision BEFORE mutating the host: the plugin the host
@@ -109,9 +110,11 @@ async function runInit(options: InitOptions) {
     // Skew is refused whether or not the global update succeeded: a linked
     // checkout can lag the version this run selected even when the CLI install
     // worked, and the two must not be left apart.
-    const pluginBehind = installedPluginVersion !== undefined && compareSemver(installedPluginVersion, chosenCli) < 0;
+    // Any verified difference is skew: a checkout ahead of the selected CLI is as
+    // far apart as one behind it, so neither is reported as success.
+    const pluginMismatched = installedPluginVersion !== undefined && installedPluginVersion !== chosenCli;
     const globalFailed = globalResult.action === "failed" && (installedPluginVersion ?? packageVersion) !== packageVersion;
-    if (pluginBehind || globalFailed) {
+    if (pluginMismatched || globalFailed) {
       throw new Error(
         `The host plugin is at ${installedPluginVersion ?? "an unconfirmed version"}, while this run targets ${chosenCli}` +
           `${globalResult.action === "failed" ? ` and the global CLI could not be updated (${globalResult.spec}), so the CLI on PATH stays at ${packageVersion}` : ""}.\n` +
@@ -179,7 +182,7 @@ program
   .description("Interactive/non-interactive setup for target agent bootstrap")
   .option("-y, --yes", "Non-interactive mode")
   .option("--target <target>", "Install target", "opencode")
-  .option("--scope <scope>", "Config scope: global|project (default: project)")
+  .option("--scope <scope>", "Config scope: global|project (default: project, or the target's single supported scope)")
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
   .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")

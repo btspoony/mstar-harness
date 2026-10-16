@@ -403,6 +403,17 @@ const projectRoot = resolveProjectRoot();
       const linkProbe = probeInstalledPlugins(OMP_LIST_TIMEOUT_MS);
       const linkEntry = installedPluginEntry(linkProbe.entries);
       linkedVersion = linkEntry === undefined ? null : ompEntryVersion(linkEntry);
+      // The adapter knows what it left installed and what this run targets: a
+      // linked checkout on another version is reported as skew here rather than
+      // passed up as a pairing nobody established.
+      if (linkedVersion !== null && linkedVersion !== expectedVersion) {
+        throw ompRefusal(
+          `the linked checkout is at ${linkedVersion}, while this run targets ${expectedVersion}`,
+          `linked ${ompPackagePath} reports ${linkedVersion}`,
+          `align the checkout (\`git -C ${HARNESS_REPO_PATH} pull --ff-only\` then re-run init), link a checkout at ${expectedVersion}, ` +
+            `or install the published plugin at that version (\`omp plugin install ${OMP_PLUGIN_NAME}@${expectedVersion}\`)`,
+        );
+      }
     }
 
  notes.push("Verify with: omp plugin list");

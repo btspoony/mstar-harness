@@ -210,7 +210,7 @@ async function diagnose(target: (typeof doctorTargets)[number], scope: "global" 
     return {
       location: harnessRepoPath,
       errors: [
-        "omp has no project-scoped plugin installation; run `npx @mstar-harness/cli doctor --target omp` (global) instead",
+        "omp has no project-scoped plugin installation; run `npx @mstar-harness/cli doctor --target omp --scope global` instead",
       ],
       notes: [],
     };

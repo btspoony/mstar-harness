@@ -35,6 +35,8 @@ const PLUGIN_NAME = "@mstar-harness/omp";
 /** The version the fake checkout carries: distinct from any CLI release, so a
  *  link that reports it cannot be mistaken for the version init chose. */
 const LINKED_VERSION = "0.0.0-linked-synthetic";
+/** The version a checkout carries when it tracks the CLI it is linked into. */
+const MATCHING_LINKED_VERSION = readHarnessVersion();
 const created: string[] = [];
 
 function tempDir(prefix: string): string {
@@ -285,7 +287,8 @@ describe("omp init end-to-end (child process with its own home)", () => {
     run: (script: string) => { status: number | null; stdout: string; stderr: string };
   }
 
-  function childHome(opts: { linkExit?: number; linkText?: string }): ChildHome {
+  function childHome(opts: { linkExit?: number; linkText?: string; linkedVersion?: string }): ChildHome {
+    const linkedVersionForFixture = opts.linkedVersion ?? MATCHING_LINKED_VERSION;
     const home = tempDir("omp-child-home-");
     const binDir = tempDir("omp-child-bin-");
     const repo = join(home, ".mstar", "harness");
@@ -297,7 +300,7 @@ describe("omp init end-to-end (child process with its own home)", () => {
     // version, not the one init selected for a published install.
     writeFileSync(
       join(repo, "packages", "omp", "package.json"),
-      `${JSON.stringify({ name: PLUGIN_NAME, version: LINKED_VERSION })}\n`,
+      `${JSON.stringify({ name: PLUGIN_NAME, version: linkedVersionForFixture })}\n`,
     );
     for (const argv of [["init"], ["add", "."], ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-m", "init"]]) {
       execFileSync("git", argv, { cwd: repo, stdio: "pipe" });
@@ -420,12 +423,25 @@ console.log(JSON.stringify(notes));
     const fixture = childHome({});
     const result = fixture.run(
       `import { ompAdapter } from ${JSON.stringify(join(import.meta.dir, "..", "src", "adapters", "omp"))};
-const run = await ompAdapter.runInstallInit("global", false, { pluginVersion: "99.9.9-synthetic" });
+const run = await ompAdapter.runInstallInit("global", false);
 console.log(JSON.stringify({ pluginVersion: run.pluginVersion }));
 `,
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(JSON.parse(result.stdout).pluginVersion).toBe(LINKED_VERSION);
+    expect(JSON.parse(result.stdout).pluginVersion).toBe(MATCHING_LINKED_VERSION);
+  });
+
+  test("a checkout whose version differs from the CLI is refused as skew", () => {
+    const fixture = childHome({ linkedVersion: LINKED_VERSION });
+    const result = fixture.run(
+      `import { ompAdapter } from ${JSON.stringify(join(import.meta.dir, "..", "src", "adapters", "omp"))};
+await ompAdapter.runInstallInit("global", false);
+`,
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
+    // The refusal names what is actually linked, not the version this run chose.
+    expect(result.stderr).toContain(LINKED_VERSION);
+    expect(result.stderr).toContain("Recovery:");
   });
 
   test("a successful link is verified against omp's own listing", () => {

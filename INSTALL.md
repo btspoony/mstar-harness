@@ -29,7 +29,7 @@ npm install @mstar-harness/cli
 node node_modules/@mstar-harness/cli/dist/mstar-harness.js init
 ```
 
-`init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted. It also resolves the published `@mstar-harness/cli` version before it touches the host: when that `latest` is **newer** than the CLI running it (a cached `npx` resolution can differ), it installs that `latest` globally and reports it; a version ahead of `latest` is left alone. `--no-global-cli` skips both the probe and that install.
+`init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted, except for a target whose host has a single supported scope (omp installs host-wide, so an unscoped `init --target omp` uses `--scope global` and says so). It also resolves the published `@mstar-harness/cli` version before it touches the host: when that `latest` is **newer** than the CLI running it (a cached `npx` resolution can differ), it installs that `latest` globally and reports it; a version ahead of `latest` is left alone. `--no-global-cli` skips both the probe and that install.
 
 ### OpenCode
 
@@ -214,7 +214,7 @@ npx @mstar-harness/cli init --target dsh
 npx @mstar-harness/cli doctor --target dsh
 ```
 
-The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Both rows are pinned to the version this run selected, and re-running is idempotent: a row already at that version is skipped (`skipped-existing`), exit 0, while a row installed at any other version is re-added (a registry install + profile write; a failed re-add exits non-zero). That realignment also replaces a local `link:`/`file:` checkout — pass `--no-fallbacks` to leave the `dsh-llm-fallbacks` row untouched, and `--scope` has no dsh surface (its profile is machine-global).
+The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Both rows are pinned to the version this run selected, and re-running is idempotent: a row already at that version is skipped (`skipped-existing`), exit 0, while a row installed at another version is re-added (a registry install + profile write; a failed re-add exits non-zero). A row the operator disabled stays disabled, and a skipped row whose installed manifest cannot be read is reported as an unconfirmed plugin version rather than assumed to match. That realignment also replaces a local `link:`/`file:` checkout — pass `--no-fallbacks` to leave the `dsh-llm-fallbacks` row untouched, and `--scope` has no dsh surface (its profile is machine-global).
 
 Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag — ignored for other targets):
 
@@ -441,12 +441,7 @@ omp plugin install @mstar-harness/omp
 omp plugin list
 ```
 
-Project scope:
-
-```bash
-npx @mstar-harness/cli init --target omp --scope global
-npx @mstar-harness/cli doctor --target omp
-```
+Creating a project scope is refused before anything is touched (omp has one user-wide root); the commands above are the only scope omp supports.
 
 **Notes:**
 
