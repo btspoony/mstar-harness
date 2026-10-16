@@ -390,26 +390,14 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
 ]);
 
 /**
- * Non-blocking advisories for a `development` registration whose delivery
- * anchors cannot describe a delivery PR. The registration still succeeds: these
- * warnings ride in the ok envelope's `data.warnings` and never refuse.
- *
- * Only the equal-pair signal can accompany a success envelope - the engine's
- * registration-coherence rule refuses a `development` workflow that omits an
- * anchor before one exists - but both signals are decidable from the caller's
- * own input, so one predicate carries them.
+ * Non-blocking advisory for a `development` registration whose two delivery
+ * anchors name the same branch: such a pair cannot describe a delivery PR. The
+ * registration still succeeds - the warning rides in the ok envelope's
+ * `data.warnings` and never refuses.
  */
 function deliveryAnchorWarnings(deliveryKind: string, source: string | undefined, target: string | undefined): string[] {
   if (deliveryKind !== "development") return [];
-  if (source === undefined || target === undefined) {
-    return [
-      "--branch-source/--branch-target: a development workflow records both delivery anchors, and this registration leaves " +
-      `branch.source ${source === undefined ? "absent" : JSON.stringify(source)} and branch.target ${target === undefined ? "absent" : JSON.stringify(target)}. ` +
-      "--branch-source is the branch the delivery PR comes from, normally the plan's own feature branch. " +
-      "Repair the registered workflow with `mstar workflow delivery-anchors`.",
-    ];
-  }
-  if (source !== target) return [];
+  if (source === undefined || target === undefined || source !== target) return [];
   return [
     `--branch-source/--branch-target: both were recorded as ${JSON.stringify(source)}, so branch.source === branch.target and the anchors name no delivery PR. ` +
     "--branch-source is the branch the delivery PR comes from, normally the plan's own feature branch; " +
