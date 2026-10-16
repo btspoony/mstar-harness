@@ -219,6 +219,61 @@ describe("verifyOmpInstall", () => {
  * so the only isolated way to exercise the real flow is a child process launched
  * with its own HOME — exactly what a real operator's shell does.
  */
+describe("verifyOmpInstall identity and probe failures", () => {
+  test("a legacy entry listed first does not stand in for the installed package", () => {
+    const root = pluginsRoot();
+    const entry = join(root, "node_modules", PLUGIN_NAME);
+    mkdirSync(entry, { recursive: true });
+    withFakeOmpListing(
+      `[{"name":"morning-star-legacy","path":"${join(root, "node_modules", "morning-star-legacy")}"},` +
+        `{"name":"${PLUGIN_NAME}","path":"${entry}","manifest":{"name":"${PLUGIN_NAME}","version":"${readHarnessVersion()}"}}]`,
+    );
+    const notes: string[] = [];
+    verifyOmpInstall(notes, readHarnessVersion(), entry);
+    expect(notes.some((note) => note.includes("linked from"))).toBe(true);
+  });
+
+  test("a failed listing probe is reported as a probe failure, not a missing registration", () => {
+    withFakeOmpListingFail();
+    let thrown: Error | null = null;
+    try {
+      verifyOmpInstall([], readHarnessVersion());
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown?.message).toContain("could not read omp's plugin listing");
+    expect(thrown?.message).not.toContain("did not register the entry");
+  });
+
+  /** Fake `omp` whose listing is a fixed JSON payload. */
+  function withFakeOmpListing(payload: string): void {
+    writeFakeOmpScript(`printf '%s\\n' '${payload}'`);
+  }
+
+  /** Fake `omp` whose listing probe fails. */
+  function withFakeOmpListingFail(): void {
+    writeFakeOmpScript(`printf '%s\\n' "listing unavailable" >&2; exit 3`);
+  }
+
+  function writeFakeOmpScript(listBody: string): void {
+    const binDir = tempDir("omp-fake-");
+    const binPath = join(binDir, "omp");
+    writeFileSync(
+      binPath,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then',
+        `  ${listBody}`,
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(binPath, 0o755);
+    process.env.PATH = `${binDir}:/usr/bin:/bin`;
+  }
+});
+
 describe("omp init end-to-end (child process with its own home)", () => {
   interface ChildHome {
     home: string;

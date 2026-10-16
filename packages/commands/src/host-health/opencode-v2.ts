@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readCliManifestField } from "./cli-manifest.js";
+import { readDeclaredCliNodeFloor } from "./cli-manifest.js";
 import {
   getOpencodeDoctorWarnings,
   isAnyMstarHarnessOpencodeSlot,
@@ -26,12 +26,12 @@ export const OPENCODE_V2_PLUGIN = "@mstar-harness/opencode-v2@latest";
 
 /** The published V2 plugin runs in OpenCode's Node process and needs node:sqlite
  * (packages/opencode-v2/INSTALL.md:8); doctor promises to check this floor. The
- * floor is a version, so a manifest owns it: the CLI manifest declares it at
- * `mstar.opencodeV2NodeFloor` because the CLI is what performs the check and is
- * the manifest a published install actually ships. Read at runtime, never
- * compiled in. `null` when no visible manifest declares it — the caller reports
- * the uncheckable floor instead of comparing against an invented version. */
-export const OPENCODE_V2_NODE_FLOOR: string | null = readCliManifestField("opencodeV2NodeFloor");
+ * floor is a version, so a manifest owns it — the CLI manifest's own
+ * `engines.node`, which the CLI must satisfy anyway and which ships with the
+ * published install. Read at runtime, never compiled in. `null` when no visible
+ * manifest declares it — the caller reports the uncheckable floor instead of
+ * comparing against an invented version. */
+export const OPENCODE_V2_NODE_FLOOR: string | null = readDeclaredCliNodeFloor();
 
 export type OpencodeGeneration = "v1" | "v2";
 

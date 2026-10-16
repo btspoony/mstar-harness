@@ -80,6 +80,9 @@ export function detectPublishedLatest(): string | null {
     // that can hand `npx` an old resolution would otherwise answer this probe
     // with the very tag this check exists to catch.
     const out = execFileSync("npm", ["view", "--prefer-online", `${CLI_PACKAGE}`, "version"], {
+      // An optional probe must not print: capture both streams so an offline or
+      // misconfigured registry stays silent, as documented.
+      stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
       env: process.env,
       timeout: LATEST_PROBE_TIMEOUT_MS,
@@ -98,7 +101,9 @@ export function detectPublishedLatest(): string | null {
  * helper stays injectable without a live registry.
  */
 export function formatVersionSkewWarning(version: string, latest: string | null): string | null {
-  if (latest === null || latest === version) return null;
+  // Only a version BEHIND the published latest is skew: a local (or prerelease)
+  // build ahead of it must not be told to move backwards.
+  if (latest === null || compareSemver(latest, version) <= 0) return null;
   return (
     `Warning: this CLI is ${CLI_PACKAGE}@${version}; the published latest is ${latest}. ` +
     `A cached npx resolution can run an older CLI, and every step of this init follows the CLI that ran \u2014 ` +

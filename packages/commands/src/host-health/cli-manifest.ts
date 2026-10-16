@@ -58,3 +58,31 @@ export function readCliManifestField(key: string): string | null {
   }
   return null;
 }
+
+/**
+ * The Node floor the CLI manifest declares (`engines.node`), as a bare dotted
+ * version, or `null` when no visible CLI manifest declares one. The CLI is what
+ * runs the OpenCode V2 doctor, and its own `engines.node` is the floor it must
+ * satisfy — a separate field for the plugin would be a second authority for the
+ * same fact.
+ */
+export function readDeclaredCliNodeFloor(): string | null {
+  for (const manifestPath of cliManifestCandidates()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const manifest = parsed as Record<string, unknown>;
+    if (manifest["name"] !== CLI_PACKAGE_NAME) continue;
+    const engines = manifest["engines"];
+    if (engines === null || typeof engines !== "object") continue;
+    const node = (engines as Record<string, unknown>)["node"];
+    if (typeof node !== "string" || node === "") continue;
+    const floor = /\d+\.\d+\.\d+/.exec(node)?.[0];
+    if (floor !== undefined) return floor;
+  }
+  return null;
+}

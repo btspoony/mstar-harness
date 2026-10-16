@@ -180,7 +180,10 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
           }.\n${detail}\nRecovery: ${allowance}`,
         );
       }
-      throw new Error(`Failed to install ${spec} via ${DSH_BIN}: ${message}`);
+      // dsh's own text arrived on stdout/stderr as often as in the folded
+      // message; report the captured detail either way and keep only the
+      // recovery line conditional.
+      throw new Error(`Failed to install ${spec} via ${DSH_BIN}: ${detail}`);
     }
   }
 

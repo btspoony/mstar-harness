@@ -287,10 +287,20 @@ exec sleep 10`);
   /** Fake npm that answers `view <pkg> version` with a published version and
    * logs any other invocation (install path). */
   function fakeNpmReportingLatest(latest: string): void {
-    writeFakeBin("npm", `if [ "$1" = "view" ]; then echo "${latest}"; exit 0; fi
+    writeFakeBin("npm", `if [ "$1" = "view" ]; then echo "${latest}"; printf '%s\\n' "npm noise on stderr" >&2; exit 0; fi
 printf '%s\\n' "$*" >> "${npmLog}"
 exit 0`);
   }
+
+  test("the optional probe's stderr never reaches init's output", () => {
+    fakeNpmReportingLatest(SYNTH_PUBLISHED_LATER);
+    fakeMstarHarness(PACKAGE_VERSION);
+    fakeOpencode();
+    const configPath = path.join(tmp, "opencode.json");
+    const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("npm noise on stderr");
+  });
 
   test("an older running CLI installs the published latest instead of itself", () => {
     fakeNpmReportingLatest(SYNTH_PUBLISHED_LATER);
@@ -439,6 +449,12 @@ describe("published-latest skew warning", () => {
   test("stays silent when the registry could not be read or the versions match", () => {
     expect(formatVersionSkewWarning(SYNTH_VERSION, null)).toBeNull();
     expect(formatVersionSkewWarning(SYNTH_VERSION, SYNTH_VERSION)).toBeNull();
+  });
+
+  test("stays silent when the running version is ahead of the published latest", () => {
+    // A local or prerelease build ahead of `latest` must not be told to move back.
+    expect(formatVersionSkewWarning(SYNTH_PUBLISHED_LATER, SYNTH_OTHER_VERSION)).toBeNull();
+    expect(formatVersionSkewWarning(SYNTH_PUBLISHED_LATER, SYNTH_PUBLISHED_LATER)).toBeNull();
   });
 
   test("names both versions and the pinned-latest recovery", () => {

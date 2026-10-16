@@ -27,8 +27,7 @@
     "node": ">=24.18.0"
   },
   "mstar": {
-    "dshLlmFallbacks": "0.6.5",
-    "opencodeV2NodeFloor": "24.18.0"
+    "dshLlmFallbacks": "0.6.5"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",

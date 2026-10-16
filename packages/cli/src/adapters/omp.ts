@@ -45,6 +45,20 @@ function runOmp(args: string[], dryRun: boolean): void {
  * reports for its own entry is preferred at the call site; this is the fallback
  * for the case where omp lists nothing yet.
  */
+function ompEntryRoots(): string[] {
+  const roots: string[] = [];
+  const listed = findInstalledPlugin(listInstalledPlugins());
+  const listedPath = listed !== undefined && typeof listed.path === "string" ? listed.path : null;
+  if (listedPath !== null) {
+    // omp's own answer beats our guess: an entry it lists may live outside the
+    // documented default root, and that is exactly the entry a link collides with.
+    const parent = path.dirname(listedPath);
+    roots.push(path.dirname(parent));
+  }
+  roots.push(ompPluginsRoot());
+  return [...new Set(roots)];
+}
+
 function ompPluginsRoot(): string {
   const dataHome = process.env["XDG_DATA_HOME"];
   return dataHome !== undefined && dataHome !== ""
@@ -73,13 +87,12 @@ function ompRefusal(step: string, detail: string, recovery: string): Error {
 }
 
 /**
- * Where omp may keep this plugin: the user plugin root (its documented default)
- * plus a relocated data root, and — most authoritatively — the path omp's own
- * listing reports for the entry it has. Nothing here is deleted by hand: a
- * plugin-manager root owns its `node_modules`, so the entry is replaced only
- * through omp's uninstall verb, and a refusal names every supported route.
- * Exported for tests: the caller supplies the roots that keep the check off the
- * real home.
+ * Every root this plugin may occupy, most authoritative first: the root omp's
+ * own listing reports for its entry when it lists one, then the plugin root omp
+ * documents (its data root under `XDG_DATA_HOME` when set, else the home
+ * default). Nothing here is deleted by hand: a plugin-manager root owns its
+ * `node_modules`, so the entry is replaced only through omp's uninstall verb,
+ * and a refusal names every supported route.
  */
 export function clearOmpEntry(root: string, ompPackagePath: string, notes: string[]): void {
   const entry = path.join(root, "node_modules", OMP_PLUGIN_NAME);
@@ -108,7 +121,15 @@ export function clearOmpEntry(root: string, ompPackagePath: string, notes: strin
 /** An install omp does not list did not happen: assert what we asked for.
  *  Exported for tests: the fake `omp` on PATH is the seam. */
 export function verifyOmpInstall(notes: string[], expectedVersion: string, linkedTree?: string): void {
-  const entry = findInstalledPlugin(listInstalledPlugins());
+  const probe = probeInstalledPlugins();
+  if (probe.error !== null) {
+    throw ompRefusal(
+      "could not read omp's plugin listing, so the install could not be verified",
+      probe.error,
+      `inspect with \`omp plugin list\` (a stalled or failing probe is not a missing install), then reinstall if the entry is absent: \`omp plugin install ${OMP_PLUGIN_NAME}\``,
+    );
+  }
+  const entry = installedPluginEntry(probe.entries);
   if (entry === undefined) {
     throw ompRefusal(
       "omp plugin list does not report the Morning Star plugin after installing it",
@@ -180,16 +201,52 @@ export const OMP_LIST_TIMEOUT_MS = 10_000;
  * is `timeout` (ms): `exec.ts` maps its own `timeoutMs` spelling onto it, and
  * raw `execFileSync` silently ignores an unknown `timeoutMs` key. */
 export function listInstalledPlugins(timeoutMs: number = OMP_LIST_TIMEOUT_MS): Array<Record<string, unknown>> {
- try {
- const raw = execFileSync("omp", ["plugin", "list", "--json"], {
- stdio: "pipe",
- encoding: "utf8",
- timeout: timeoutMs,
- });
- return parseOmpPluginList(raw);
- } catch {
- return [];
- }
+  return probeInstalledPlugins(timeoutMs).entries;
+}
+
+/**
+ * The same probe, keeping its failure distinct from an empty listing: a doctor
+ * note may read a failed probe as "not installed", but install verification must
+ * not report a successful install as a registration failure.
+ */
+export function probeInstalledPlugins(
+  timeoutMs: number = OMP_LIST_TIMEOUT_MS,
+): { entries: Array<Record<string, unknown>>; error: string | null } {
+  try {
+    const raw = execFileSync("omp", ["plugin", "list", "--json"], {
+      stdio: "pipe",
+      encoding: "utf8",
+      timeout: timeoutMs,
+    });
+    return { entries: parseOmpPluginList(raw), error: null };
+  } catch (error) {
+    return { entries: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * The entry for the package this CLI installs, matched by exact identity before
+ * path: a legacy row (a different package whose name merely mentions
+ * morning-star) must not stand in for the package just installed.
+ */
+function installedPluginEntry(entries: Array<Record<string, unknown>>): Record<string, unknown> | undefined {
+  const nameOf = (entry: Record<string, unknown>): string | null => {
+    const name = entry["name"];
+    if (typeof name === "string" && name !== "") return name;
+    const manifest = entry["manifest"];
+    if (manifest !== null && typeof manifest === "object") {
+      const manifestName = (manifest as Record<string, unknown>)["name"];
+      if (typeof manifestName === "string" && manifestName !== "") return manifestName;
+    }
+    return null;
+  };
+  return (
+    entries.find((entry) => nameOf(entry) === OMP_PLUGIN_NAME) ??
+    entries.find(
+      (entry) =>
+        typeof entry["path"] === "string" && entry["path"].endsWith(path.join("node_modules", OMP_PLUGIN_NAME)),
+    )
+  );
 }
 
 
