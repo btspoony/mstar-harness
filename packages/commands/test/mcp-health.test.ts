@@ -84,6 +84,15 @@ describe("MCP doctor health", () => {
     expect(result.errors.join(" ")).toContain("Node.js runtime 24.17.0");
   });
 
+  test("an unprobed launch runtime is a mismatch, never aligned", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-unprobed-"));
+    roots.push(root);
+    writeMstarConfig(root, "omp");
+    const result = diagnoseMcpTarget("omp", root, { version: "" });
+    expect(result.status).toBe("mismatch");
+    expect(result.errors.join(" ")).toContain("could not be probed on PATH");
+  });
+
   test("malformed and non-launching configs are mismatches, never aligned", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-health-invalid-"));
     roots.push(root);

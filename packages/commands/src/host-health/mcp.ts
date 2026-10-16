@@ -36,10 +36,14 @@ function readJson(file: string): Record<string, unknown> | null {
 }
 
 /** The runtime every host's MCP config resolves to when it launches the CLI:
- * the published bin is a Node-shebang entry, so this is the Node runtime the
- * doctor itself runs on. */
+ * each config launches `npx`, which runs the Node-shebang bin with the `node`
+ * executable on PATH — so the probe reads THAT executable, never a version
+ * emulated by whatever process happens to run the doctor. An empty version
+ * means the launch's `node` could not be probed (unverified, not aligned). */
 function actualRuntime(): McpRuntime {
-  return { version: process.versions.node };
+  const probed = spawnSync("node", ["--version"], { encoding: "utf8" });
+  if (probed.error !== undefined || probed.status !== 0) return { version: "" };
+  return { version: (probed.stdout ?? "").trim().replace(/^v/, "") };
 }
 
 /**
@@ -317,9 +321,11 @@ export function diagnoseMcpTarget(
   const otherScopeInitCommand = options.otherScopeInitCommand
     ?? "mstar init --target opencode --opencode-generation v2 --scope global (global file) or mstar init --target opencode --opencode-generation v2 --scope project (project file)";
   const runtimeFloor = MIN_NODE_VERSION;
-  const runtimeError = compareSemver(runtime.version, runtimeFloor) < 0
-    ? `Node.js runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
-    : null;
+  const runtimeError = runtime.version === ""
+    ? "The `node` executable that this host's launch (`npx`) resolves could not be probed on PATH, so the required Node.js floor is unverified."
+    : compareSemver(runtime.version, runtimeFloor) < 0
+      ? `Node.js runtime ${runtime.version} is below the required ${runtimeFloor} floor.`
+      : null;
 
   if (target === "dsh") {
     return diagnoseDshMcp(configRoot, runtimeFloor, runtimeError);

@@ -49,7 +49,7 @@ function engineCode(error: unknown, fallback: string): string {
 function authorityRecoveryHint(code: string): string {
   if (code === "store.busy") return "Wait for the competing store writer to finish, then retry `status validate`.";
   if (code === "store.corrupt") return "Preserve the corrupt database and legacy sources; restore through a supported recovery process or provide the full refusal to the store recovery owner. An unreadable live store cannot be recovered by online restore-preview.";
-  if (code === "store.runtime-unsupported") return "Run this command with a runtime that provides native node:sqlite — Node.js >=24.18.0 on PATH — then retry `status validate`.";
+  if (code === "store.runtime-unsupported") return "Run this command with a runtime that provides native node:sqlite: the published CLI entrypoint needs Node.js >=24.18.0 on PATH, and a retry that does not change the executing runtime reproduces this refusal.";
   if (code === "store.schema-unsupported") return "Use a harness build that supports this store schema, then retry `status validate`.";
   if (code === "store.schema-drift") return "Use the harness build that owns the applied schema and retry `status validate`.";
   if (code === "execution.not-active") return "Run `mstar store upgrade --operator <name>` to import legacy state and activate authority, then retry `status validate`.";
