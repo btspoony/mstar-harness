@@ -23907,8 +23907,23 @@ function conflict2(message) {
 function rootOf(context) {
   return canonicalPath(dirname16(storeDbPath(context)));
 }
-function provenReplayIds(db, sourceDigest) {
-  const ids = new Set;
+function conversionInputDigest(declarations, acknowledgedCompassSkips) {
+  const deliveryDeclarations = [...declarations].map((entry) => ({
+    workflow: entry.workflow,
+    deliveryKind: entry.deliveryKind,
+    ...entry.branchSource === undefined ? {} : { branchSource: entry.branchSource },
+    ...entry.branchTarget === undefined ? {} : { branchTarget: entry.branchTarget },
+    ...entry.completionPolicy === undefined ? {} : { completionPolicy: entry.completionPolicy }
+  })).sort((a, b) => a.workflow < b.workflow ? -1 : a.workflow > b.workflow ? 1 : 0);
+  const compassSkips = [...acknowledgedCompassSkips].sort();
+  return {
+    digest: createHash14("sha256").update(JSON.stringify({ deliveryDeclarations, acknowledgedCompassSkips: compassSkips })).digest("hex"),
+    carriesInput: deliveryDeclarations.length > 0 || compassSkips.length > 0
+  };
+}
+function provenReplayIds(db, sourceDigest, inputDigest, carriesInput) {
+  const proven = new Set;
+  const inputUnproven = new Set;
   const candidates = db.prepare("select result_json from store_operations where result_json like ?").all(`%"sourceDigest":${JSON.stringify(sourceDigest)}%`);
   for (const candidate of candidates) {
     if (typeof candidate.result_json !== "string")
@@ -23923,10 +23938,15 @@ function provenReplayIds(db, sourceDigest) {
       continue;
     if (!Array.isArray(receipt.importedIds) || !receipt.importedIds.every(isNonEmptyString))
       continue;
+    if (carriesInput && receipt.inputDigest !== inputDigest) {
+      for (const id of receipt.importedIds)
+        inputUnproven.add(id);
+      continue;
+    }
     for (const id of receipt.importedIds)
-      ids.add(id);
+      proven.add(id);
   }
-  return ids;
+  return { proven, inputUnproven };
 }
 function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, acknowledgedWorkflowSkips) {
   const workflowsDir = join27(root, "workflows");
@@ -24389,6 +24409,7 @@ async function importExecutionMinimal(input) {
   const workflowSkips = new Set(input.acknowledgedWorkflowSkips ?? []);
   const compassSkips = new Set(input.acknowledgedCompassSkips ?? []);
   const source = discover(context, operator, input.acknowledgedSkips ?? [], workflowSkips, input.deliveryDeclarations ?? [], compassSkips);
+  const conversionInput = conversionInputDigest(input.deliveryDeclarations ?? [], compassSkips);
   const requestHash3 = createHash14("sha256").update(JSON.stringify({
     operation: "store.upgrade",
     root: source.root,
@@ -24410,7 +24431,9 @@ async function importExecutionMinimal(input) {
     }
     const existing = new Set(tx.db.prepare("select workflow_id from execution_workflows").all().map(({ workflow_id }) => workflow_id));
     const collidingIds = new Set(source.rows.filter((row) => existing.has(row.id)).map(({ id }) => id));
-    const provenIds = new Set([...provenReplayIds(tx.db, source.sourceDigest)].filter((id) => collidingIds.has(id)));
+    const replayProof = provenReplayIds(tx.db, source.sourceDigest, conversionInput.digest, conversionInput.carriesInput);
+    const provenIds = new Set([...replayProof.proven].filter((id) => collidingIds.has(id)));
+    const inputUnprovenIds = new Set([...replayProof.inputUnproven].filter((id) => collidingIds.has(id)));
     const importable = source.rows.filter((row) => !collidingIds.has(row.id));
     const acknowledgedCollisions = source.rows.filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id)).map((row) => ({ id: row.id, path: relative9(source.root, row.dir).split(/[\\/]+/).join("/") }));
     const unmatchedWorkflowSkips = [...workflowSkips].filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
@@ -24421,7 +24444,8 @@ async function importExecutionMinimal(input) {
       conflict2(source.refusal);
     const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id) && !provenIds.has(id));
     if (refusedCollisions.length > 0) {
-      conflict2(`the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow. Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`);
+      const unconsumedInput = conversionInput.carriesInput && refusedCollisions.some((id) => inputUnprovenIds.has(id)) ? ` This run carries conversion-shaping input (--delivery/--ack-skip-compass), and the retained import receipt(s) for these exact source bytes record no matching input digest, so they do not prove the earlier import consumed THIS input — the native row was not shaped by it, and the run never overwrites it with the declaration being asked for.` : "";
+      conflict2(`the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow.${unconsumedInput} Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`);
     }
     let imported = 0;
     const importedIds = [];
@@ -24451,7 +24475,8 @@ async function importExecutionMinimal(input) {
     for (const row of source.rows.filter((entry) => provenIds.has(entry.id))) {
       const path2 = relative9(source.root, row.dir).split(/[\\/]+/).join("/");
       const acknowledged = workflowSkips.has(row.id) ? " The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id and disposed of no import." : "";
-      dispositions.push(`workflow ${row.id}: proven replay — this store's own retained import receipt for source digest ${source.sourceDigest} already imported this id, so the native execution authority already holds it from an import of these exact source bytes at ${path2}. This run imported nothing for it and kept the native workflow/plan rows, coordination, header and revisions unchanged; the legacy bytes remain in place.${acknowledged}`);
+      const shaped = conversionInput.carriesInput ? ` It also recorded input digest ${conversionInput.digest} for the delivery declarations and compass acknowledgements this run carries.` : "";
+      dispositions.push(`workflow ${row.id}: proven replay — this store's own retained import receipt for source digest ${source.sourceDigest} already imported this id, so the native execution authority already holds it from an import of these exact source bytes at ${path2}.${shaped} This run imported nothing for it and kept the native workflow/plan rows, coordination, header and revisions unchanged; the legacy bytes remain in place.${acknowledged}`);
     }
     skipped.sort((a, b) => a.path.localeCompare(b.path));
     for (const entry of source.skippedWorkflowAcknowledgements) {
@@ -24484,7 +24509,8 @@ async function importExecutionMinimal(input) {
       importedIds,
       skipped,
       dispositions,
-      sourceDigest: source.sourceDigest
+      sourceDigest: source.sourceDigest,
+      inputDigest: conversionInput.digest
     };
     tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash3, JSON.stringify(result), new Date().toISOString());
     return result;
