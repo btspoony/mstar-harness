@@ -90,7 +90,14 @@ async function runInit(options: InitOptions) {
         : globalResult.reason === "already-matching"
           ? "already matching"
           : globalResult.reason;
-    console.log(`Plugin version: ${chosenCli}; global CLI: ${globalState}.`);
+    // Only an adapter that installs a plugin can be reported at that version;
+    // the others register a marketplace or write config and leave the plugin
+    // install as the operator's next step.
+    console.log(
+      adapter.installsPlugin === true
+        ? `Plugin version: ${chosenCli}; global CLI: ${globalState}.`
+        : `Global CLI: ${globalState}.`,
+    );
     if (globalResult.action === "failed" && chosenCli !== packageVersion) {
       // The plugin is already at the newer version; a global CLI left at the old
       // one is exactly the skew this run exists to remove, so this cannot report

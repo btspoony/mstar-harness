@@ -74,6 +74,10 @@ export type InstallInitFlags = {
 };
 
 export type AgentAdapter = {
+  /** Whether this target installs a host plugin at the chosen version. Targets
+   *  that only register a marketplace or write config must not be reported as
+   *  having installed one. */
+  installsPlugin?: boolean;
   target: Target;
   mode: "config" | "install";
   getAvailableModels?: () => string[];

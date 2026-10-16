@@ -12,12 +12,14 @@ import {
   DSH_PROFILES_DIR,
   diagnoseDshHost,
   dshLoaderName,
+  readInstalledPluginVersion,
   fallbacksVersionDrifted,
   isDshAvailable,
   parseDshLoaderEntries,
   resolveDshProfileDir,
 } from "@mstar-harness/commands";
 import { runCliCommand } from "../exec";
+import { readHarnessVersion } from "../utils";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 
 export { dshFallbacksLoaderName, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
@@ -130,7 +132,11 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
     }
   }
 
-  for (const spec of dshPluginSpecs()) {
+  // The mstar row is pinned to the version this run selected: an unpinned add
+  // follows dsh's own range, which is what can leave the plugin behind the CLI.
+  const mstarSpec = `@mstar-harness/dsh@${initFlags?.pluginVersion ?? readHarnessVersion()}`;
+  const specs = [mstarSpec, dshFallbacksSpec()];
+  for (const spec of specs) {
     if (spec === dshFallbacksSpec() && initFlags?.noFallbacks) {
       notes.push(`skipped-by-flag: ${spec} (--no-fallbacks)`);
       continue;
@@ -140,7 +146,11 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       const disabledRow = disabledLoaderNames.has(spec) || disabledLoaderNames.has(dshLoaderName(spec));
       // The enclosing condition already proved this spec's row is present, so
       // drift is the only reason to fall through to the versioned re-add.
-      const needsVersionAlign = isFallbacks && fallbacksVersionDrifted(profileDir) && !disabledRow;
+      const installedRow = readInstalledPluginVersion(profileDir, dshLoaderName(spec));
+      const needsVersionAlign = !disabledRow &&
+        (isFallbacks
+          ? fallbacksVersionDrifted(profileDir)
+          : installedRow !== null && installedRow !== (initFlags?.pluginVersion ?? readHarnessVersion()));
       if (!needsVersionAlign) {
         notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
         continue;
@@ -183,14 +193,17 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       // dsh's own text arrived on stdout/stderr as often as in the folded
       // message; report the captured detail either way and keep only the
       // recovery line conditional.
-      throw new Error(`Failed to install ${spec} via ${DSH_BIN}: ${detail}`);
+      throw new Error(
+        `Failed to install ${spec} via ${DSH_BIN}: ${detail}\n` +
+          `Recovery: run \`${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${spec}\` and read its output, then check host health with \`mstar-harness doctor --target dsh\`.`,
+      );
     }
   }
 
   notes.push(`Profile: ${DSH_PROFILE} at ${profileDir}`);
   notes.push("Verify with: mstar-harness doctor --target dsh");
   notes.push(
-    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${dshPluginSpecs().join(
+    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${specs.join(
       ` && ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add `,
     )}`,
   );
@@ -205,6 +218,7 @@ function runDoctor(scope: Scope): { location: string; errors: string[]; notes: s
 
 export const dshAdapter: AgentAdapter = {
   target: "dsh",
+  installsPlugin: true,
   mode: "install",
   runInstallInit: (scope, dryRun, initFlags) => runInit(scope, dryRun, initFlags),
   runInstallDoctor: (scope) => runDoctor(scope),

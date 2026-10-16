@@ -100,7 +100,12 @@ export function resolveDshProfileDir(dshHome?: string): string {
 
 /** Read the installed fallbacks package version from a profile tree. Missing or unreadable artifacts return null. */
 export function readInstalledFallbacksVersion(profileDir: string): string | null {
-  const pkgJson = path.join(profileDir, "node_modules", dshFallbacksLoaderName(), "package.json");
+  return readInstalledPluginVersion(profileDir, dshFallbacksLoaderName());
+}
+
+/** The version of one installed plugin row in a profile, or null when absent. */
+export function readInstalledPluginVersion(profileDir: string, loaderName: string): string | null {
+  const pkgJson = path.join(profileDir, "node_modules", loaderName, "package.json");
   try {
     const raw = fs.readFileSync(pkgJson, "utf8");
     const parsed: unknown = JSON.parse(raw);

@@ -157,10 +157,13 @@ export function verifyOmpInstall(
   }
   if (linkedTree !== undefined) {
     if (typeof entry.path !== "string") {
-      // The listing shape is omp's; without a path there is nothing to compare, so
-      // the note says what could not be confirmed instead of claiming it was.
-      notes.push(`omp reports ${OMP_PLUGIN_NAME}, but its listing carries no path to compare with ${linkedTree}.`);
-      return;
+      // Without a path there is nothing to compare, and "the plugin is listed"
+      // is not the claim this step makes: it must point at the tree just linked.
+      throw ompRefusal(
+        `omp lists ${OMP_PLUGIN_NAME} but reports no path, so the link cannot be confirmed`,
+        `expected the listing to point at ${linkedTree}`,
+        `re-link it (\`omp plugin link ${linkedTree}\`) and re-run, or install the published plugin instead (\`omp plugin install ${OMP_PLUGIN_NAME}\`)`,
+      );
     }
     let listed: string;
     let linked: string;
@@ -186,18 +189,23 @@ export function verifyOmpInstall(
     return;
   }
   const installed = ompEntryVersion(entry);
-  if (installed !== null && installed !== expectedVersion) {
+  if (installed === null) {
+    // A published install was asked for a specific version; a listing that does
+    // not report one cannot confirm it, so this is not success.
+    throw ompRefusal(
+      `omp lists ${OMP_PLUGIN_NAME} but reports no version, so ${expectedVersion} could not be confirmed`,
+      "the listing carries no version for the entry it accepted",
+      `inspect with \`omp plugin list\`, then reinstall if needed: \`omp plugin install ${OMP_PLUGIN_NAME}@${expectedVersion}\``,
+    );
+  }
+  if (installed !== expectedVersion) {
     throw ompRefusal(
       "omp reports a different plugin version than the one installed",
       `expected ${expectedVersion}, omp lists ${installed}`,
       `install the expected version yourself: \`omp plugin install ${OMP_PLUGIN_NAME}@${expectedVersion}\``,
     );
   }
-  notes.push(
-    installed === null
-      ? `omp reports ${OMP_PLUGIN_NAME} (its listing carries no version).`
-      : `omp reports ${OMP_PLUGIN_NAME} at ${installed}.`,
-  );
+  notes.push(`omp reports ${OMP_PLUGIN_NAME} at ${installed}.`);
 }
 
 /**

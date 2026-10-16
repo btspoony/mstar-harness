@@ -1,5 +1,8 @@
 import { compareSemver } from "@mstar-harness/commands";
+import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { runCliCommand } from "./exec";
 
 export type EnsureGlobalCliOpts = {
@@ -60,10 +63,32 @@ export function defaultDetectVersion(): string | null {
   }
 }
 
+/**
+ * Resolve `npm` outside the working tree. A checkout can prepend its own
+ * `node_modules/.bin` to PATH, which would let that checkout choose the npm this
+ * command runs; every PATH entry inside the working directory is skipped.
+ */
+function resolveTrustedNpm(): string {
+  const cwd = process.cwd();
+  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  for (const entry of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    if (entry === "") continue;
+    const dir = path.resolve(entry);
+    if (dir === cwd || dir.startsWith(cwd + path.sep)) continue;
+    const candidate = path.join(dir, executable);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return executable; // last resort: the platform's own resolution
+}
+
 /** npm install spawn, bounded by a timeout so a stalled registry surfaces
- * as `action: "failed"` instead of hanging init without output. */
+ * as `action: "failed"` instead of hanging init without output. Runs from a
+ * neutral directory so the project's npm config cannot steer a global install. */
 function defaultInstall(spec: string): void {
-  runCliCommand(["npm", "i", "-g", spec], { timeoutMs: installTimeoutMs() });
+  runCliCommand([resolveTrustedNpm(), "i", "-g", spec], {
+    cwd: tmpdir(),
+    timeoutMs: installTimeoutMs(),
+  });
 }
 
 /**
@@ -79,14 +104,31 @@ export function detectPublishedLatest(): string | null {
     // `--prefer-online` revalidates the packument: the same stale npm cache
     // that can hand `npx` an old resolution would otherwise answer this probe
     // with the very tag this check exists to catch.
-    const out = execFileSync("npm", ["view", "--prefer-online", `${CLI_PACKAGE}`, "version"], {
-      // An optional probe must not print: capture both streams so an offline or
-      // misconfigured registry stays silent, as documented.
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      env: process.env,
-      timeout: LATEST_PROBE_TIMEOUT_MS,
-    });
+    // `--prefer-online` revalidates the packument; the user/global configs are
+    // neutralized and the probe runs outside the working tree so neither the
+    // checkout's npm config nor its PATH can steer the answer.
+    const out = execFileSync(
+      resolveTrustedNpm(),
+      [
+        "view",
+        "--prefer-online",
+        `${CLI_PACKAGE}`,
+        "version",
+        "--userconfig",
+        "/dev/null",
+        "--globalconfig",
+        "/dev/null",
+      ],
+      {
+        // An optional probe must not print: capture both streams so an offline
+        // or misconfigured registry stays silent, as documented.
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: tmpdir(),
+        encoding: "utf8",
+        env: process.env,
+        timeout: LATEST_PROBE_TIMEOUT_MS,
+      },
+    );
     const value = out.trim();
     return value === "" || value === "undefined" ? null : value;
   } catch {

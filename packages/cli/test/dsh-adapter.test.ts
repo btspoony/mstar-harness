@@ -44,6 +44,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
 import { dshFallbacksSpec, dshFallbacksVersion } from "@mstar-harness/commands";
+import { readHarnessVersion } from "../src/utils";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -231,7 +232,12 @@ function withDshHomeAndPath(
   withEnv("DSH_HOME", dshHome, () => withPath(fake.binDir, fn));
 }
 
-const MSTAR_SPEC = "@mstar-harness/dsh";
+// The mstar row is pinned to the version this run selected (the CLI's own
+// manifest version when no pluginVersion was passed), so the expected spec is
+// derived, never a literal.
+const MSTAR_SPEC = `@mstar-harness/dsh@${readHarnessVersion()}`;
+/** The doctor describes the row by its loader identity, which carries no version. */
+const MSTAR_ROW = "@mstar-harness/dsh";
 const FALLBACKS_SPEC = dshFallbacksSpec();
 
 /** Fixture runtime tokens: clearly not semver, printed verbatim by the fake
@@ -558,10 +564,11 @@ describe("dshAdapter.runInstallInit", () => {
         }
       });
       expect(String(error)).toContain(`Failed to install ${MSTAR_SPEC}`);
-      // A generic failure names no recovery: dsh printed none, and inventing
-      // one (flags, version) would be worse than saying nothing.
+      // A generic failure names no dsh-specific exemption (dsh printed none), but
+      // it is still a hard stop, so it names the supported routes out of it.
       expect(String(error)).not.toContain("allow-version");
-      expect(String(error)).not.toContain("Recovery:");
+      expect(String(error)).toContain("Recovery:");
+      expect(String(error)).toContain(`mstar-harness doctor --target dsh`);
       // The failing add was still attempted (argv recorded before the exit).
       expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
     } finally {
@@ -642,7 +649,7 @@ describe("dshAdapter.runInstallDoctor", () => {
       });
       expect(result).toBeDefined();
       expect(result!.errors).toEqual([]);
-      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+      expectNote(result!.notes ?? [], `${MSTAR_ROW}: mounted`);
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
     } finally {
       rmSync(dshHome, { recursive: true, force: true });
@@ -681,7 +688,7 @@ describe("dshAdapter.runInstallDoctor", () => {
           result = dshAdapter.runInstallDoctor?.("global");
         });
         expect(result).toBeDefined();
-        expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+        expectNote(result!.notes ?? [], `${MSTAR_ROW}: mounted`);
         expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: disabled`);
         expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is disabled`))).toBe(true);
       } finally {
@@ -698,7 +705,7 @@ describe("dshAdapter.runInstallDoctor", () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
-      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: mounted`);
+      expectNote(result!.notes ?? [], `${MSTAR_ROW}: mounted`);
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: uninstalled`);
       expect(result!.errors.some((line) => line.includes(`${FALLBACKS_SPEC} is uninstalled`))).toBe(true);
     } finally {
@@ -715,9 +722,9 @@ describe("dshAdapter.runInstallDoctor", () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
-      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: uninstalled`);
+      expectNote(result!.notes ?? [], `${MSTAR_ROW}: uninstalled`);
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
-      expect(result!.errors.some((line) => line.includes(`${MSTAR_SPEC} is uninstalled`))).toBe(true);
+      expect(result!.errors.some((line) => line.includes(`${MSTAR_ROW} is uninstalled`))).toBe(true);
     } finally {
       rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
@@ -733,9 +740,9 @@ describe("dshAdapter.runInstallDoctor", () => {
         result = dshAdapter.runInstallDoctor?.("global");
       });
       expect(result).toBeDefined();
-      expectNote(result!.notes ?? [], `${MSTAR_SPEC}: disabled`);
+      expectNote(result!.notes ?? [], `${MSTAR_ROW}: disabled`);
       expectNote(result!.notes ?? [], `${FALLBACKS_SPEC}: mounted`);
-      expect(result!.errors.some((line) => line.includes(`${MSTAR_SPEC} is disabled`))).toBe(true);
+      expect(result!.errors.some((line) => line.includes(`${MSTAR_ROW} is disabled`))).toBe(true);
     } finally {
       rmSync(dshHome, { recursive: true, force: true });
       fake.remove();
@@ -877,7 +884,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
         expect.stringContaining("no mstar-mcp row"),
       ]));
       expect(data.notes).toEqual(expect.arrayContaining([
-        expect.stringContaining(`${MSTAR_SPEC}: mounted`),
+        expect.stringContaining(`${MSTAR_ROW}: mounted`),
         expect.stringContaining(`${FALLBACKS_SPEC}: mounted`),
       ]));
     } finally {
@@ -923,7 +930,7 @@ describe("CLI doctor --target dsh (fake dsh on PATH)", () => {
       const result = runCli(["doctor", "--target", "dsh"], { env: fakePathEnv(fake) });
       const data = responseData(result);
       expect(data.notes).toEqual(expect.arrayContaining([
-        expect.stringContaining(`${MSTAR_SPEC}: mounted`),
+        expect.stringContaining(`${MSTAR_ROW}: mounted`),
         expect.stringContaining(`${FALLBACKS_SPEC}: uninstalled`),
       ]));
       expect(data.errors).toEqual(expect.arrayContaining([
