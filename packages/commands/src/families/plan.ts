@@ -97,7 +97,11 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
    recovery: id === "plan.complete" && code === "coordination.scope-mismatch"
-        ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
+        ? details !== undefined && "expected" in details && "actual" in details
+          ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
+          // No recorded scope at all: there is no anchor to compare, so the repair
+          // is to record the row's worktree and branch, not to re-register one.
+          : "The plan records no worktree/branch scope. Record the plan worktree and feature branch with mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>, then retry."
         : id === "plan.bind"
         ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
         : id === "plan.show"

@@ -1579,6 +1579,50 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     expect(recovery).toContain("mstar plan prepare");
   }, 30_000);
 
+  test("a plan.complete refusal for a row with no recorded scope recovers through plan prepare, not the anchor repair", async () => {
+    const fixture = await activeDeliveryFixture("mstar-completion-no-scope");
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-no-scope");
+
+    // Prepare is optional, so the row records no worktree/branch scope: the
+    // refusal is the missing-scope cause of `coordination.scope-mismatch`, whose
+    // details carry `worktree_path`/`working_branch` rather than `expected`/`actual`.
+    const startPath = join(fixture.root, "no-scope-start.json");
+    writeJson(startPath, { status: "InProgress", summary: "no scope start", evidence_paths: [fixture.qaReport] });
+    expect(runCli(
+      ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    ).exitCode).toBe(0);
+
+    const evidencePath = join(fixture.root, "no-scope-completion.json");
+    writeJson(evidencePath, {
+      source_sha: fixture.sourceSha,
+      review_base: fixture.baseSha,
+      review_head: fixture.sourceSha,
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+
+    const refused = runCli(
+      ["plan", "complete", "--plan", PLAN_ID, "--file", evidencePath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    const envelope = jsonOf(refused);
+    expect(envelope.code).toBe("coordination.scope-mismatch");
+    const details = objectMember(envelope, "details");
+    expect(details).toMatchObject({ worktree_path: null, working_branch: null });
+    const recovery = stringMember(details, "recovery");
+    if (recovery === undefined) throw new Error(`the no-scope refusal carries no recovery: ${refused.stdout}`);
+    expect(recovery).toContain("mstar plan prepare");
+    expect(recovery).not.toContain("delivery-anchors");
+  }, 30_000);
+
   test("the removed transfer verbs are absent from the command surface", async () => {
     const fixture = await activeFixture("mstar-transfer-verbs-gone");
     const { coordinatorWire } = await prepareRow(fixture);
