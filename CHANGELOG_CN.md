@@ -6,6 +6,44 @@
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-10-16
+
+### Fixed
+
+- **发布的 CLI 重新以 Node 作为入口运行时。** `dist/mstar-harness.js` 之前带的 shebang 指向本仓库的开发运行时，因此每次直接运行 `mstar-harness` 或 `npx @mstar-harness/cli` 都跑在 PATH 上碰巧存在的那个运行时上——即使在已有受支持 Node 的机器上，即使包运行器本就用本机 Node 安装。现在 bin 带 Node shebang（`#!/usr/bin/env node`），且 `@mstar-harness/cli` 只声明一个运行时要求（`node >=24.18.0`）。
+- **面向用户的运行时文本只提一个运行时。** `store.runtime-unsupported` 的拒绝、`status validate` 的 recovery、`doctor` 的运行时下限提示，都只指明 Node 下限（`>=24.18.0`，原生 `node:sqlite`）与实际执行该入口的运行时，不再把第二个运行时写成要求。store 的 recovery 也不再拿"修正操作者输入"这类通用文本回应运行时拒绝，而是列出全部 store verb **各自必需的选项**（`store init`、`store backup --out <path>`、`store migrate --manifest <path> --apply`、`store activate --manifest <path> --attestation <absolute-json>`、`store retire --manifest <path>`、`store upgrade --operator <name> --harness <control-root>`），并要求带上相同选项重跑实际调用的那个，而不是被改指 `store upgrade`。SDD 证据记录真正执行 supervisor 的运行时，因此从源码运行的捕获能识别自己的运行器，而不会把该运行器模拟的 Node 版本当成入口运行时。
+- **文档随入口对齐。** `INSTALL.md`（前置要求、CLI 安装、MCP 启动、doctor 说明）、`README.md`/`README_CN.md` 与 `docs/runtime-reference.md` 只把 Node 下限写成启动要求；从 checkout 的步骤改为指向拥有这些开发工具链命令的维护者文档，不再直接写出命令。宿主插件 README 把运行时下限归因于加载它的宿主。
+- **doctor 改为探测其启动真正会用的 `node`。** 每个宿主 MCP 配置都以 `npx` 启动，而 `npx` 用 PATH 上的 `node` 执行 CLI——doctor 现在探测该可执行文件自身的版本，而不再报告 doctor 进程碰巧暴露的版本（从源码运行时那是该运行器模拟出的 Node 版本，并非本机 Node 安装）。探测失败时，该目标以 **unverified** 的 Node 下限报为 mismatch，而不是把无法启动的配置报成 aligned。
+- **`status validate` 的运行时 recovery 不再给出无效重试建议。** 它指明入口的 Node 下限，并说明"不改变执行运行时的重试会复现该拒绝"，让处于不支持运行时的操作者去换运行时，而不是重跑同一条命令。
+- 两条都补了回归：低于下限的 CLI 用例断言 store recovery 指出被调用的 verb（upgrade 带其选项、`store init` 作为自身命令），且 `status validate` 的 recovery 含"未改变则复现"这一事实；doctor 套件断言未探测到的启动运行时为 mismatch；SDD 证据套件断言记录的工具指纹标明真正执行捕获的运行时。
+- **对未变更的 legacy 源重复执行 `store upgrade` 重新成为普通成功。** 执行导入器此前唯一的 replay 路径是按调用方 operation id 匹配，而 CLI 每次调用都新生成 `randomUUID()` 且从不回传，因此对已导入过的树再次升级必然落入 native-id 冲突拒绝，并要求为每个已导入 id 传 `--ack-skip-workflow`。现在导入器还会读取 store **自己留存的导入收据**：每次已提交的导入本就会写一行 `store_operations`，其 `result_json` 携带本次消费的 `sourceDigest` 与已提交的 `importedIds`，而该表从不被裁剪。**与本次完全相同源字节**的收据已列出的冲突 id 即 **proven replay**——该次运行不导入任何行、不需要任何确认，并在 `dispositions` 中逐个说明该 id 已由 native authority 从这些确切字节的导入中持有。这正是本次变更确立的来源政策：只有当留存来源证明同一来源时，同 ID 匹配才算 replay。
+- **未证明的冲突行为不变。** 仅仅是 id 相同的不相关 workflow，或记录导入之后字节已变化（`sourceDigest` 不同）的 legacy 源，仍然拒绝 `execution.migration-conflict` 并指明 `--ack-skip-workflow <该 id>`，其未匹配确认的用法错误（exit 2）也保持不变。候选收据在 JS 中做形状校验（`sourceDigest` 字符串等于当前 digest + `importedIds` 字符串数组），而不是因为 JSON 恰好提到该 digest 就采信；查询也绝不按调用方 operation id 索引。守卫顺序保持不变：未匹配确认 → 不安全源拒绝 → 冲突处理。
+- **replay 现在还必须证明“塑造行内容的输入”，而不只是字节。** `sourceDigest` 只覆盖本次读取的 legacy 字节，而 `--delivery` 声明与 `--ack-skip-compass` 确认会在不改动这些字节的前提下改变转换产物——因此此前对未变更字节的重复执行可能接受一份**不同**的声明并静默丢弃它，native 行仍保持此前那次导入留下的状态。收据因此额外记录一个 `inputDigest`，覆盖规范化后的声明（按 lift id 排序、固定键序）与 compass 确认（排序）。**两者都不携带**的运行仍仅凭字节证明即可 replay，故此字段出现之前写入的收据继续有效；**携带任一者**的运行则要求收据记录相同的 `inputDigest`，否则该 id 仍是未证明冲突。该拒绝现在只陈述证据支持的内容——留存收据并不能证明此前的导入消费了本次输入，因此本次运行不把该 id 当作已证明的 replay，并保持 native 行不变——并同时在既有 `--ack-skip-workflow <id>` 恢复路径旁给出。不新增拒绝码、表、迁移或 flag。
+- **`MinimalImportResult.verdict` 拓宽为 `"upgraded" | "nothing-to-import"`**（增量），与 DSH 导入器既有的词汇一致：提交了行的运行仍报 `upgraded` 及其 `imported` 计数，而未提交任何行但证明至少一次 replay 的运行则报告当前已是最新状态。`docs/commands.md` § Store CLI upgrade and recovery 描述了 proven-replay 结果，并为未证明的冲突保留 `--ack-skip-workflow`。
+
+### Harness
+
+- **`@mstar-harness/commands` 现为严格内部包。** 它标记为 `private`，作为 workspace `devDependency` 消费并内联进 CLI bundle，因此 Release workflow 不再发布它（该发布步骤永远无法成功：该包从未存在于 npm，且 OIDC 可信发布无法创建新包）。
+- **根 manifest 完全不再引用 commands。** 它已从 `dependencies` 和 `devDependencies` 中一并删除——根包即 git 安装入口（`omp plugin install github:btspoony/mstar-harness`、`bun add github:…`），而 `workspace:` 协议在工作区之外无法解析，会安装 devDependencies 的 git 安装将因此失败。workspace 内各包仍直接 link commands，`release:prepare` 仍让它的版本与发布同步。
+- **已在 registry 上的版本，其发布步骤会被报告为跳过而非失败。** 发布前检查把每个可发布包分类为 `publish` 或 `skip`（已在 registry 上），并在任何 registry 状态未知时拒绝，因此每个发布步骤要么发布、要么明确说明该版本已存在。它只检查 manifest 可发布性与 registry 状态——无法验证 npm 可信发布者/OIDC 授权，那只能由真实发布尝试证明。CI 还会断言 workflow 的发布集合与非 private 的 workspace 包一致。
+- `init` 不再把失败的宿主安装当作成功：link / install / build 任一步被拒都会以非零退出结束，并给出原因与恢复路径。
+- omp 安装对已存在的插件树改为确定性处理（先经支持的路径移除陈旧条目再 link，并校验实际安装版本），也不再向会忽略它的 install 路径传 scope。
+- omp coordinator 工具的 session 参数改用双参 `record` 形式，使工具 schema 在已验证的各宿主 shim 下都能构造成功。
+- dsh 的版本不兼容拒绝现在会给出运行时、插件 spec 与 dsh 自身的 `allow-version` 恢复命令，而不只是转发拒绝信息。
+- 版本值一律在运行时从 `package.json` 读取；Bun 版本门禁与版本比较测试已删除。
+- 当已发布的最新版比正在运行的版本更新时，`init` 会把该最新版 `@mstar-harness/cli` 全局装上，并在版本不同时打印两者：否则 `npx` 的缓存解析可能让较旧的 CLI 运行，而 `init` 的每一步（包括全局安装）都会跟随那个旧版本。registry 探测有超时上限、`--dry-run` 下跳过、离线时静默，因此既不会阻塞也不会让 init 失败。
+- README 的 **Install** 章节改为按宿主的列表：每个宿主把 `init` 命令与原生命令分行给出，`init` 被阻塞时不再卡住 onboarding。同时在 `INSTALL.md` 补齐原先缺失的原生路径（OpenCode 的 `opencode.json` 槽位、Cursor 插件 checkout、Codex marketplace 注册）。
+- **Release workflow 不再有手动入口。** `workflow_dispatch` 及其 `commit` 输入已移除：发布任务持有 `id-token: write` + `contents: write`，而手动派发会选定一个 ref，仓库写入者可先修改该 ref 上的 workflow 副本再运行，因此发布路径现在只能经已合并的 `release vX.Y.Z` PR 到达。已在 registry 上的版本仍被报告为跳过；发布过程中部分包已发布而失败的 release，恢复方式是准备下一个 patch 版本，由新版本发布其余包。
+
+### Added
+
+- **PR review 席位 prompt 现在带上强度与共享时间预算。** `mstar pr-review seat-prompt` 在每个席位的 `## Budget` 块开头给出已解析 tier、**整场 review** 的墙钟软上限（`PR_REVIEW_TIER_BUDGETS[tier].wallClockMinutes`），并在提供时给出派发时刻这只共享时钟的剩余分钟（`--remaining-minutes <n>`，负值渲染为已超出分钟数）。席位不再各自获得一份新额度；软上限条目约定到点返回部分结果并在 payload 尾部声明截断，而不是硬停。
+- **席位运行期间的监督。** 新增 engine 常量 `PR_REVIEW_NUDGE_CADENCE`（`normalSeconds` / `overrunSeconds`），由 `mstar pr-review budget` 与 tier 表一并打印，为主 agent 提供统一节奏向仍在运行的席位催办剩余预算——共享上限过后切换到更快节奏。措辞（派发、催办、返回即停、超时不等于硬停，以及席位无法中途投递消息的 host 差异——dsh 的 `mstar-pr-seats` 脚本现在要求显式 `budgetLine`，缺失即拒绝并给出恢复文本）位于 `mstar-audit` `references/pr-review.md` 的 **§ Seat supervision (progress nudges)**；`commands/amazing-pr-review.md` 在 Execute 步骤中要求执行该循环。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.1**。
+
 ## [4.0.0] - 2026-10-15
 
 ### Fix

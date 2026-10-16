@@ -6,6 +6,23 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-10-16
+
+### Changed
+
+- `init` no longer reports success for a failed host install: a refused link, install, or build step ends with a non-zero exit that names the cause and a recovery.
+- omp install is deterministic about a pre-existing plugin tree (removes a stale entry through a supported route before linking, verifies the installed version), and no longer passes a scope flag the install path ignores.
+- The omp coordinator tool's session parameter uses the two-argument `record` form, so the tool schema constructs under every host shim probed.
+- A dsh incompatibility refusal now names the runtime, the plugin spec, and dsh's own `allow-version` recovery instead of relaying the rejection alone.
+- Version values come from `package.json` at runtime; the Bun-version gate and version-comparison tests are gone.
+- `init` installs the published `@mstar-harness/cli` latest globally when a newer version than the one running is published, and warns with both versions when they differ: a cached `npx` resolution can otherwise run an older CLI, and every step of `init` — including the global install — used to follow that older version. The registry probe is bounded, skipped by `--dry-run`, and silent when offline, so it never blocks or fails an init.
+- **PR-review seat prompts are dispatched with the tier and the shared time budget.** `mstar pr-review seat-prompt` now opens each seat's `## Budget` block with the resolved tier and the **whole-review** soft wall-clock cap (`PR_REVIEW_TIER_BUDGETS[tier].wallClockMinutes`) plus, when given, the minutes left of that one clock at dispatch (`--remaining-minutes <n>` — negative renders as minutes *over*). A seat is never handed a fresh per-seat allowance, and the soft-cap bullet promises a partial return with declared truncated coverage at the deadline instead of a hard stop.
+- **Seat supervision while seats run.** New engine constant `PR_REVIEW_NUDGE_CADENCE` (`normalSeconds` / `overrunSeconds`), printed by `mstar pr-review budget` alongside the tier table, gives the main agent one cadence to nudge still-running seats with their remaining budget — the faster tick once the shared cap is passed. The wording (dispatch, nudge, stop-at-completion, overrun-is-not-a-kill, and the host difference where seats cannot be messaged mid-run — the dsh `mstar-pr-seats` script now requires an explicit `budgetLine`, refusing without the recovery text) lives in `mstar-audit` `references/pr-review.md` **§ Seat supervision (progress nudges)**; `commands/amazing-pr-review.md` requires the loop in its Execute steps.
+
+- Version alignment with harness **4.0.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.1**.
+
 ## [4.0.0] - 2026-10-15
 
 ### Harness
