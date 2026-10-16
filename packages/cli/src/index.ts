@@ -54,8 +54,11 @@ function resolveExplicitModelAssignments(options: InitOptions) {
 
 async function runInit(options: InitOptions) {
   const target = options.target || "opencode";
-  const scope = options.scope || "project";
   const adapter = getAdapter(target);
+  const scope = options.scope ?? adapter.defaultScope ?? "project";
+  if (!options.scope && adapter.defaultScope !== undefined && adapter.defaultScope !== "project") {
+    console.log(pc.dim(`This target installs host-wide; using --scope ${adapter.defaultScope}.`));
+  }
   if (!options.scope && !options.yes) console.log(pc.dim("Scope not provided; defaulting to project."));
   if (adapter.mode === "install") {
     logStep("Step 2/2 - Run target install flow");

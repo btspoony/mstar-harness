@@ -43,7 +43,7 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
   - CLI: `npx @mstar-harness/cli init --target dsh` — installs the plugin plus LLM fallbacks; `--no-fallbacks` skips the second
   - Native: `dsh plugin --profile web add @mstar-harness/dsh` — the LLM-fallbacks row is optional, and it must be the version this CLI pins (read from the CLI's own manifest; `init` adds that row, while an unpinned `dsh-llm-fallbacks` follows dsh's own range instead)
 - **omp** — needs the `omp` CLI installed
-  - CLI: `npx @mstar-harness/cli init --target omp --scope global` — omp's plugin manager keeps one user-wide root, so it has no project scope (`init` refuses `--scope project` for this target)
+  - CLI: `npx @mstar-harness/cli init --target omp` — omp's plugin manager keeps one user-wide root, so this target defaults to `--scope global`; an explicit `--scope project` is refused
   - Native: `omp plugin install @mstar-harness/omp`
 - **OpenCode**
   - CLI: `npx @mstar-harness/cli init --target opencode` — detects which plugin key the installed generation uses, and `--opencode-generation` overrides

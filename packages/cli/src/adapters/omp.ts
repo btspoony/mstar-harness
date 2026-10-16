@@ -289,21 +289,22 @@ function installedPluginEntry(entries: Array<Record<string, unknown>>): Record<s
 
 
 async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
-  if (scope === "project") {
-    // omp's plugin manager keeps one user-wide root: its `link` and `list`
-    // implementations ignore `--scope` (upstream `handleLink` always calls the
-    // user-root link), so a project-scoped run would mutate user state while
-    // claiming project scope. Refuse instead, with the scope omp does support.
-    throw ompRefusal(
-      "omp has no project-scoped plugin installation",
-      "omp's plugin manager resolves one user-wide root, and both `omp plugin link` and `omp plugin list` ignore --scope",
-      "re-run for the scope omp supports: `npx @mstar-harness/cli init --target omp --scope global`",
-    );
-  }
- const notes: string[] = [];
+const notes: string[] = [];
  let linkedVersion: string | null = null;
  const projectRoot = resolveProjectRoot();
  if (!dryRun) await ensureHostPresent("omp");
+ if (!dryRun && scope === "project") {
+   // omp's plugin manager keeps one user-wide root: its `link` and `list`
+   // implementations ignore `--scope` (upstream `handleLink` always calls the
+   // user-root link), so a real project-scoped run would mutate user state while
+   // claiming project scope. Refuse instead of pretending the flag worked; a
+   // dry-run only previews, so it stays available.
+   throw ompRefusal(
+     "omp has no project-scoped plugin installation",
+     "omp's plugin manager resolves one user-wide root, and both `omp plugin link` and `omp plugin list` ignore --scope",
+     "re-run for the scope omp supports: `npx @mstar-harness/cli init --target omp --scope global`",
+   );
+ }
  notes.push(...ensureLocalHarnessRepo(dryRun));
 
  // Keep the shared checkout current so new host markers (`.omp-plugin/`) exist before link/doctor.

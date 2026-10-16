@@ -86,6 +86,9 @@ export type AgentAdapter = {
    *  that only register a marketplace or write config must not be reported as
    *  having installed one. */
   installsPlugin?: boolean;
+  /** The scope this target installs into when the caller passes none. Defaults
+   *  to `project`; a target whose host has only one installation says so here. */
+  defaultScope?: Scope;
   target: Target;
   mode: "config" | "install";
   getAvailableModels?: () => string[];
