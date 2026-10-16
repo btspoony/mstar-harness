@@ -156,6 +156,8 @@ function buildFixture(options: FixtureOptions = {}): string {
   write(root, "packages/engine/tsconfig.json", '{ "include": ["src"] }\n');
   write(root, "packages/engine/src/index.ts", "export const engine = 1;\n");
   write(root, "packages/engine/src/store-db.ts", "export const store = 1;\n");
+  write(root, "packages/engine/scripts/build.ts", "export const build = 1;\n");
+  write(root, "packages/engine/scripts/debug-esm.ts", "export const debug = 1;\n");
   write(root, "packages/engine/dist/engine.js", "// engine bundle\n");
   write(root, "packages/engine/dist/audit.js", "// audit bundle\n");
   write(root, "packages/engine/dist/index.d.ts", "export declare const engine: number;\n");
@@ -362,6 +364,13 @@ describe("execution-consumer-manifest — canonical collection", () => {
       .find((consumer) => consumer.id === "engine")
       ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
     expect(engineDist?.files).toBe(4);
+    // The engine's build scripts are part of its input closure: `build.ts` runs
+    // the bundle and `debug-esm.ts` is a bundled build input.
+    const engine = manifest.consumers.find((consumer) => consumer.id === "engine");
+    expect(engine?.sources.trees.map((tree) => tree.root)).toEqual([
+      "packages/engine/scripts",
+      "packages/engine/src",
+    ]);
 
     // OpenCode dynamically injects the CLI MCP server, whose handlers mutate; it remains a writer.
     const opencode = manifest.consumers.find((consumer) => consumer.id === "opencode");
@@ -481,6 +490,13 @@ describe("execution-consumer-manifest — verification refusals", () => {
     expect(readFileSync(join(root, "packages/engine/dist/engine.js"), "utf8")).toBe(
       "// engine bundle\n",
     );
+
+    // The build script is an input too: a change to it invalidates the recorded
+    // closure even though the still-present dist bytes are untouched.
+    const scriptDrift = buildFixture();
+    const scriptManifest = collectExecutionConsumerManifest(scriptDrift);
+    writeFileSync(join(scriptDrift, "packages/engine/scripts/debug-esm.ts"), "export const debug = 2;\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(scriptManifest), "consumer.digest-mismatch");
   });
 
   test("refuses a changed OMP plugin manifest while the old root copy stays", () => {

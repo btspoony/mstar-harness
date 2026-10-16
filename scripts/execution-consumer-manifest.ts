@@ -258,7 +258,10 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     runtime: { target: "node", declaration: "package-engines" },
     packageJson: "packages/engine/package.json",
     entrypoint: "packages/engine/dist/engine.js",
-    sourceTrees: [{ root: "packages/engine/src" }],
+    // `bun run scripts/build.ts` is what actually compiles this dist (it also
+    // bundles `scripts/debug-esm.ts`), so the build scripts are build inputs in
+    // their own right — same shape as the `cli` layout below.
+    sourceTrees: [{ root: "packages/engine/src" }, { root: "packages/engine/scripts" }],
     sourceFiles: ["packages/engine/package.json", "packages/engine/tsconfig.json"],
     generatedTrees: [{ root: "packages/engine/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
     generatedFiles: ["packages/engine/dist/audit.js", "packages/engine/dist/engine.js"],
