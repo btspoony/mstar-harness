@@ -3788,8 +3788,7 @@ test("a changed --delivery declaration over unchanged bytes refuses instead of d
 
   // A DIFFERENT valid declaration over those same bytes is NOT a replay: the
   // receipt proves the bytes were read, not that this declaration set was
-  // consumed, so accepting it would silently discard the new declaration and
-  // leave the native row shaped by the old one.
+  // consumed, so accepting it would silently discard the new declaration.
   const nativeBefore = await protectedStore(context);
   const statusBytes = readFileSync(join(context.harnessDir, "status.json"));
   const changed = [{ workflow: "v1-standalone", deliveryKind: "verification/report-only" as const, completionPolicy: "report at docs/legacy.md" }];

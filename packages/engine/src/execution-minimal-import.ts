@@ -133,7 +133,8 @@ function conversionInputDigest(declarations: DeliveryLiftDeclarations, acknowled
  * receipt recording the SAME input digest, because an earlier import of these
  * bytes may have converted them from a different declaration set; ids whose only
  * same-bytes receipt lacks that proof are returned in `inputUnproven` so the
- * refusal can name the real cause instead of implying the bytes were discarded.
+ * refusal can name the unproven input instead of implying the bytes were
+ * discarded.
  */
 function provenReplayIds(
   db: StoreDb,
@@ -889,13 +890,13 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id) && !provenIds.has(id));
     if (refusedCollisions.length > 0) {
       // A run that carries --delivery/--ack-skip-compass can collide with a
-      // receipt for these exact bytes that proves only the BYTES were read. That
-      // gap is the real cause there: the native row was not shaped by this
-      // input, so treating the id as a replay would discard the declaration the
-      // caller is asking for. Name it beside the recovery instead of implying
-      // the source bytes themselves were discarded.
+      // receipt for these exact bytes that proves only the BYTES were read. Such
+      // a receipt cannot prove the declaration set it committed rows from, so
+      // treating the id as a replay would discard the declaration the caller is
+      // asking for. Say only that: the receipt's silence is not evidence about
+      // the earlier run.
       const unconsumedInput = conversionInput.carriesInput && refusedCollisions.some((id) => inputUnprovenIds.has(id))
-        ? ` This run carries conversion-shaping input (--delivery/--ack-skip-compass), and the retained import receipt(s) for these exact source bytes record no matching input digest, so they do not prove the earlier import consumed THIS input \u2014 the native row was not shaped by it, and the run never overwrites it with the declaration being asked for.`
+        ? ` This run carries conversion-shaping input (--delivery/--ack-skip-compass), and the retained import receipt(s) for these exact source bytes record no matching input digest, so they do not prove the earlier import consumed THIS input; this run therefore does not treat the id as a proven replay and leaves the native rows unchanged.`
         : "";
       conflict(
         `the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow.${unconsumedInput} ` +
