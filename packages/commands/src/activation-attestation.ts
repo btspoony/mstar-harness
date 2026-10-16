@@ -2,9 +2,8 @@ import {
   ACTIVATION_PROTOCOL_VERSION,
   CONSUMER_KINDS,
   DISPOSITIONS,
-  MIN_BUN_VERSION,
-  MIN_NODE_VERSION,
   SESSION_STATES,
+  readDeclaredNodeFloor,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 
@@ -13,7 +12,7 @@ export const activationAttestationDocumentConstraints: readonly Readonly<{ path:
   { path: "*", rule: "Every string value must be nonblank (trim() is not empty)." },
   { path: "attestedAt", rule: "Date.parse(value) must be finite; the engine diagnostic calls this an ISO/RFC3339 instant, but validation uses Date.parse semantics." },
   { path: "consumers", rule: "At least one installed consumer is required." },
-  { path: "consumers[].runtimeVersion", rule: `Must meet the declared runtime floor: bun >= ${MIN_BUN_VERSION}; node >= ${MIN_NODE_VERSION}.` },
+  { path: "consumers[].runtimeVersion", rule: `Must be "node" and meet the declared floor: node >= ${readDeclaredNodeFloor() ?? "the manifest's engines.node"}. Bun is the development toolchain and is never a consumer runtime.` },
   { path: "consumers[].current", rule: "Exactly one consumer is current, and that consumer's kind must be coordinator." },
   { path: "*", rule: "Only the declared keys at the top level and in operator, consumers[], and stoppedSessions[] are accepted; undeclared credential fields are refused by name." },
   { path: "stoppedSessions[].state", rule: "Only stopped or reloaded sessions are accepted." },
@@ -30,7 +29,9 @@ export const activationAttestationDocumentSchema = z.object({
     entryId: z.string(),
     kind: z.enum(Object.keys(CONSUMER_KINDS) as [string, ...string[]]),
     entrypoint: z.string(),
-    runtime: z.enum(["bun", "node"]),
+    // A consumer is an installed entrypoint that opens the store, and Bun is this
+    // project's development toolchain: the contract has no Bun entry to gate.
+    runtime: z.literal("node"),
     runtimeVersion: z.string(),
     version: z.string(),
     current: z.boolean(),

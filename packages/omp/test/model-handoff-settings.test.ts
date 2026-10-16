@@ -260,11 +260,12 @@ describe("native plugin settings", () => {
     mkdirSync(installedPackage, { recursive: true });
     writeFileSync(
       join(installedPackage, "package.json"),
-      JSON.stringify({ name: PLUGIN_NAME, version: "0.0.0", omp: { name: "morning-star-harness" } }, null, 2),
+      // Synthetic version: this is a scratch install the host must parse, not a version claim.
+      JSON.stringify({ name: PLUGIN_NAME, version: "0.0.0-synthetic", omp: { name: "morning-star-harness" } }, null, 2),
     );
     writeFileSync(
       join(projectDir, "package.json"),
-      JSON.stringify({ name: "handoff-probe-project", dependencies: { [PLUGIN_NAME]: "0.0.0" } }, null, 2),
+      JSON.stringify({ name: "handoff-probe-project", dependencies: { [PLUGIN_NAME]: "0.0.0-synthetic" } }, null, 2),
     );
 
     const listed = runProbe<string[]>(

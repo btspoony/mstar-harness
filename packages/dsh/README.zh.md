@@ -6,7 +6,7 @@
 
 让 [Morning Star](https://github.com/btspoony/mstar-harness) 成为一等公民的 dsh（DeepSeek Harness）宿主——一个 cordis 函数插件，将 mstar engine 进程内挂载，实现 engine `HostAdapter`（`host: 'dsh'`），守护 `{HARNESS_DIR}/status.json` 写入（校验 + 咨询；hard 下按修复逃生放行），在 `Enforcement: hard` 开启时阻止被禁止的 subagent 派发，对挂载技能根下的 `SKILL.md` 写入执行技能撰写 lint，通过 dsh skill-filesystem 提供者挂载 mstar `skills/` 镜像（单一规范挂载），并向每个组合后的 agent 步骤追加一条持久化的 `mstar-engine` catalog 行（持久化日志的读取方也接受旧标识 `mstar-engine-status`）。随 dsh Loader 应用启动；一切均通过 seam 的拒绝/咨询通道行使职责，从不改动工具本身。
 
-本插件的运行时下限来自 dsh 宿主：宿主提供的运行时必须 **>=1.4.0**，也就是首个带原生 `node:sqlite` 模块的版本（mstar store 需要该模块；这也是 store 闸门强制、且 `packages/dsh/package.json` 声明的下限）。本包不额外要求 Node。
+本插件的运行时要求来自 dsh 宿主：宿主提供的运行时必须提供 mstar store 所需的原生 `node:sqlite` 模块（store 闸门强制的是这项能力）。Bun 宿主不做版本闸门 —— workspace 各 manifest 里的 `engines.bun` 只是开发工具链声明 —— store 的 Node 版本下限只作用于 Node 入口。本包不额外要求 Node。
 
 ## Usage
 

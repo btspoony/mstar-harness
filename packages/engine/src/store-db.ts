@@ -4,8 +4,10 @@
  *
  * Authority: issue-store-contract.md §2 (connection/path/upgrades) and §8
  * (accepted runtime decision). User-selected runtime: direct in-process
- * `node:sqlite` under Bun >=1.4.0 or Node >=24.18.0 — no child transport,
- * daemon, `bun:sqlite`, driver dependency or older-runtime fallback.
+ * `node:sqlite` on a runtime whose owning manifest declares the Node floor in
+ * `engines.node` (the floor is read at runtime; `package.json` owns it) — no
+ * child transport, daemon, `bun:sqlite`, driver dependency or older-runtime
+ * fallback. Bun carries no floor: it is a development toolchain.
  *
  * SQLite is NEVER acquired at module import: `node:sqlite` is loaded lazily
  * inside the connection functions only, so importing this module (or the
@@ -22,6 +24,7 @@ import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openS
 import type { Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
+import { readDeclaredNodeFloor, warnUncheckableNodeFloor } from "./core.js";
 // Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
 // import of the activation validator must be loaded at call time (see
 // validatedActivationAttestation below) because store-activation.ts reads
@@ -47,10 +50,6 @@ function parsedInstant(value: unknown): number | null {
   return Number.isFinite(instant) ? instant : null;
 }
 
-/** Minimum Bun runtime floor (contract §8). */
-export const MIN_BUN_VERSION = "1.4.0";
-/** Minimum Node runtime floor (contract §8). */
-export const MIN_NODE_VERSION = "24.18.0";
 /** Default bounded wait for a competing writer before a visible refusal. */
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
@@ -151,21 +150,27 @@ export function assertStoreRuntimeSupported(info: StoreRuntimeInfo = detectStore
   // from a Bun-hosted plugin host or a development run — never rendered as a
   // CLI user's requirement.
   const kind = info.isBun ? "Bun" : "Node";
-  const floor = info.isBun ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+  // The floor is a version, so `package.json` owns it: read `engines.node` from
+  // the owning manifest at runtime. Bun has no floor — it is a development
+  // toolchain, and product code never gates on the Bun version. A manifest that
+  // declares no floor leaves the version comparison unenforced; the capability
+  // refusal below is unaffected.
+  const floor = kind === "Node" ? readDeclaredNodeFloor() : null;
+  if (kind === "Node" && floor === null) warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
     throw new StoreError(
       "store.runtime-unsupported",
       `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. ` +
-        `The issue store requires ${kind} >=${floor} with native node:sqlite; upgrade the runtime ` +
+        `The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime ` +
         `(${runtimeHome}). No fallback runtime or driver is supported.`,
     );
   }
-  if (compareVersions(info.version, floor) < 0) {
+  if (floor !== null && compareVersions(info.version, floor) < 0) {
     throw new StoreError(
       "store.runtime-unsupported",
       `${kind} ${info.version} is below the issue-store floor. The store requires the native ` +
-        `"node:sqlite" module on ${kind} >=${floor}; found ${kind} ${info.version}. Upgrade the runtime ` +
+        `"node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime ` +
         `for this entrypoint (${runtimeHome}). No older-runtime fallback exists` +
         `${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`,
     );

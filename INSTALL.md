@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Node.js >=24.18.0** — the published `mstar-harness` binary is a Node script (`#!/usr/bin/env node`), so every launch form — plain `mstar-harness`, `npx @mstar-harness/cli …`, and the explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js …` — executes that same entrypoint on the Node runtime on PATH. A package runner is **not** a runtime: it fetches the package and then executes the bin with the Node already installed. That Node must provide the native `node:sqlite` module (>=24.18.0); no fallback driver exists. Host plugins (dsh, omp, OpenCode) run inside their own host process, not in the CLI.
+- **Node.js >=24.18.0** — the published `mstar-harness` binary is a Node script (`#!/usr/bin/env node`), so every launch form — plain `mstar-harness`, `npx @mstar-harness/cli …`, and the explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js …` — executes that same entrypoint on the Node runtime on PATH. A package runner is **not** a runtime: it fetches the package and then executes the bin with the Node already installed. That Node must provide the native `node:sqlite` module (>=24.18.0); no fallback driver exists. Host plugins (dsh, omp, OpenCode) run inside their own host process, not in the CLI. A **Bun**-hosted plugin process is not version-gated by the store — the `engines.bun` fields in the workspace manifests declare the development toolchain, and the only runtime requirement a Bun host must satisfy is the native `node:sqlite` capability.
 - Target host installed:
   - [OpenCode](https://opencode.ai)
   - [Cursor](https://cursor.com)
@@ -29,7 +29,7 @@ npm install @mstar-harness/cli
 node node_modules/@mstar-harness/cli/dist/mstar-harness.js init
 ```
 
-`init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted.
+`init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted, except for a target whose host has a single supported scope (omp installs host-wide, so an unscoped `init --target omp` uses `--scope global` and says so). It also resolves the published `@mstar-harness/cli` version before it touches the host: when that `latest` is **newer** than the CLI running it (a cached `npx` resolution can differ), it installs that `latest` globally and reports it; a version ahead of `latest` is left alone. `--no-global-cli` skips both the probe and that install.
 
 ### OpenCode
 
@@ -43,6 +43,18 @@ Non-interactive preview:
 ```bash
 npx @mstar-harness/cli init --target opencode --dry-run --yes
 ```
+
+Without the CLI — add the published plugin package to `opencode.json` yourself, keyed by the slot that generation reads:
+
+```jsonc
+// singular `plugin` slot
+{ "plugin": ["@mstar-harness/opencode"] }
+
+// plural `plugins` slot
+{ "plugins": ["@mstar-harness/opencode-v2"] }
+```
+
+Restart OpenCode afterwards. This path installs the plugin only: it skips the harness gitignore entries and does not run `doctor`.
 
 ### Cursor
 
@@ -66,6 +78,14 @@ npx @mstar-harness/cli doctor --target cursor --scope global
 ```
 
 Restart Cursor or run **Developer: Reload Window** after install.
+
+Without the CLI — clone the repo into the plugin path Cursor loads (a real directory, never a symlink):
+
+```bash
+git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness
+```
+
+This path installs the plugin only: it skips the harness gitignore entries and does not run `doctor`. Re-run `git pull` in that checkout to update it.
 
 **Layout note:** Cursor does **not** discover symlinked plugin directories. The CLI maintains a shared checkout at `~/.mstar/harness` and a **separate real git checkout** at the Cursor plugin path. See [Install path layout](#install-path-layout).
 
@@ -161,7 +181,7 @@ Install the plugin in Kimi TUI (user-scoped — all projects):
 
 ### omp
 
-User scope (recommended):
+User scope (the only scope omp has):
 
 ```bash
 npx @mstar-harness/cli init --target omp --scope global
@@ -177,7 +197,7 @@ omp plugin install @mstar-harness/omp
 #   (the linked tree needs its own build first — see packages/omp/README.md → Maintainers / local checkouts)
 ```
 
-Project scope: `npx @mstar-harness/cli init --target omp --scope project`.
+omp's plugin manager keeps **one user-wide plugin root**: `omp plugin link` and `omp plugin list` ignore `--scope` upstream, so there is no project-scoped omp installation to create. `init --target omp` therefore defaults to `--scope global` (and says so), while an explicit `--scope project` refuses before touching anything and names the scope omp supports.
 
 **Notes:**
 
@@ -194,7 +214,7 @@ npx @mstar-harness/cli init --target dsh
 npx @mstar-harness/cli doctor --target dsh
 ```
 
-The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Re-running is idempotent: already-installed rows are skipped (`skipped-existing`), exit 0. The one version-aware exception is a `dsh-llm-fallbacks` row installed at a version other than the pinned one: `init` re-adds the pinned spec (a registry install + profile write; a failed re-add exits non-zero), which also replaces a local `link:`/`file:` fallbacks checkout — pass `--no-fallbacks` to leave such a profile untouched.
+The CLI runs **two independent** `dsh plugin --profile web add` calls (mstar first, then `dsh-llm-fallbacks`) — the two-command install contract, never folded into a patch file. Both rows are pinned to the version this run selected, and re-running is idempotent: a row already at that version is skipped (`skipped-existing`), exit 0, while a row installed at another version is re-added (a registry install + profile write; a failed re-add exits non-zero). A row the operator disabled stays disabled, and a skipped row whose installed manifest cannot be read is reported as an unconfirmed plugin version rather than assumed to match. That realignment also replaces a local `link:`/`file:` checkout — pass `--no-fallbacks` to leave the `dsh-llm-fallbacks` row untouched, and `--scope` has no dsh surface (its profile is machine-global).
 
 Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag — ignored for other targets):
 
@@ -202,12 +222,13 @@ Skip the `dsh-llm-fallbacks` row (`--no-fallbacks` is a dsh-target-only flag —
 npx @mstar-harness/cli init --target dsh --no-fallbacks
 ```
 
-Or run the two plugin-manager commands directly (the same contract the CLI executes):
+Or run the plugin-manager commands directly (the same contract the CLI executes):
 
 ```bash
 dsh plugin --profile web add @mstar-harness/dsh
-dsh plugin --profile web add dsh-llm-fallbacks
 ```
+
+The LLM-fallbacks row is optional and must carry the **pinned** version: an unpinned `dsh plugin --profile web add dsh-llm-fallbacks` follows dsh's own range and can boot-break the installed artifact. `init` adds the pinned spec, and `mstar-harness doctor --target dsh` names the pin whenever the profile's row drifts from it.
 
 **Notes:**
 
@@ -403,7 +424,7 @@ ZCode plugin source in this repository:
 
 ### omp
 
-User scope (recommended):
+User scope (the only scope omp has):
 
 ```bash
 npx @mstar-harness/cli init --target omp --scope global
@@ -420,12 +441,7 @@ omp plugin install @mstar-harness/omp
 omp plugin list
 ```
 
-Project scope:
-
-```bash
-npx @mstar-harness/cli init --target omp --scope project
-npx @mstar-harness/cli doctor --target omp --scope project
-```
+Creating a project scope is refused before anything is touched (omp has one user-wide root); the commands above are the only scope omp supports.
 
 **Notes:**
 
@@ -482,13 +498,14 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
 
 | Host | What still holds the 3.x copy | Refresh |
 | --- | --- | --- |
-| CLI | the global npm install | `npm i -g @mstar-harness/cli@latest` (or keep using `npx`, which fetches the current release on every run) |
+| CLI | the global npm install | `npm i -g @mstar-harness/cli@latest` (or keep using `npx`, which resolves the registry on every run but may serve a cached older resolution — `init` reports that skew, and `@latest` forces the current release) |
+| CLI (version `init` leaves) | — | `init` installs `@mstar-harness/cli` globally at the version the run targeted: the published `latest` when it is newer than the running CLI, otherwise the running version |
 | Cursor | the plugin checkout at `~/.cursor/plugins/local/morning-star-harness` (global) or `.cursor/plugins/morning-star-harness` (project) | re-run `npx @mstar-harness/cli init --target cursor --scope <global\|project>` — its adapter `git pull --ff-only`s that checkout — or pull it yourself: `git -C <checkout> pull --ff-only` |
 | Codex | the shared `~/.mstar/harness` checkout (the agent `.toml` source, which `init` does **not** pull) and codex's own marketplace snapshot | `git -C ~/.mstar/harness pull --ff-only`, then `codex plugin marketplace upgrade`, then `codex plugin add morning-star-harness@mstar-repo`, then re-run `npx @mstar-harness/cli init --target codex --scope <global\|project>` to re-copy the agent files — re-running `init` alone keeps the old sources ([Codex: agent files](#codex-agent-files)) |
 | ZCode | the plugin copy installed from the `mstar-local` marketplace (a 3.x snapshot) | re-run `npx @mstar-harness/cli init --target zcode` to rewrite the marketplace catalogs, then reinstall **morning-star-harness** in ZCode (**Settings → Plugin Management → Discover**); ZCode refreshes a `github`-source marketplace itself |
 | omp | the linked `~/.mstar/harness` tree: `init` pulls that checkout and re-links `packages/omp`, but runs the build only when `packages/omp/plugin.json` is **absent** (`adapters/omp.ts:110-132`), so an existing linked 3.x tree keeps its old generated `dist`/mirrors | `git -C ~/.mstar/harness pull --ff-only`, then rebuild that checkout in place with the repository's development toolchain ([`packages/omp/README.md`](packages/omp/README.md) → Maintainers / local checkouts) — then `npx @mstar-harness/cli init --target omp` (or `omp plugin link ~/.mstar/harness/packages/omp`); `omp plugin install @mstar-harness/omp` installs the published package instead |
 | OpenCode | the config row `@mstar-harness/opencode@latest`, resolved by the host at load | re-run `npx @mstar-harness/cli init --target opencode`, then restart OpenCode |
-| dsh | the profile row installed at the 3.x version — re-running `init` reports `skipped-existing` and leaves it | `dsh plugin --profile web add @mstar-harness/dsh` (the same command contract the CLI runs; `init` does re-add the pinned `dsh-llm-fallbacks` row when that one has drifted) |
+| dsh | the profile row installed at the 3.x version | re-run `npx @mstar-harness/cli init --target dsh`: the adapter now pins both rows to the version the run selected and re-adds a row whose installed version differs, so the 3.x row is realigned instead of reported `skipped-existing`. To do it by hand: `dsh plugin --profile web add @mstar-harness/dsh@<selected version>`, and the same for `dsh-llm-fallbacks@<pinned>` if that row has drifted |
 | Kimi | the managed copy under `$KIMI_CODE_HOME/plugins/managed/` | in the Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload` |
 
 Check the result with `npx @mstar-harness/cli doctor --target <host>` (per-host scope flags in the sections above), then restart or reload the host — a running host keeps the code it loaded.

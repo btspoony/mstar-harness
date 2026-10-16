@@ -1,10 +1,18 @@
+import { compareSemver } from "@mstar-harness/commands";
+import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { runCliCommand } from "./exec";
 
 export type EnsureGlobalCliOpts = {
   version: string;
   dryRun: boolean;
   noGlobalCli: boolean;
+  /** Published `latest`, when it was probed: a newer published version is what
+   * gets installed, so a stale npx resolution cannot leave the operator on an
+   * older CLI. `undefined` (not probed) keeps `version`. */
+  latest?: string | null;
   /** Return current mstar-harness version on PATH, or null if missing. */
   detectVersion?: () => string | null;
   /** Run `npm i -g @mstar-harness/cli@<version>`. Throw on failure. */
@@ -18,6 +26,9 @@ export type EnsureGlobalCliResult =
   | { action: "failed"; spec: string; message: string };
 
 const CLI_NAME = "mstar-harness";
+const CLI_PACKAGE = "@mstar-harness/cli";
+/** Registry probe ceiling (ms): a slow or offline registry must not delay init. */
+const LATEST_PROBE_TIMEOUT_MS = 2_000;
 /** npm install timeout (ms): a stalled registry must surface as an error
  * instead of hanging init without output. Mirrors the dsh adapter's
  * DSH_ADD_TIMEOUT_MS convention; overridable via env so tests can shrink
@@ -52,10 +63,162 @@ export function defaultDetectVersion(): string | null {
   }
 }
 
+/**
+ * Resolve `npm` outside the working tree. A checkout can prepend its own
+ * `node_modules/.bin` to PATH, which would let that checkout choose the npm this
+ * command runs; every PATH entry inside the working directory is skipped.
+ */
+function resolveTrustedNpm(): string {
+  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+  // npm prepends `node_modules/.bin` for the checkout the command runs in, so
+  // only paths inside the checkout itself are untrusted — excluding every
+  // ancestor would also drop a user-managed npm (nvm, volta) under the home
+  // directory and then fall back to a name that PATH re-resolves unchecked.
+  let checkout: string | null = null;
+  let dir = process.cwd();
+  for (;;) {
+    if (fs.existsSync(path.join(dir, ".git"))) {
+      checkout = dir;
+      break;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const resolvedCheckout = ((): string | null => {
+    if (checkout === null) return null;
+    try {
+      return fs.realpathSync(checkout);
+    } catch {
+      return checkout;
+    }
+  })();
+  const insideCheckout = (candidate: string): boolean => {
+    // A dependency tree's shim directory is never a trusted npm, whether or not
+    // the surrounding tree has a `.git` marker: `npx` puts those first, and an
+    // archive can arrive without any repository metadata at all.
+    if (candidate.split(path.sep).join("/").includes("node_modules/.bin")) return true;
+    if (resolvedCheckout === null) return false;
+    let resolved = candidate;
+    try {
+      resolved = fs.realpathSync(candidate);
+    } catch {
+      // a missing entry keeps its literal path
+    }
+    return resolved === resolvedCheckout || resolved.startsWith(resolvedCheckout + path.sep);
+  };
+  for (const entry of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    if (entry === "") continue;
+    const candidateDir = path.resolve(entry);
+    if (insideCheckout(candidateDir)) continue;
+    const candidate = path.join(candidateDir, executable);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  // No validated npm: falling back to a bare name lets the shell resolve the
+  // checkout's own npm again, which is the execution vector this avoids.
+  throw new Error(
+    "No npm outside the current checkout was found on PATH, so the version check and the global install cannot run safely.\n" +
+      "Recovery: install npm outside the checkout, or re-run with --no-global-cli to skip both.",
+  );
+}
+
+/** Empty, DISTINCT npm config files: pointing both options at one file makes npm
+ *  refuse the config ("double-loading config ... previously loaded"), which would
+ *  silently disable the version probe. */
+function neutralNpmConfigs(): { user: string; global: string } {
+  if (neutralConfigs !== null) return neutralConfigs;
+  const dir = fs.mkdtempSync(path.join(tmpdir(), "mstar-npm-config-"));
+  const user = path.join(dir, "user-npmrc");
+  const global = path.join(dir, "global-npmrc");
+  fs.writeFileSync(user, "");
+  fs.writeFileSync(global, "");
+  neutralConfigs = { user, global };
+  return neutralConfigs;
+}
+
+let neutralConfigs: { user: string; global: string } | null = null;
+
 /** npm install spawn, bounded by a timeout so a stalled registry surfaces
- * as `action: "failed"` instead of hanging init without output. */
+ * as `action: "failed"` instead of hanging init without output. Runs from a
+ * neutral directory so the project's npm config cannot steer a global install. */
 function defaultInstall(spec: string): void {
-  runCliCommand(["npm", "i", "-g", spec], { timeoutMs: installTimeoutMs() });
+  const configs = neutralNpmConfigs();
+  runCliCommand(
+    [resolveTrustedNpm(), "i", "-g", spec, "--userconfig", configs.user, "--globalconfig", configs.global],
+    { cwd: tmpdir(), timeoutMs: installTimeoutMs() },
+  );
+}
+
+/**
+ * Published `latest` version of this package, or null when it cannot be read.
+ * A warm npm cache can serve an older resolution to `npx <pkg>` — the CLI then
+ * runs a stale version and every step it takes (including the global install
+ * below) is version-skewed with no visible sign, so init states the skew and
+ * installs the published version instead of the stale one.
+ * Offline, stalled, or unreadable: null, and the caller stays quiet.
+ */
+export function detectPublishedLatest(): string | null {
+  try {
+    // `--prefer-online` revalidates the packument: the same stale npm cache
+    // that can hand `npx` an old resolution would otherwise answer this probe
+    // with the very tag this check exists to catch.
+    // `--prefer-online` revalidates the packument; the user/global configs are
+    // neutralized and the probe runs outside the working tree so neither the
+    // checkout's npm config nor its PATH can steer the answer.
+    const out = execFileSync(
+      resolveTrustedNpm(),
+      [
+        "view",
+        "--prefer-online",
+        `${CLI_PACKAGE}`,
+        "version",
+        "--userconfig",
+        neutralNpmConfigs().user,
+        "--globalconfig",
+        neutralNpmConfigs().global,
+      ],
+      {
+        // An optional probe must not print: capture both streams so an offline
+        // or misconfigured registry stays silent, as documented.
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: tmpdir(),
+        encoding: "utf8",
+        env: process.env,
+        timeout: LATEST_PROBE_TIMEOUT_MS,
+      },
+    );
+    const value = out.trim();
+    return value === "" || value === "undefined" ? null : value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One-line warning when the CLI that is running is not the published `latest`,
+ * or null when it matches or the registry could not be read. Kept separate from
+ * `ensureGlobalCli` so the network probe sits at the CLI edge and the install
+ * helper stays injectable without a live registry.
+ */
+/**
+ * The version `init` installs: the published `latest` when it is higher than the
+ * running one, else the running version. A leading (or equal) prerelease is never
+ * downgraded, so this is also the version the host install must pin.
+ */
+export function chooseCliVersion(version: string, latest: string | null): string {
+  if (latest === null) return version;
+  return compareSemver(latest, version) > 0 ? latest : version;
+}
+
+export function formatVersionSkewWarning(version: string, latest: string | null): string | null {
+  // Only a version BEHIND the published latest is skew: a local (or prerelease)
+  // build ahead of it must not be told to move backwards.
+  if (latest === null || compareSemver(latest, version) <= 0) return null;
+  return (
+    `Warning: this CLI is ${CLI_PACKAGE}@${version}; the published latest is ${latest}. ` +
+    `A cached npx resolution can run an older CLI, and every step of this init follows the CLI that ran \u2014 ` +
+    `re-run with \`npx ${CLI_PACKAGE}@latest init \u2026\`.`
+  );
 }
 
 /**
@@ -65,7 +228,11 @@ function defaultInstall(spec: string): void {
  * because the npm global prefix is not writable.
  */
 export function ensureGlobalCli(opts: EnsureGlobalCliOpts): EnsureGlobalCliResult {
-  const spec = `@mstar-harness/cli@${opts.version}`;
+  // A published version newer than the one running is what the operator asked
+  // for (an unpinned `npx` spec means latest), so it is what gets installed.
+  const newer = chooseCliVersion(opts.version, opts.latest ?? null) === opts.version ? null : opts.latest!;
+  const target = newer ?? opts.version;
+  const spec = `@mstar-harness/cli@${target}`;
   const log = opts.log ?? ((line: string) => console.log(line));
 
   if (opts.noGlobalCli) {
@@ -79,14 +246,18 @@ export function ensureGlobalCli(opts: EnsureGlobalCliOpts): EnsureGlobalCliResul
   }
 
   const current = (opts.detectVersion ?? defaultDetectVersion)();
-  if (current === opts.version) {
+  if (current === target) {
     log(`${CLI_NAME} ${current} already on PATH.`);
     return { action: "skipped", reason: "already-matching" };
   }
 
   try {
     (opts.install ?? defaultInstall)(spec);
-    log(`Installed ${spec} globally.`);
+    log(
+      newer === null
+        ? `Installed ${spec} globally.`
+        : `Installed ${spec} globally (this run was ${opts.version}; ${newer} is the published latest).`,
+    );
     return { action: "installed", spec };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

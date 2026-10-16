@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
+import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,12 @@ import { initializeStore, openStore, readExecutionState, type StoreDb } from "@m
 import { activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { executeCommand } from "../definitions.js";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
+
+/** Injected current runtime for a `node` consumer: at/above the declared floor. */
+const atOrAboveRuntime = (() => {
+  const floor = readDeclaredNodeFloor() ?? "0.0.0";
+  return `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`;
+})();
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -144,7 +151,7 @@ function attestationDocument(stoppedSessionIds: readonly string[]): Record<strin
     operator: { actor: "recovery-operator", authorizationRef: "operator-authorization-fixture" },
     consumers: [{
       entryId: "mstar-cli", kind: "coordinator", entrypoint: "packages/cli/src/index.ts",
-      runtime: "bun", runtimeVersion: "99.0.0", version: "0.0.0-test", current: true, disposition: "reloaded",
+      runtime: "node", runtimeVersion: atOrAboveRuntime, version: "0.0.0-synthetic", current: true, disposition: "reloaded",
     }],
     stoppedSessions: stoppedSessionIds.map((sessionId) => ({ sessionId, host: "fixture-host", state: "stopped" })),
   };

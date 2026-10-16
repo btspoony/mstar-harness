@@ -1225,7 +1225,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
           .object({
             operation: z.literal("recover"),
             priorSessionId: z
-              .union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown()), z.record(z.unknown())])
+              .union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown()), z.record(z.string(), z.unknown())])
               .describe("string|null: the ACTIVE recovery's recorded coordinator session, or null only when none is recorded."),
             ...coordinatorAdmissionFields,
           })

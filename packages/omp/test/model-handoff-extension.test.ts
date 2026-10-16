@@ -34,6 +34,7 @@
  * process was started** — process-level loading evidence is handed to T4/QA.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -80,6 +81,12 @@ import {
   setArtifactStore,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
+
+/** Injected current runtime for a `node` consumer: at/above the declared floor. */
+const atOrAboveRuntime = (() => {
+  const floor = readDeclaredNodeFloor() ?? "0.0.0";
+  return `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`;
+})();
 
 /* --------------------------------------------------------------- scratch --- */
 
@@ -1076,9 +1083,9 @@ function activationAttestation(
         entryId: "omp-model-handoff",
         kind: "coordinator",
         entrypoint: "extensions/model-handoff.js",
-        runtime: "bun",
-        runtimeVersion: "1.4.0",
-        version: "3.11.2",
+        runtime: "node",
+        runtimeVersion: atOrAboveRuntime,
+        version: "0.0.0-synthetic-b",
         current: true,
         disposition: "reloaded",
       },

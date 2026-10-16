@@ -114,7 +114,8 @@ function tool(overrides: Partial<EvidenceToolFingerprint> = {}): EvidenceToolFin
     bytes: 10,
     platform: "linux",
     arch: "x64",
-    runnerRuntimeVersion: "node=v22.0.0",
+    // Synthetic runtime string carried as payload — not a real version.
+    runnerRuntimeVersion: "node=0.0.0-synthetic-a",
     error: null,
     ...overrides,
   };
@@ -141,7 +142,8 @@ function snapshot(overrides: Partial<EvidenceInputSnapshot> = {}): EvidenceInput
 function record(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schema: "mstar.sdd-evidence/v1",
-    producer: { name: "mstar-harness", version: "0.0.0-fixture" },
+    // Synthetic producer version carried as payload — not a real version.
+    producer: { name: "mstar-harness", version: "0.0.0-synthetic" },
     runId: RUN_ID,
     request: request(),
     command: { argv: ["bun", "test", "unit.spec.ts"], cwd: "/feature/wt" },
@@ -605,7 +607,8 @@ describe("assessSddEvidenceReuse", () => {
     const before = snapshot();
     const after = snapshot({
       environment: { CI: "1", NODE_ENV: "production" },
-      tool: tool({ runnerRuntimeVersion: "bun/2.1.0" }),
+      // Differs from the default synthetic runtime string to drive the movement.
+      tool: tool({ runnerRuntimeVersion: "bun/0.0.0-synthetic-b" }),
     });
     const rec = record({ before, after });
     const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, after);

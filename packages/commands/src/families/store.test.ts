@@ -10,6 +10,20 @@ import { executeCommand, getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
 
 
+type EngineManifest = { engines?: { node?: string } };
+// Repo manifest read at runtime: no test pins the runtime floor, and
+// package.json stays the sole version authority.
+const engineManifest = JSON.parse(
+  readFileSync(join(import.meta.dir, "..", "..", "..", "engine", "package.json"), "utf8"),
+) as EngineManifest;
+const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+const floorMajor = Number.parseInt(declaredNodeFloor.split(".")[0]!, 10);
+/** Injected current runtime: at/above the declared floor. */
+const atOrAboveRuntime = `${floorMajor + 1}.0.0`;
+/** Injected below-floor runtime: the floor major minus one, minor/patch zeroed. */
+const belowFloorRuntime = `${floorMajor - 1}.0.0`;
+
+
 function legacyWorkspace(harness: string): void {
   const workflowId = "upgrade-fixture-workflow";
   const workflowDir = join(harness, "workflows", workflowId);
@@ -290,8 +304,9 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
       operator: { actor: "fixture-operator", authorizationRef: "fixture-authorization" },
       consumers: [{
         entryId: "coordinator-cli", kind: "coordinator" as const,
-        entrypoint: "packages/cli/src/index.ts", runtime: "node" as const, runtimeVersion: "24.18.0",
-        version: "0.0.0-test", current: true, disposition: "reloaded" as const,
+        entrypoint: "packages/cli/src/index.ts", runtime: "node" as const, runtimeVersion: atOrAboveRuntime,
+        // Synthetic carried plugin version, not a release number.
+        version: "0.0.0-synthetic", current: true, disposition: "reloaded" as const,
       }],
       stoppedSessions: [{ sessionId, host: "omp", state: "stopped" as const }],
     };
@@ -310,7 +325,7 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
     const invalidDocuments: unknown[] = [
       { ...validAttestation, operator: { ...validAttestation.operator, actor: "   " } },
       { ...validAttestation, attestedAt: "not-an-instant" },
-      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, runtimeVersion: "24.17.9" }] },
+      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, runtimeVersion: belowFloorRuntime }] },
       { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, current: false }] },
       multipleCurrent,
       nonCoordinator,

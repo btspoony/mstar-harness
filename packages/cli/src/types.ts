@@ -65,12 +65,30 @@ export type ModelSelections = {
   others: string[];
 };
 
+/** What an install-mode run left behind. `pluginVersion` is the version that is
+ *  actually installed or linked afterwards, not the one that was requested. */
+export type InstallInitResult = {
+  location: string;
+  notes: string[];
+  pluginVersion?: string;
+};
+
 /** Flags forwarded to an install-mode adapter's runInstallInit. */
 export type InstallInitFlags = {
   noFallbacks?: boolean;
+  /** Version the host install must pin, resolved by the CLI before any
+   *  host mutation (published latest when newer, else the running version). */
+  pluginVersion?: string;
 };
 
 export type AgentAdapter = {
+  /** Whether this target installs a host plugin at the chosen version. Targets
+   *  that only register a marketplace or write config must not be reported as
+   *  having installed one. */
+  installsPlugin?: boolean;
+  /** The scope this target installs into when the caller passes none. Defaults
+   *  to `project`; a target whose host has only one installation says so here. */
+  defaultScope?: Scope;
   target: Target;
   mode: "config" | "install";
   getAvailableModels?: () => string[];
@@ -87,7 +105,7 @@ export type AgentAdapter = {
     scope: Scope,
     dryRun: boolean,
     initFlags?: InstallInitFlags,
-  ) => { location: string; notes: string[] } | Promise<{ location: string; notes: string[] }>;
+  ) => InstallInitResult | Promise<InstallInitResult>;
   runInstallDoctor?: (scope: Scope) => { location: string; errors: string[]; notes?: string[] };
   printPostSetupSummary?: (config: Record<string, unknown>) => void;
 };

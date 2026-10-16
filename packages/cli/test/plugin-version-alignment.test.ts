@@ -31,6 +31,17 @@ import { OMP_LIST_TIMEOUT_MS } from "../src/adapters/omp";
 
 const PLUGIN_DIR_NAME = "morning-star-harness";
 
+// Synthetic stand-ins for the plugin version the discovery code reads back and
+// echoes. They are NOT real versions and carry no claim about this repo; every
+// expectation below is derived from whichever constant is passed in.
+// Semver order: OLD < BASE < MID < NEW < GREATER, and every prerelease < RELEASE.
+const RELEASE = "0.0.0"; // bare core of the synthetic family; the release counterpart of any -synthetic* prerelease
+const OLD = "0.0.0-synthetic";
+const BASE = "0.0.0-synthetic-a";
+const MID = "0.0.0-synthetic-a.1";
+const NEW = "0.0.0-synthetic-b";
+const GREATER = "0.0.0-synthetic-c";
+
 /** Fresh temp dir; `withDir` removes it after `fn`. */
 function withDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "pva-"));
@@ -99,38 +110,38 @@ describe("detectZcodePluginVersion", () => {
 
   test("manifest version wins over the directory name", () => {
     withDir((cacheRoot) => {
-      makeVersionDir(cacheRoot, "mstar-local", "3.7.0", { zcodeManifestVersion: "3.6.0" });
-      expect(detectZcodePluginVersion(cacheRoot)).toBe("3.6.0");
+      makeVersionDir(cacheRoot, "mstar-local", NEW, { zcodeManifestVersion: BASE });
+      expect(detectZcodePluginVersion(cacheRoot)).toBe(BASE);
     });
   });
 
   test("root plugin.json is the manifest fallback when .zcode-plugin is absent", () => {
     withDir((cacheRoot) => {
-      makeVersionDir(cacheRoot, "mstar-local", "3.7.0", { rootManifestVersion: "3.7.0" });
-      expect(detectZcodePluginVersion(cacheRoot)).toBe("3.7.0");
+      makeVersionDir(cacheRoot, "mstar-local", BASE, { rootManifestVersion: BASE });
+      expect(detectZcodePluginVersion(cacheRoot)).toBe(BASE);
     });
   });
 
   test("directory name is the fallback when no manifest carries a version", () => {
     withDir((cacheRoot) => {
-      makeVersionDir(cacheRoot, "mstar-local", "3.7.0");
-      expect(detectZcodePluginVersion(cacheRoot)).toBe("3.7.0");
+      makeVersionDir(cacheRoot, "mstar-local", BASE);
+      expect(detectZcodePluginVersion(cacheRoot)).toBe(BASE);
     });
   });
 
   test("malformed manifest degrades to the directory name instead of throwing", () => {
     withDir((cacheRoot) => {
-      makeVersionDir(cacheRoot, "mstar-local", "3.7.0", { malformedManifest: true });
-      expect(detectZcodePluginVersion(cacheRoot)).toBe("3.7.0");
+      makeVersionDir(cacheRoot, "mstar-local", BASE, { malformedManifest: true });
+      expect(detectZcodePluginVersion(cacheRoot)).toBe(BASE);
     });
   });
 
   test("multiple versions across marketplaces resolve to the highest semver", () => {
     withDir((cacheRoot) => {
-      makeVersionDir(cacheRoot, "mstar-local", "3.6.0");
-      makeVersionDir(cacheRoot, "other-marketplace", "3.7.0", { zcodeManifestVersion: "3.7.0" });
-      makeVersionDir(cacheRoot, "mstar-local", "3.7.0-rc.1", { rootManifestVersion: "3.7.0-rc.1" });
-      expect(detectZcodePluginVersion(cacheRoot)).toBe("3.7.0");
+      makeVersionDir(cacheRoot, "mstar-local", OLD);
+      makeVersionDir(cacheRoot, "other-marketplace", NEW, { zcodeManifestVersion: NEW });
+      makeVersionDir(cacheRoot, "mstar-local", MID, { rootManifestVersion: MID });
+      expect(detectZcodePluginVersion(cacheRoot)).toBe(NEW);
     });
   });
 
@@ -160,16 +171,16 @@ describe("detectOpencodePluginVersion", () => {
 
   test("reads the version from the spec's nested opencode package.json", () => {
     withDir((root) => {
-      makeOpencodeSpec(root, "opencode@latest", "2.3.0");
-      expect(detectOpencodePluginVersion(root)).toBe("2.3.0");
+      makeOpencodeSpec(root, "opencode@latest", BASE);
+      expect(detectOpencodePluginVersion(root)).toBe(BASE);
     });
   });
 
   test("multiple cached specs resolve to the highest semver", () => {
     withDir((root) => {
-      makeOpencodeSpec(root, "opencode@2.3.0", "2.3.0");
-      makeOpencodeSpec(root, "opencode@latest", "2.4.0");
-      expect(detectOpencodePluginVersion(root)).toBe("2.4.0");
+      makeOpencodeSpec(root, `opencode@${OLD}`, OLD);
+      makeOpencodeSpec(root, "opencode@latest", NEW);
+      expect(detectOpencodePluginVersion(root)).toBe(NEW);
     });
   });
 
@@ -188,16 +199,16 @@ describe("detectOpencodePluginVersion", () => {
 describe("detectCursorPluginVersion", () => {
   test(".cursor-plugin/plugin.json wins over package.json", () => {
     withDir((root) => {
-      writeJsonAt(join(root, ".cursor-plugin", "plugin.json"), { name: PLUGIN_DIR_NAME, version: "3.6.3" });
-      writeJsonAt(join(root, "package.json"), { version: "0.0.1" });
-      expect(detectCursorPluginVersion(root)).toBe("3.6.3");
+      writeJsonAt(join(root, ".cursor-plugin", "plugin.json"), { name: PLUGIN_DIR_NAME, version: BASE });
+      writeJsonAt(join(root, "package.json"), { version: OLD });
+      expect(detectCursorPluginVersion(root)).toBe(BASE);
     });
   });
 
   test("package.json is the manifest fallback", () => {
     withDir((root) => {
-      writeJsonAt(join(root, "package.json"), { version: "3.6.3" });
-      expect(detectCursorPluginVersion(root)).toBe("3.6.3");
+      writeJsonAt(join(root, "package.json"), { version: BASE });
+      expect(detectCursorPluginVersion(root)).toBe(BASE);
     });
   });
 
@@ -218,24 +229,24 @@ describe("detectCursorPluginVersionForScope", () => {
   test("project scope prefers the project install", () => {
     withDir((project) => {
       withDir((globalDir) => {
-        writeJsonAt(join(project, ".cursor-plugin", "plugin.json"), { version: "3.5.0" });
-        writeJsonAt(join(globalDir, "package.json"), { version: "3.6.3" });
-        expect(detectCursorPluginVersionForScope("project", paths(project, globalDir))).toBe("3.5.0");
+        writeJsonAt(join(project, ".cursor-plugin", "plugin.json"), { version: OLD });
+        writeJsonAt(join(globalDir, "package.json"), { version: BASE });
+        expect(detectCursorPluginVersionForScope("project", paths(project, globalDir))).toBe(OLD);
       });
     });
   });
 
   test("project scope falls back to the global install when the project checkout is absent", () => {
     withDir((globalDir) => {
-      writeJsonAt(join(globalDir, ".cursor-plugin", "plugin.json"), { version: "3.6.3" });
-      expect(detectCursorPluginVersionForScope("project", paths(null, globalDir))).toBe("3.6.3");
+      writeJsonAt(join(globalDir, ".cursor-plugin", "plugin.json"), { version: BASE });
+      expect(detectCursorPluginVersionForScope("project", paths(null, globalDir))).toBe(BASE);
     });
   });
 
   test("global scope ignores the project install", () => {
     withDir((project) => {
       withDir((globalDir) => {
-        writeJsonAt(join(project, "package.json"), { version: "3.5.0" });
+        writeJsonAt(join(project, "package.json"), { version: OLD });
         expect(detectCursorPluginVersionForScope("global", paths(project, globalDir))).toBeNull();
       });
     });
@@ -253,27 +264,27 @@ describe("detectDshPluginVersion", () => {
 
   test("reads the version from the default web profile", () => {
     withDir((home) => {
-      writeJsonAt(join(home, "profiles", "web", "node_modules", "@mstar-harness", "dsh", "package.json"), { version: "3.7.0" });
-      expect(detectDshPluginVersion(home)).toBe("3.7.0");
+      writeJsonAt(join(home, "profiles", "web", "node_modules", "@mstar-harness", "dsh", "package.json"), { version: BASE });
+      expect(detectDshPluginVersion(home)).toBe(BASE);
     });
   });
 
   test("a newer version in a NON-default profile does NOT win (Greptile P1)", () => {
     withDir((home) => {
-      writeJsonAt(join(home, "profiles", "web", "node_modules", "@mstar-harness", "dsh", "package.json"), { version: "3.6.0" });
-      writeJsonAt(join(home, "profiles", "headless", "node_modules", "@mstar-harness", "dsh", "package.json"), { version: "9.9.9" });
-      expect(detectDshPluginVersion(home)).toBe("3.6.0");
+      writeJsonAt(join(home, "profiles", "web", "node_modules", "@mstar-harness", "dsh", "package.json"), { version: BASE });
+      writeJsonAt(join(home, "profiles", "headless", "node_modules", "@mstar-harness", "dsh", "package.json"), { version: NEW });
+      expect(detectDshPluginVersion(home)).toBe(BASE);
     });
   });
 
   test("link installs resolve by reading through the symlinked dir", () => {
     withDir((home) => {
       withDir((target) => {
-        writeJsonAt(join(target, "package.json"), { version: "3.7.0" });
+        writeJsonAt(join(target, "package.json"), { version: BASE });
         const link = join(home, "profiles", "web", "node_modules", "@mstar-harness", "dsh");
         mkdirSync(join(link, ".."), { recursive: true });
         symlinkSync(target, link, "dir");
-        expect(detectDshPluginVersion(home)).toBe("3.7.0");
+        expect(detectDshPluginVersion(home)).toBe(BASE);
       });
     });
   });
@@ -312,9 +323,9 @@ describe("detectKimiPluginVersion", () => {
   test("finds a plugin directly under plugins/managed (depth 1)", () => {
     withDir((home) => {
       makeKimiPlugin(join(home, "plugins", "managed"), PLUGIN_DIR_NAME, [
-        { file: ".kimi-plugin/plugin.json", version: "3.7.0" },
+        { file: ".kimi-plugin/plugin.json", version: BASE },
       ]);
-      expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+      expect(detectKimiPluginVersion(home)).toBe(BASE);
     });
   });
 
@@ -322,35 +333,35 @@ describe("detectKimiPluginVersion", () => {
     withDir((home) => {
       const managed = join(home, "plugins", "managed");
       makeKimiPlugin(managed, join("marketplace", "cache", PLUGIN_DIR_NAME), [
-        { file: "plugin.json", version: "3.7.0" },
+        { file: "plugin.json", version: BASE },
       ]);
-      expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+      expect(detectKimiPluginVersion(home)).toBe(BASE);
 
       makeKimiPlugin(managed, join("too", "deep", "nesting", PLUGIN_DIR_NAME), [
-        { file: "plugin.json", version: "9.9.9" },
+        { file: "plugin.json", version: NEW },
       ]);
-      expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+      expect(detectKimiPluginVersion(home)).toBe(BASE);
     });
   });
 
   test("tolerant manifest read: .kimi-plugin wins, then plugin.json, then package.json", () => {
     withDir((home) => {
       makeKimiPlugin(join(home, "plugins", "managed"), PLUGIN_DIR_NAME, [
-        { file: ".kimi-plugin/plugin.json", version: "3.7.0" },
-        { file: "plugin.json", version: "3.6.0" },
-        { file: "package.json", version: "3.5.0" },
+        { file: ".kimi-plugin/plugin.json", version: BASE },
+        { file: "plugin.json", version: MID },
+        { file: "package.json", version: OLD },
       ]);
-      expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+      expect(detectKimiPluginVersion(home)).toBe(BASE);
     });
   });
 
   test("multiple plugin roots resolve to the highest semver; other names are ignored", () => {
     withDir((home) => {
       const managed = join(home, "plugins", "managed");
-      makeKimiPlugin(managed, PLUGIN_DIR_NAME, [{ file: "plugin.json", version: "3.6.0" }]);
-      makeKimiPlugin(managed, join("other", PLUGIN_DIR_NAME), [{ file: "plugin.json", version: "3.7.0" }]);
-      makeKimiPlugin(managed, "some-other-plugin", [{ file: "plugin.json", version: "9.9.9" }]);
-      expect(detectKimiPluginVersion(home)).toBe("3.7.0");
+      makeKimiPlugin(managed, PLUGIN_DIR_NAME, [{ file: "plugin.json", version: OLD }]);
+      makeKimiPlugin(managed, join("other", PLUGIN_DIR_NAME), [{ file: "plugin.json", version: NEW }]);
+      makeKimiPlugin(managed, "some-other-plugin", [{ file: "plugin.json", version: GREATER }]);
+      expect(detectKimiPluginVersion(home)).toBe(NEW);
     });
   });
 });
@@ -363,14 +374,14 @@ describe("parseCodexInstalledEntries", () => {
   test("returns the full installed[] entries (pluginId + version readable)", () => {
     const dump = JSON.stringify({
       installed: [
-        { pluginId: "documents@openai-primary-runtime", version: "26.905.11957" },
-        { pluginId: `${PLUGIN_DIR_NAME}@mstar-repo`, version: "3.6.3", enabled: true },
+        { pluginId: "documents@openai-primary-runtime", version: NEW },
+        { pluginId: `${PLUGIN_DIR_NAME}@mstar-repo`, version: BASE, enabled: true },
       ],
     });
     const entries = parseCodexInstalledEntries(dump);
     expect(entries).toHaveLength(2);
     const mstar = entries.find((entry) => entry.pluginId === `${PLUGIN_DIR_NAME}@mstar-repo`);
-    expect(mstar?.version).toBe("3.6.3");
+    expect(mstar?.version).toBe(BASE);
   });
 
   test("missing installed key yields an empty list", () => {
@@ -394,8 +405,8 @@ describe("parseOmpPluginList", () => {
   test("omp 17.x shape: npm + marketplace groups flatten into entries", () => {
     const parsed = parseOmpPluginList(
       JSON.stringify({
-        npm: [{ name: "@mstar-harness/omp", version: "3.7.0" }],
-        marketplace: [{ name: "other", version: "1.0.0" }],
+        npm: [{ name: "@mstar-harness/omp", version: BASE }],
+        marketplace: [{ name: "other", version: OLD }],
       }),
     );
     expect(parsed).toHaveLength(2);
@@ -414,27 +425,27 @@ describe("findInstalledPlugin + ompEntryVersion", () => {
     const plugins = parseOmpPluginList(
       JSON.stringify({
         npm: [
-          { name: "unrelated", version: "1.0.0" },
+          { name: "unrelated", version: OLD },
           {
             name: "@mstar-harness/omp",
-            version: "3.7.0",
+            version: BASE,
             path: "/omp/plugins/node_modules/@mstar-harness/omp",
-            manifest: { name: PLUGIN_DIR_NAME, version: "3.7.0" },
+            manifest: { name: PLUGIN_DIR_NAME, version: BASE },
           },
         ],
       }),
     );
     const found = findInstalledPlugin(plugins);
     expect(found).toBeDefined();
-    expect(ompEntryVersion(found!)).toBe("3.7.0");
+    expect(ompEntryVersion(found!)).toBe(BASE);
   });
 
   test("version precedence: entry.version > manifest.version > package.json at path", () => {
     withDir((entryPath) => {
-      writeJsonAt(join(entryPath, "package.json"), { version: "3.5.0" });
-      expect(ompEntryVersion({ version: "3.7.0" })).toBe("3.7.0");
-      expect(ompEntryVersion({ version: "not-semver", manifest: { version: "3.7.0" } })).toBe("3.7.0");
-      expect(ompEntryVersion({ path: entryPath })).toBe("3.5.0");
+      writeJsonAt(join(entryPath, "package.json"), { version: OLD });
+      expect(ompEntryVersion({ version: BASE })).toBe(BASE);
+      expect(ompEntryVersion({ version: "not-semver", manifest: { version: BASE } })).toBe(BASE);
+      expect(ompEntryVersion({ path: entryPath })).toBe(OLD);
     });
   });
 
@@ -457,18 +468,18 @@ describe("findInstalledPlugin + ompEntryVersion", () => {
     withDir((projectRoot) => {
       const globalEntry = {
         name: "@mstar-harness/omp",
-        version: "3.0.0",
+        version: OLD,
         path: join(tmpdir(), "pva-omp-global", ".omp", "plugins", "@mstar-harness", "omp"),
       };
       const projectEntry = {
         name: "@mstar-harness/omp",
-        version: "3.11.2",
+        version: NEW,
         path: join(projectRoot, ".omp", "plugins", "@mstar-harness", "omp"),
       };
       // Project scope reads the project install even when the global one is listed first.
-      expect(detectOmpPluginVersion("project", [globalEntry, projectEntry], projectRoot)).toBe("3.11.2");
+      expect(detectOmpPluginVersion("project", [globalEntry, projectEntry], projectRoot)).toBe(NEW);
       // Global scope skips the project install.
-      expect(detectOmpPluginVersion("global", [globalEntry, projectEntry], projectRoot)).toBe("3.0.0");
+      expect(detectOmpPluginVersion("global", [globalEntry, projectEntry], projectRoot)).toBe(OLD);
     });
   });
 
@@ -476,12 +487,12 @@ describe("findInstalledPlugin + ompEntryVersion", () => {
     withDir((projectRoot) => {
       const globalEntry = {
         name: "@mstar-harness/omp",
-        version: "3.0.0",
+        version: OLD,
         path: join(tmpdir(), "pva-omp-global-only", ".omp", "plugins", "@mstar-harness", "omp"),
       };
-      expect(detectOmpPluginVersion("project", [globalEntry], projectRoot)).toBe("3.0.0");
+      expect(detectOmpPluginVersion("project", [globalEntry], projectRoot)).toBe(OLD);
       // An entry with no usable path cannot be scoped; it stays a fallback candidate.
-      expect(detectOmpPluginVersion("project", [{ name: "@mstar-harness/omp", version: "3.1.0" }], projectRoot)).toBe("3.1.0");
+      expect(detectOmpPluginVersion("project", [{ name: "@mstar-harness/omp", version: BASE }], projectRoot)).toBe(BASE);
     });
   });
 });
@@ -495,67 +506,67 @@ const ALL_TARGETS: readonly Target[] = ["opencode", "cursor", "codex", "zcode", 
 describe("formatPluginVersionDoctorNote", () => {
   test("aligned — same line for every target", () => {
     for (const target of ALL_TARGETS) {
-      expect(formatPluginVersionDoctorNote(target, "3.7.0", "3.7.0")).toBe(
-        "Plugin/CLI versions aligned (3.7.0).",
+      expect(formatPluginVersionDoctorNote(target, BASE, BASE)).toBe(
+        `Plugin/CLI versions aligned (${BASE}).`,
       );
     }
   });
 
   test("plugin newer — the global-CLI update prompt is identical for every target", () => {
     for (const target of ALL_TARGETS) {
-      expect(formatPluginVersionDoctorNote(target, "3.7.0", "3.8.0")).toBe(
-        "Installed plugin 3.8.0 is newer than CLI 3.7.0 \u2014 update the global CLI: npm i -g @mstar-harness/cli@latest (or @3.8.0).",
+      expect(formatPluginVersionDoctorNote(target, BASE, NEW)).toBe(
+        `Installed plugin ${NEW} is newer than CLI ${BASE} \u2014 update the global CLI: npm i -g @mstar-harness/cli@latest (or @${NEW}).`,
       );
     }
   });
 
   test("CLI newer: zcode keeps the Plugin Management prompt (batch-1 wording)", () => {
-    expect(formatPluginVersionDoctorNote("zcode", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin in ZCode (Settings \u2192 Plugin Management \u2192 update from the mstar-local marketplace).",
+    expect(formatPluginVersionDoctorNote("zcode", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin in ZCode (Settings \u2192 Plugin Management \u2192 update from the mstar-local marketplace).`,
     );
   });
 
   test("CLI newer: per-host plugin update hints (batch-2 hosts)", () => {
-    expect(formatPluginVersionDoctorNote("opencode", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin (@mstar-harness/opencode) and restart OpenCode.",
+    expect(formatPluginVersionDoctorNote("opencode", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin (@mstar-harness/opencode) and restart OpenCode.`,
     );
-    expect(formatPluginVersionDoctorNote("cursor", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin checkout (git pull, or re-run mstar-harness init --target cursor).",
+    expect(formatPluginVersionDoctorNote("cursor", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin checkout (git pull, or re-run mstar-harness init --target cursor).`,
     );
-    expect(formatPluginVersionDoctorNote("codex", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin: codex plugin marketplace upgrade, then codex plugin add morning-star-harness@mstar-repo.",
+    expect(formatPluginVersionDoctorNote("codex", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin: codex plugin marketplace upgrade, then codex plugin add morning-star-harness@mstar-repo.`,
     );
-    expect(formatPluginVersionDoctorNote("omp", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin: omp plugin install @mstar-harness/omp.",
+    expect(formatPluginVersionDoctorNote("omp", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin: omp plugin install @mstar-harness/omp.`,
     );
-    expect(formatPluginVersionDoctorNote("dsh", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin: re-run mstar-harness init --target dsh (re-adds @mstar-harness/dsh in the web profile).",
+    expect(formatPluginVersionDoctorNote("dsh", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin: re-run mstar-harness init --target dsh (re-adds @mstar-harness/dsh in the web profile).`,
     );
-    expect(formatPluginVersionDoctorNote("kimi", "3.8.0", "3.7.0")).toBe(
-      "CLI 3.8.0 is newer than installed plugin 3.7.0 \u2014 update the Morning Star plugin via the Kimi TUI: /plugins install.",
+    expect(formatPluginVersionDoctorNote("kimi", NEW, BASE)).toBe(
+      `CLI ${NEW} is newer than installed plugin ${BASE} \u2014 update the Morning Star plugin via the Kimi TUI: /plugins install.`,
     );
   });
 
   test("not installed: per-host install hints without a drift direction", () => {
-    expect(formatPluginVersionDoctorNote("zcode", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("zcode", BASE, null)).toBe(
       "No installed Morning Star plugin found under ~/.zcode/cli/plugins/cache/ (install from the mstar-local marketplace).",
     );
-    expect(formatPluginVersionDoctorNote("opencode", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("opencode", BASE, null)).toBe(
       "No installed Morning Star plugin found under ~/.cache/opencode/packages/ (run mstar-harness init --target opencode to add @mstar-harness/opencode).",
     );
-    expect(formatPluginVersionDoctorNote("cursor", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("cursor", BASE, null)).toBe(
       "No installed Morning Star plugin found under ~/.cursor/plugins/ (run mstar-harness init --target cursor).",
     );
-    expect(formatPluginVersionDoctorNote("codex", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("codex", BASE, null)).toBe(
       "No installed Morning Star plugin found in `codex plugin list` (install: codex plugin add morning-star-harness@mstar-repo).",
     );
-    expect(formatPluginVersionDoctorNote("omp", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("omp", BASE, null)).toBe(
       "No installed Morning Star plugin found in `omp plugin list` (install: omp plugin install @mstar-harness/omp).",
     );
-    expect(formatPluginVersionDoctorNote("dsh", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("dsh", BASE, null)).toBe(
       "No installed Morning Star plugin found under ~/.dsh/profiles/ (run mstar-harness init --target dsh to add @mstar-harness/dsh).",
     );
-    expect(formatPluginVersionDoctorNote("kimi", "3.7.0", null)).toBe(
+    expect(formatPluginVersionDoctorNote("kimi", BASE, null)).toBe(
       "No installed Morning Star plugin found under $KIMI_CODE_HOME/plugins/managed (install via the Kimi TUI: /plugins install).",
     );
   });
@@ -567,8 +578,8 @@ describe("formatPluginVersionDoctorNote", () => {
   });
 
   test("prerelease-aware: a prerelease CLI is older than its release plugin", () => {
-    expect(formatPluginVersionDoctorNote("zcode", "3.7.0-rc.1", "3.7.0")).toBe(
-      "Installed plugin 3.7.0 is newer than CLI 3.7.0-rc.1 \u2014 update the global CLI: npm i -g @mstar-harness/cli@latest (or @3.7.0).",
+    expect(formatPluginVersionDoctorNote("zcode", OLD, RELEASE)).toBe(
+      `Installed plugin ${RELEASE} is newer than CLI ${OLD} \u2014 update the global CLI: npm i -g @mstar-harness/cli@latest (or @${RELEASE}).`,
     );
   });
 });

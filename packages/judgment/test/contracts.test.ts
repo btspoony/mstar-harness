@@ -58,7 +58,7 @@ function makePilot() {
     packManifest: [{ packId: "pack-1", packSha256: hash }],
     rubricVersion: "a05-rubric-1",
     builderVersion: "a05-builder-1",
-    implementationVersion: "judgment-0.0.0",
+    implementationVersion: "synthetic-implementation-1",
     limits: {
       timeoutMs: 10_000,
       maxRunElapsedMs: 10_000_000,

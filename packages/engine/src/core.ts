@@ -196,10 +196,80 @@ export function readHarnessVersion(): string {
 }
 
 /**
- * Exact `dsh-llm-fallbacks` version shared by the workspace pin and the
- * published CLI `init --target dsh` install spec. Two literals only: this
- * constant and `packages/dsh/package.json` `devDependencies["dsh-llm-fallbacks"]`.
- * A drift test asserts they match. CLI src must not import JSON (no
- * resolveJsonModule; published dist cannot see the repo).
+ * The Node floor the owning manifest declares (`engines.node`), as a bare
+ * dotted version (`>=24.18.0` → `24.18.0`), or `null` when no visible manifest
+ * declares one — never an invented fallback.
+ *
+ * Same resolution as `harnessVersionFrom`: the module's OWN manifest first (a
+ * published install ships `package.json` next to the bundle), then the monorepo
+ * root walk. A runtime floor is a version, so `package.json` owns it; nothing
+ * here is compiled in. Bun has no counterpart: it is a development toolchain,
+ * so product code never gates on the Bun version.
  */
-export const DSH_LLM_FALLBACKS_VERSION = "0.6.5";
+/**
+ * Name an uncheckable Node floor instead of letting the version comparison be
+ * skipped in silence. The layout that cannot resolve one (a lone copied bundle,
+ * a hook entry without the engine package beside it) still runs the capability
+ * check; the operator gets the reason and the supported recovery on stderr.
+ */
+export function warnUncheckableNodeFloor(): void {
+  process.stderr.write(
+    "mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " +
+      "so the Node version is not compared (the native node:sqlite capability check still applies). " +
+      "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " +
+      "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n",
+  );
+}
+
+export function readDeclaredNodeFloor(): string | null {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const root = findRootPackageJson(moduleDir);
+  const candidates: string[] = [];
+  let dir = moduleDir;
+  for (let depth = 0; depth < 6; depth += 1) {
+    // A published install ships the manifest next to the bundle; the monorepo
+    // layout keeps this package one level down from a bundled entrypoint (a
+    // `hooks/*.mjs` bundle inlines this module, so its own module directory is
+    // the repository root's `hooks/`).
+    candidates.push(join(dir, "..", "package.json"), join(dir, "package.json"));
+    if (depth === 1) candidates.push(join(dir, "packages", "engine", "package.json"));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (root !== null) candidates.push(root);
+  for (const manifestPath of [...new Set(candidates)]) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue; // unreadable or unparseable manifest — try the next candidate
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const manifest = parsed as Record<string, unknown>; // parsed JSON; every read below is narrowed
+    // Only a manifest that owns this product may declare the floor: a checkout
+    // nested under an unrelated Node project must not inherit that project's
+    // engines.node (a higher one refuses a supported runtime; a lower one
+    // weakens the gate).
+    const name = manifest["name"];
+    if (
+      name !== "morning-star" &&
+      name !== "@mstar-harness/engine" &&
+      name !== "@mstar-harness/cli" &&
+      // Host plugins embed this engine and declare the same Node floor, so a
+      // bundled extension (an omp coordinator, for one) can still resolve it.
+      name !== "@mstar-harness/omp" &&
+      name !== "@mstar-harness/dsh" &&
+      name !== "@mstar-harness/opencode" &&
+      name !== "@mstar-harness/opencode-v2"
+    ) {
+      continue;
+    }
+    const engines = manifest["engines"];
+    if (engines === null || typeof engines !== "object" || !("node" in engines)) continue;
+    const node = engines.node;
+    if (typeof node === "string" && node !== "") return node.replace(/^\D+/, "");
+  }
+  return null;
+}
+

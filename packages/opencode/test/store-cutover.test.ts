@@ -26,7 +26,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
@@ -38,6 +38,15 @@ import {
   validateStatusWrite,
   type StatusLogger,
 } from "../src/mstar.js";
+
+// The declared Node floor, read from the engine manifest at runtime: no test
+// pins the floor value, and package.json stays the sole version authority.
+type EngineManifest = { engines?: { node?: string } };
+const engineManifest = JSON.parse(
+  readFileSync(join(import.meta.dir, "..", "..", "engine", "package.json"), "utf8"),
+) as EngineManifest;
+const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+const belowFloorNodeVersion = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) - 1}.0.0`;
 
 /** Ambient MSTAR_HARNESS_DIR would redirect every `.mstar` fixture — pinned out. */
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -238,18 +247,17 @@ describe("opencode authority boundary — store/retired-register direct writes (
     }
   });
 
-  test("a below-floor ACTUAL runtime refuses with that runtime's own floor", async () => {
+  test("a below-floor ACTUAL runtime refuses with the declared floor", async () => {
     const fixture = makeHarnessProject();
     const { log } = capture();
 
-    storeRuntimeOverride.info = (): StoreRuntimeInfo => ({ isBun: true, version: "1.3.14" });
-    const bun = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-    expect(bun?.violations[0]!.code).toBe("store.authority-unavailable");
-    expect(bun?.violations[0]!.message).toContain("Bun >=1.4.0");
-
-    storeRuntimeOverride.info = (): StoreRuntimeInfo => ({ isBun: false, version: "24.17.0" });
+    storeRuntimeOverride.info = (): StoreRuntimeInfo => ({ isBun: false, version: belowFloorNodeVersion });
     const node = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-    expect(node?.violations[0]!.message).toContain("Node >=24.18.0");
+    expect(node?.violations[0]!.code).toBe("store.authority-unavailable");
+    // The refusal names the runtime it refused; the floor value is the engine
+    // manifest's, so no floor literal is restated here.
+    expect(node?.violations[0]!.message).toContain("Node");
+    expect(node?.violations[0]!.message).toContain(declaredNodeFloor);
   });
 
   test("the route reports the ACTUAL runtime, never Bun's emulated Node version, and refuses a stub engine", async () => {

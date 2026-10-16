@@ -48,7 +48,7 @@ Coordinator sessions can run Prepare for every new Morning Star iteration on `@s
 
 **Scope limitation (host behaviour, not configurable here):** the native `/settings` → Plugins panel lists **user-scope** plugin installs. A `--scope project` install is used by omp but has no row in that panel; use the user-scope install above. The extension reads the saved preference through the host's exported settings helper, so a project-scoped runtime still honours the preference you saved there.
 
-Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and an omp host whose runtime is **>=1.4.0** — the first version with the native `node:sqlite` module the store gate enforces. The peer is optional so the package installs on any host: the hooks, MCP bridge, skills and commands are self-contained and unaffected by host resolution. The CLI's own Node entrypoint is a separate contract, not an extra floor here.
+Requires omp's `@oh-my-pi/pi-coding-agent` (optional peer, `peerDependencies`) and an omp host whose runtime exposes the native `node:sqlite` module the store gate enforces (a Bun-hosted omp is not version-gated; the store's Node version floor applies to Node entrypoints). The peer is optional so the package installs on any host: the hooks, MCP bridge, skills and commands are self-contained and unaffected by host resolution. The CLI's own Node entrypoint is a separate contract, not an extra floor here.
 The engine and command/MCP runtime are bundled inline into the hook and extension bundles at build time. The model-handoff and Phase-2 extensions retain their host APIs as external imports resolved by omp.
 
 ## Phase-2 scheduling observation

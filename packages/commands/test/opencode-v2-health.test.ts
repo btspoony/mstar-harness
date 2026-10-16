@@ -20,7 +20,7 @@
  *     the generation source (probe vs explicit flag vs both-keys).
  * All fixtures live in temp dirs — no real host binary is involved.
  */
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -40,7 +40,17 @@ import {
 import { diagnoseMcpTarget, type McpRuntime } from "../src/host-health/mcp.js";
 import { getLocalCommandDefinitions } from "../src/index.js";
 
-const MCP_RUNTIME: McpRuntime = { version: "24.18.0" };
+type EngineManifest = { engines?: { node?: string } };
+// Repo manifest read at runtime: no test pins the runtime floor, and
+// package.json stays the sole version authority.
+const declaredNodeFloor = (
+  (JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "engine", "package.json"), "utf8")) as EngineManifest)
+    .engines?.node ?? ""
+).replace(/^>=\s*/, "").trim();
+/** Injected current runtime: at/above the declared floor. */
+const MCP_RUNTIME_VERSION = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
+
+const MCP_RUNTIME: McpRuntime = { version: MCP_RUNTIME_VERSION };
 
 function writeMcpConfig(root: string, config: unknown): void {
   const configDir = join(root, ".config", "opencode");
@@ -93,7 +103,8 @@ describe("isMstarHarnessOpencodeV2Slot", () => {
   test("matches string forms of the owned V2 slot at any version", () => {
     expect(isMstarHarnessOpencodeV2Slot("@mstar-harness/opencode-v2")).toBe(true);
     expect(isMstarHarnessOpencodeV2Slot("@mstar-harness/opencode-v2@latest")).toBe(true);
-    expect(isMstarHarnessOpencodeV2Slot("@mstar-harness/opencode-v2@1.2.3")).toBe(true);
+    // Synthetic spec version: the detector's subject is the slot shape, not a version value.
+    expect(isMstarHarnessOpencodeV2Slot("@mstar-harness/opencode-v2@0.0.0-synthetic")).toBe(true);
     expect(isMstarHarnessOpencodeV2Slot(" @mstar-harness/opencode-v2@latest ")).toBe(true);
   });
 

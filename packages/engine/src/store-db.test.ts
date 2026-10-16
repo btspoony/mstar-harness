@@ -4,8 +4,8 @@
  *
  * The scenario suite below is executed against the REAL store-db.ts
  * implementation and the REAL node:sqlite driver — twice: once in-process
- * under Bun 1.4.0 (the test runner itself) and once per scenario as a child
- * process under Node >=24.18.0 and Bun 1.4.0, using the test-only
+ * under the Bun test runner itself and once per scenario as a child process
+ * under the declared Node floor and the same Bun binary, using the test-only
  * `store-test-runtime.ts` helper bundled into a temporary directory. No mock
  * database exists anywhere in this proof. The bundle and all temporary
  * databases are removed after the run.
@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import * as nodeFs from "node:fs";
-import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,10 +21,8 @@ import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { backupStore } from "./store-activation.js";
 import {
-  MIN_BUN_VERSION,
   MIGRATIONS,
   migrationChecksum,
-  MIN_NODE_VERSION,
   SCHEMA_VERSION_TABLE_SQL,
   StoreError,
   type StoreRuntimeInfo,
@@ -36,13 +34,19 @@ import {
 } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-db-test-"));
-const BUNDLE = join(ROOT, "store-test-runtime.mjs");
+// The scenario bundle runs as a copied module, so it needs the published layout
+// around it: a package root whose manifest carries the runtime floor the module
+// reads at runtime. Without it the floor is undiscoverable and the below-floor
+// scenario would exercise nothing.
+const BUNDLE = join(ROOT, "dist", "store-test-runtime.mjs");
 
 /** Node binary used for the Node-floor leg; overridable for local runs. */
 const NODE_BIN = process.env.MSTAR_TEST_NODE_BIN ?? "node";
 let bundleError = "";
 
 beforeAll(() => {
+  mkdirSync(join(ROOT, "dist"), { recursive: true });
+  copyFileSync(join(import.meta.dir, "..", "package.json"), join(ROOT, "package.json"));
   const built = spawnSync(
     process.execPath,
     ["build", join(import.meta.dir, "store-test-runtime.ts"), "--target", "node", "--outfile", BUNDLE],
@@ -73,28 +77,59 @@ const SCENARIOS: string[] = [
   "second-writer-busy",
 ] as const;
 
-describe("store-db runtime floors (actual versions)", () => {
-  test("compareVersions orders floors numerically", () => {
-    expect(compareVersions("24.18.0", "24.18.0")).toBe(0);
-    expect(compareVersions("24.17.0", "24.18.0")).toBeLessThan(0);
-    expect(compareVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+describe("store-db runtime floors (declared manifest floor)", () => {
+  test("compareVersions orders synthetic vectors numerically", () => {
+    // Synthetic comparator vectors, not repository versions. The comparator is
+    // purely numeric per dotted segment (parseInt), so pre-release suffixes
+    // would all collapse to 0 — the vectors must differ in numeric segments.
+    const same = "0.0.1";
+    const low = "0.0.9";
+    const high = "0.0.10";
+    expect(compareVersions(same, same)).toBe(0);
+    expect(compareVersions(low, high)).toBeLessThan(0);
+    expect(compareVersions(high, low)).toBeGreaterThan(0);
   });
 
   test("below-floor and missing-capability refusals are actionable (in-process, real logic)", () => {
-    expect(() => assertStoreRuntimeSupported({ isBun: false, version: "22.5.0" })).toThrow(StoreError);
-    expect(() => assertStoreRuntimeSupported({ isBun: true, version: "1.3.14" })).toThrow(/Bun >=1\.4\.0/);
-    expect(() => assertStoreRuntimeSupported({ isBun: false, version: "24.17.9" })).toThrow(/Node >=24\.18\.0/);
-    expect(() => assertStoreRuntimeSupported({ isBun: false, version: "24.18.0", hasSqlite: false })).toThrow(
+    // The Node floor is read from THIS package's manifest at runtime; no test
+    // pins the value (package.json is the sole version authority).
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+      engines?: { node?: string };
+    };
+    const floor = (manifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+    const floorMajor = Number.parseInt(floor.split(".")[0]!, 10);
+    const below = `${floorMajor - 1}.0.0`;
+    const atOrAbove = `${floorMajor + 1}.0.0`;
+    const belowError = (() => {
+      try {
+        assertStoreRuntimeSupported({ isBun: false, version: below });
+        return null;
+      } catch (error) {
+        return error as Error;
+      }
+    })();
+    expect(belowError).toBeInstanceOf(StoreError);
+    // The refusal names the runtime it refused; the floor value itself is the
+    // manifest's, so no version literal is restated here.
+    expect(belowError?.message).toContain("Node");
+    expect(() => assertStoreRuntimeSupported({ isBun: false, version: below, hasSqlite: false })).toThrow(
       /node:sqlite/,
     );
-    expect(() => assertStoreRuntimeSupported({ isBun: true, version: MIN_BUN_VERSION })).not.toThrow();
-    expect(() => assertStoreRuntimeSupported({ isBun: false, version: MIN_NODE_VERSION })).not.toThrow();
+    expect(() => assertStoreRuntimeSupported({ isBun: false, version: atOrAbove })).not.toThrow();
   });
 
   test("a Node refusal names only the Node floor and no other runtime", () => {
+    // Same manifest read as the sibling test: the floor value is the manifest's,
+    // so no version literal is restated here.
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+      engines?: { node?: string };
+    };
+    const floor = (manifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+    if (floor === "") throw new Error("the engine manifest declares no engines.node floor");
+    const belowFloor = `${Number.parseInt(floor.split(".")[0]!, 10) - 1}.0.0`;
     const probes: readonly { info: StoreRuntimeInfo; names: RegExp }[] = [
-      { info: { isBun: false, version: "24.17.9" }, names: /Node >=24\.18\.0/ },
-      { info: { isBun: false, version: "24.18.0", hasSqlite: false }, names: /node:sqlite/ },
+      { info: { isBun: false, version: belowFloor }, names: new RegExp(`Node >=${floor.replaceAll(".", "\\.")}`) },
+      { info: { isBun: false, version: floor, hasSqlite: false }, names: /node:sqlite/ },
     ];
     for (const { info, names } of probes) {
       const message = (() => {
@@ -108,9 +143,11 @@ describe("store-db runtime floors (actual versions)", () => {
       expect(message).toMatch(names);
       expect(message).not.toMatch(/[Bb]un/);
     }
-    // A Bun-hosted plugin host keeps its own floor; a Node entry never sees it.
-    expect(() => assertStoreRuntimeSupported({ isBun: true, version: "1.3.14" })).toThrow(/Bun >=1\.4\.0/);
+    // Bun is a development toolchain and carries no version floor: only the
+    // native-sqlite capability gates it, so an old Bun is not version-refused.
+    expect(() => assertStoreRuntimeSupported({ isBun: true, version: "0.0.0-synthetic" })).not.toThrow();
   });
+
 });
 
 describe.each([
@@ -1396,4 +1433,37 @@ describe("store-db publication makes the canonical directory entry durable", () 
     }
     expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
   }, 60_000);
+});
+
+describe("uncheckable Node floor", () => {
+  test("a manifest-less layout names the skipped comparison on stderr", () => {
+    // The layout that declares no floor: the built module is copied alone with no
+    // manifest anywhere above it. Run it in its own process so the real
+    // resolution path decides, and so the runtime is the Node the store targets.
+    const dir = mkdtempSync(join(tmpdir(), "mstar-floorless-"));
+    try {
+      const bundle = join(dir, "store-db.mjs");
+      const built = spawnSync(
+        process.execPath,
+        ["build", join(import.meta.dir, "store-db.ts"), "--target", "node", "--outfile", bundle],
+        { encoding: "utf8" },
+      );
+      expect(built.status).toBe(0);
+      const probe = join(dir, "probe.mjs");
+      writeFileSync(
+        probe,
+        `import { assertStoreRuntimeSupported } from ${JSON.stringify(bundle)};\n` +
+          `assertStoreRuntimeSupported({ isBun: false, version: "0.0.0-synthetic" });\n` +
+          `console.log("no refusal");\n`,
+      );
+      const ran = spawnSync(NODE_BIN, [probe], { encoding: "utf8" });
+      expect(ran.status).toBe(0);
+      expect(ran.stdout).toContain("no refusal");
+      expect(ran.stderr).toContain("uncheckable");
+      expect(ran.stderr).toContain("engines.node");
+      expect(ran.stderr).toContain("Recovery:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

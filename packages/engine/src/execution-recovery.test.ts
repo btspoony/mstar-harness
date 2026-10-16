@@ -15,6 +15,7 @@
  * export redaction and stability.
  */
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { readDeclaredNodeFloor } from "./core.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs";
@@ -56,6 +57,12 @@ import {
 import { MIGRATIONS, initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import * as storeDb from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
+
+/** Injected current runtime for a `node` consumer: at/above the declared floor. */
+const atOrAboveRuntime = (() => {
+  const floor = readDeclaredNodeFloor() ?? "0.0.0";
+  return `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`;
+})();
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-recovery-"));
 const TS = "2026-09-02T00:00:00.000Z";
@@ -1638,8 +1645,8 @@ describe("execution-restore", () => {
           entryId: "coordinator-test",
           kind: "coordinator",
           entrypoint: "/opt/mstar/coordinator",
-          runtime: "bun",
-          runtimeVersion: "99.0.0",
+          runtime: "node",
+          runtimeVersion: atOrAboveRuntime,
           version: "test",
           current: true,
           disposition: "reloaded",

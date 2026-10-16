@@ -1,7 +1,7 @@
 {
   "name": "@mstar-harness/dsh",
   "version": "4.0.0",
-  "description": "Morning Star harness dsh (DeepSeek Harness) cordis function plugin — in-process engine gates (status/dispatch/lease) with hard refusal channels.",
+  "description": "Morning Star harness dsh (DeepSeek Harness) cordis function plugin \u2014 in-process engine gates (status/dispatch/lease) with hard refusal channels.",
   "keywords": [
     "dsh",
     "dsh-plugin"
@@ -65,7 +65,8 @@
     "prepublishOnly": "bun run build"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.0",
+    "node": ">=24.18.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",

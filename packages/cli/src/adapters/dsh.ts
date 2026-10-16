@@ -1,26 +1,28 @@
 import {
   DSH_BIN,
   DSH_DUMP_FLAG,
-  DSH_FALLBACKS_LOADER_NAME,
-  DSH_FALLBACKS_SPEC,
+  dshFallbacksLoaderName,
+  dshFallbacksSpec,
   DSH_HOME_ENV,
   DSH_HOME_SUBDIR,
   DSH_INSTALL_HINT,
-  DSH_PLUGIN_SPECS,
+  dshPluginSpecs,
   DSH_PROFILE,
   DSH_PROFILE_FLAG,
   DSH_PROFILES_DIR,
   diagnoseDshHost,
   dshLoaderName,
+  readInstalledPluginVersion,
   fallbacksVersionDrifted,
   isDshAvailable,
   parseDshLoaderEntries,
   resolveDshProfileDir,
 } from "@mstar-harness/commands";
 import { runCliCommand } from "../exec";
+import { readHarnessVersion } from "../utils";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 
-export { DSH_FALLBACKS_LOADER_NAME, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
+export { dshFallbacksLoaderName, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
 
 // --- dsh CLI surface (probe-pinned 2026-08-17 on dsh 0.1.0-rc.6) ---
 // - `--profile <name>` is required and must precede the subcommand:
@@ -53,6 +55,17 @@ export { DSH_FALLBACKS_LOADER_NAME, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, 
 const DSH_LOCAL_TIMEOUT_MS = 10_000;
 const DSH_ADD_TIMEOUT_MS = 300_000;
 const DSH_ADD_TIMEOUT_ENV = "MSTAR_DSH_SUBPROCESS_TIMEOUT_MS";
+
+/** dsh prints its own exact-version exemption command when it refuses a plugin
+ * for peer-range incompatibility (`dsh plugin --profile <p> allow-version
+ * <spec> --dsh-version <runtime> --accept-risk`). Match that line instead of
+ * building it: the recovery we quote must be the one this dsh build printed,
+ * and flag/version literals here would go stale with dsh's own surface. */
+const DSH_ALLOW_VERSION_RE = /dsh\s+plugin\s+--profile\s+\S+\s+allow-version\s+[^\n]*--accept-risk/;
+/** Runtime version echoed from dsh's text (never a literal here): its recovery
+ * command carries it, the refusal sentence is the fallback shape. */
+const DSH_VERSION_FLAG_RE = /--dsh-version\s+([^\s"'`,]+)/;
+const DSH_INCOMPATIBLE_PHRASE_RE = /incompatible with dsh\s+([^\s:,.]+)/i;
 
 /** Add-path timeout: env override wins, else the conservative default. */
 function addTimeoutMs(): number {
@@ -119,22 +132,43 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
     }
   }
 
-  for (const spec of DSH_PLUGIN_SPECS) {
-    if (spec === DSH_FALLBACKS_SPEC && initFlags?.noFallbacks) {
+  // The mstar row is pinned to the version this run selected: an unpinned add
+  // follows dsh's own range, which is what can leave the plugin behind the CLI.
+  const selectedVersion = initFlags?.pluginVersion ?? readHarnessVersion();
+  const mstarSpec = `@mstar-harness/dsh@${selectedVersion}`;
+  /** The mstar row's version after this run, or undefined when the run could not
+   *  establish one (a skipped row whose manifest is unreadable). */
+  let mstarInstalledVersion: string | undefined;
+  const specs = [mstarSpec, dshFallbacksSpec()];
+  for (const spec of specs) {
+    const isFallbacks = spec === dshFallbacksSpec();
+    if (spec === dshFallbacksSpec() && initFlags?.noFallbacks) {
       notes.push(`skipped-by-flag: ${spec} (--no-fallbacks)`);
       continue;
     }
     if (!dryRun && (installed.has(spec) || installed.has(dshLoaderName(spec)))) {
-      const isFallbacks = spec === DSH_FALLBACKS_SPEC;
       const disabledRow = disabledLoaderNames.has(spec) || disabledLoaderNames.has(dshLoaderName(spec));
       // The enclosing condition already proved this spec's row is present, so
       // drift is the only reason to fall through to the versioned re-add.
-      const needsVersionAlign = isFallbacks && fallbacksVersionDrifted(profileDir) && !disabledRow;
+      const installedRow = readInstalledPluginVersion(profileDir, dshLoaderName(spec));
+      const needsVersionAlign = !disabledRow &&
+        (isFallbacks
+          ? fallbacksVersionDrifted(profileDir)
+          : installedRow !== null && installedRow !== (initFlags?.pluginVersion ?? readHarnessVersion()));
       if (!needsVersionAlign) {
+        // A skipped mstar row keeps whatever version it had: report that one, and
+        // say so when it could not be read rather than claiming the selected one.
+        if (!isFallbacks) {
+          mstarInstalledVersion = installedRow ?? undefined;
+          if (installedRow === null) {
+            notes.push(`plugin version unconfirmed: ${spec} was skipped and its installed manifest has no readable version`);
+          }
+        }
         notes.push(`skipped-existing: ${spec} (already installed in profile ${DSH_PROFILE})`);
         continue;
       }
     }
+    if (!isFallbacks) mstarInstalledVersion = selectedVersion;
     const addArgs = ["plugin", DSH_PROFILE_FLAG, DSH_PROFILE, "add", spec];
     if (dryRun) {
       notes.push(`Would run: ${DSH_BIN} ${addArgs.join(" ")}`);
@@ -145,19 +179,53 @@ function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFlags) {
       notes.push(`installed: ${spec} (${DSH_BIN} ${addArgs.join(" ")})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to install ${spec} via ${DSH_BIN}: ${message}`);
+      const streams = error as { stdout?: unknown; stderr?: unknown };
+      // execFileSync folds only stderr into `message`; dsh prints its refusal
+      // and the recovery command on either stream, so widen with whatever is
+      // not already folded in (keeps dsh's own text verbatim, unduplicated).
+      const detail = [
+        message,
+        typeof streams?.stdout === "string" ? streams.stdout.trim() : "",
+        typeof streams?.stderr === "string" ? streams.stderr.trim() : "",
+      ]
+        .filter((part, index) => index === 0 || (part.length > 0 && !message.includes(part)))
+        .join("\n");
+      // A peer-range refusal is a different failure from a generic add error:
+      // only it carries a recovery the operator can act on. Quote dsh's own
+      // printed recovery and runtime version — flag and version literals are
+      // never ours to invent, and without dsh's own line we name no recovery.
+      const allowance = DSH_ALLOW_VERSION_RE.exec(detail)?.[0];
+      if (allowance) {
+        const runtime = DSH_VERSION_FLAG_RE.exec(detail)?.[1] ?? DSH_INCOMPATIBLE_PHRASE_RE.exec(detail)?.[1];
+        throw new Error(
+          `Cannot install ${spec} via ${DSH_BIN}: rejected as incompatible by the installed ${DSH_BIN} runtime${
+            runtime ? ` ${runtime}` : ""
+          }.\n${detail}\nRecovery: ${allowance}`,
+        );
+      }
+      // dsh's own text arrived on stdout/stderr as often as in the folded
+      // message; report the captured detail either way and keep only the
+      // recovery line conditional.
+      throw new Error(
+        `Failed to install ${spec} via ${DSH_BIN}: ${detail}\n` +
+          `Recovery: run \`${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${spec}\` and read its output, then check host health with \`mstar-harness doctor --target dsh\`.`,
+      );
     }
   }
 
   notes.push(`Profile: ${DSH_PROFILE} at ${profileDir}`);
   notes.push("Verify with: mstar-harness doctor --target dsh");
   notes.push(
-    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${DSH_PLUGIN_SPECS.join(
+    `Alternate manual install: ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add ${specs.join(
       ` && ${DSH_BIN} plugin ${DSH_PROFILE_FLAG} ${DSH_PROFILE} add `,
     )}`,
   );
 
-  return { location: profileDir, notes };
+  return {
+    location: profileDir,
+    notes,
+    ...(mstarInstalledVersion === undefined ? {} : { pluginVersion: mstarInstalledVersion }),
+  };
 }
 
 function runDoctor(scope: Scope): { location: string; errors: string[]; notes: string[] } {
@@ -167,6 +235,7 @@ function runDoctor(scope: Scope): { location: string; errors: string[]; notes: s
 
 export const dshAdapter: AgentAdapter = {
   target: "dsh",
+  installsPlugin: true,
   mode: "install",
   runInstallInit: (scope, dryRun, initFlags) => runInit(scope, dryRun, initFlags),
   runInstallDoctor: (scope) => runDoctor(scope),

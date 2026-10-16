@@ -26,7 +26,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
-  MIN_BUN_VERSION,
   StoreError,
   assertStoreRuntimeSupported,
   createFsStore,
@@ -359,17 +358,11 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
   it('the below-floor/capability refusal is the engine\'s actionable one, not a local restatement', () => {
     // The readers never re-implement the floor: they surface whatever
     // `openStore` raises, and that raise is this text (issue contract §8).
+    // Bun carries no version floor: only the sqlite capability gates it. The
+    // token is deliberately not a release-shaped version.
+    expect(() => assertStoreRuntimeSupported({ isBun: true, version: '0.0.0-synthetic' })).not.toThrow()
     try {
-      assertStoreRuntimeSupported({ isBun: true, version: '1.3.0' })
-      throw new Error('expected the below-floor runtime to be refused')
-    } catch (error) {
-      expect((error as StoreError).code).toBe('store.runtime-unsupported')
-      expect((error as StoreError).message).toContain(`Bun >=${MIN_BUN_VERSION}`)
-      expect((error as StoreError).message).toContain('Upgrade the runtime')
-      expect((error as StoreError).message).toContain('No older-runtime fallback exists')
-    }
-    try {
-      assertStoreRuntimeSupported({ isBun: true, version: '1.4.0', hasSqlite: false })
+      assertStoreRuntimeSupported({ isBun: true, version: '0.0.0-synthetic', hasSqlite: false })
       throw new Error('expected the missing capability to be refused')
     } catch (error) {
       expect((error as StoreError).code).toBe('store.runtime-unsupported')

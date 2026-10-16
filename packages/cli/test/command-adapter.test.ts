@@ -833,6 +833,18 @@ const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
 const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";
 const runnerPlainV1: ProbeCommandRunner = async () => "1.14.40";
 
+// Declared Node floor, read at runtime from the manifest that owns it
+// (`packages/opencode-v2/package.json`, the same authority the adapter's
+// OPENCODE_V2_NODE_FLOOR reads): no test pins the floor value.
+type EngineManifest = { engines?: { node?: string } };
+const opencodeV2Manifest = JSON.parse(
+  readFileSync(join(resolve(import.meta.dir, ".."), "..", "opencode-v2", "package.json"), "utf8"),
+) as EngineManifest;
+const declaredNodeFloor = (opencodeV2Manifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+const floorMajor = Number.parseInt(declaredNodeFloor.split(".")[0]!, 10);
+const aboveFloorNodeVersion = `${floorMajor + 1}.0.0`;
+const belowFloorNodeVersion = `${floorMajor - 1}.0.0`;
+
 const runnerMissing: ProbeCommandRunner = async () => {
   throw Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" });
 };
@@ -1355,7 +1367,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
     const binDir = stubOpencode("opencode v2.0.24");
     // The V2 plugin's Node floor is checked against the PATH node; provide a
     // deterministic stub above the floor.
-    const nodeDir = stubNode("24.18.0");
+    const nodeDir = stubNode(aboveFloorNodeVersion);
 
     const flatProject = runDoctorCli(
       ["doctor", "--target", "opencode", "--scope", "project", "--opencode-generation", "v2"],
@@ -1390,7 +1402,7 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
       "mcp": { "servers": { "morning-star": { "type": "local", "command": ["npx", "@mstar-harness/cli", "mcp"] } } },
     }, null, 2), "utf8");
     const binDir = stubOpencode("opencode v2.0.24");
-    const nodeDir = stubNode("20.0.0");
+    const nodeDir = stubNode(belowFloorNodeVersion);
 
     const result = runDoctorCli(
       ["doctor", "--target", "opencode", "--scope", "global", "--opencode-generation", "v2"],
@@ -1399,8 +1411,10 @@ describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)
       projectRoot,
     );
     expect(result.exitCode).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toContain("Node >=24.18.0");
-    expect(`${result.stdout}\n${result.stderr}`).toContain("20.0.0");
+    // The refusal names the requirement (declared floor) and the offending
+    // PATH node it actually probed; neither value is a test literal.
+    expect(`${result.stdout}\n${result.stderr}`).toContain(`Node >=${declaredNodeFloor}`);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(belowFloorNodeVersion);
   }, 20_000);
 
   test("the scope-split recovery is real: the same flat row does not block a global-scope v2 init", () => {

@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readDeclaredCliNodeFloor } from "./cli-manifest.js";
 import {
- getOpencodeDoctorWarnings,
- isAnyMstarHarnessOpencodeSlot,
- isMstarHarnessOpencodePlugin,
- validateOpencodeConfig,
+  getOpencodeDoctorWarnings,
+  isAnyMstarHarnessOpencodeSlot,
+  isMstarHarnessOpencodePlugin,
+  validateOpencodeConfig,
 } from "./opencode.js";
 
 /**
@@ -24,8 +25,13 @@ export const OPENCODE_V2_CONFIG_SCHEMA: string | null = null;
 export const OPENCODE_V2_PLUGIN = "@mstar-harness/opencode-v2@latest";
 
 /** The published V2 plugin runs in OpenCode's Node process and needs node:sqlite
- * (packages/opencode-v2/INSTALL.md:8); doctor promises to check this floor. */
-export const OPENCODE_V2_NODE_FLOOR = "24.18.0";
+ * (packages/opencode-v2/INSTALL.md:8); doctor promises to check this floor. The
+ * floor is a version, so a manifest owns it — the CLI manifest's own
+ * `engines.node`, which the CLI must satisfy anyway and which ships with the
+ * published install. Read at runtime, never compiled in. `null` when no visible
+ * manifest declares it — the caller reports the uncheckable floor instead of
+ * comparing against an invented version. */
+export const OPENCODE_V2_NODE_FLOOR: string | null = readDeclaredCliNodeFloor();
 
 export type OpencodeGeneration = "v1" | "v2";
 

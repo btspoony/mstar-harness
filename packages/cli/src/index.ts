@@ -10,7 +10,8 @@ import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
-import { ensureGlobalCli } from "./global-cli";
+import { compareSemver } from "@mstar-harness/commands";
+import { chooseCliVersion, detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
 import type { InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 import { registerMcpCommand } from "./mcp/command";
@@ -54,18 +55,74 @@ function resolveExplicitModelAssignments(options: InitOptions) {
 
 async function runInit(options: InitOptions) {
   const target = options.target || "opencode";
-  const scope = options.scope || "project";
   const adapter = getAdapter(target);
-  if (!options.scope && !options.yes) console.log(pc.dim("Scope not provided; defaulting to project."));
+  const scope = options.scope ?? adapter.defaultScope ?? "project";
+  if (!options.scope && adapter.defaultScope !== undefined && adapter.defaultScope !== "project") {
+    console.log(pc.dim(`This target installs host-wide; using --scope ${adapter.defaultScope}.`));
+  } else if (!options.scope && !options.yes) {
+    console.log(pc.dim("Scope not provided; defaulting to project."));
+  }
   if (adapter.mode === "install") {
     logStep("Step 2/2 - Run target install flow");
-    const installResult = await adapter.runInstallInit?.(scope, !!options.dryRun, { noFallbacks: options.noFallbacks });
+    // Resolve the version decision BEFORE mutating the host: the plugin the host
+    // installs and the global CLI must end on the same version, and the operator
+    // must see the pairing this run leaves behind.
+    // --no-global-cli is a no-network opt-out: the probe exists only to inform
+    // the global install, so it is skipped with it.
+    const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
+    const chosenCli = chooseCliVersion(packageVersion, latest);
+    const installResult = await adapter.runInstallInit?.(scope, !!options.dryRun, {
+      noFallbacks: options.noFallbacks,
+      pluginVersion: chosenCli,
+    });
     if (!installResult) throw new Error(`Adapter ${target} does not implement install init flow.`);
     console.log(pc.green(`Status: ${options.dryRun ? "ready (dry-run)" : "configured"} (${scope})`));
     console.log(`Target: ${target}`);
     console.log(`Install location: ${installResult.location}`);
     for (const note of installResult.notes) console.log(`  - ${note}`);
-    ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
+    const skew = formatVersionSkewWarning(packageVersion, latest);
+    if (skew !== null) console.log(skew);
+    const globalResult = ensureGlobalCli({
+      version: packageVersion,
+      latest,
+      dryRun: !!options.dryRun,
+      noGlobalCli: !!options.noGlobalCli,
+    });
+    const globalState = globalResult.action === "installed"
+      ? `installed ${globalResult.spec}`
+      : globalResult.action === "failed"
+        ? `install FAILED for ${globalResult.spec} - the CLI on PATH was not updated`
+        : globalResult.reason === "already-matching"
+          ? "already matching"
+          : globalResult.reason;
+    // Only an adapter that installs a plugin can be reported at a version, and
+    // that version is the one it actually installed (a linked tree carries the
+    // checkout's version, not the one this run chose); the others register a
+    // marketplace or write config and leave the plugin install to the operator.
+    // An adapter that could not establish the installed version says so: the
+    // version this run *chose* is not evidence of what is on disk.
+    const installedPluginVersion = installResult.pluginVersion;
+    console.log(
+      adapter.installsPlugin === true
+        ? `Plugin version: ${installedPluginVersion ?? "unconfirmed (the existing row was skipped and its manifest is unreadable)"}; global CLI: ${globalState}.`
+        : `Global CLI: ${globalState}.`,
+    );
+    // Skew is refused whether or not the global update succeeded: a linked
+    // checkout can lag the version this run selected even when the CLI install
+    // worked, and the two must not be left apart.
+    // Any verified difference is skew: a checkout ahead of the selected CLI is as
+    // far apart as one behind it, so neither is reported as success.
+    const pluginMismatched = installedPluginVersion !== undefined && installedPluginVersion !== chosenCli;
+    const globalFailed = globalResult.action === "failed" && (installedPluginVersion ?? packageVersion) !== packageVersion;
+    if (pluginMismatched || globalFailed) {
+      throw new Error(
+        `The host plugin is at ${installedPluginVersion ?? "an unconfirmed version"}, while this run targets ${chosenCli}` +
+          `${globalResult.action === "failed" ? ` and the global CLI could not be updated (${globalResult.spec}), so the CLI on PATH stays at ${packageVersion}` : ""}.\n` +
+          `Recovery: realign the plugin (\`git -C ~/.mstar/harness pull --ff-only\` then re-run init, or install the published plugin at ${chosenCli}), ` +
+          `or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
+      );
+    }
+    console.log(`Next: npx @mstar-harness/cli doctor --target ${target}${scope === "project" ? "" : " --scope global"}`);
     return;
   }
   const useExplicitModels = hasExplicitModelFlags(options);
@@ -99,7 +156,24 @@ async function runInit(options: InitOptions) {
   console.log(`Config file: ${configPath}`);
   if (adapter.printPostSetupSummary) adapter.printPostSetupSummary(updated);
   for (const [roleId, modelId] of Object.entries(assignments)) console.log(`  - ${roleId}: ${modelId}`);
-  ensureGlobalCli({ version: packageVersion, dryRun: !!options.dryRun, noGlobalCli: !!options.noGlobalCli });
+  const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
+  const skew = formatVersionSkewWarning(packageVersion, latest);
+  if (skew !== null) console.log(skew);
+  const globalResult = ensureGlobalCli({
+    version: packageVersion,
+    latest,
+    dryRun: !!options.dryRun,
+    noGlobalCli: !!options.noGlobalCli,
+  });
+  // The config-only path mutates no host plugin, but a failed global update still
+  // leaves the newer CLI un-installed: report it as a failure, not as configured.
+  const chosenCli = chooseCliVersion(packageVersion, latest);
+  if (globalResult.action === "failed" && chosenCli !== packageVersion) {
+    throw new Error(
+      `The published CLI ${chosenCli} could not be installed globally (${globalResult.spec}); the CLI on PATH stays at ${packageVersion}.\n` +
+        `Recovery: fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`), or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
+    );
+  }
 }
 
 program.name("mstar-harness").description("Morning Star harness CLI for target-based agent bootstrap").version(packageVersion);
@@ -108,7 +182,7 @@ program
   .description("Interactive/non-interactive setup for target agent bootstrap")
   .option("-y, --yes", "Non-interactive mode")
   .option("--target <target>", "Install target", "opencode")
-  .option("--scope <scope>", "Config scope: global|project (default: project)")
+  .option("--scope <scope>", "Config scope: global|project (default: project, or the target's single supported scope)")
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
   .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")

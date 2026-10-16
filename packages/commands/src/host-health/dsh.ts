@@ -1,7 +1,9 @@
-import { DSH_LLM_FALLBACKS_VERSION } from "@mstar-harness/engine";
+import { cliManifestCandidates, readCliManifestField } from "./cli-manifest.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolveProjectRoot } from "./paths.js";
 import { compareSemver } from "./version-compare.js";
 
 export const DSH_BIN = "dsh";
@@ -17,11 +19,49 @@ export const DSH_PROFILES_DIR = "profiles";
 export const DSH_INSTALL_HINT =
   "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.";
 
+/** The plugin spec's own package name (row order: mstar first, fallbacks second). */
+const DSH_FALLBACKS_PACKAGE = "@mstar-harness/dsh";
+/** Resolved pin, memoised for the process (`undefined` = not resolved yet). */
+let fallbacksPinCache: string | null | undefined;
+
+/**
+ * The exact `dsh-llm-fallbacks` version shared by the CLI install spec and the
+ * pinned re-add. `package.json` owns the value (`packages/cli/package.json`
+ * `mstar.dshLlmFallbacks` — the CLI is what runs the install); it is read at
+ * runtime, never compiled in, and the CLI source must not import JSON (no
+ * resolveJsonModule; a published dist cannot see the repo).
+ *
+ * Resolved on demand, not at module load: a packaging context that copies the
+ * built CLI artifact alone has no manifest beside it, and a command that never
+ * touches dsh must keep working there. A dsh command in that context refuses
+ * with this message instead of installing an unpinned (boot-breaking) spec.
+ */
+export function dshFallbacksVersion(): string {
+  let cached = fallbacksPinCache;
+  if (cached === undefined) {
+    cached = readCliManifestField("dshLlmFallbacks");
+    fallbacksPinCache = cached;
+  }
+  if (cached === null) {
+    throw new Error(
+      `Cannot resolve the dsh-llm-fallbacks pin: no CLI manifest in ${cliManifestCandidates().join(", ")} declares ` +
+        `\`mstar.dshLlmFallbacks\`. Add the key to the CLI package.json at runtime path, or reinstall the CLI package.`,
+    );
+  }
+  return cached;
+}
+
 /** Install/doctor row order: mstar first, fallbacks second. The fallbacks spec is an
- * exact pin (`DSH_LLM_FALLBACKS_VERSION`) because an unpinned `dsh plugin add` follows
- * the dsh CLI's own range and can boot-break the installed artifact. */
-export const DSH_PLUGIN_SPECS: readonly string[] = ["@mstar-harness/dsh", `dsh-llm-fallbacks@${DSH_LLM_FALLBACKS_VERSION}`];
-export const DSH_FALLBACKS_SPEC = DSH_PLUGIN_SPECS[1];
+ * exact pin (from the CLI manifest) because an unpinned `dsh plugin add` follows the
+ * dsh CLI's own range and can boot-break the installed artifact. */
+export function dshPluginSpecs(): readonly string[] {
+  return [DSH_FALLBACKS_PACKAGE, `dsh-llm-fallbacks@${dshFallbacksVersion()}`];
+}
+
+/** The pinned fallbacks spec (`dsh-llm-fallbacks@<pin>`). */
+export function dshFallbacksSpec(): string {
+  return dshPluginSpecs()[1];
+}
 
 /** Spec → loader-row name: strip a trailing `@<version>` (none in mstar's spec; fallbacks carries the pin). */
 export function dshLoaderName(spec: string): string {
@@ -31,7 +71,9 @@ export function dshLoaderName(spec: string): string {
 }
 
 /** Loader-row name for the fallbacks package (dump-config `name:` line is version-free). */
-export const DSH_FALLBACKS_LOADER_NAME = dshLoaderName(DSH_FALLBACKS_SPEC);
+export function dshFallbacksLoaderName(): string {
+  return dshLoaderName(dshFallbacksSpec());
+}
 
 const FALLBACKS_VERSION_SHAPE_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
@@ -58,7 +100,12 @@ export function resolveDshProfileDir(dshHome?: string): string {
 
 /** Read the installed fallbacks package version from a profile tree. Missing or unreadable artifacts return null. */
 export function readInstalledFallbacksVersion(profileDir: string): string | null {
-  const pkgJson = path.join(profileDir, "node_modules", DSH_FALLBACKS_LOADER_NAME, "package.json");
+  return readInstalledPluginVersion(profileDir, dshFallbacksLoaderName());
+}
+
+/** The version of one installed plugin row in a profile, or null when absent. */
+export function readInstalledPluginVersion(profileDir: string, loaderName: string): string | null {
+  const pkgJson = path.join(profileDir, "node_modules", loaderName, "package.json");
   try {
     const raw = fs.readFileSync(pkgJson, "utf8");
     const parsed: unknown = JSON.parse(raw);
@@ -75,10 +122,10 @@ export function readInstalledFallbacksVersion(profileDir: string): string | null
 
 /** True when the profile's installed fallbacks version is missing or differs from the harness pin. */
 export function fallbacksVersionDrifted(profileDir: string): boolean {
-  if (!FALLBACKS_VERSION_SHAPE_RE.test(DSH_LLM_FALLBACKS_VERSION)) return false;
+  if (!FALLBACKS_VERSION_SHAPE_RE.test(dshFallbacksVersion())) return false;
   const installedVersion = readInstalledFallbacksVersion(profileDir);
   if (installedVersion === null) return true;
-  return compareSemver(installedVersion, DSH_LLM_FALLBACKS_VERSION) !== 0;
+  return compareSemver(installedVersion, dshFallbacksVersion()) !== 0;
 }
 
 /** Probe whether dsh is executable; diagnostic failures are reported as unavailable. */
@@ -167,15 +214,15 @@ export function diagnoseDshHost(
   }
 
   const byName = new Map(entries.map((entry) => [entry.name, entry]));
-  for (const spec of DSH_PLUGIN_SPECS) {
+  for (const spec of dshPluginSpecs()) {
     const entry = byName.get(spec) ?? byName.get(dshLoaderName(spec));
     const state = !entry ? "uninstalled" : entry.enabled ? "mounted" : "disabled";
-    if (spec === DSH_FALLBACKS_SPEC && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
+    if (spec === dshFallbacksSpec() && state === "mounted" && fallbacksVersionDrifted(profileDir)) {
       const installedVersion = readInstalledFallbacksVersion(profileDir);
       const installedLabel = installedVersion ?? "unknown";
-      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${DSH_LLM_FALLBACKS_VERSION})`);
+      notes.push(`${spec}: drifted (installed ${installedLabel}, pinned ${dshFallbacksVersion()})`);
       errors.push(
-        `${spec} is drifted (profile has ${installedLabel}, harness pins ${DSH_LLM_FALLBACKS_VERSION}). Run: mstar-harness init --target dsh`,
+        `${spec} is drifted (profile has ${installedLabel}, harness pins ${dshFallbacksVersion()}). Run: mstar-harness init --target dsh`,
       );
       continue;
     }
