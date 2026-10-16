@@ -313,7 +313,9 @@ describe("omp init end-to-end (child process with its own home)", () => {
         `echo "$@" >> "${logFile}"`,
         'if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then',
         `  if [ -e "${entry}" ]; then`,
-        `    printf '[{"name":"${PLUGIN_NAME}","path":"${entry}","manifest":{"name":"${PLUGIN_NAME}","version":"${readHarnessVersion()}"}}]\\n'`,
+        // The version comes from the entry itself, as a real listing reports it.
+        `    __v=$(/usr/bin/sed -n 's/.*"version":"\\([^"]*\\)".*/\\1/p' "${entry}/package.json" 2>/dev/null)`,
+        `    printf '[{"name":"${PLUGIN_NAME}","path":"${entry}","manifest":{"name":"${PLUGIN_NAME}","version":"%s"}}]\\n' "$__v"`,
         "  else",
         `    printf '[]\\n'`,
         "  fi",
@@ -323,6 +325,9 @@ describe("omp init end-to-end (child process with its own home)", () => {
         opts.linkExit
           ? `  printf '%s\\n' "${linkText}" >&2; exit ${opts.linkExit}`
           : `  /bin/mkdir -p "${join(home, ".omp", "plugins", "node_modules", "@mstar-harness")}"; /bin/ln -s "${linked}" "${entry}"; exit 0`,
+        "fi",
+        'if [ "$1" = "plugin" ] && [ "$2" = "install" ]; then',
+        `  /bin/mkdir -p "${entry}"; printf '{"name":"${PLUGIN_NAME}","version":"%s"}' "\${3##*@}" > "${entry}/package.json"; exit 0`,
         "fi",
         "exit 0",
         "",
@@ -359,6 +364,28 @@ describe("omp init end-to-end (child process with its own home)", () => {
       },
     };
   }
+
+  /** Change a prepared child home so the build path cannot produce plugin.json. */
+  function stripHarnessPluginMarker(home: string): void {
+    rmSync(join(home, ".mstar", "harness", "packages", "omp", "plugin.json"), { force: true });
+  }
+
+  test("the published install pins the version the CLI chose, not the running one", () => {
+    const fixture = childHome({});
+    stripHarnessPluginMarker(fixture.home);
+    const fakeBun = join(fixture.binDir, "bun");
+    writeFileSync(fakeBun, "#!/bin/sh\nexit 1\n");
+    chmodSync(fakeBun, 0o755);
+    const chosen = "9.9.9-synthetic";
+    const result = fixture.run(
+      `import { ompAdapter } from ${JSON.stringify(join(import.meta.dir, "..", "src", "adapters", "omp"))};
+const { notes } = await ompAdapter.runInstallInit("global", false, { pluginVersion: ${JSON.stringify(chosen)} });
+console.log(JSON.stringify(notes));
+`,
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(fixture.argv()).toContain(`plugin install ${PLUGIN_NAME}@${chosen}`);
+  });
 
   const RUN_INIT = `import { ompAdapter } from ${JSON.stringify(join(import.meta.dir, "..", "src", "adapters", "omp"))};
 const { notes } = await ompAdapter.runInstallInit("global", false);

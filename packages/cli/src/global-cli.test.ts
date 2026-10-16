@@ -268,6 +268,13 @@ describe("init wiring (end-to-end CLI harness)", () => {
     writeFakeBin("mstar-harness", `echo "${version}"\nexit 0`);
   }
 
+  /** Fake npm whose latest probe succeeds and whose global install fails. */
+  function fakeNpmReportingLatestThenFailInstall(latest: string): void {
+    writeFakeBin("npm", `if [ "$1" = "view" ]; then echo "${latest}"; exit 0; fi
+printf '%s\\n' "$*" >> "${npmLog}"
+exit 1`);
+  }
+
   /** Fake npm that logs its args, then hangs (used with a tiny install
    * timeout to exercise the kill path). The registry probe is answered
    * immediately so only the install is what stalls. */
@@ -358,6 +365,7 @@ exit 0`);
     expect(result.stdout).toContain(`Installed @mstar-harness/cli@${PACKAGE_VERSION} globally.`);
     expect(result.stdout).toContain("Status: configured");
     expect(installLines()).toEqual([`i -g @mstar-harness/cli@${PACKAGE_VERSION}`]);
+    // The pairing line names the version the run targeted and the global state.
     expect(existsSync(configPath)).toBe(true);
   });
   test("OpenCode refuses to replace a symlink config and leaves its target untouched", () => {
@@ -394,6 +402,8 @@ exit 0`);
     expect(result.stdout).toContain(`Installed @mstar-harness/cli@${PACKAGE_VERSION} globally.`);
     expect(result.stdout).toContain("Status: configured");
     expect(installLines()).toEqual([`i -g @mstar-harness/cli@${PACKAGE_VERSION}`]);
+    // The pairing line names the version the run targeted and the global state.
+    expect(result.stdout).toMatch(/Plugin version: .+; global CLI: installed @mstar-harness\/cli@/);
   });
 
   test("install-mode stays exit 0 when the global install fails", () => {
@@ -403,7 +413,21 @@ exit 0`);
     const result = runInitCli(["--yes", "--target", "dsh"], cliEnv());
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Global CLI install failed:");
+    // The pairing line reports what actually happened, never a claimed pairing.
+    expect(result.stdout).toMatch(/Plugin version: .+; global CLI: install FAILED for @mstar-harness\/cli@/);
     expect(result.stdout).toContain("Status: configured");
+  });
+
+  test("a plugin newer than the CLI on PATH is a refusal, not a success", () => {
+    // The published latest is newer, so the plugin installs at that version; the
+    // global update then fails, which would leave exactly the reported skew.
+    fakeNpmReportingLatestThenFailInstall(SYNTH_PUBLISHED_LATER);
+    fakeMstarHarness(PACKAGE_VERSION);
+    fakeDsh();
+    const result = runInitCli(["--yes", "--target", "dsh"], cliEnv());
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--no-global-cli");
+    expect(result.stderr).toContain(SYNTH_PUBLISHED_LATER);
   });
 
   test("--no-global-cli skips the global install entirely", () => {

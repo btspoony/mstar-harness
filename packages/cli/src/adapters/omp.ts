@@ -304,7 +304,9 @@ async function runInit(scope: Scope, dryRun: boolean, initFlags?: InstallInitFla
  );
  } else {
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
- const expectedVersion = readHarnessVersion();
+ // The CLI resolved this before mutating anything: the published latest when
+ // it is newer than the running CLI, else the running version.
+ const expectedVersion = initFlags?.pluginVersion ?? readHarnessVersion();
  const installSpec = `${OMP_PLUGIN_NAME}@${expectedVersion}`;
  // `omp plugin install` accepts `--scope` only for marketplace specs: it warns
  // and ignores it otherwise, so the note states where the install actually lands.
