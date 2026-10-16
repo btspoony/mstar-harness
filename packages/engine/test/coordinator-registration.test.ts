@@ -43,7 +43,7 @@ function workflowInput(harnessDir: string, planId: string) {
       harnessDir,
       plan: { id: planId, title: "Fixture plan", file: `plans/${planId}.md` },
       deliveryKind: "development" as const,
-      branchSource: "feature/fixture",
+      branchWork: "feature/fixture",
       branchTarget: "main",
       project: "harness",
       startedAt: "2026-09-18T00:00:00.000Z",

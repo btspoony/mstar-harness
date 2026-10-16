@@ -1522,7 +1522,10 @@ export type AuditWorkflowOptions = {
   workflowId?: string;
   /** Delivery kind declared by the caller; never inferred or defaulted. */
   deliveryKind: WorkflowDeliveryKind;
-  branchSource?: string;
+  /** The branch the promoted workflow was created from, recorded as `branch.base`. Optional. */
+  branchBase?: string;
+  /** The promoted plan's delivery branch, recorded as `branch.work`. Required together with `branchTarget` for `development`. */
+  branchWork?: string;
   branchTarget?: string;
   completionPolicy?: string;
 };
@@ -1567,9 +1570,10 @@ export function promotedAuditSnapshot(
     plans: promotedAuditPlanRows(outDir, selected),
     delivery_kind: options.deliveryKind,
   };
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+  if (options.branchBase !== undefined || options.branchWork !== undefined || options.branchTarget !== undefined) {
     snapshot.branch = {
-      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchBase !== undefined ? { base: options.branchBase } : {}),
+      ...(options.branchWork !== undefined ? { work: options.branchWork } : {}),
       ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
     };
   }

@@ -178,7 +178,7 @@ function planRequest(options: {
         harnessDir: options.context.harnessDir,
         plan: { id: planId, title, file: `plans/${relativePath}` },
         deliveryKind: "development",
-        branchSource: `feature/${workflowId}`,
+        branchWork: `feature/${workflowId}`,
         branchTarget: "main",
         project: "_default",
         ...(options.omitStartedAt === true ? {} : { startedAt: TS }),
@@ -687,7 +687,7 @@ describe("execution-registration", () => {
         options: {
           harnessDir: fixture.context.harnessDir,
           deliveryKind: "development",
-          branchSource: `feature/${AUDIT_WORKFLOW_ID}`,
+          branchWork: `feature/${AUDIT_WORKFLOW_ID}`,
           branchTarget: "main",
         },
       },
@@ -720,7 +720,7 @@ describe("execution-registration", () => {
       id: AUDIT_WORKFLOW_ID,
       type: "plan",
       delivery_kind: "development",
-      branch: { source: `feature/${AUDIT_WORKFLOW_ID}`, target: "main" },
+      branch: { work: `feature/${AUDIT_WORKFLOW_ID}`, target: "main" },
     });
     const planRow = await one<{ revision: number; state_json: string }>(
       fixture.context,

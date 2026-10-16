@@ -174,7 +174,7 @@ function planRegistration(harnessDir: string, operationId: string) {
         harnessDir,
         plan: { id: 'plan-a', title: 'Store cutover plan', file: 'plans/plan-a.md' },
         deliveryKind: 'development' as const,
-        branchSource: 'feature/store-cutover',
+        branchWork: 'feature/store-cutover',
         branchTarget: 'main',
         startedAt: '2026-09-19T00:00:00.000Z',
       },

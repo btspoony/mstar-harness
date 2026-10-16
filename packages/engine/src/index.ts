@@ -134,6 +134,7 @@ export type {
 export {
   assertDeliveryRegistrationCoherence,
   consultDeliveryEvidence,
+  deliveryBranchOf,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,

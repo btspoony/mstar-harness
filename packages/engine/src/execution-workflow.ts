@@ -31,9 +31,9 @@
  *   the main/control checkout, on the registered integration branch;
  * - identity is never rekeyed: `id`, `type`, `started_at`, `project`,
  *   `delivery_kind` and `completion_policy` are not writable through this route
- *   at all; the delivery anchors (`branch.source` / `branch.target`) are
- *   writable ONLY through the guarded `delivery-anchors` member, which names
- *   exactly those two fields, requires a reason and stays under the workflow CAS
+ *   at all; the branch anchors (`branch.base` / `branch.work` / `branch.target`)
+ *   are writable ONLY through the guarded `delivery-anchors` member, which names
+ *   exactly those fields, requires a reason and stays under the workflow CAS
  *   token. The candidate header is validated by the existing snapshot validator
  *   before it is stored.
  *
@@ -152,6 +152,7 @@ import {
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_TERMINAL_STATUSES,
   consultDeliveryEvidence,
+  deliveryBranchOf,
   deliveryEvidenceMembers,
   deliveryEvidenceViolations,
   isTerminalSnapshot,
@@ -177,13 +178,16 @@ import type { PlanRow } from "./status.js";
  * this route must not offer.
  *
  * `delivery-anchors` is deliberately NOT that arbitrary header patch: it names
- * exactly the two delivery-anchor fields (`branch.source` / `branch.target`),
- * it requires a non-empty reason so the correction is auditable, every anchor it
- * supplies must be a non-empty string, and the pair it writes commits under the
- * SAME workflow CAS token as every other member — so a competing writer still
- * loses the revision race and a re-read always sees a whole pair. A registered
- * workflow is REPAIRABLE rather than re-registrable: without it a mistyped
- * anchor could only be corrected by abandoning the lifecycle.
+ * exactly the branch anchors a plan's delivery names (`branch.base` /
+ * `branch.work` / `branch.target`), it requires a non-empty reason so the
+ * correction is auditable, every anchor it supplies must be a non-empty string,
+ * and the anchors it writes commit under the SAME workflow CAS token as every
+ * other member — so a competing writer still loses the revision race and a
+ * re-read always sees a whole header. A registered workflow is REPAIRABLE rather
+ * than re-registrable: without it a mistyped anchor could only be corrected by
+ * abandoning the lifecycle. The deprecated `branch.source` spelling of the
+ * delivery branch is a READ alias: it is never an operation member, and a
+ * `work` this operation records replaces it (see `applyWorkflowOperation`).
  */
 export type WorkflowExecutionOperation =
   | { kind: "phase"; phase: NonNullable<WorkflowSnapshot["phase"]>; compassPath: string }
@@ -191,7 +195,7 @@ export type WorkflowExecutionOperation =
   | { kind: "execution-policy"; policy: NonNullable<WorkflowSnapshot["execution_policy"]> }
   | { kind: "integration-worktree"; path: string }
   | { kind: "delivery"; delivery: NonNullable<WorkflowSnapshot["delivery"]> }
-  | { kind: "delivery-anchors"; branch: { source?: string; target?: string }; reason: string };
+  | { kind: "delivery-anchors"; branch: { base?: string; work?: string; target?: string }; reason: string };
 
 /** §3 one DB workflow-operation request: the §3.1 envelope plus what it addresses. */
 export type WorkflowOperationRequest<Operation extends WorkflowExecutionOperation = WorkflowExecutionOperation> =
@@ -281,15 +285,20 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       if (!isPlainObject(op.branch)) {
         throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a branch object naming the anchor(s) to record; retry through mstar workflow delivery-anchors.");
       }
-      // Exact keys on the pair too: `branch` is the operation's own member, and
+      // Exact keys on the object too: `branch` is the operation's own member, and
       // an undefined key inside it would be a partial header patch by another name.
-      assertExactKeys(op.branch, ["source", "target"], "a delivery-anchors branch");
-      const { source, target } = op.branch;
-      if (source === undefined && target === undefined) {
-        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.source or branch.target); retry through mstar workflow delivery-anchors.");
+      // The deprecated `source` spelling is deliberately NOT admitted here - one
+      // delivery-branch key, so the operation can never write both.
+      assertExactKeys(op.branch, ["base", "work", "target"], "a delivery-anchors branch");
+      const { base, work, target } = op.branch;
+      if (base === undefined && work === undefined && target === undefined) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.base, branch.work or branch.target); retry through mstar workflow delivery-anchors.");
       }
-      if (source !== undefined && !isNonEmptyString(source)) {
-        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.source must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      if (base !== undefined && !isNonEmptyString(base)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.base must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (work !== undefined && !isNonEmptyString(work)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.work must be a non-empty string; retry through mstar workflow delivery-anchors.");
       }
       if (target !== undefined && !isNonEmptyString(target)) {
         throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.target must be a non-empty string; retry through mstar workflow delivery-anchors.");
@@ -1247,10 +1256,16 @@ function applyWorkflowOperation(input: {
       // header does not carry stays absent rather than being invented. The
       // candidate header is validated and stored by the shared tail below, so a
       // malformed pair is a refusal, never a half-written header.
-      const registered = isPlainObject(header.branch) ? header.branch : {};
+      const registered: Record<string, unknown> = isPlainObject(header.branch) ? { ...header.branch } : {};
+      // `source` is the pre-rename spelling of `work`: a `work` this operation
+      // records REPLACES it, so one row never carries both spellings of the
+      // delivery branch. An unnamed `source` on a row this operation does not
+      // re-point is left as registered.
+      if (isNonEmptyString(operation.branch.work)) delete registered.source;
       header.branch = {
         ...registered,
-        ...(isNonEmptyString(operation.branch.source) ? { source: operation.branch.source } : {}),
+        ...(isNonEmptyString(operation.branch.base) ? { base: operation.branch.base } : {}),
+        ...(isNonEmptyString(operation.branch.work) ? { work: operation.branch.work } : {}),
         ...(isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}),
       };
       break;
@@ -1549,11 +1564,14 @@ function applyDeliveryEvidence(input: {
     );
   }
   const branch = isPlainObject(header.branch) ? header.branch : {};
+  // The registered delivery branch, whichever spelling the row carries: a row
+  // registered before the rename must satisfy this check exactly like a new one.
+  const registeredWork = deliveryBranchOf(branch);
   if (incomingPr !== undefined) {
-    if (isNonEmptyString(branch.source) && incomingPr.head !== branch.source) {
+    if (isNonEmptyString(registeredWork) && incomingPr.head !== registeredWork) {
       throw invalidWorkflowTransition(
         `workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery ` +
-          `source is ${JSON.stringify(branch.source)} (\u00A74d: the recorded PR identity must be the registered delivery)`,
+          `branch is ${JSON.stringify(registeredWork)} (\u00A74d: the recorded PR identity must be the registered delivery)`,
         { workflow_id: workflowId },
       );
     }

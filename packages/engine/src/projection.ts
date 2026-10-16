@@ -43,6 +43,7 @@ import { readExecutionState, type ExecutionState } from "./execution-store.js";
 import { rowPlanId, validatePlanRow, validateWorkflowEntry, type PlanRow } from "./status.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
+  deliveryBranchOf,
   LEGACY_WORKTREE_PATH_CODE,
   validateIntegrationMergeLease,
   validateWorkflowSnapshot,
@@ -595,7 +596,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       rows.workflows.push({
         id: item.workflow_id, type: projectionState.type as ProjectedWorkflow["type"], status: projectionState.status as string,
         phase: text(projectionState.phase), startedAt: text(projectionState.started_at), endedAt: text(projectionState.ended_at), updatedAt: text(projectionState.updated_at),
-        branchBase: text(branch.base), branchSource: text(branch.source), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
+        // The projected `branch_source` column carries the DELIVERY branch under
+        // whatever spelling the row uses (`deliveryBranchOf` is the one resolver);
+        // the column and DTO field names stay as they are, so the projection
+        // schema is unchanged. `branch_base` now fills for a plan too (the branch
+        // the workflow was created from).
+        branchBase: text(branch.base), branchSource: text(deliveryBranchOf(branch)), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
         activeRegistration: registryIds.has(item.workflow_id),
       });
     }

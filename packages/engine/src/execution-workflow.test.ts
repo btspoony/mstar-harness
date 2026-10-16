@@ -57,6 +57,7 @@ import { prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
+import { deliveryBranchOf } from "../src/workflow.js";
 import { integrationAnchors } from "../src/coordination-transitions.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-workflow-"));
@@ -276,7 +277,16 @@ async function workflowFixture(
       project: "harness",
       compass_ref: COMPASS_REF,
       ...(workflowType === "plan" ? { delivery_kind: "development" } : {}),
-      branch: { base: "main", source: SOURCE_BRANCH, target: "main", integration: INTEGRATION_BRANCH },
+      // A plan workflow registers `{base, work, target}`; an iteration registers
+      // `{base, integration, target}` (its delivery line IS the integration
+      // branch). The integration anchor stays on the plan fixture because the
+      // integration-checkout transitions read it.
+      branch: {
+        base: "main",
+        ...(workflowType === "plan" ? { work: SOURCE_BRANCH } : {}),
+        target: "main",
+        integration: INTEGRATION_BRANCH,
+      },
       integration_worktree_path: integrationPath,
       execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
       plans: planIds.map((id) => ({
@@ -2695,12 +2705,12 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
   test("a registered workflow's anchors are corrected member by member and repaired again later", async () => {
     const fixture = await workflowFixture("delivery-anchors");
     const initial = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
-    expect(initial.branch).toMatchObject({ source: SOURCE_BRANCH, target: "main" });
+    expect(initial.branch).toMatchObject({ base: "main", work: SOURCE_BRANCH, target: "main" });
 
     const receipt = await workflowMutation(fixture, "op-anchors-pair", {
       kind: "delivery-anchors",
-      branch: { source: "fix/registered-by-mistake", target: "release" },
-      reason: "the registered source was the delivery target",
+      branch: { work: "fix/registered-by-mistake", target: "release" },
+      reason: "the registered delivery branch was the delivery target",
     });
     expect(receipt.replayed).toBe(false);
     const state = receipt.data.workflows[0]!.state as unknown as Record<string, unknown>;
@@ -2708,7 +2718,7 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     // operation does NOT name keeps the value the header already carried.
     expect(state.branch).toEqual({
       base: "main",
-      source: "fix/registered-by-mistake",
+      work: "fix/registered-by-mistake",
       target: "release",
       integration: INTEGRATION_BRANCH,
     });
@@ -2717,7 +2727,7 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
       ...identityAnchors(initial),
       branch: {
         base: "main",
-        source: "fix/registered-by-mistake",
+        work: "fix/registered-by-mistake",
         target: "release",
         integration: INTEGRATION_BRANCH,
       },
@@ -2728,7 +2738,7 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     const conflicting = await refusalOf(() =>
       workflowMutation(fixture, "op-anchors-pair", {
         kind: "delivery-anchors",
-        branch: { source: "fix/registered-by-mistake", target: "release" },
+        branch: { work: "fix/registered-by-mistake", target: "release" },
         reason: "a different reason for the same anchors",
       }),
     );
@@ -2743,7 +2753,7 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     });
     expect((single.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
       base: "main",
-      source: "fix/registered-by-mistake",
+      work: "fix/registered-by-mistake",
       target: "main",
       integration: INTEGRATION_BRANCH,
     });
@@ -2753,17 +2763,91 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     // anchors to the row's recorded working branch.
     const again = await workflowMutation(fixture, "op-anchors-again", {
       kind: "delivery-anchors",
-      branch: { source: SOURCE_BRANCH },
-      reason: "restore the registered source now that the row branch is known",
+      branch: { work: SOURCE_BRANCH },
+      reason: "restore the registered delivery branch now that the row branch is known",
     });
     expect(again.replayed).toBe(false);
     expect(again.recovery?.outcome).toBe("applied");
     expect((again.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
       base: "main",
-      source: SOURCE_BRANCH,
+      work: SOURCE_BRANCH,
       target: "main",
       integration: INTEGRATION_BRANCH,
     });
+  });
+
+  test("the deprecated source spelling of the delivery branch still reads, and a named work replaces it", async () => {
+    // The compatibility contract: a row registered BEFORE the rename carries
+    // `branch.source`, and every consumer must resolve it exactly as it resolves
+    // `branch.work`. The helper is the one resolver.
+    const fixture = await workflowFixture("delivery-anchors-legacy");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.branch = { source: SOURCE_BRANCH, target: "main" };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    const legacy = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(deliveryBranchOf(legacy.branch)).toBe(SOURCE_BRANCH);
+
+    // A correction that names `work` replaces the deprecated key: one row never
+    // carries both spellings of the delivery branch.
+    const repaired = await workflowMutation(fixture, "op-anchors-legacy", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/renamed" },
+      reason: "record the delivery branch under its current name",
+    });
+    const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.branch).toEqual({ work: "fix/renamed", target: "main" });
+    expect(deliveryBranchOf(state.branch)).toBe("fix/renamed");
+  });
+
+  test("a row registered before the rename still passes the PR-identity check and still completes", async () => {
+    // The compatibility contract, exercised end to end: a workflow registered
+    // BEFORE the rename stored `branch.source` instead of `branch.work`, and such
+    // a row must still pass the PR-identity check and still close. The header is
+    // rewritten to the pre-rename shape this test's fixture would have had.
+    const fixture = await workflowFixture("delivery-anchors-legacy-close");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.branch = { source: SOURCE_BRANCH, target: "main" };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+
+    // (1) PR identity. The registered delivery branch resolves to the legacy
+    // value, so a contradicting head is still refused BY FIELD VALUE - and the
+    // matching delivery tail is accepted.
+    const contradictory = await refusalOf(() =>
+      workflowMutation(fixture, "op-legacy-contradict", {
+        kind: "delivery",
+        delivery: { pr: { repo: "o/r", head: "feature/somewhere-else", target: "main" } },
+      }),
+    );
+    expect(contradictory.code).toBe("coordination.invalid-transition");
+    const recorded = await workflowMutation(fixture, "op-legacy-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ pr: { head: SOURCE_BRANCH, target: "main" } });
+
+    // (2) The close. `applyLifecycleTransition` consults `consultDeliveryEvidence`
+    // over the stored header, which resolves the delivery branch through the same
+    // helper - so the legacy row completes with no missing-evidence refusal.
+    const closed = await workflowMutation(fixture, "op-legacy-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the pre-rename delivery was verified",
+    });
+    const [stored] = rows(
+      fixture.context,
+      `select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.branch') as branch, ` +
+        `(select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered ` +
+        `from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(stored!.registered).toBe(0);
+    expect(stored!.status).toBe("completed");
+    // The close never rewrites how the row was registered.
+    expect(JSON.parse(String(stored!.branch))).toEqual({ source: SOURCE_BRANCH, target: "main" });
   });
 
   test("an iteration workflow's base and integration anchors survive a single-anchor correction", async () => {
@@ -2789,7 +2873,6 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
     expect(state.branch).toEqual({
       base: "main",
-      source: SOURCE_BRANCH,
       target: "release",
       integration: INTEGRATION_BRANCH,
     });
@@ -2809,7 +2892,6 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     });
     expect((repeated.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
       base: "main",
-      source: SOURCE_BRANCH,
       target: "release/v2",
       integration: INTEGRATION_BRANCH,
     });
@@ -2821,13 +2903,16 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     const cases: ReadonlyArray<readonly [string, unknown, string]> = [
       ["both anchors absent", { kind: "delivery-anchors", branch: {}, reason: "operator correction" }, "coordination.invalid-input"],
       ["no branch member", { kind: "delivery-anchors", reason: "operator correction" }, "coordination.invalid-input"],
-      ["an empty source", { kind: "delivery-anchors", branch: { source: "   " }, reason: "operator correction" }, "coordination.invalid-input"],
+      ["an empty work", { kind: "delivery-anchors", branch: { work: "   " }, reason: "operator correction" }, "coordination.invalid-input"],
       ["a non-string target", { kind: "delivery-anchors", branch: { target: 42 }, reason: "operator correction" }, "coordination.invalid-input"],
-      ["no reason", { kind: "delivery-anchors", branch: { source: "fix/corrected" } }, "coordination.invalid-input"],
-      ["an empty reason", { kind: "delivery-anchors", branch: { source: "fix/corrected" }, reason: "" }, "coordination.invalid-input"],
+      ["no reason", { kind: "delivery-anchors", branch: { work: "fix/corrected" } }, "coordination.invalid-input"],
+      ["an empty reason", { kind: "delivery-anchors", branch: { work: "fix/corrected" }, reason: "" }, "coordination.invalid-input"],
       // A member key inside the pair is the shared exact-key refusal, so the
       // pair can never become a partial header patch by another name.
-      ["a key the pair does not own", { kind: "delivery-anchors", branch: { source: "fix/corrected", base: "main" }, reason: "operator correction" }, "coordination.forbidden-field"],
+      ["a key the pair does not own", { kind: "delivery-anchors", branch: { work: "fix/corrected", integration: "x" }, reason: "operator correction" }, "coordination.forbidden-field"],
+      // The deprecated spelling is a READ alias only: the operation names `work`,
+      // so a row can never be given both spellings of its delivery branch.
+      ["the deprecated source spelling", { kind: "delivery-anchors", branch: { source: "fix/corrected" }, reason: "operator correction" }, "coordination.forbidden-field"],
     ];
     for (const [label, operation, code] of cases) {
       const refusal = await refusalOf(() => workflowMutation(fixture, `op-anchors-${label}`, operation as never));
@@ -2853,7 +2938,7 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     const refusal = await refusalOf(() =>
       workflowMutation(fixture, "op-anchors-closed", {
         kind: "delivery-anchors",
-        branch: { source: "fix/corrected" },
+        branch: { work: "fix/corrected" },
         reason: "correct the anchor after the close",
       }),
     );
