@@ -42,7 +42,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 - **dsh（DeepSeek Harness）** —— 需要 PATH 上有 `dsh` CLI
   - CLI：`npx @mstar-harness/cli init --target dsh` —— 安装插件与 LLM fallbacks；`--no-fallbacks` 跳过后者
-  - 原生：`dsh plugin --profile web add @mstar-harness/dsh`，再执行 `dsh plugin --profile web add dsh-llm-fallbacks`
+  - 原生：`dsh plugin --profile web add @mstar-harness/dsh` —— LLM fallbacks 那一行是可选的，且必须是本 CLI 钉住的版本（从 CLI 自身 manifest 读取；该行由 `init` 添加，而未钉版本的 `dsh-llm-fallbacks` 会跟随 dsh 自身的区间）
 - **omp** —— 需要已安装 `omp` CLI
   - CLI：`npx @mstar-harness/cli init --target omp`
   - 原生：`omp plugin install @mstar-harness/omp`

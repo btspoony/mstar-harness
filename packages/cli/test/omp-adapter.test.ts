@@ -54,7 +54,7 @@ interface FakeOmp {
  * entry's real state is, so verification sees what actually exists; `plugin
  * uninstall` removes the entry the way omp owns it.
  */
-function withFakeOmp(entry: string): FakeOmp {
+function withFakeOmp(entry: string, opts: { uninstallExit?: number } = {}): FakeOmp {
   const binDir = tempDir("omp-fake-");
   const logFile = join(binDir, "argv.log");
   const script = [
@@ -69,7 +69,9 @@ function withFakeOmp(entry: string): FakeOmp {
     "  exit 0",
     "fi",
     'if [ "$1" = "plugin" ] && [ "$2" = "uninstall" ]; then',
-    `  /bin/rm -rf "${entry}"; exit 0`,
+    opts.uninstallExit
+      ? `  printf '%s\\n' "not installed" >&2; exit ${opts.uninstallExit}`
+      : `  /bin/rm -rf "${entry}"; exit 0`,
     "fi",
     "exit 0",
   ].join("\n");
@@ -100,7 +102,7 @@ function pluginsRoot(): string {
 }
 
 describe("clearOmpEntry", () => {
-  test("a leftover tree no manifest declares is removed without invoking omp", () => {
+  test("a leftover tree is replaced through omp's own uninstall, never deleted by hand", () => {
     const root = pluginsRoot();
     const entry = join(root, "node_modules", PLUGIN_NAME);
     mkdirSync(entry, { recursive: true });
@@ -108,9 +110,29 @@ describe("clearOmpEntry", () => {
     const fake = withFakeOmp(entry);
     const notes: string[] = [];
     clearOmpEntry(root, "/nonexistent/linked/tree", notes);
+    expect(fake.argv()).toContain(`plugin uninstall ${PLUGIN_NAME}`);
     expect(existsSync(entry)).toBe(false);
-    expect(fake.argv()).toEqual([]);
-    expect(notes.some((note) => note.includes("leftover"))).toBe(true);
+    expect(notes.some((note) => note.includes("through omp"))).toBe(true);
+  });
+
+  test("an entry omp cannot remove is refused with the path and every supported route", () => {
+    const root = pluginsRoot();
+    const entry = join(root, "node_modules", PLUGIN_NAME);
+    mkdirSync(entry, { recursive: true });
+    const fake = withFakeOmp(entry, { uninstallExit: 1 });
+    let thrown: Error | null = null;
+    try {
+      clearOmpEntry(root, "/nonexistent/linked/tree", []);
+    } catch (error) {
+      thrown = error as Error;
+    }
+    // The plugin manager owns its node_modules: init never deletes the entry
+    // itself, so the refusal must name the path and both supported routes.
+    expect(existsSync(entry)).toBe(true);
+    expect(fake.argv()).toContain(`plugin uninstall ${PLUGIN_NAME}`);
+    expect(thrown?.message).toContain(entry);
+    expect(thrown?.message).toContain(`omp plugin uninstall ${PLUGIN_NAME}`);
+    expect(thrown?.message).toContain(`omp plugin install ${PLUGIN_NAME}`);
   });
 
   test("an entry the plugin manager declares is removed through omp", () => {
@@ -136,24 +158,6 @@ describe("clearOmpEntry", () => {
     clearOmpEntry(root, "/nonexistent/linked/tree", []);
     expect(existsSync(entry)).toBe(false);
   });
-
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
-    "a removal it cannot perform refuses with the path and a supported route",
-    () => {
-      const root = pluginsRoot();
-      const entry = join(root, "node_modules", PLUGIN_NAME);
-      mkdirSync(entry, { recursive: true });
-      writeFileSync(join(entry, "held.txt"), "held\n");
-      // A read-only entry cannot have its contents unlinked; the removal must
-      // surface as a refusal rather than a silent half-clean.
-      chmodSync(entry, 0o500);
-      try {
-        expect(() => clearOmpEntry(root, "/nonexistent/linked/tree", [])).toThrow(/Recovery:/);
-      } finally {
-        chmodSync(entry, 0o755);
-      }
-    },
-  );
 
   test("an entry that does not exist is a no-op", () => {
     const root = pluginsRoot();

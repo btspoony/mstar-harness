@@ -41,7 +41,7 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
 
 - **dsh (DeepSeek Harness)** — needs the `dsh` CLI on `PATH`
   - CLI: `npx @mstar-harness/cli init --target dsh` — installs the plugin plus LLM fallbacks; `--no-fallbacks` skips the second
-  - Native: `dsh plugin --profile web add @mstar-harness/dsh`, then `dsh plugin --profile web add dsh-llm-fallbacks`
+  - Native: `dsh plugin --profile web add @mstar-harness/dsh` — the LLM-fallbacks row is optional, and it must be the version this CLI pins (read from the CLI's own manifest; `init` adds that row, while an unpinned `dsh-llm-fallbacks` follows dsh's own range instead)
 - **omp** — needs the `omp` CLI installed
   - CLI: `npx @mstar-harness/cli init --target omp`
   - Native: `omp plugin install @mstar-harness/omp`

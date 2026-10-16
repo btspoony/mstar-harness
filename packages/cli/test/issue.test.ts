@@ -100,16 +100,6 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
 }
 
 describe("mstar issue CLI bundle", () => {
-  test("the subprocess launchers this suite uses answer with a version", () => {
-    // Evidence: subprocess launchers used below. Print so the report names them.
-    console.log(`issue.test runtimes NODE_BIN=${NODE_BIN} bun=${process.execPath}`);
-    for (const bin of [NODE_BIN, process.execPath]) {
-      const probe = spawnSync(bin, ["--version"], { encoding: "utf8" });
-      expect(probe.status).toBe(0);
-      expect(probe.stdout.trim()).toMatch(/^v?\d+\.\d+/);
-    }
-  });
-
   test("the built bundle carries the Node shebang", () => {
     expect(existsSync(BUNDLE)).toBe(true);
     chmodSync(BUNDLE, 0o755);

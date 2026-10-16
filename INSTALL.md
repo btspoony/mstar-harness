@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Node.js >=24.18.0** — the published `mstar-harness` binary is a Node script (`#!/usr/bin/env node`), so every launch form — plain `mstar-harness`, `npx @mstar-harness/cli …`, and the explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js …` — executes that same entrypoint on the Node runtime on PATH. A package runner is **not** a runtime: it fetches the package and then executes the bin with the Node already installed. That Node must provide the native `node:sqlite` module (>=24.18.0); no fallback driver exists. Host plugins (dsh, omp, OpenCode) run inside their own host process, not in the CLI.
+- **Node.js >=24.18.0** — the published `mstar-harness` binary is a Node script (`#!/usr/bin/env node`), so every launch form — plain `mstar-harness`, `npx @mstar-harness/cli …`, and the explicit `node node_modules/@mstar-harness/cli/dist/mstar-harness.js …` — executes that same entrypoint on the Node runtime on PATH. A package runner is **not** a runtime: it fetches the package and then executes the bin with the Node already installed. That Node must provide the native `node:sqlite` module (>=24.18.0); no fallback driver exists. Host plugins (dsh, omp, OpenCode) run inside their own host process, not in the CLI. A **Bun**-hosted plugin process is not version-gated by the store — the `engines.bun` fields in the workspace manifests declare the development toolchain, and the only runtime requirement a Bun host must satisfy is the native `node:sqlite` capability.
 - Target host installed:
   - [OpenCode](https://opencode.ai)
   - [Cursor](https://cursor.com)

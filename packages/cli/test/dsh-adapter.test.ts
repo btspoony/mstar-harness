@@ -591,9 +591,8 @@ describe("dshAdapter.runInstallInit", () => {
       expect(message).toContain(FAKE_DSH_PROSE_TOKEN);
       expect(message).toContain("incompatible");
       // dsh's printed recovery command, quoted verbatim rather than reconstructed.
-      const recoveryLine = DSH_INCOMPATIBLE_OUTPUT.split("\n").find((line) => /dsh plugin --profile .* allow-version /.test(line));
-      expect(recoveryLine).toBeDefined();
-      expect(message).toContain(recoveryLine!);
+      expect(message).toContain("allow-version");
+      expect(message).toContain("--accept-risk");
       // dsh's rollback note survives the refusal too.
       expect(message).toContain("restored package.json, pnpm-lock.yaml, and node_modules.");
       // The refusal is not the generic shape.

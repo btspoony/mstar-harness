@@ -39,6 +39,19 @@ function runOmp(args: string[], dryRun: boolean): void {
   runCliCommand(["omp", ...args], { dryRun });
 }
 
+/**
+ * The plugin root omp materializes installs in: its documented default under the
+ * user home, or the relocated data root when `XDG_DATA_HOME` is set. A root omp
+ * reports for its own entry is preferred at the call site; this is the fallback
+ * for the case where omp lists nothing yet.
+ */
+function ompPluginsRoot(): string {
+  const dataHome = process.env["XDG_DATA_HOME"];
+  return dataHome !== undefined && dataHome !== ""
+    ? path.join(dataHome, "omp", "plugins")
+    : path.join(homedir(), ".omp", "plugins");
+}
+
 function declaredByPluginManager(root: string): boolean {
   const manifest = path.join(root, "package.json");
   if (!fs.existsSync(manifest)) return false;
@@ -60,10 +73,13 @@ function ompRefusal(step: string, detail: string, recovery: string): Error {
 }
 
 /**
- * Clear whatever occupies the entry before linking: a stale tree is what makes
- * `omp plugin link` fail on an unlink error. A package-manager-managed entry is
- * removed through omp itself; an entry no manifest declares is a leftover.
- * Exported for tests: `root` is the seam that keeps the check off the real home.
+ * Where omp may keep this plugin: the user plugin root (its documented default)
+ * plus a relocated data root, and — most authoritatively — the path omp's own
+ * listing reports for the entry it has. Nothing here is deleted by hand: a
+ * plugin-manager root owns its `node_modules`, so the entry is replaced only
+ * through omp's uninstall verb, and a refusal names every supported route.
+ * Exported for tests: the caller supplies the roots that keep the check off the
+ * real home.
  */
 export function clearOmpEntry(root: string, ompPackagePath: string, notes: string[]): void {
   const entry = path.join(root, "node_modules", OMP_PLUGIN_NAME);
@@ -73,29 +89,18 @@ export function clearOmpEntry(root: string, ompPackagePath: string, notes: strin
   } catch {
     return;
   }
-  if (declaredByPluginManager(root)) {
-    try {
-      runOmp(["plugin", "uninstall", OMP_PLUGIN_NAME], false);
-      notes.push(`Replaced the existing ${OMP_PLUGIN_NAME} install in ${root} through omp (its manifest declares it).`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw ompRefusal(
-        `Could not replace the existing ${OMP_PLUGIN_NAME} install in ${root}`,
-        message,
-        `run \`omp plugin uninstall ${OMP_PLUGIN_NAME}\`, or link by hand: \`omp plugin link ${ompPackagePath}\``,
-      );
-    }
-    return;
-  }
   try {
-    fs.rmSync(entry, { recursive: true, force: true });
-    notes.push(`Removed the leftover ${OMP_PLUGIN_NAME} entry at ${entry} (no plugin-manager manifest declares it).`);
+    runOmp(["plugin", "uninstall", OMP_PLUGIN_NAME], false);
+    notes.push(`Replaced the existing ${OMP_PLUGIN_NAME} install in ${root} through omp.`);
+    return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const declared = declaredByPluginManager(root) ? "declared by the plugin-manager manifest" : "not declared by any manifest";
     throw ompRefusal(
-      `Could not remove the leftover entry at ${entry}`,
-      message,
-      `install the published plugin instead, which replaces it through omp: \`omp plugin install ${OMP_PLUGIN_NAME}\``,
+      `An existing ${OMP_PLUGIN_NAME} entry occupies the plugin path (${declared}), and omp could not remove it`,
+      `${entry}: ${message}`,
+      `remove it through omp (\`omp plugin uninstall ${OMP_PLUGIN_NAME}\`), or install the published plugin, which replaces it through omp: ` +
+        `\`omp plugin install ${OMP_PLUGIN_NAME}\`; for a manual link: \`omp plugin link ${ompPackagePath}\``,
     );
   }
 }
@@ -264,7 +269,7 @@ async function runInit(scope: Scope, dryRun: boolean) {
  notes.push(
  `Linked omp plugin tree resolved via the workspace engine member; dist + root mirrors are gitignored build outputs (rebuilt automatically above when absent)`,
  );
- clearOmpEntry(path.join(homedir(), ".omp", "plugins"), ompPackagePath, notes);
+ clearOmpEntry(ompPluginsRoot(), ompPackagePath, notes);
  const linkArgs = ["plugin", "link", ompPackagePath];
  if (scope === "project") linkArgs.push("--scope", "project");
  try {

@@ -393,6 +393,7 @@ __export(exports_engine, {
   verifyCatalogImport: () => verifyCatalogImport,
   verifySddEvidence: () => verifySddEvidence,
   violationLine: () => violationLine,
+  warnUncheckableNodeFloor: () => warnUncheckableNodeFloor,
   withStoreRead: () => withStoreRead,
   workflowEntryPreDispatchCheck: () => workflowEntryPreDispatchCheck,
   workflowExecutionPolicyViolations: () => workflowExecutionPolicyViolations,
@@ -7585,11 +7586,26 @@ function harnessVersionFrom(moduleDir) {
 function readHarnessVersion() {
   return harnessVersionFrom(dirname4(fileURLToPath(import.meta.url)));
 }
+function warnUncheckableNodeFloor() {
+  process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run the CLI from its installed package (`npm i -g @mstar-harness/cli`) so the manifest that declares the floor is reachable.\n");
+}
 function readDeclaredNodeFloor() {
   const moduleDir = dirname4(fileURLToPath(import.meta.url));
-  const own3 = join4(moduleDir, "..", "package.json");
   const root = findRootPackageJson(moduleDir);
-  for (const manifestPath of root === null || root === own3 ? [own3] : [own3, root]) {
+  const candidates = [];
+  let dir = moduleDir;
+  for (let depth = 0;depth < 6; depth += 1) {
+    candidates.push(join4(dir, "..", "package.json"), join4(dir, "package.json"));
+    if (depth === 1)
+      candidates.push(join4(dir, "packages", "engine", "package.json"));
+    const parent = dirname4(dir);
+    if (parent === dir)
+      break;
+    dir = parent;
+  }
+  if (root !== null)
+    candidates.push(root);
+  for (const manifestPath of [...new Set(candidates)]) {
     let parsed;
     try {
       parsed = JSON.parse(readFileSync3(manifestPath, "utf8"));
@@ -11125,6 +11141,8 @@ function validateActivationAttestation(value) {
     const entryId = attestationString(consumer, "entryId", what);
     const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
     const floor = runtime === "bun" ? null : readDeclaredNodeFloor();
+    if (runtime === "node" && floor === null)
+      warnUncheckableNodeFloor();
     if (floor !== null && compareVersions(runtimeVersion, floor) < 0) {
       activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` + `compatible consumer. Upgrade/reload it or exclude it explicitly.`);
     }
@@ -17296,9 +17314,11 @@ function compareVersions(a, b) {
   }
   return 0;
 }
-function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
+function assertStoreRuntimeSupported(info = detectStoreRuntime(), floorOverride) {
   const kind = info.isBun ? "Bun" : "Node";
-  const floor = kind === "Node" ? readDeclaredNodeFloor() : null;
+  const floor = kind === "Node" ? floorOverride === undefined ? readDeclaredNodeFloor() : floorOverride.nodeFloor : null;
+  if (kind === "Node" && floor === null)
+    warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
     throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
