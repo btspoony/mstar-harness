@@ -35,34 +35,28 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 
 ## Install
 
-Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager. `init` writes baseline config and adds the harness gitignore entries, then prints the `doctor` command to run next (`init` does not run `doctor` itself - host health and MCP config are what `doctor` checks); the native command installs the plugin only. Use the native command when `init` is blocked — it bypasses this CLI entirely.
-
-`npx` can serve an older cached resolution, and every step of `init` follows the CLI that ran; `init` reports when the published `latest` is **newer** than the version it is running, and then installs that `latest` globally (a version ahead of `latest` is left alone) — use `npx @mstar-harness/cli@latest init …` when the CLI that runs should itself be the newest release.
+Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager — the native command installs the plugin only. Options, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
 
 - **dsh (DeepSeek Harness)** — needs the `dsh` CLI on `PATH`
-  - CLI: `npx @mstar-harness/cli init --target dsh` — installs the plugin plus LLM fallbacks; `--no-fallbacks` skips the second
-  - Native: `dsh plugin --profile web add @mstar-harness/dsh` — the LLM-fallbacks row is optional, and it must be the version this CLI pins (read from the CLI's own manifest; `init` adds that row, while an unpinned `dsh-llm-fallbacks` follows dsh's own range instead)
+  - CLI: `npx @mstar-harness/cli init --target dsh`
+  - Native: `dsh plugin --profile web add @mstar-harness/dsh`
 - **omp** — needs the `omp` CLI installed
-  - CLI: `npx @mstar-harness/cli init --target omp` — omp's plugin manager keeps one user-wide root, so this target defaults to `--scope global`; an explicit `--scope project` is refused
+  - CLI: `npx @mstar-harness/cli init --target omp`
   - Native: `omp plugin install @mstar-harness/omp`
 - **OpenCode**
-  - CLI: `npx @mstar-harness/cli init --target opencode` — detects which plugin key the installed generation uses, and `--opencode-generation` overrides
-  - Native: add `@mstar-harness/opencode` to the singular `plugin` key, or `@mstar-harness/opencode-v2` to the plural `plugins` key, in `opencode.json`, then restart OpenCode
-- **Cursor** — needs `git`; Cursor does not load symlinked plugin directories
-  - CLI: `npx @mstar-harness/cli init --target cursor` — creates a real plugin checkout
+  - CLI: `npx @mstar-harness/cli init --target opencode`
+  - Native: `@mstar-harness/opencode` for OpenCode 1.x, `@mstar-harness/opencode-v2` for OpenCode 2.x — add it to the plugin list in [`opencode.json`](INSTALL.md#opencode), then restart OpenCode
+- **Cursor** — needs `git`
+  - CLI: `npx @mstar-harness/cli init --target cursor`
   - Native: `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`, then **Developer: Reload Window**
-- **Kimi Code** — no CLI target; install inside the Kimi TUI
+- **Kimi Code** — no CLI target
   - Native: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`
 - **ZCode**
-  - CLI: `npx @mstar-harness/cli init --target zcode` — registers the `mstar-local` marketplace
-  - Native: **Settings → Plugin Management → Discover** → install **morning-star-harness**
+  - CLI: `npx @mstar-harness/cli init --target zcode`
+  - Native: add `https://github.com/btspoony/mstar-harness` as a ZCode plugin marketplace, then install **morning-star-harness**
 - **Codex** — needs the `codex` CLI
-  - CLI: `npx @mstar-harness/cli init --target codex` — registers the repo marketplace and adds `morning-star-harness@mstar-repo`
+  - CLI: `npx @mstar-harness/cli init --target codex`
   - Native: `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo`
-
-`init` defaults to `--scope project` (`--scope global` installs host-wide, and Codex's global scope skips the seven slash-command skills; for dsh the flag has no effect — its profile is machine-global), and after a successful run it installs `@mstar-harness/cli` globally at the version the run targeted (the published `latest` when that is newer than the running CLI, otherwise the running version) — pass `--no-global-cli` to skip that. Check the result with `npx @mstar-harness/cli doctor --target <host>`; it also reports MCP configuration as `aligned`, `mismatch`, or `unavailable`.
-
-The published binary is `mstar-harness`. The short alias `mstar` exists only where this package is installed, and an unrelated npm package claims the same name — use the long form when in doubt. Manual installs, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
 
 ## Use
 
