@@ -16631,6 +16631,10 @@ var PR_REVIEW_TIER_BUDGETS = Object.freeze({
   default: Object.freeze({ wallClockMinutes: 10, maxSeats: 2, perSeatFindingsCap: 6, evidenceTokensCap: 900, fileOpenCap: 20 }),
   deep: Object.freeze({ wallClockMinutes: 15, maxSeats: 4, perSeatFindingsCap: 8, evidenceTokensCap: 1200, fileOpenCap: 30 })
 });
+var PR_REVIEW_NUDGE_CADENCE = Object.freeze({
+  normalSeconds: 120,
+  overrunSeconds: 60
+});
 var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");

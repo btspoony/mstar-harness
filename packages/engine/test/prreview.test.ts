@@ -1230,7 +1230,7 @@ must-fix=0 should-fix=0 nit=0 unverified=0`);
 // PR_REVIEW_TIER_BUDGETS — per-tier wall-clock budgets + per-seat caps
 // (tier time budget; prose SSOT: pr-review.md § Review depth)
 // ---------------------------------------------------------------------------
-import { PR_REVIEW_TIER_BUDGETS } from "../src/prreview.js";
+import { PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS } from "../src/prreview.js";
 
 describe("PR_REVIEW_TIER_BUDGETS — per-tier time budgets (pr-review.md § Review depth)", () => {
   const TIERS = ["quick", "default", "deep"] as const;
@@ -1297,6 +1297,12 @@ describe("PR_REVIEW_TIER_BUDGETS — per-tier time budgets (pr-review.md § Revi
  // strict mode throws on frozen assignment - equally acceptable
     }
     expect(PR_REVIEW_TIER_BUDGETS.quick.wallClockMinutes).toBe(5);
+  });
+
+  test("PR_REVIEW_NUDGE_CADENCE pins the supervision cadence and is frozen (pr-review.md § Seat supervision)", () => {
+    expect(Object.isFrozen(PR_REVIEW_NUDGE_CADENCE)).toBe(true);
+    // Contractual intervals: 2 min inside the cap, 1 min once it is passed.
+    expect(PR_REVIEW_NUDGE_CADENCE).toEqual({ normalSeconds: 120, overrunSeconds: 60 });
   });
 });
 
@@ -1382,6 +1388,39 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (tier time budget)", (
       expect(readFirst).toBeGreaterThanOrEqual(0);
       expect(budget).toBeGreaterThan(readFirst);
       expect(recon).toBeGreaterThan(budget);
+    }
+  });
+
+  const tierLine = (tier: "quick" | "default" | "deep") => `- Tier: \`${tier}\` \u2014 review strength for this session.`;
+
+  test("## Budget head states the tier and the WHOLE-review soft cap on every tier (incl. omitted -> default)", () => {
+    const variants = [
+      { tier: "quick" as const, row: PR_REVIEW_TIER_BUDGETS.quick },
+      { tier: "default" as const, row: PR_REVIEW_TIER_BUDGETS.default },
+      { tier: "deep" as const, row: PR_REVIEW_TIER_BUDGETS.deep },
+      { tier: undefined, row: PR_REVIEW_TIER_BUDGETS.default }, // omitted tier -> default row
+    ];
+    for (const { tier, row } of variants) {
+      const prompt = tier === undefined ? prReviewSeatPrompt(base) : prReviewSeatPrompt({ ...base, tier });
+      expect(prompt).toContain(tierLine(tier ?? "default"));
+      expect(prompt).toContain(
+        `- Soft wall-clock cap: ${row.wallClockMinutes} min for the WHOLE review \u2014 one shared clock started at worktree setup, not a fresh per-seat allowance.`,
+      );
+    }
+  });
+
+  test("--remaining-minutes renders the dispatch-time remainder of the shared clock, overrun included", () => {
+    const sharedCapLine = (minutes: number) =>
+      `- Soft wall-clock cap: ${PR_REVIEW_TIER_BUDGETS.deep.wallClockMinutes} min for the WHOLE review \u2014 one shared clock started at worktree setup, not a fresh per-seat allowance (${minutes} min `;
+    expect(prReviewSeatPrompt({ ...base, tier: "deep", budgetRemainingMinutes: 7 })).toContain(`${sharedCapLine(7)}left when you were dispatched).`);
+    expect(prReviewSeatPrompt({ ...base, tier: "deep", budgetRemainingMinutes: -3 })).toContain(`${sharedCapLine(3)}over it when you were dispatched).`);
+ // Omitted: the shared cap still renders, without inventing a remainder.
+    expect(prReviewSeatPrompt({ ...base, tier: "deep" })).not.toContain("when you were dispatched");
+  });
+
+  test("a non-finite budgetRemainingMinutes throws (no NaN minutes reach a seat prompt)", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => prReviewSeatPrompt({ ...base, budgetRemainingMinutes: bad })).toThrow(/budgetRemainingMinutes must be a finite number/);
     }
   });
 
