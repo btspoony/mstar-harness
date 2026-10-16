@@ -77,7 +77,10 @@ function rootOf(context: StoreContext): string {
  * mentions this digest, and every candidate is then shape-validated in JS (an
  * object whose `sourceDigest` string EQUALS the current digest plus an
  * `importedIds` array of strings), so unrelated JSON that merely mentions the
- * digest - or a receipt for different source bytes - proves nothing.
+ * digest - or a receipt for different source bytes - proves nothing. The whole
+ * array is validated as a unit: a malformed receipt is rejected outright rather
+ * than salvaged per element, so a mixed array cannot smuggle one id past the
+ * collision refusal.
  */
 function provenReplayIds(db: StoreDb, sourceDigest: string): Set<string> {
   const ids = new Set<string>();
@@ -89,8 +92,8 @@ function provenReplayIds(db: StoreDb, sourceDigest: string): Set<string> {
     let receipt: unknown;
     try { receipt = JSON.parse(candidate.result_json); } catch { continue; }
     if (!isPlainObject(receipt) || receipt.sourceDigest !== sourceDigest) continue;
-    if (!Array.isArray(receipt.importedIds)) continue;
-    for (const id of receipt.importedIds) if (isNonEmptyString(id)) ids.add(id);
+    if (!Array.isArray(receipt.importedIds) || !receipt.importedIds.every(isNonEmptyString)) continue;
+    for (const id of receipt.importedIds) ids.add(id);
   }
   return ids;
 }

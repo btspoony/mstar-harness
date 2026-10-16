@@ -3734,6 +3734,43 @@ test("a legacy source whose bytes changed after its recorded import still refuse
   expect(readFileSync(snapshotPath)).toEqual(editedBytes);
 });
 
+test("a malformed retained receipt proves nothing, so its collision still refuses the named recovery", async () => {
+  const { context } = legacyWorkspace("malformed-receipt");
+  const workflowId = "wf-malformed-receipt";
+  const input = { context, operator: "operator", operationId: "op-malformed-receipt-first" };
+  const first = await upgradeStoreMinimal(input);
+  expect(first).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: [workflowId] });
+
+  // The retained receipt for THESE exact bytes is damaged: its `importedIds`
+  // mixes a real id with a non-string member. A receipt is proof only as a
+  // whole, so the mixed array is rejected outright instead of being salvaged
+  // per element — `null` must not smuggle the id past the collision refusal.
+  const damaged = await openStore(context, "write");
+  try {
+    damaged.db.prepare("update store_operations set result_json = ? where operation_id = ?").run(
+      JSON.stringify({ ...first, importedIds: [workflowId, null] }),
+      input.operationId,
+    );
+  } finally { damaged.close(); }
+  const damagedBefore = await protectedStore(context);
+
+  const refused = await upgradeStoreMinimal({ ...input, operationId: "op-malformed-receipt-second" })
+    .then(() => { throw new Error("a malformed retained receipt served replay proof"); }, (error: Error & { code?: string }) => error);
+  expect(refused.code).toBe("execution.migration-conflict");
+  expect(refused.message).toContain(`--ack-skip-workflow ${workflowId}`);
+  expect(refused.message).toContain("already exists in the native execution authority");
+  // Nothing committed: the damaged receipt vouched for no id at all, so the
+  // refused run added no receipt of its own beside it.
+  expect(await protectedStore(context)).toEqual(damagedBefore);
+
+  // The named acknowledgement remains the supported recovery for that collision.
+  const acked = await upgradeStoreMinimal({
+    ...input, operationId: "op-malformed-receipt-ack", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(acked).toMatchObject({ verdict: "upgraded", imported: 0 });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining(`workflow ${workflowId}: skipped by --ack-skip-workflow`));
+});
+
 test("the source digest is code-unit ordered, so the same bytes keep one identity under any process locale", async () => {
   // One fixture, copied byte-for-byte: the same harness-relative keys and bytes,
   // so any digest difference comes from the ordering used to fold them.
