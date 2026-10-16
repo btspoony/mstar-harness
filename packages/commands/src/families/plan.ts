@@ -109,7 +109,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
           : id === "plan.prepare"
             ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
             : id === "plan.progress"
-              ? "The progress payload and plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <status>."
+              ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
               : id === "plan.issue-add"
                 ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
                 : id === "plan.issue-close"
@@ -376,6 +376,13 @@ const PLAN_BIND_EXPECT_HELP = `CAS expectation for the bound workflow: coordinat
 function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<string, string>> {
   if (verb === "bind") return { expect: PLAN_BIND_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
   if (verb === "show") return { sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
+  if (verb === "progress") return {
+    // The value is the JSON progress object, not a bare status word: the accepted
+    // shape is the engine's `validatePlanProgress` contract, published as PlanProgress.
+    progress: "JSON progress object with status (InProgress|InReview|Blocked), summary and evidence_paths; read the shape with mstar schema PlanProgress",
+    expect: PLAN_EXPECT_HELP,
+    sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,
+  };
   return { expect: PLAN_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
 }
 export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
@@ -404,7 +411,10 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
           ? inputSchema.extend({ evidence: completionEvidenceSchema.optional() })
           : inputSchema,
       payloads: Object.fromEntries(
-        (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
+        (payloadByVerb[verb] ?? []).map((field) => [field, {
+          schema: payloadSchemaFor(verb, field),
+          ...(verb === "progress" ? { registryName: "PlanProgress" } : {}),
+        }]),
       ),
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],
