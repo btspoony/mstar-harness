@@ -1523,6 +1523,62 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     expect(await storedRowStatus(fixture)).toBe("Done");
   }, 30_000);
 
+  test("the scope-mismatch refusal advertises the delivery-anchor repair, not the generic completion recovery", async () => {
+    const fixture = await activeDeliveryFixture("mstar-completion-anchor-mismatch");
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-anchor-mismatch");
+
+    // The row records a real feature checkout on a branch that is NOT the
+    // registered delivery source (`feature/exec-session`) — issue #499's anchor
+    // mismatch, which the generic completion recovery cannot repair.
+    const mismatchedPath = join(fixture.root, "wt-anchor-mismatch");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/anchor-mismatch", mismatchedPath], {
+      cwd: fixture.root,
+    });
+    const prepared = runCli(
+      ["plan", "prepare", "--plan", PLAN_ID,
+        ...prepareConfig(fixture, { worktreePath: mismatchedPath, workingBranch: "feature/anchor-mismatch" }),
+        "--operation", "prepare-anchor-mismatch", "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode, prepared.stdout).toBe(0);
+    const startPath = join(fixture.root, "anchor-mismatch-start.json");
+    writeJson(startPath, { status: "InProgress", summary: "anchor mismatch start", evidence_paths: [fixture.qaReport] });
+    expect(runCli(
+      ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    ).exitCode).toBe(0);
+
+    const evidencePath = join(fixture.root, "anchor-mismatch-completion.json");
+    writeJson(evidencePath, {
+      source_sha: fixture.sourceSha,
+      review_base: fixture.baseSha,
+      review_head: fixture.sourceSha,
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+
+    const refused = runCli(
+      ["plan", "complete", "--plan", PLAN_ID, "--file", evidencePath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    const envelope = jsonOf(refused);
+    expect(envelope.code).toBe("coordination.scope-mismatch");
+    const details = objectMember(envelope, "details");
+    expect(details).toMatchObject({ expected: "feature/exec-session", actual: "feature/anchor-mismatch" });
+    const recovery = stringMember(details, "recovery");
+    if (recovery === undefined) throw new Error(`the scope-mismatch refusal carries no recovery: ${refused.stdout}`);
+    expect(recovery).toContain("mstar workflow delivery-anchors");
+    expect(recovery).toContain("mstar plan prepare");
+  }, 30_000);
+
   test("the removed transfer verbs are absent from the command surface", async () => {
     const fixture = await activeFixture("mstar-transfer-verbs-gone");
     const { coordinatorWire } = await prepareRow(fixture);

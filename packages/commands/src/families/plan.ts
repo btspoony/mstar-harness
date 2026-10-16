@@ -96,7 +96,9 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
-   recovery: id === "plan.bind"
+   recovery: id === "plan.complete" && code === "coordination.scope-mismatch"
+        ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
+        : id === "plan.bind"
         ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
         : id === "plan.show"
           ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."

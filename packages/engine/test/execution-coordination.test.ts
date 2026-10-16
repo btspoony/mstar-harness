@@ -915,6 +915,7 @@ async function realIterationFixture(label: string): Promise<Fixture & { integrat
 async function realStandaloneFixture(
   label: string,
   deliveryKind: "development" | "verification/report-only" = "development",
+  registeredSource = `feature/${OWN_PLAN}`,
 ): Promise<Fixture & { sourceSha: string; worktree: string }> {
   const fixture = await seededWorkflow(label, { plans: [OWN_PLAN], deliveryKind });
   const { context } = fixture;
@@ -931,7 +932,7 @@ async function realStandaloneFixture(
     const state = JSON.parse(String(row.state_json)) as Record<string, unknown>;
     state.type = "plan";
     state.delivery_kind = deliveryKind;
-    state.branch = { source: `feature/${OWN_PLAN}`, target: "main" };
+    state.branch = { source: registeredSource, target: "main" };
     if (deliveryKind === "verification/report-only") {
       state.completion_policy = "acceptance report";
     }
@@ -1279,6 +1280,32 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     } finally {
       setCompleteWitnessGapForTest(undefined);
     }
+  }, 30000);
+
+  test("a recorded branch that differs from the registered delivery source names both values and both repairs", async () => {
+    // The issue-#499 mistake: the workflow registered `main` as its delivery
+    // source while the row records its real feature branch.
+    const fixture = await realStandaloneFixture("complete-anchor-mismatch", "development", "main");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "prepare-mismatch", {
+      worktreePath: fixture.worktree,
+      workingBranch: `feature/${OWN_PLAN}`,
+      qaGate: "mandatory",
+    });
+    await progressPlan(fixture, OWN_PLAN, "progress-mismatch", "InProgress");
+    const evidence = completionEvidence(context, sourceSha);
+    const before = footprint(context);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    const refusal = await refusalOf(() =>
+      planCall(fixture, OWN_PLAN, "complete-mismatch", token, { kind: "complete", evidence } as CoordinationOperation),
+    );
+    expect(refusal.code).toBe("coordination.scope-mismatch");
+    expect(refusal.details).toMatchObject({ expected: "main", actual: `feature/${OWN_PLAN}` });
+    expect(refusal.message).toContain(`feature/${OWN_PLAN}`);
+    expect(refusal.message).toContain("main");
+    expect(refusal.message).toContain("mstar workflow delivery-anchors");
+    expect(refusal.message).toContain("mstar plan prepare");
+    expect(footprint(context)).toEqual(before);
   }, 30000);
 
 });

@@ -1743,7 +1743,9 @@ async function captureCompletionWitnesses(
     if (scope.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.",
+        `The plan records working branch ${scope.workingBranch} but the workflow registers delivery source ${anchors.sourceBranch}; ` +
+          `complete requires them to match. Correct the registered anchor with mstar workflow delivery-anchors, ` +
+          `or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.`,
         { plan_id: read.planId, expected: anchors.sourceBranch, actual: scope.workingBranch },
       );
     }
@@ -1818,7 +1820,9 @@ function completeInTransaction(
     if (scope!.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.",
+        `The plan records working branch ${scope!.workingBranch} but the workflow registers delivery source ${anchors.sourceBranch}; ` +
+          `complete requires them to match. Correct the registered anchor with mstar workflow delivery-anchors, ` +
+          `or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.`,
         { plan_id: planId, expected: anchors.sourceBranch, actual: scope!.workingBranch },
       );
     }
