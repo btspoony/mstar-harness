@@ -46,7 +46,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
   - 原生：`omp plugin install @mstar-harness/omp`
 - **OpenCode**
   - CLI：`npx @mstar-harness/cli init --target opencode`
-  - 原生：单数 `plugin` 键写 `@mstar-harness/opencode`，复数 `plugins` 键写 `@mstar-harness/opencode-v2`；写入 `opencode.json` 后重启 OpenCode
+  - 原生：OpenCode 1.x 用 `@mstar-harness/opencode`，2.x 用 `@mstar-harness/opencode-v2`；写入 `opencode.json` 后重启 OpenCode
 - **Cursor** —— 需要 `git`
   - CLI：`npx @mstar-harness/cli init --target cursor`
   - 原生：`git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`，然后 **Developer: Reload Window**

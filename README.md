@@ -45,7 +45,7 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
   - Native: `omp plugin install @mstar-harness/omp`
 - **OpenCode**
   - CLI: `npx @mstar-harness/cli init --target opencode`
-  - Native: add `@mstar-harness/opencode` to the singular `plugin` key, or `@mstar-harness/opencode-v2` to the plural `plugins` key, in `opencode.json`, then restart OpenCode
+  - Native: `@mstar-harness/opencode` for OpenCode 1.x, `@mstar-harness/opencode-v2` for OpenCode 2.x — add it to `opencode.json`, then restart OpenCode
 - **Cursor** — needs `git`
   - CLI: `npx @mstar-harness/cli init --target cursor`
   - Native: `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`, then **Developer: Reload Window**
