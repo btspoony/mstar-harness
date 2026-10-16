@@ -2710,6 +2710,17 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
       ...identityAnchors(initial),
       branch: { source: "fix/registered-by-mistake", target: "release" },
     });
+    // The reason is part of the RECORDED intent, not decoration: reusing this
+    // operation id with a different reason is a different request, disclosed as
+    // a conflict instead of replayed as the first repair.
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-pair", {
+        kind: "delivery-anchors",
+        branch: { source: "fix/registered-by-mistake", target: "release" },
+        reason: "a different reason for the same anchors",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
 
     // One anchor is repairable on its own: the anchor the operation does not
     // name keeps the value the workflow already registers.
