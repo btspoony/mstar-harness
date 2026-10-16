@@ -7616,8 +7616,9 @@ function readDeclaredNodeFloor() {
       continue;
     const manifest = parsed;
     const name = manifest["name"];
-    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli")
+    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli" && name !== "@mstar-harness/omp" && name !== "@mstar-harness/dsh" && name !== "@mstar-harness/opencode" && name !== "@mstar-harness/opencode-v2") {
       continue;
+    }
     const engines = manifest["engines"];
     if (engines === null || typeof engines !== "object" || !("node" in engines))
       continue;
@@ -11139,14 +11140,16 @@ function validateActivationAttestation(value) {
       attestationRefusal(`${what}.kind must be one of ${Object.keys(CONSUMER_KINDS).join(", ")}`);
     }
     const runtime = consumer.runtime;
-    if (runtime !== "bun" && runtime !== "node")
-      attestationRefusal(`${what}.runtime must be "bun" or "node"`);
+    if (runtime !== "node") {
+      attestationRefusal(`${what}.runtime must be "node" (got ${JSON.stringify(runtime)}); a consumer is an installed entrypoint that opens the store, ` + "and Bun is this project's development toolchain, not a runtime a consumer runs on. Attest the Node entrypoint that opens the store");
+    }
     const entryId = attestationString(consumer, "entryId", what);
     const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
-    const floor = runtime === "bun" ? null : readDeclaredNodeFloor();
-    if (runtime === "node" && floor === null)
-      warnUncheckableNodeFloor();
-    if (floor !== null && compareVersions(runtimeVersion, floor) < 0) {
+    const floor = readDeclaredNodeFloor();
+    if (floor === null) {
+      attestationRefusal(`${what} cannot be checked for runtime compatibility: no visible manifest declares engines.node (run this from an installed CLI or a full checkout, ` + "not from a copied bundle), so the consumer's Node version cannot be compared against the floor");
+    }
+    if (compareVersions(runtimeVersion, floor) < 0) {
       activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` + `compatible consumer. Upgrade/reload it or exclude it explicitly.`);
     }
     const disposition = consumer.disposition;

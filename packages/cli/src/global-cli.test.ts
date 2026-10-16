@@ -288,7 +288,12 @@ exec sleep 10`);
    * so "npm never ran" is not the contract — "no global install ran" is. */
   function installLines(): string[] {
     if (!existsSync(npmLog)) return [];
-    return readFileSync(npmLog, "utf8").trim().split("\n").filter((line) => line.startsWith("i -g "));
+    return readFileSync(npmLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.startsWith("i -g "))
+      // The neutral npm config flags are plumbing: assertions name the spec.
+      .map((line) => line.split(" --userconfig")[0]!);
   }
 
   /** Fake npm that answers `view <pkg> version` with a published version and

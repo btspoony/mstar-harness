@@ -60,7 +60,7 @@ import {
   type IndexFamily,
   type RawTable,
 } from "./catalog-import.js";
-import { readDeclaredNodeFloor, warnUncheckableNodeFloor, writeJson } from "./core.js";
+import { readDeclaredNodeFloor, writeJson } from "./core.js";
 import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIGRATIONS,
@@ -135,7 +135,8 @@ export type InstalledConsumerAttestation = {
   kind: AttestationConsumerKind;
   /** The actual installed entrypoint (absolute path or the resolution root used). */
   entrypoint: string;
-  runtime: "bun" | "node";
+  /** The supported runtime. Bun is the development toolchain, never a consumer. */
+  runtime: "node";
   /** The version ACTUALLY reported by that runtime (checked against the floor). */
   runtimeVersion: string;
   /** The installed package/bundle version of that entry. */
@@ -1031,14 +1032,27 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
       attestationRefusal(`${what}.kind must be one of ${Object.keys(CONSUMER_KINDS).join(", ")}`);
     }
     const runtime = consumer.runtime;
-    if (runtime !== "bun" && runtime !== "node") attestationRefusal(`${what}.runtime must be "bun" or "node"`);
+    if (runtime !== "node") {
+      attestationRefusal(
+        `${what}.runtime must be "node" (got ${JSON.stringify(runtime)}); a consumer is an installed entrypoint that opens the store, ` +
+          "and Bun is this project's development toolchain, not a runtime a consumer runs on. Attest the Node entrypoint that opens the store",
+      );
+    }
     const entryId = attestationString(consumer, "entryId", what);
     const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
     // `bun` consumers carry no version gate (Bun is a development toolchain);
     // a Node consumer's floor is the declared one, read from the manifest.
-    const floor = runtime === "bun" ? null : readDeclaredNodeFloor();
-    if (runtime === "node" && floor === null) warnUncheckableNodeFloor();
-    if (floor !== null && compareVersions(runtimeVersion, floor) < 0) {
+    // The floor is the whole point of this check, and every host that embeds this
+    // engine ships a manifest that declares it: an unresolvable floor is refused
+    // rather than passed, so no consumer can be attested without the comparison.
+    const floor = readDeclaredNodeFloor();
+    if (floor === null) {
+      attestationRefusal(
+        `${what} cannot be checked for runtime compatibility: no visible manifest declares engines.node (run this from an installed CLI or a full checkout, ` +
+          "not from a copied bundle), so the consumer's Node version cannot be compared against the floor",
+      );
+    }
+    if (compareVersions(runtimeVersion, floor) < 0) {
       activationBlocked(
         `${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` +
           `compatible consumer. Upgrade/reload it or exclude it explicitly.`,

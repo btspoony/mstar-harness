@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { readDeclaredNodeFloor } from "./core.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,12 @@ import { adoptTerminalWorkflow, readExecutionState, type ExecutionContext } from
 import type { ActivationAttestation } from "./store-activation.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
+
+/** Injected current runtime for a `node` consumer: at/above the declared floor. */
+const atOrAboveRuntime = (() => {
+  const floor = readDeclaredNodeFloor() ?? "0.0.0";
+  return `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`;
+})();
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 
@@ -287,8 +294,7 @@ describe("terminal adoption session settlement", () => {
       operator: { actor: "recovery-operator", authorizationRef: "operator-authorization-fixture" },
       consumers: [{
         entryId: "mstar-cli", kind: "coordinator", entrypoint: "packages/cli/src/index.ts",
-        // Synthetic runtime/bundle versions carried as payload — not real versions.
-        runtime: "bun", runtimeVersion: "0.0.0-synthetic-a", version: "0.0.0-synthetic-b", current: true, disposition: "reloaded",
+        runtime: "node", runtimeVersion: atOrAboveRuntime, version: "0.0.0-synthetic-b", current: true, disposition: "reloaded",
       }],
       stoppedSessions: stoppedSessionIds.map((sessionId) => ({ sessionId, host: "fixture-host", state: "stopped" as const })),
     };

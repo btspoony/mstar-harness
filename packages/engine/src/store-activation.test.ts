@@ -134,6 +134,8 @@ const engineManifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "pack
   engines?: { node?: string };
 };
 const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
+/** Injected current runtime for a `node` consumer: at/above the declared floor. */
+const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 
 /** A conforming installed-consumer attestation: one current coordinator, one upgraded CLI. */
 function attestation(overrides: Partial<ActivationAttestation> = {}): ActivationAttestation {
@@ -146,8 +148,8 @@ function attestation(overrides: Partial<ActivationAttestation> = {}): Activation
         entryId: "cli-global",
         kind: "cli",
         entrypoint: "/usr/local/lib/node_modules/@mstar-harness/cli/dist/index.js",
-        runtime: "bun",
-        runtimeVersion: "0.0.0-synthetic", // no version gate on a Bun consumer
+        runtime: "node",
+        runtimeVersion: atOrAboveRuntime,
         version: "0.0.0-synthetic", // fixture payload carried through, never compared
         current: false,
         disposition: "upgraded",
@@ -365,6 +367,18 @@ describe("store activation barrier", () => {
     );
     expect(error.message).toContain("current coordinator");
     expect((await metaOf(context)).authority_state).toBe("staged");
+  });
+
+  test("a consumer declaring any runtime other than node is refused by name", async () => {
+    const { context, apply } = await stagedFixture("activation-bun-consumer-");
+    // Bun is this project's development toolchain, never a runtime a consumer
+    // runs on, so the vocabulary has no Bun entry to leave ungated.
+    const bunConsumer = attestation().consumers.map((consumer) => ({ ...consumer, runtime: "bun" })) as unknown as ActivationAttestation["consumers"];
+    const refused = await refusalOf("store.attestation-invalid", () =>
+      activateStore(context, apply, attestation({ consumers: bunConsumer })),
+    );
+    expect(refused.message).toContain('.runtime must be "node"');
+    expect(refused.message).toContain("Bun is this project's development toolchain");
   });
 
   test("activation refuses a below-floor consumer as incompatible, and a running session as unquiesced", async () => {

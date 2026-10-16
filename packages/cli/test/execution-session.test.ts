@@ -27,6 +27,7 @@
  *   and passes the phase-6 projection.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,6 +49,12 @@ import {
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = process.env.MSTAR_CLI_ENTRY ?? join(CLI_ROOT, "src/index.ts");
+
+/** Injected current runtime for a `node` consumer: at/above the declared floor. */
+const atOrAboveRuntime = (() => {
+  const floor = readDeclaredNodeFloor() ?? "0.0.0";
+  return `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`;
+})();
 
 const WORKFLOW_ID = "wf-exec-session";
 const PLAN_ID = "20260921-execution-session-plan";
@@ -316,10 +323,8 @@ function attestationFor(priorSessionId: string): Record<string, unknown> {
         entryId: "mstar-cli",
         kind: "coordinator",
         entrypoint: "packages/cli/src/index.ts",
-        runtime: "bun",
-        // Synthetic runtime/plugin versions, not release numbers; bun consumers
-        // carry no runtime floor.
-        runtimeVersion: "0.0.0-synthetic",
+        runtime: "node",
+        runtimeVersion: atOrAboveRuntime,
         version: "0.0.0-synthetic",
         current: true,
         disposition: "reloaded",

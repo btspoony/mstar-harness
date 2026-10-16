@@ -252,7 +252,19 @@ export function readDeclaredNodeFloor(): string | null {
     // engines.node (a higher one refuses a supported runtime; a lower one
     // weakens the gate).
     const name = manifest["name"];
-    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli") continue;
+    if (
+      name !== "morning-star" &&
+      name !== "@mstar-harness/engine" &&
+      name !== "@mstar-harness/cli" &&
+      // Host plugins embed this engine and declare the same Node floor, so a
+      // bundled extension (an omp coordinator, for one) can still resolve it.
+      name !== "@mstar-harness/omp" &&
+      name !== "@mstar-harness/dsh" &&
+      name !== "@mstar-harness/opencode" &&
+      name !== "@mstar-harness/opencode-v2"
+    ) {
+      continue;
+    }
     const engines = manifest["engines"];
     if (engines === null || typeof engines !== "object" || !("node" in engines)) continue;
     const node = engines.node;
