@@ -57,6 +57,8 @@ import { prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
+import { deliveryBranchOf } from "../src/workflow.js";
+import { integrationAnchors } from "../src/coordination-transitions.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-workflow-"));
 afterAll(() => {
@@ -275,7 +277,16 @@ async function workflowFixture(
       project: "harness",
       compass_ref: COMPASS_REF,
       ...(workflowType === "plan" ? { delivery_kind: "development" } : {}),
-      branch: { base: "main", source: SOURCE_BRANCH, target: "main", integration: INTEGRATION_BRANCH },
+      // A plan workflow registers `{base, work, target}`; an iteration registers
+      // `{base, integration, target}` (its delivery line IS the integration
+      // branch). The integration anchor stays on the plan fixture because the
+      // integration-checkout transitions read it.
+      branch: {
+        base: "main",
+        ...(workflowType === "plan" ? { work: SOURCE_BRANCH } : {}),
+        target: "main",
+        integration: INTEGRATION_BRANCH,
+      },
       integration_worktree_path: integrationPath,
       execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
       plans: planIds.map((id) => ({
@@ -2683,5 +2694,386 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
       }),
     );
     expect(refusal.code).toBe("store.not-initialized");
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * §3 the delivery-anchor repair
+ * ------------------------------------------------------------------------ */
+
+describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
+  test("a registered workflow's anchors are corrected member by member and repaired again later", async () => {
+    const fixture = await workflowFixture("delivery-anchors");
+    const initial = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(initial.branch).toMatchObject({ base: "main", work: SOURCE_BRANCH, target: "main" });
+
+    const receipt = await workflowMutation(fixture, "op-anchors-pair", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/registered-by-mistake", target: "release" },
+      reason: "the registered delivery branch was the delivery target",
+    });
+    expect(receipt.replayed).toBe(false);
+    const state = receipt.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    // Merged, not replaced: the anchors named here move, and every member the
+    // operation does NOT name keeps the value the header already carried.
+    expect(state.branch).toEqual({
+      base: "main",
+      work: "fix/registered-by-mistake",
+      target: "release",
+      integration: INTEGRATION_BRANCH,
+    });
+    // The anchors it named are the only identity values that moved.
+    expect(identityAnchors(state)).toEqual({
+      ...identityAnchors(initial),
+      branch: {
+        base: "main",
+        work: "fix/registered-by-mistake",
+        target: "release",
+        integration: INTEGRATION_BRANCH,
+      },
+    });
+    // The reason is part of the RECORDED intent, not decoration: reusing this
+    // operation id with a different reason is a different request, disclosed as
+    // a conflict instead of replayed as the first repair.
+    const conflicting = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-pair", {
+        kind: "delivery-anchors",
+        branch: { work: "fix/registered-by-mistake", target: "release" },
+        reason: "a different reason for the same anchors",
+      }),
+    );
+    expect(conflicting.code).toBe("execution.operation-conflict");
+
+    // One anchor is repairable on its own: the anchor the operation does not
+    // name keeps the value the workflow already registers.
+    const single = await workflowMutation(fixture, "op-anchors-target", {
+      kind: "delivery-anchors",
+      branch: { target: "main" },
+      reason: "the target was wrong too",
+    });
+    expect((single.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "main",
+      work: "fix/registered-by-mistake",
+      target: "main",
+      integration: INTEGRATION_BRANCH,
+    });
+
+    // Revisable and repeatable: a third correction on the same RUNNING workflow
+    // is a fresh operation — no create-only rule, no precondition tying the
+    // anchors to the row's recorded working branch.
+    const again = await workflowMutation(fixture, "op-anchors-again", {
+      kind: "delivery-anchors",
+      branch: { work: SOURCE_BRANCH },
+      reason: "restore the registered delivery branch now that the row branch is known",
+    });
+    expect(again.replayed).toBe(false);
+    expect(again.recovery?.outcome).toBe("applied");
+    expect((again.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "main",
+      work: SOURCE_BRANCH,
+      target: "main",
+      integration: INTEGRATION_BRANCH,
+    });
+  });
+
+  test("the deprecated source spelling of the delivery branch still reads, and a named work replaces it", async () => {
+    // The compatibility contract: a row registered BEFORE the rename carries
+    // `branch.source`, and every consumer must resolve it exactly as it resolves
+    // `branch.work`. The helper is the one resolver.
+    const fixture = await workflowFixture("delivery-anchors-legacy");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.branch = { source: SOURCE_BRANCH, target: "main" };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    const legacy = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(deliveryBranchOf(legacy.branch)).toBe(SOURCE_BRANCH);
+
+    // A correction that names `work` replaces the deprecated key: one row never
+    // carries both spellings of the delivery branch.
+    const repaired = await workflowMutation(fixture, "op-anchors-legacy", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/renamed" },
+      reason: "record the delivery branch under its current name",
+    });
+    const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.branch).toEqual({ work: "fix/renamed", target: "main" });
+    expect(deliveryBranchOf(state.branch)).toBe("fix/renamed");
+  });
+
+  test("a row registered before the rename still passes the PR-identity check and still completes", async () => {
+    // The compatibility contract, exercised end to end: a workflow registered
+    // BEFORE the rename stored `branch.source` instead of `branch.work`, and such
+    // a row must still pass the PR-identity check and still close. The header is
+    // rewritten to the pre-rename shape this test's fixture would have had.
+    const fixture = await workflowFixture("delivery-anchors-legacy-close");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.branch = { source: SOURCE_BRANCH, target: "main" };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+
+    // (1) PR identity. The registered delivery branch resolves to the legacy
+    // value, so a contradicting head is still refused BY FIELD VALUE - and the
+    // matching delivery tail is accepted.
+    const contradictory = await refusalOf(() =>
+      workflowMutation(fixture, "op-legacy-contradict", {
+        kind: "delivery",
+        delivery: { pr: { repo: "o/r", head: "feature/somewhere-else", target: "main" } },
+      }),
+    );
+    expect(contradictory.code).toBe("coordination.invalid-transition");
+    const recorded = await workflowMutation(fixture, "op-legacy-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ pr: { head: SOURCE_BRANCH, target: "main" } });
+
+    // (2) The close. `applyLifecycleTransition` consults `consultDeliveryEvidence`
+    // over the stored header, which resolves the delivery branch through the same
+    // helper - so the legacy row completes with no missing-evidence refusal.
+    const closed = await workflowMutation(fixture, "op-legacy-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the pre-rename delivery was verified",
+    });
+    const [stored] = rows(
+      fixture.context,
+      `select json_extract(state_json, '$.status') as status, json_extract(state_json, '$.branch') as branch, ` +
+        `(select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered ` +
+        `from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
+    );
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(stored!.registered).toBe(0);
+    expect(stored!.status).toBe("completed");
+    // The close never rewrites how the row was registered.
+    expect(JSON.parse(String(stored!.branch))).toEqual({ source: SOURCE_BRANCH, target: "main" });
+  });
+
+  test("a repair that leaves the anchors disagreeing with the recorded PR identity warns, and stays silent when it does not", async () => {
+    // The recorded identity is `workflow evidence`'s own frozen fact. It was
+    // checked against the anchors registered at record time, and the close
+    // consultation requires the two to keep agreeing - so a repair that moves one
+    // of them WARNS (it never refuses): the running lifecycle stays repairable,
+    // and the operator learns the one call that puts it back.
+    const fixture = await workflowFixture("delivery-anchors-pr-identity");
+    const recorded = await workflowMutation(fixture, "op-anchors-identity", { kind: "delivery", delivery: DELIVERY_TAIL });
+    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ pr: { head: SOURCE_BRANCH, target: "main" } });
+
+    // (1) the delivery BRANCH moves: `delivery.pr.head` against the resolved
+    // delivery branch is the comparison that fails. The `delivery.pr.target` one
+    // cannot: the anchor this operation does not name keeps the value the
+    // recorded identity was already checked against.
+    const reworked = await workflowMutation(fixture, "op-anchors-rework", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/elsewhere" },
+      reason: "the delivery branch moved after the PR was recorded",
+    });
+    expect(reworked.replayed).toBe(false);
+    expect(reworked.recovery?.outcome).toBe("applied");
+    const [headWarning] = reworked.recovery?.warnings ?? [];
+    expect(headWarning?.code).toBe("workflow.delivery-anchors.pr-identity");
+    expect(headWarning?.message).toContain(`branch.work ${JSON.stringify("fix/elsewhere")}`);
+    expect(headWarning?.message).toContain(`branch.target ${JSON.stringify("main")}`);
+    expect(headWarning?.message).toContain(`delivery.pr.head ${JSON.stringify(SOURCE_BRANCH)}`);
+    expect(headWarning?.message).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
+    expect(headWarning?.message).toContain(
+      `mstar workflow delivery-anchors --workflow ${WORKFLOW_ID} --branch-work ${SOURCE_BRANCH} --branch-target main --reason`,
+    );
+
+    // (2) the anchors agree again: the repair carries no advisory at all.
+    const agreed = await workflowMutation(fixture, "op-anchors-agreed", {
+      kind: "delivery-anchors",
+      branch: { work: SOURCE_BRANCH },
+      reason: "restore the recorded PR identity's delivery branch",
+    });
+    expect(agreed.recovery?.warnings).toEqual([]);
+
+    // (3) the delivery TARGET moves: now `delivery.pr.target` is the comparison
+    // that fails, and the header the repair STORED is the one it warns about.
+    const retargeted = await workflowMutation(fixture, "op-anchors-retarget", {
+      kind: "delivery-anchors",
+      branch: { target: "release" },
+      reason: "the PR was retargeted",
+    });
+    const [targetWarning] = retargeted.recovery?.warnings ?? [];
+    expect(targetWarning?.code).toBe("workflow.delivery-anchors.pr-identity");
+    expect(targetWarning?.message).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
+    expect(targetWarning?.message).toContain(`branch.target ${JSON.stringify("release")}`);
+    const state = retargeted.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    // The message describes the anchors THIS transaction stored, never a snapshot
+    // read before it.
+    expect(state.branch).toMatchObject({ target: "release" });
+  });
+
+  test("a repair on a workflow with no recorded PR identity carries no advisory", async () => {
+    const fixture = await workflowFixture("delivery-anchors-no-pr");
+    const repair = await workflowMutation(fixture, "op-anchors-no-pr", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/registered-by-mistake" },
+      reason: "the registered delivery branch was the delivery target",
+    });
+    // Nothing has been frozen yet, so there is no identity to disagree with.
+    expect(repair.recovery?.warnings).toEqual([]);
+    const state = repair.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.branch).toMatchObject({ work: "fix/registered-by-mistake" });
+  });
+
+  test("an iteration workflow's base and integration anchors survive a single-anchor correction", async () => {
+    // The reachable input a wholesale pair replacement destroyed: an iteration
+    // workflow registers its own `{base, integration, target}` anchors, and a
+    // target-only repair names exactly one of them.
+    const fixture = await workflowFixture("delivery-anchors-iteration", [], "iteration");
+    const initial = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(initial.branch).toMatchObject({ base: "main", integration: INTEGRATION_BRANCH, target: "main" });
+    // The consumer of the members the operation does not name resolves before
+    // the repair, on the registered header.
+    expect(integrationAnchors(initial as unknown as WorkflowSnapshot, PLAN_ID)).toEqual({
+      targetBranch: INTEGRATION_BRANCH,
+      worktreePath: fixture.integrationPath,
+    });
+
+    const repaired = await workflowMutation(fixture, "op-anchors-iteration", {
+      kind: "delivery-anchors",
+      branch: { target: "release" },
+      reason: "the iteration's delivery target was registered on the wrong branch",
+    });
+    expect(repaired.replayed).toBe(false);
+    const state = repaired.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.branch).toEqual({
+      base: "main",
+      target: "release",
+      integration: INTEGRATION_BRANCH,
+    });
+    // base/integration are exactly where they were, so the integration consumer
+    // still resolves - the call that used to fail once the pair was replaced.
+    expect(integrationAnchors(state as unknown as WorkflowSnapshot, PLAN_ID)).toEqual({
+      targetBranch: INTEGRATION_BRANCH,
+      worktreePath: fixture.integrationPath,
+    });
+
+    // Revisable and repeatable: a further correction preserves what it does not
+    // name just the same.
+    const repeated = await workflowMutation(fixture, "op-anchors-iteration-again", {
+      kind: "delivery-anchors",
+      branch: { target: "release/v2" },
+      reason: "the delivery target moved to its own branch",
+    });
+    expect((repeated.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "main",
+      target: "release/v2",
+      integration: INTEGRATION_BRANCH,
+    });
+  });
+
+  test("a repair may name only the anchor members its own lifecycle type carries", async () => {
+    // The shape gate admits the union of both types' members; the type lives on
+    // the header, so the membership decision happens where the header is in
+    // hand. An iteration carries `base` / `integration` / `target`: `branch.work`
+    // is a `type: plan` delivery anchor, and storing it here would leave a key no
+    // iteration consumer reads while the projection reports it as a delivery
+    // branch.
+    const fixture = await workflowFixture("delivery-anchors-type-members", [], "iteration");
+    const before = await workflowFootprint(fixture.context);
+    const workRefusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-iteration-work", {
+        kind: "delivery-anchors",
+        branch: { work: "fix/wrong-type" },
+        reason: "the delivery branch of another lifecycle type",
+      }),
+    );
+    expect(workRefusal.code).toBe("coordination.invalid-transition");
+    expect(workRefusal.message).toContain('type "iteration"');
+    expect(workRefusal.message).toContain("branch.work");
+    expect(workRefusal.message).toContain("branch.base | branch.target");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // The anchors the type DOES carry stay revisable, and the header never gains
+    // the `work` key the repair refused.
+    const based = await workflowMutation(fixture, "op-anchors-iteration-base", {
+      kind: "delivery-anchors",
+      branch: { base: "release/root" },
+      reason: "the iteration's creation anchor was registered on the wrong branch",
+    });
+    const iterationBranch = (based.data.workflows[0]!.state as unknown as Record<string, unknown>).branch as Record<string, unknown>;
+    expect(iterationBranch).toEqual({ base: "release/root", target: "main", integration: INTEGRATION_BRANCH });
+    expect(Object.hasOwn(iterationBranch, "work")).toBe(false);
+
+    // A plan still names all three, exactly as before.
+    const planFixture = await workflowFixture("delivery-anchors-type-members-plan");
+    const plan = await workflowMutation(planFixture, "op-anchors-plan-all", {
+      kind: "delivery-anchors",
+      branch: { base: "release/root", work: "fix/repointed", target: "release" },
+      reason: "all three anchors of a plan lifecycle are revisable together",
+    });
+    expect((plan.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "release/root",
+      work: "fix/repointed",
+      target: "release",
+      integration: INTEGRATION_BRANCH,
+    });
+
+    // `integration` still has no writer on either type.
+    const integrationRefusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-iteration-integration", {
+        kind: "delivery-anchors",
+        branch: { integration: INTEGRATION_BRANCH },
+        reason: "the integration anchor is not writable here",
+      } as never),
+    );
+    expect(integrationRefusal.code).toBe("coordination.forbidden-field");
+  });
+
+  test("an anchorless, empty or reason-less repair is refused with no mutation", async () => {
+    const fixture = await workflowFixture("delivery-anchors-refusals");
+    const before = await workflowFootprint(fixture.context);
+    const cases: ReadonlyArray<readonly [string, unknown, string]> = [
+      ["both anchors absent", { kind: "delivery-anchors", branch: {}, reason: "operator correction" }, "coordination.invalid-input"],
+      ["no branch member", { kind: "delivery-anchors", reason: "operator correction" }, "coordination.invalid-input"],
+      ["an empty work", { kind: "delivery-anchors", branch: { work: "   " }, reason: "operator correction" }, "coordination.invalid-input"],
+      ["a non-string target", { kind: "delivery-anchors", branch: { target: 42 }, reason: "operator correction" }, "coordination.invalid-input"],
+      ["no reason", { kind: "delivery-anchors", branch: { work: "fix/corrected" } }, "coordination.invalid-input"],
+      ["an empty reason", { kind: "delivery-anchors", branch: { work: "fix/corrected" }, reason: "" }, "coordination.invalid-input"],
+      // A member key inside the pair is the shared exact-key refusal, so the
+      // pair can never become a partial header patch by another name.
+      ["a key the pair does not own", { kind: "delivery-anchors", branch: { work: "fix/corrected", integration: "x" }, reason: "operator correction" }, "coordination.forbidden-field"],
+      // The deprecated spelling is a READ alias only: the operation names `work`,
+      // so a row can never be given both spellings of its delivery branch.
+      ["the deprecated source spelling", { kind: "delivery-anchors", branch: { source: "fix/corrected" }, reason: "operator correction" }, "coordination.forbidden-field"],
+    ];
+    for (const [label, operation, code] of cases) {
+      const refusal = await refusalOf(() => workflowMutation(fixture, `op-anchors-${label}`, operation as never));
+      expect(`${label} -> ${refusal.code}`).toBe(`${label} -> ${code}`);
+    }
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("a closed lifecycle keeps refusing the repair through the pre-existing amend guard", async () => {
+    const fixture = await workflowFixture("delivery-anchors-terminal");
+    // The state the workflow-wide amend guard is reachable from: the header
+    // already records its terminal outcome while its ACTIVE registry row remains
+    // (the residue a crashed close leaves). A FULLY closed workflow refuses
+    // earlier, in address resolution - `coordination.workflow-not-found`, the
+    // refusal the terminal-close case above already asserts - so no repair
+    // reaches a retained history header.
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "update execution_workflows set state_json = json_set(state_json, '$.status', 'stopped', '$.ended_at', ?) where workflow_id = ?",
+      ).run("2026-01-05T06:07:08.000Z", WORKFLOW_ID);
+    });
+    const before = await workflowFootprint(fixture.context);
+    const refusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-closed", {
+        kind: "delivery-anchors",
+        branch: { work: "fix/corrected" },
+        reason: "correct the anchor after the close",
+      }),
+    );
+    // The repair carries no terminal-state rule of its own: the guard that
+    // already refuses every other operation kind refuses this one too, naming
+    // the status it observed.
+    expect(refusal.code).toBe("coordination.invalid-transition");
+    expect(refusal.details.status).toBe("stopped");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 });

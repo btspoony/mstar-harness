@@ -59,7 +59,8 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
         plan: { id, title, file: `plans/${basename(file)}` },
         deliveryKind: "development" as const,
         project: "_default",
-        branchSource: `feature/${workflowId}`,
+        branchBase: "main",
+        branchWork: `feature/${workflowId}`,
         branchTarget: "main",
         startedAt: "2026-10-09T00:00:00.000Z",
       },
@@ -78,6 +79,13 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     expect((await getCatalog(context, { kind: "plan", id: "20261009-atomic-plan" })).entity.title).toBe("Atomic plan");
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
     expect(existsSync(join(harnessDir, "workflows", "wf-atomic", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
+
+    // The registered header records the CURRENT branch vocabulary, in the one
+    // place a plan workflow's anchors are fixed: the branch it was created from,
+    // its delivery branch and its PR target - never the pre-rename `source`
+    // spelling.
+    const [registered] = (await readExecutionState(context)).data.workflows;
+    expect(registered!.state.branch).toEqual({ base: "main", work: "feature/wf-atomic", target: "main" });
 
     await expect(
       registerShippedCatalogExecution(execution, {

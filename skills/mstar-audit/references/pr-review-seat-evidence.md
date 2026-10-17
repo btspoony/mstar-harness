@@ -34,7 +34,7 @@ Read-only seat contract for the `pr` variant's three-stage pipeline — Stage 1 
 
 ## Handoff
 
-- The **main agent** extracts your payload and writes / consolidates the evidence files for you (`references/pr-review.md` § Local report archive naming contract — `<YYYY-MM-DD>-pr<N>-stage1-<slug>.md` / `-stage2-<slug>.md`). Your payload is the file's content source; you never need to write it yourself.
+- The **main agent** extracts your payload and writes / consolidates the evidence files for you (`references/pr-review.md` § Local report archive naming contract — `stage1-<slug>.md` / `stage2-<slug>.md` in the run directory under `{REVIEW_DIR}`). Your payload is the file's content source; you never need to write it yourself.
 
 ## Hard Rules (verbatim)
 

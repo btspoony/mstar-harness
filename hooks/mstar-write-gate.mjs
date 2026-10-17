@@ -33,7 +33,7 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename5, dirname as dirname6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
+import { basename as basename5, dirname as dirname6, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
 import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
@@ -42,20 +42,20 @@ import { randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
 import { execFileSync as execFileSync2 } from "node:child_process";
 import { basename as basename6, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
-import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep7 } from "node:path";
+import { basename as basename7, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
 import { createHash as createHash8 } from "node:crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync13, readdirSync as readdirSync9, statSync as statSync5 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep9 } from "node:path";
+import { dirname as dirname9, isAbsolute as isAbsolute8, join as join16, resolve as resolve12, sep as sep8 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename9, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
+import { basename as basename8, dirname as dirname10, join as join17, resolve as resolve13 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync8 } from "node:fs";
-import { basename as basename12, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename11, dirname as dirname13, join as join19, relative as relative6, resolve as resolve15 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
+import { basename as basename12, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
 import { readFileSync as readFileSync21 } from "node:fs";
 import { join as join28 } from "node:path";
@@ -499,6 +499,7 @@ var MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
 var MSTARC_SPECS_DIR_KEY = "specs_dir";
 var MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
 var MSTARC_PROJECT_DIR_KEY = "project_dir";
+var MSTARC_REVIEW_DIR_KEY = "review_dir";
 var MSTARC_ENFORCEMENT_KEY = "enforcement";
 var CONFIG_KEYS;
 var init_mstarc = __esm(() => {
@@ -511,6 +512,7 @@ var init_mstarc = __esm(() => {
     [MSTARC_SPECS_DIR_KEY]: "specsDir",
     [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
     [MSTARC_PROJECT_DIR_KEY]: "projectDir",
+    [MSTARC_REVIEW_DIR_KEY]: "reviewDir",
     [MSTARC_ENFORCEMENT_KEY]: "enforcement",
     jev_mode: "jevMode",
     jev_transport: "jevTransport"
@@ -10394,7 +10396,7 @@ function validateStatusV2(docOrPath, opts = {}) {
         violations.push(violation2("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
       }
       if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation2("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`audit promote\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+        violations.push(violation2("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
       }
     }
   }
@@ -10809,7 +10811,6 @@ var AUDIT_EFFORTS;
 var AUDIT_RISKS;
 var AUDIT_CONFIDENCES;
 var AUDIT_CATEGORIES;
-var AUDIT_STATUS_FIELDS;
 var WHOLE_MATCH_PATTERNS;
 var VALUE_PATTERNS;
 var NEVER_COMMIT_FILENAMES;
@@ -10823,6 +10824,7 @@ var AUDIT_SEVERITY_ORDER;
 var DEFAULT_IGNORABLE_RE;
 var LONE_SURROGATE_RE;
 var init_audit = __esm(() => {
+  init_path();
   AUDIT_PRIORITIES = ["P1", "P2", "P3"];
   AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
   AUDIT_RISKS = ["LOW", "MED", "HIGH"];
@@ -10838,7 +10840,6 @@ var init_audit = __esm(() => {
     "docs",
     "direction"
   ];
-  AUDIT_STATUS_FIELDS = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"];
   WHOLE_MATCH_PATTERNS = [
     { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
     { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
@@ -10943,7 +10944,8 @@ var init_recovery_intent = __esm(() => {
     lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
     "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
     "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
-    delivery: ["workflowId", "operation.kind", "operation.delivery"]
+    delivery: ["workflowId", "operation.kind", "operation.delivery"],
+    "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
   };
 });
 function resolveRelativePath(raw, label) {
@@ -11221,7 +11223,7 @@ function isPathWithin(root, candidate) {
   const child = canonicalPath(candidate);
   if (child === parent)
     return true;
-  return child.startsWith(parent.endsWith(sep5) ? parent : `${parent}${sep5}`);
+  return child.startsWith(parent.endsWith(sep4) ? parent : `${parent}${sep4}`);
 }
 function refuseUnlessSameGeneration(live, expected, what) {
   if (live.storeId !== expected.storeId) {
@@ -14524,6 +14526,8 @@ function hasFiles(dir) {
     return false;
   }
 }
+var REVIEW_RUN_LEVELS;
+var REVIEW_DATE_RE;
 var SCAFFOLD_DIRS;
 var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 # Principle: process stays local; results are shared with the team.
@@ -14554,7 +14558,9 @@ var init_path = __esm(() => {
   init_mstarc();
   init_project();
   init_store_db();
-  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"];
+  REVIEW_RUN_LEVELS = ["quick", "standard", "deep"];
+  REVIEW_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd", "reviews"];
   GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
 `).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
   GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
@@ -14582,6 +14588,13 @@ var init_plan_path = __esm(() => {
     "working branch": true
   };
 });
+function deliveryBranchOf(branch) {
+  if (!isPlainObject(branch))
+    return;
+  if (nonEmptyString(branch.work))
+    return branch.work;
+  return nonEmptyString(branch.source) ? branch.source : undefined;
+}
 function validateIntegrationMergeLease(lease) {
   const violations = [];
   if (!isPlainObject(lease)) {
@@ -14765,7 +14778,7 @@ function validateWorkflowSnapshot(doc) {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation7("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "source", "integration", "target"]) {
+      for (const key of ["base", "work", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation7("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -14818,6 +14831,9 @@ function validateWorkflowSnapshot(doc) {
 }
 function isTerminalSnapshot(doc) {
   return WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
+}
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
 }
 var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 var WORKFLOW_LIFECYCLE_STATUSES;
@@ -14886,7 +14902,6 @@ var ROOT_KINDS3;
 var DOCUMENT_KINDS3;
 var RELATIONS4;
 var init_catalog_registration = __esm(() => {
-  init_audit();
   init_catalog();
   init_coordination_write();
   init_path();
@@ -14992,9 +15007,16 @@ function readMainWorktree(cwd) {
   }
 }
 var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var deliveryAnchorFlags;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
   init_workflow();
+  deliveryAnchorFlags = {
+    base: "--branch-base",
+    work: "--branch-work",
+    target: "--branch-target",
+    integration: null
+  };
   QC_ALIGNMENT_FIELDS = [
     { key: "planId", label: "plan_id" },
     { key: "reviewRange", label: "Review range" },
@@ -16513,7 +16535,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve15(targetPath);
-  const name = basename12(resolved);
+  const name = basename11(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -16560,7 +16582,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -16588,7 +16610,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename12(filePath)} content must be a JSON object`
+          message: `${basename11(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -16678,7 +16700,7 @@ function landedPathOf(filePath) {
         const parent = dirname14(probe);
         if (parent === probe)
           return resolve16(filePath);
-        suffix.unshift(basename13(probe));
+        suffix.unshift(basename12(probe));
         probe = parent;
         continue;
       }
@@ -16690,13 +16712,13 @@ function landedPathOf(filePath) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!isStoreAuthorityName(basename13(target)))
+  if (!isStoreAuthorityName(basename12(target)))
     return false;
   return isHarnessRootDir(dirname14(target));
 }
 function caseFoldedDocKind(candidate) {
   const target = resolve16(candidate);
-  const name = basename13(target);
+  const name = basename12(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
@@ -16733,6 +16755,7 @@ init_iteration();
 var WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
 var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
 var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
+init_path();
 init_audit();
 var MUST_FIX_FIRST = 45;
 var MUST_FIX_EACH_ADDITIONAL = 15;
@@ -17161,7 +17184,7 @@ async function captureExecutionProjectionSources(context) {
         endedAt: text4(projectionState.ended_at),
         updatedAt: text4(projectionState.updated_at),
         branchBase: text4(branch.base),
-        branchSource: text4(branch.source),
+        branchSource: text4(deliveryBranchOf(branch)),
         branchIntegration: text4(branch.integration),
         branchTarget: text4(branch.target),
         activeRegistration: registryIds.has(item.workflow_id)
@@ -18404,7 +18427,6 @@ init_catalog_registration();
 init_coordination_write();
 init_execution_store();
 init_recovery_intent();
-init_audit();
 init_workflow();
 init_catalog_import();
 init_catalog();

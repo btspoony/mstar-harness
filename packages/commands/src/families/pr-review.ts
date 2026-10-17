@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, unlinkSync, openSync, fstatSync, 
 import path from "node:path";
 import {
   computePrTally, planReviewPost, prReviewReportPath, prReviewSeatPrompt, prReviewSizing,
-  resolvePrReviewTier, PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS, validatePrReviewReport,
+  resolvePrReviewTier, resolveReviewDir, PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS, validatePrReviewReport,
   type MergeClass, type PrReportTarget, type ReviewPostPlan,
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
@@ -17,21 +17,21 @@ const verbs = ["tally", "report-path", "validate-report", "post", "worktree-clea
 type Verb = (typeof verbs)[number];
 type Input = {
   findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string;
-  reportsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
+  reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
   pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
   base?: string; head?: string; largestFileTotal?: string;
   domain?: string; seat?: string; worktree?: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string; collectFolded?: boolean; remainingMinutes?: string;
 };
 const inputSchema = z.object({
   findings: z.string().optional(), unverified: z.string().optional(), unmetAcUnsafe: z.string().optional(), unmetAcSafe: z.string().optional(),
-  reportsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
+  reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
   pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
   tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; all counts default to zero and are limited to 0–50." },
-  "report-path": { args: [], options: [{ key: "reportsDir", flags: "--reports-dir <dir>", required: true }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path from reportsDir, PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
+  "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
   "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false, help: "Only true is an explicit saved-report assertion; otherwise the recorded sidecar must already say true." }], effects: ["read", "write", "process"], description: "Remove the recorded PR-review worktree and branch only when --report-saved=true or the recorded sidecar says reportSaved=true, and only when the supplied branch matches its recorded branch." },
@@ -117,7 +117,8 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const stage = input.stage === undefined ? undefined : input.stage === "1" ? 1 : input.stage === "2" ? 2 : (() => { throw new UsageError("--stage must be 1 or 2"); })();
       if ((stage !== undefined) !== (input.slug !== undefined)) throw new UsageError("--stage and --slug go together");
       if (input.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new UsageError("--date must be YYYY-MM-DD");
-      return ok(id, { path: prReviewReportPath({ reportsDir: abs(context.cwd, need(input.reportsDir, "--reports-dir")), target: parseTarget(need(input.target, "--target")), ...(stage ? { stage } : {}), ...(input.slug ? { slug: input.slug } : {}), ...(input.date ? { date: input.date } : {}) }) });
+      const reviewsDir = input.reviewsDir === undefined ? resolveReviewDir(context.cwd) : abs(context.cwd, input.reviewsDir);
+      return ok(id, { path: prReviewReportPath({ reviewsDir, target: parseTarget(need(input.target, "--target")), ...(stage ? { stage } : {}), ...(input.slug ? { slug: input.slug } : {}), ...(input.date ? { date: input.date } : {}) }) });
     }
     if (verb === "validate-report") {
       const file = abs(context.cwd, need(input.reportFile, "report file"));
@@ -232,6 +233,7 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
       ...contract.args.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
       ...contract.options.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
       ...(verb === "report-path" ? [
+        { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },
         { name: "stage", ownership: "caller" as const, route, required: true, condition: { field: "slug", present: true }, constraint: "stage and slug must be supplied together" },
         { name: "slug", ownership: "caller" as const, route, required: true, condition: { field: "stage", present: true }, constraint: "stage and slug must be supplied together" },
         { name: "date", ownership: "caller" as const, route, required: false, constraint: "defaults to local calendar date" },

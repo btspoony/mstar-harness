@@ -39,6 +39,7 @@ import {
   EXECUTE_PHASE,
   PREPARE_PHASE,
   consultDeliveryEvidence,
+  deliveryBranchOf,
   deriveLifecyclePhase,
   derivePlanRegistration,
   WORKFLOW_SNAPSHOT_FILE,
@@ -454,17 +455,39 @@ describe("validateWorkflowSnapshot — registration-declared fields (contract §
 
 describe("consultDeliveryEvidence — pure delivery rules", () => {
   test("accepts complete registered evidence and rejects missing registration or evidence", () => {
+    const delivery = {
+      compound: { outcome: "created" },
+      pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" },
+      merge: { provider: "github", evidence: "verified merge" },
+    };
     const complete = validSnapshot({
       type: "plan",
       delivery_kind: "development",
-      branch: { source: "feature/fixture", target: "main" },
-      delivery: {
-        compound: { outcome: "created" },
-        pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" },
-        merge: { provider: "github", evidence: "verified merge" },
-      },
+      branch: { work: "feature/fixture", target: "main" },
+      delivery,
     });
     expect(consultDeliveryEvidence(complete as never)).toEqual([]);
+
+    // The pre-rename spelling of the delivery branch resolves through the same
+    // reader, so a row registered before the rename passes the identical check...
+    const legacy = validSnapshot({
+      type: "plan",
+      delivery_kind: "development",
+      branch: { source: "feature/fixture", target: "main" },
+      delivery,
+    });
+    expect(consultDeliveryEvidence(legacy as never)).toEqual([]);
+    // ...and the comparison reads the VALUE under either spelling, so a legacy
+    // row whose recorded PR head contradicts it is incomplete like any other.
+    const legacyContradiction = validSnapshot({
+      type: "plan",
+      delivery_kind: "development",
+      branch: { source: "feature/fixture", target: "main" },
+      delivery: { ...delivery, pr: { repo: "btspoony/mstar-harness", head: "feature/elsewhere", target: "main" } },
+    });
+    expect(consultDeliveryEvidence(legacyContradiction as never).map((item) => item.code)).toContain(
+      "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
+    );
 
     const unregistered = consultDeliveryEvidence(validSnapshot({ type: "plan", status: "running", ended_at: undefined }) as never);
     expect(unregistered.map((item) => item.code)).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
@@ -480,6 +503,22 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
     for (const status of ["completed", "failed", "stopped"] as const) {
       expect(consultDeliveryEvidence(validSnapshot({ type: "plan", status }) as never)).toEqual([]);
     }
+  });
+});
+
+describe("the delivery branch spelling — read compatibility", () => {
+  test("deliveryBranchOf resolves work, the pre-rename source, and prefers work when both are carried", () => {
+    expect(deliveryBranchOf({ work: "feature/w", target: "main" })).toBe("feature/w");
+    expect(deliveryBranchOf({ source: "feature/s", target: "main" })).toBe("feature/s");
+    expect(deliveryBranchOf({ work: "feature/w", source: "feature/s" })).toBe("feature/w");
+    expect(deliveryBranchOf({ base: "main" })).toBeUndefined();
+    expect(deliveryBranchOf(undefined)).toBeUndefined();
+  });
+
+  test("the snapshot validator accepts both spellings and still refuses an empty branch anchor", () => {
+    expect(validateWorkflowSnapshot(validSnapshot({ branch: { base: "main", work: "feature/x", target: "main" } })).ok).toBe(true);
+    expect(validateWorkflowSnapshot(validSnapshot({ branch: { source: "feature/x", target: "main" } })).ok).toBe(true);
+    expectViolations(validateWorkflowSnapshot(validSnapshot({ branch: { work: "" } })), "workflow.snapshot.invalid-branch");
   });
 });
 

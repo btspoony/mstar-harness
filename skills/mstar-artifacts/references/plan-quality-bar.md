@@ -1,10 +1,10 @@
 # Plan Quality Bar
 
-The standard every implementation plan must meet before it is locked and dispatched. Applies to `{PLAN_DIR}` main plans, SDD task-briefs derived from them, and audit-generated plans. Extends the Plan 质量门 in **`mstar-phase-gates`** and the `plan.main.md` template.
+The standard every implementation plan must meet before it is locked and dispatched. Applies to `{PLAN_DIR}` main plans and the SDD task-briefs derived from them. Extends the Plan 质量门 in **`mstar-phase-gates`** and the `plan.main.md` template.
 
 ## Core principle: write for a zero-context executor
 
-SDD implementers start with a fresh session — they have not seen the Prepare conversation, the spec, or other tasks. Audit plans may be executed sessions or days later by a different model. If a plan references "the pattern discussed above" or "as agreed in clarify", it is broken.
+SDD implementers start with a fresh session — they have not seen the Prepare conversation, the spec, or other tasks. A plan may be executed sessions or days later by a different model. If a plan references "the pattern discussed above" or "as agreed in clarify", it is broken.
 
 The plan is the spec. Everything the executor needs must be in the file or reachable from a file path it names.
 
@@ -123,7 +123,6 @@ Each task fits **one focused implementer round** — the round closes the task's
 |-------------|---------|
 | PM/architect Prepare | Full bar before `plan(locked)` |
 | SDD task-brief (extracted from plan) | Inherits from plan; `mstar sdd task-brief` carries excerpts forward |
-| Audit-generated plan (`mstar-audit`) | Full bar — audit plans are the most context-isolated |
 | Hotfix (`inline`) | Relaxed — see `mstar-phase-gates` hotfix exception |
 
 ## Attribution

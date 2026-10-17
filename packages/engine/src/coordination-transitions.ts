@@ -14,6 +14,7 @@ import {
 } from "./coordination-write.js";
 import type { PlanRow } from "./status.js";
 import {
+  deliveryBranchOf,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
   type WorkflowSnapshot,
@@ -299,10 +300,12 @@ export type StandaloneDeliveryAnchors = { sourceBranch: string; targetBranch: st
 export function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: string): StandaloneDeliveryAnchors {
   const row = snapshot.plans.find((candidate) => candidate.id === planId);
   const worktreePath = isPlainObject(row?.metadata) ? row.metadata.worktree_path : undefined;
-  const sourceBranch = snapshot.branch?.source;
+  // The delivery branch, whichever spelling the row carries (see
+  // `deliveryBranchOf`): this is the ONE reader of the stored `branch`.
+  const sourceBranch = deliveryBranchOf(snapshot.branch);
   const targetBranch = snapshot.branch?.target;
   if (!isNonEmptyString(sourceBranch) || !isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
-    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered source/target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, source_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
+    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered delivery and target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, delivery_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
   }
   return { sourceBranch, targetBranch, worktreePath };
 }

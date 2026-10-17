@@ -63,7 +63,7 @@ describe("pr-review command family", () => {
   });
   test("report-path refusal preserves its authored target message and usage contract", async () => {
     const { context } = fixture();
-    const result = await command("pr-review.report-path").execute({ reportsDir: ".", target: "unknown" }, context);
+    const result = await command("pr-review.report-path").execute({ reviewsDir: ".", target: "unknown" }, context);
     expect(result).toMatchObject({
       status: "usage",
       code: "command.invalid-input",

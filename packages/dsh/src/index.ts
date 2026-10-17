@@ -202,7 +202,7 @@ declare module '@deepseek-ai/cordis' {
     'mstar/skill-lint'(payload: SkillLintAdvisory): void
     /**
      * Advisory: an artifact-scoped write-intent (DESIGN.md / DESIGN.dark.md,
-     * audit plan files under `plans/audit-*`, knowledge docs under
+     * review reports under `{REVIEW_DIR}`, knowledge docs under
      * `{HARNESS_DIR}/knowledge/`, mstar-roles SKILL.md + references) found
      * engine violations in the pre-write on-disk document (warn mode), was
      * allowed as a hard-mode repair escape, or degraded to allow. Emitted

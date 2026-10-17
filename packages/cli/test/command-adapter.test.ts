@@ -103,6 +103,20 @@ describe("generated CLI adapter", () => {
     expect(decoded.diagnostics).toEqual([]);
     expect(decoded.input.progress).toEqual(payload);
   });
+  test("a plan.progress refusal recovery names the JSON progress object, never a bare status", async () => {
+    const fixture = await cliHarness();
+    const refused = await run(
+      ["plan", "progress", "--workflow", "wf-absent", "--plan", "p-absent",
+        "--progress", JSON.stringify({ status: "InProgress", summary: "started", evidence_paths: [] })],
+      getCommandDefinitions(),
+      false,
+      { ...fixture.invocation, sessionId: "progress-recovery" },
+    );
+    expect(refused.status).toBe(1);
+    const envelope = JSON.parse(refused.stdout) as { details?: { recovery?: string } };
+    expect(envelope.details?.recovery).toContain("JSON progress object");
+    expect(envelope.details?.recovery).not.toContain("--progress <status>");
+  });
   test("registered workflow-note append accepts acquired CLI context identities and rejects unsafe selectors", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "cli-note-identity-"));
     const harnessDir = path.join(root, ".mstar");
@@ -604,6 +618,24 @@ describe("schema selector routes", () => {
     // tracks is the typed array, not an opaque placeholder.
     expect(envelope.data.descriptor.input.properties.tracks).toMatchObject({ type: "array" });
     expect(envelope.data.descriptor.payloadSchemas).toHaveProperty("tracks");
+  });
+
+  test("plan.progress publishes the PlanProgress payload and its help names the JSON object", async () => {
+    const result = await run(["schema", "--command", "plan.progress"]);
+    expect(result.status).toBe(0);
+    const envelope = JSON.parse(result.stdout) as {
+      data: { descriptor: { payloadFields: Record<string, Array<{ name: string }>> } };
+    };
+    // The published contract is the engine's accepted shape, named once.
+    expect(envelope.data.descriptor.payloadFields.progress?.map((field) => field.name))
+      .toEqual(expect.arrayContaining(["status", "summary", "evidence_paths"]));
+
+    const help = await run(["plan", "progress", "--help"]);
+    expect(help.status).toBe(0);
+    // commander wraps option help at the terminal width; compare unwrapped prose.
+    const helpText = help.stdout.replace(/\s+/g, " ");
+    expect(helpText).toContain("JSON progress object");
+    expect(helpText).toContain("mstar schema PlanProgress");
   });
 
   test("CLI --family returns a compact member list", async () => {

@@ -87,6 +87,25 @@ describe("store and execution command surface", () => {
     });
   });
 
+  test("the control-root refusal names the observed fact, both admitted invocations and the sanctioned route", async () => {
+    const root = fixture("execution-control-root");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    // The invocation's control root IS the resolved target: the guard exists to
+    // keep a control root's own store out of the execution family, and all three
+    // verbs share `executionContext`, so all three must explain the refusal.
+    for (const id of ["store.execution.export", "store.execution.restore", "store.execution.restore-preview"]) {
+      const result = await invoke(definition(id), { harness }, root, harness);
+      expect(result).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+      const message = result.status === "usage" ? result.message : "";
+      // `harness` is already absolute, so it is exactly what the guard resolves.
+      expect(message).toContain(`the resolved target ${harness} is this invocation's control root`);
+      expect(message).toContain("--harness <absolute-path>");
+      expect(message).toContain("no control root is discovered");
+      expect(message).toContain("mstar store backup");
+    }
+  });
+
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
     const root = fixture("store-lifecycle");
     const harness = join(root, ".mstar");

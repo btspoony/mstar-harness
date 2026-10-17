@@ -96,14 +96,20 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(details === undefined ? {} : { details }),
-   recovery: id === "plan.bind"
+   recovery: id === "plan.complete" && code === "coordination.scope-mismatch"
+        ? details !== undefined && "expected" in details && "actual" in details
+          ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
+          // No recorded scope at all: there is no anchor to compare, so the repair
+          // is to record the row's worktree and branch, not to re-register one.
+          : "The plan records no worktree/branch scope. Record the plan worktree and feature branch with mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>, then retry."
+        : id === "plan.bind"
         ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
         : id === "plan.show"
           ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
           : id === "plan.prepare"
             ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
             : id === "plan.progress"
-              ? "The progress payload and plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <status>."
+              ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
               : id === "plan.issue-add"
                 ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
                 : id === "plan.issue-close"
@@ -370,6 +376,13 @@ const PLAN_BIND_EXPECT_HELP = `CAS expectation for the bound workflow: coordinat
 function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<string, string>> {
   if (verb === "bind") return { expect: PLAN_BIND_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
   if (verb === "show") return { sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
+  if (verb === "progress") return {
+    // The value is the JSON progress object, not a bare status word: the accepted
+    // shape is the engine's `validatePlanProgress` contract, published as PlanProgress.
+    progress: "JSON progress object with status (InProgress|InReview|Blocked), summary and evidence_paths; read the shape with mstar schema PlanProgress",
+    expect: PLAN_EXPECT_HELP,
+    sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,
+  };
   return { expect: PLAN_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
 }
 export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
@@ -398,7 +411,10 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
           ? inputSchema.extend({ evidence: completionEvidenceSchema.optional() })
           : inputSchema,
       payloads: Object.fromEntries(
-        (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
+        (payloadByVerb[verb] ?? []).map((field) => [field, {
+          schema: payloadSchemaFor(verb, field),
+          ...(verb === "progress" ? { registryName: "PlanProgress" } : {}),
+        }]),
       ),
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],

@@ -106,7 +106,7 @@ export type DeliveryLiftDeclaration = {
   workflow: string;
   /** Delivery kind declared for that lift; never inferred or defaulted. */
   deliveryKind: WorkflowDeliveryKind;
-  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
+  /** Delivery branch of the lift, recorded as `branch.work`. Required for `development`. */
   branchSource?: string;
   /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
   branchTarget?: string;
@@ -450,8 +450,13 @@ function buildIterationSnapshot(
 function applyDeliveryLiftDeclaration(snapshot: WorkflowSnapshot, declaration: DeliveryLiftDeclaration): void {
   snapshot.delivery_kind = declaration.deliveryKind;
   if (declaration.branchSource !== undefined || declaration.branchTarget !== undefined) {
+    // The `--delivery` declaration keeps its legacy key (it is the frozen wire
+    // form of the upgrade input, and the conversion digest hashes it verbatim);
+    // the LIFT it produces records the current vocabulary, like every other
+    // writer: `branch.work` is the delivery branch, and only rows registered
+    // before the rename still carry the `source` spelling.
     snapshot.branch = {
-      ...(declaration.branchSource !== undefined ? { source: declaration.branchSource } : {}),
+      ...(declaration.branchSource !== undefined ? { work: declaration.branchSource } : {}),
       ...(declaration.branchTarget !== undefined ? { target: declaration.branchTarget } : {}),
     };
   }
@@ -510,7 +515,14 @@ function applyDeliveryDeclarations(
       );
     }
     try {
-      assertDeliveryRegistrationCoherence(declaration.deliveryKind, declaration, `delivery declaration for ${declaration.workflow}`);
+      // The declaration's own key stays legacy (`branchSource`); the coherence
+      // rule speaks the current vocabulary, so the delivery branch is handed over
+      // under its current name.
+      assertDeliveryRegistrationCoherence(
+        declaration.deliveryKind,
+        { branchWork: declaration.branchSource, branchTarget: declaration.branchTarget, completionPolicy: declaration.completionPolicy },
+        `delivery declaration for ${declaration.workflow}`,
+      );
     } catch (error) {
       throw new DeliveryDeclarationError(`${(error as Error).message}; ${retry([...declared].sort(compareIds))}`);
     }

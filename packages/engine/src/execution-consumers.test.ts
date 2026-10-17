@@ -482,7 +482,7 @@ async function registeredStore(label: string): Promise<StoreContext> {
         harnessDir: context.harnessDir,
         plan: { id: CROSS_PLAN, title: planTitle, file: planFile },
         deliveryKind: "development" as const,
-        branchSource: `feature/${CROSS_WORKFLOW}`,
+        branchWork: `feature/${CROSS_WORKFLOW}`,
         branchTarget: "main",
         project: "_default",
         startedAt: TS,

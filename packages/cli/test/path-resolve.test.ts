@@ -178,7 +178,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
     });
   });
 
-  test("success returns structured harness, specs, workflow and project directories", () => {
+  test("success returns structured harness, specs, workflow, project and review directories", () => {
     withRoot((root) => {
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
@@ -190,6 +190,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
         specsDir: join(root, ".mstar", "specs"),
         workflowDir: join(root, ".mstar", "workflows"),
         projectDir: join(root, ".mstar", "projects"),
+        reviewDir: join(root, ".mstar", "reviews"),
       });
     });
   });

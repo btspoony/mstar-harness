@@ -96,34 +96,17 @@ const DESIGN_BROKEN = DESIGN_VALID.replace('"#ffffff"', '"not-a-color"')
 /** Dark twin missing `gray-1000` → `design-md.parity.missing-dark`. */
 const DESIGN_DARK_PARITY_BROKEN = DESIGN_DARK_VALID.replace('  gray-1000: "#f5f5f5"\n', '')
 
-/** Compliant audit plan Status block (engine fixture shape). */
-const AUDIT_GOOD = `# Fix N+1 query in order list
+/** A review report body (the run README shape) with no plan Status block. */
+const AUDIT_REPORT = `# Codebase audit — standard round 1
 
-## Status
-- **Priority**: P1
-- **Effort**: M
-- **Risk**: MED
-- **Depends on**: none
-- **Category**: perf
-- **Planned at**: commit \`abc1234\`, 2026-08-08
-
-## Problem
+## Findings
 Every order-list render issues 1+N queries.
 `
 
-/** Invalid priority → `audit.status.invalid-priority`. */
-const AUDIT_BROKEN = AUDIT_GOOD.replace('- **Priority**: P1', '- **Priority**: P9')
-
-/** Valid Status block whose body reproduces a secret value (Hard Rule 4). */
+/** Valid report whose body reproduces a secret value (Hard Rule 4). */
 const auditFixturePassword = randomBytes(24).toString('hex')
-const AUDIT_SECRET = `${AUDIT_GOOD}
+const AUDIT_SECRET = `${AUDIT_REPORT}
 const password = "${auditFixturePassword}";
-`
-
-/** No Status block at all → `audit.status.missing-block`. */
-const AUDIT_NO_BLOCK = `# Plan without status
-
-Some body text.
 `
 
 /** schema.yaml-compliant bug-track knowledge doc (engine fixture shape). */
@@ -209,9 +192,9 @@ description: Fixture role hub.
   await writeFile(join(sibling, 'SKILL.md'), `---\nname: mstar-compound\ndescription: Fixture sibling skill.\n---\n\n${loadOrder}`)
 }
 
-/** Audit plan path under `<root>/plans/audit-<date>/` (mstar-audit layout). */
-function auditPlanPath(root: string, name = '001-fix-n1.md'): string {
-  return join(root, 'plans', 'audit-2026-08-08', name)
+/** Review report path under the boot `{REVIEW_DIR}` (`<harness>/reviews`). */
+function reviewReportPath(root: string, name = 'README.md'): string {
+  return join(root, 'harness', 'reviews', '2026-08-08-codebase-standard-1', name)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,19 +220,17 @@ describe('lint*Write — known-doc branch (warn gate; hard veto)', () => {
     expect(typed.violations.map((v) => v.code)).toContain('design-md.tokens.color-format')
   })
 
-  it('audit: broken Status block → warn / veto (audit.status.invalid-priority)', () => {
-    const gate = lintAuditWrite(AUDIT_BROKEN, { target: '/p/001-fix.md', hard: false })
+  it('audit: a report reproducing a secret → warn gate, SeamVetoError in hard mode (audit.secrets.found)', () => {
+    const gate = lintAuditWrite(AUDIT_SECRET, { target: '/r/README.md', hard: false })
     expect(gate.ok).toBe(false)
-    expect(gate.violations.map((v) => v.code)).toContain('audit.status.invalid-priority')
-    expect(() => lintAuditWrite(AUDIT_BROKEN, { target: '/p/001-fix.md', hard: true })).toThrow(SeamVetoError)
+    expect(gate.violations.map((v) => v.code)).toContain('audit.secrets.found')
+    expect(() => lintAuditWrite(AUDIT_SECRET, { target: '/r/README.md', hard: true })).toThrow(SeamVetoError)
   })
 
-  it('audit: secret values join the verdict (audit.secrets.found)', () => {
-    const gate = lintAuditWrite(AUDIT_SECRET, { target: '/p/001-fix.md', hard: false })
-    expect(gate.ok).toBe(false)
-    const codes = gate.violations.map((v) => v.code)
-    expect(codes).not.toContain('audit.status.missing-block')
-    expect(codes).toContain('audit.secrets.found')
+  it('audit: a clean report passes — the validator is the credential scan only', () => {
+    const gate = lintAuditWrite(AUDIT_REPORT, { target: '/r/README.md', hard: true })
+    expect(gate.ok).toBe(true)
+    expect(gate.violations).toEqual([])
   })
 
   it('compound: broken schema → warn / veto (compound.schema.missing-field)', () => {
@@ -442,56 +423,54 @@ describe('design-md gate — fs/write-intent listener', () => {
 })
 
 // ---------------------------------------------------------------------------
-// audit gate — plans/audit-* scope
+// audit gate — {REVIEW_DIR} scope
 // ---------------------------------------------------------------------------
 
-describe('audit gate — fs/write-intent listener (plans/audit-* scope)', () => {
-  it('broken Status block → warn advisory, intent proceeds', async () => {
+describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
+  it('secret values in the on-disk report → warn advisory, intent proceeds', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp()
-    await seedFile(auditPlanPath(root), AUDIT_BROKEN)
+    booted = await bootApp({ root })
+    await seedFile(reviewReportPath(root), AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
 
-    const intent = await booted.ctx.waterfall('fs/write-intent', target(auditPlanPath(root)), {}, () => undefined)
+    const intent = await booted.ctx.waterfall('fs/write-intent', target(reviewReportPath(root)), {}, () => undefined)
 
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.seam).toBe('audit')
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('audit.status.invalid-priority')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('audit.secrets.found')
   })
 
-  it('valid plan → silent pass', async () => {
+  it('clean report → silent pass', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp()
-    await seedFile(auditPlanPath(root), AUDIT_GOOD)
+    booted = await bootApp({ root })
+    await seedFile(reviewReportPath(root), AUDIT_REPORT)
     const advisories = captureAdvisories(booted.ctx)
 
-    await booted.ctx.waterfall('fs/write-intent', target(auditPlanPath(root)), {}, () => undefined)
+    await booted.ctx.waterfall('fs/write-intent', target(reviewReportPath(root)), {}, () => undefined)
 
     expect(advisories).toHaveLength(0)
   })
 
-  it('secret values in the on-disk plan → advisory (audit.secrets.found)', async () => {
+  it('path-scoping: a non-markdown file in the run dir is untouched', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp()
-    await seedFile(auditPlanPath(root), AUDIT_SECRET)
+    booted = await bootApp({ root })
+    const sidecar = reviewReportPath(root, 'findings.json')
+    await seedFile(sidecar, AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
 
-    await booted.ctx.waterfall('fs/write-intent', target(auditPlanPath(root)), {}, () => undefined)
+    await booted.ctx.waterfall('fs/write-intent', target(sidecar), {}, () => undefined)
 
-    expect(advisories).toHaveLength(1)
-    const codes = advisories[0]!.result.violations.map((v) => v.code)
-    expect(codes).not.toContain('audit.status.missing-block')
-    expect(codes).toContain('audit.secrets.found')
+    expect(advisories).toHaveLength(0)
   })
 
-  it('hard mode + broken → repair escape', async () => {
+  it('hard mode + secret → repair escape', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp({ enforcement: 'hard' })
-    await seedFile(auditPlanPath(root), AUDIT_BROKEN)
+    booted = await bootApp({ root, enforcement: 'hard' })
+    await seedFile(reviewReportPath(root), AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
 
-    await booted.ctx.waterfall('fs/write-intent', target(auditPlanPath(root)), {}, () => undefined)
+    await booted.ctx.waterfall('fs/write-intent', target(reviewReportPath(root)), {}, () => undefined)
 
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.hard).toBe(true)
@@ -499,38 +478,42 @@ describe('audit gate — fs/write-intent listener (plans/audit-* scope)', () => 
     expect(advisories[0]!.result.hardBlocked).toBe(true)
   })
 
-  it('path-scoping: plans/NNN-*.md outside an audit-* dir is untouched', async () => {
+  it('path-scoping: a plan-shaped `.md` outside {REVIEW_DIR} is untouched', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp()
-    await seedFile(join(root, 'plans', '001-fix-n1.md'), AUDIT_BROKEN)
+    booted = await bootApp({ root })
+    const plan = join(root, 'plans', '001-fix-n1.md')
+    await seedFile(plan, AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
 
-    await booted.ctx.waterfall('fs/write-intent', target(join(root, 'plans', '001-fix-n1.md')), {}, () => undefined)
+    await booted.ctx.waterfall('fs/write-intent', target(plan), {}, () => undefined)
 
     expect(advisories).toHaveLength(0)
   })
 
-  it('path-scoping: the audit-* README.md index is untouched', async () => {
+  it('path-scoping: the run README.md IS in scope (it is the report)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp()
-    await seedFile(auditPlanPath(root, 'README.md'), '# Index\n\nNo status block here.\n')
+    booted = await bootApp({ root })
+    await seedFile(reviewReportPath(root, 'README.md'), AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
 
-    await booted.ctx.waterfall('fs/write-intent', target(auditPlanPath(root, 'README.md')), {}, () => undefined)
-
-    expect(advisories).toHaveLength(0)
-  })
-
-  it('hostile (no Status block) → advisory audit.status.missing-block', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
-    booted = await bootApp()
-    await seedFile(auditPlanPath(root), AUDIT_NO_BLOCK)
-    const advisories = captureAdvisories(booted.ctx)
-
-    await booted.ctx.waterfall('fs/write-intent', target(auditPlanPath(root)), {}, () => undefined)
+    await booted.ctx.waterfall('fs/write-intent', target(reviewReportPath(root, 'README.md')), {}, () => undefined)
 
     expect(advisories).toHaveLength(1)
-    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('audit.status.missing-block')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('audit.secrets.found')
+  })
+
+  it('no harness dir → the `reviews` path segment still scopes the seam', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    booted = await bootApp({ root, harnessDir: null })
+    const report = join(root, 'reviews', '2026-08-08-pr134', 'report.md')
+    await seedFile(report, AUDIT_SECRET)
+    const advisories = captureAdvisories(booted.ctx)
+
+    await booted.ctx.waterfall('fs/write-intent', target(report), {}, () => undefined)
+
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.seam).toBe('audit')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('audit.secrets.found')
   })
 })
 
@@ -774,9 +757,9 @@ describe('shared envelope', () => {
     try {
       const harnessDir = join(root, 'harness')
       await mkdir(harnessDir, { recursive: true })
-      const audit = auditPlanPath(root)
+      const audit = reviewReportPath(root)
       await seedFile(join(root, 'DESIGN.md'), DESIGN_BROKEN)
-      await seedFile(audit, AUDIT_BROKEN)
+      await seedFile(audit, AUDIT_SECRET)
 
       // Mount 1 — all four listeners are live on the new fiber.
       const fiber = await ctx.plugin(plugin, { harnessDir })
@@ -845,7 +828,7 @@ describe('seam tool registration — real composition', () => {
   it('presentCall renders a generic card with the primary path', async () => {
     const app = booted = await bootApp()
     expectGenericCall(app.ctx.tools.get('mstar_design_md_validate')!.presentCall?.({ dir: '/d' }), '/d')
-    expectGenericCall(app.ctx.tools.get('mstar_audit_validate')!.presentCall?.({ plan_path: '/p.md' }), '/p.md')
+    expectGenericCall(app.ctx.tools.get('mstar_audit_validate')!.presentCall?.({ report_path: '/r.md' }), '/r.md')
     expectGenericCall(app.ctx.tools.get('mstar_compound_validate')!.presentCall?.({ doc_path: '/k.md' }), '/k.md')
     expectGenericCall(app.ctx.tools.get('mstar_roles_validate')!.presentCall?.({ roles_dir: '/roles' }), '/roles')
   })
@@ -897,12 +880,12 @@ describe('mstar_design_md_validate', () => {
 })
 
 describe('mstar_audit_validate', () => {
-  it('valid plan → ok true', async () => {
+  it('clean report → ok true', async () => {
     const app = booted = await bootApp()
-    const plan = join(app.root, 'plans', 'audit-2026-08-08', '001-fix.md')
-    await seedFile(plan, AUDIT_GOOD)
+    const report = reviewReportPath(app.root)
+    await seedFile(report, AUDIT_REPORT)
 
-    const result = await run(app.ctx, 'mstar_audit_validate', { plan_path: plan })
+    const result = await run(app.ctx, 'mstar_audit_validate', { report_path: report })
 
     expect(result.isError).toBe(false)
     if (result.isError) return
@@ -911,30 +894,28 @@ describe('mstar_audit_validate', () => {
     expect(valueOf(result).secrets).toEqual([])
   })
 
-  it('broken plan with a secret → violations + secrets findings', async () => {
+  it('report reproducing a secret → violations + secrets findings', async () => {
     const app = booted = await bootApp()
-    const plan = join(app.root, 'plans', 'audit-2026-08-08', '001-fix.md')
-    await seedFile(plan, AUDIT_SECRET)
+    const report = reviewReportPath(app.root)
+    await seedFile(report, AUDIT_SECRET)
 
-    const result = await run(app.ctx, 'mstar_audit_validate', { plan_path: plan })
+    const result = await run(app.ctx, 'mstar_audit_validate', { report_path: report })
 
     expect(result.isError).toBe(false)
     if (result.isError) return
     expect(valueOf(result).ok).toBe(false)
-    const codes = valueOf(result).violations.map((v: { code: string }) => v.code)
-    expect(codes).not.toContain('audit.status.missing-block')
-    expect(codes).toContain('audit.secrets.found')
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('audit.secrets.found')
     expect(valueOf(result).secrets!.some((s: { type: string }) => s.type === 'password')).toBe(true)
   })
 
-  it('missing plan file → error result', async () => {
+  it('missing report file → error result', async () => {
     const app = booted = await bootApp()
 
-    const result = await run(app.ctx, 'mstar_audit_validate', { plan_path: join(app.root, 'nope.md') })
+    const result = await run(app.ctx, 'mstar_audit_validate', { report_path: join(app.root, 'nope.md') })
 
     expect(result.isError).toBe(true)
     if (!result.isError) return
-    expect(result.error.message).toContain('plan file not found')
+    expect(result.error.message).toContain('report file not found')
   })
 })
 
