@@ -21696,9 +21696,17 @@ function lintLoadOrder(skillTexts) {
       continue;
     if (name === "mstar-coding-behavior")
       continue;
+    if (name === "mstar-engine-legacy") {
+      for (const referenced of Object.keys(skillTexts)) {
+        if (referenced === name || !referenced.startsWith("mstar-") || !text4.includes(referenced))
+          continue;
+        violations.push(violation13("medium", "roles.loadorder.legacy.archive.reference", `skill "${name}" names the runtime skill "${referenced}" — the engine-absent archive is inbound-only: runtime skills may point at it, it never names another topic (mstar-harness-core load contract)`, `describe the behavior instead of naming the skill (e.g. "the runtime dispatch rules", "the current field reference", "the host references")`));
+      }
+      continue;
+    }
     const section = extractLoadOrderSection(text4);
     if (section === null) {
-      violations.push(violation13("medium", "roles.loadorder.section.missing", `skill "${name}" has no Load Order / First action section — mstar-* topics require a load declaration except exact mstar-coding-behavior (mstar-harness-core load contract; mstar-roles § Load Order)`, `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`));
+      violations.push(violation13("medium", "roles.loadorder.section.missing", `skill "${name}" has no Load Order / First action section — mstar-* topics require a load declaration except the exact-name exemptions mstar-coding-behavior and mstar-engine-legacy (mstar-harness-core load contract; mstar-roles § Load Order)`, `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`));
       continue;
     }
     if (name === "mstar-roles") {
@@ -21713,7 +21721,7 @@ function lintLoadOrder(skillTexts) {
       continue;
     }
     if (!section.includes("mstar-harness-core")) {
-      violations.push(violation13("medium", "roles.loadorder.core.missing", `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap and exact standalone mstar-coding-behavior)`, "name mstar-harness-core first in the Load Order section"));
+      violations.push(violation13("medium", "roles.loadorder.core.missing", `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap, exact standalone mstar-coding-behavior, and the inbound-only mstar-engine-legacy archive)`, "name mstar-harness-core first in the Load Order section"));
     }
   }
   return { ok: violations.length === 0, violations };

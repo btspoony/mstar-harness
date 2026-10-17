@@ -25,7 +25,9 @@
  * turning the manual corpus smoke into a permanent CI guard.
  * 4. roles/load-order corpus ( * every `skills/mstar-*` SKILL.md must declare
  * `mstar-harness-core` in a Load Order / First action section (engine
- * `lintLoadOrder`) and the mstar-roles mapping / parameter tables
+ * `lintLoadOrder`; the engine-absent archive is exempt by exact name and is
+ * instead linted inbound-only over its whole text face, `SKILL.md` +
+ * `references/*.md`) and the mstar-roles mapping / parameter tables
  * must resolve against the on-disk `references/<role>.md` layout
  * (engine `validateRoleMapping` on `skills/mstar-roles`).
  * 5. skills corpus — five-question runtime smoke (audit finding 5;
@@ -318,7 +320,12 @@ export type RolesCorpusResult = {
  * `mstar-harness-core` in a Load Order / First action section
  * (`lintLoadOrder`; core itself is exempt by design) and the mstar-roles
  * mapping / parameter tables must resolve against the on-disk
- * `references/*.md` layout (`validateRoleMapping` on `rolesDir`).
+ * `references/*.md` layout (`validateRoleMapping` on `rolesDir`). The
+ * engine-absent archive is exempt by exact name and doesn't load topics, so
+ * its inbound-only rule is the one that applies: `skills/mstar-engine-legacy/
+ * references/*.md` are appended to that skill's text (every other skill stays
+ * SKILL.md-only), which makes a cross-reference in an archive reference file
+ * fail like one in its SKILL.md.
  * Load-bearing: deleting a Load Order heading or a mapped reference file
  * fails drift-lint (regression-pinned by scripts/drift-lint.test.ts). */
 export function checkRolesCorpus(
@@ -331,6 +338,16 @@ export function checkRolesCorpus(
     const m = rel.match(/^skills\/(mstar-[\w-]+)\/SKILL\.md$/);
     if (!m) continue;
     skillTexts[m[1]] = text;
+  }
+  // The engine-absent archive is inbound-only over its whole text face, so its
+  // reference files are linted with its SKILL.md; every other skill stays
+  // SKILL.md-only.
+  const archive = "mstar-engine-legacy";
+  if (skillTexts[archive] !== undefined) {
+    const refs = files
+      .filter(({ rel }) => rel.startsWith(`skills/${archive}/references/`) && rel.endsWith(".md"))
+      .map(({ text }) => text);
+    if (refs.length > 0) skillTexts[archive] = [skillTexts[archive], ...refs].join("\n");
   }
   const loadOrder = lintLoadOrder(skillTexts);
   for (const v of loadOrder.violations) {
@@ -349,7 +366,8 @@ export function checkRolesCorpus(
 }
 
 /** Guard 4 corpus read — guard-or-clear-error (engine corpus test
- * pattern): every skill `SKILL.md` under `skills/mstar-*` is read with a
+ * pattern): every skill Markdown file (`SKILL.md` + `references/*.md`)
+ * under `skills/mstar-*` is read with a
  * try/catch so an unreadable file (EISDIR/EPERM) becomes an explicit
  * `roles: read` failure row instead of crashing drift-lint with a raw
  * stack. The dsh seam and CLI skip unreadable siblings best-effort; the CI

@@ -25,10 +25,13 @@
  * runtime identity) fails the corpus, and removing a real load-order
  * heading fails it — each restored to green through the same seam.
  * - checkRolesCorpus (guard 4) — roles/load-order corpus smoke: the real
- * corpus passes load-order lint + role mapping (19 skills, 0 mapping
+ * corpus (every SKILL.md plus the engine-absent archive's `references/*.md`)
+ * passes load-order lint + role mapping (19 skills, 0 mapping
  * violations); deleting a Load Order section
  * (roles.loadorder.section.missing) or losing the core mention
- * (roles.loadorder.core.missing) fails; a roles dir missing mapped
+ * (roles.loadorder.core.missing) fails; a cross-reference inside an
+ * archive reference file fails (roles.loadorder.legacy.archive.reference);
+ * a roles dir missing mapped
  * reference files fails (roles.mapping.reference.missing); non-corpus
  * files are ignored (load-bearing per plan Step 3).
  * - readDeclaredBins (F-S2) — Guard 1's manifest read is guard-or-clear:
@@ -872,15 +875,25 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
   const ROLES_DIR = join(SKILLS_ROOT, "mstar-roles");
 
   /** The real shipped corpus as the guard sees it: every
- * `skills/mstar-*` SKILL.md, with the repo-relative `rel` the guard
- * filters on. */
-  const realCorpus = () =>
-    readdirSync(SKILLS_ROOT, { withFileTypes: true })
+   * `skills/mstar-*` SKILL.md plus the engine-absent archive's
+   * `references/*.md` (the one skill whose reference files the guard reads),
+   * with the repo-relative `rel` the guard filters on. */
+  const realCorpus = () => {
+    const entries = readdirSync(SKILLS_ROOT, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && entry.name.startsWith("mstar-"))
       .map((entry) => ({
         rel: `skills/${entry.name}/SKILL.md`,
         text: readFileSync(join(SKILLS_ROOT, entry.name, "SKILL.md"), "utf8"),
       }));
+    const archiveRefs = join(SKILLS_ROOT, "mstar-engine-legacy", "references");
+    for (const name of readdirSync(archiveRefs).filter((file) => file.endsWith(".md")).sort()) {
+      entries.push({
+        rel: `skills/mstar-engine-legacy/references/${name}`,
+        text: readFileSync(join(archiveRefs, name), "utf8"),
+      });
+    }
+    return entries;
+  };
 
  /** Same heading contract as engine lintLoadOrder. */
   const LOAD_ORDER_HEADING = /^#{1,6}\s+[^\r\n]*\b(?:load[\s-]*order|first\s+action)\b[^\r\n]*$/i;
@@ -951,6 +964,26 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
         (row) => row.includes("roles: load-order roles.loadorder.core.missing") && row.includes("mstar-roles"),
       ),
     ).toBe(true);
+  });
+
+  test("red probe: a cross-reference inside an archive reference file fails (roles.loadorder.legacy.archive.reference)", () => {
+    const rel = "skills/mstar-engine-legacy/references/status-field-history.md";
+    const corpus = realCorpus();
+    expect(corpus.find((entry) => entry.rel === rel)).toBeDefined();
+    const gapped = corpus.map((entry) =>
+      entry.rel === rel
+        ? { ...entry, text: `${entry.text}\nEngine-present field and authority details → \`mstar-artifacts\`.\n` }
+        : entry,
+    );
+    const { loadOrderViolations, failures } = checkRolesCorpus(gapped, ROLES_DIR);
+    expect(loadOrderViolations).toBe(1);
+    expect(
+      failures.some(
+        (row) => row.includes("roles.loadorder.legacy.archive.reference") && row.includes("mstar-artifacts"),
+      ),
+    ).toBe(true);
+ // Restore: the shipped reference files are green through the same seam.
+    expect(checkRolesCorpus(corpus, ROLES_DIR).loadOrderViolations).toBe(0);
   });
 
   test("mapped reference file missing from the roles dir fails (roles.mapping.reference.missing)", () => {
