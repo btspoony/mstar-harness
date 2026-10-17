@@ -226,6 +226,49 @@ describe("pr-review command family", () => {
     });
   });
 
+  test("tally maps the incomplete flags into the engine input and refuses one-sided supply", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
+
+    // The settled run keeps its derived verdict and its two-line header.
+    const settled = await command("pr-review.tally").execute({ findings }, context);
+    expect(settled.status).toBe("ok");
+    expect(settled.data).toMatchObject({
+      verdict: "blocked",
+      chatHeader: "blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 nit=1 unverified=0",
+    });
+
+    // The declared run reports the same partial grade under the neutral token,
+    // with the cause and the comma-split scope carried through.
+    const partial = await command("pr-review.tally").execute(
+      { findings, incompleteReason: "budget spent before the security domain", unscanned: "src/auth.ts, packages/engine" },
+      context,
+    );
+    expect(partial.status).toBe("ok");
+    expect(partial.data).toMatchObject({
+      verdict: "incomplete",
+      scorePct: 53,
+      band: "fail",
+      incomplete: { reason: "budget spent before the security domain", unscanned: ["src/auth.ts", "packages/engine"] },
+      chatHeader:
+        "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 nit=1 unverified=0\n" +
+        "cause: budget spent before the security domain\nunscanned: src/auth.ts, packages/engine",
+    });
+
+    // One-sided supply: the execute guard and the admitted contract agree.
+    const direct = await command("pr-review.tally").execute({ findings, incompleteReason: "budget spent" }, context);
+    expect(direct).toMatchObject({
+      status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "--incomplete-reason and --unscanned go together",
+    });
+    const admitted = await executeCommand("pr-review.tally", { findings, incompleteReason: "budget spent" }, context);
+    expect(admitted).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(admitted, "one-sided incomplete flags")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "unscanned", code: "required" }),
+    ]));
+  });
+
   test("unknown outcome after posting does not claim success or retry", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");

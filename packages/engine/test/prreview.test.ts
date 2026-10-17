@@ -1524,3 +1524,181 @@ describe("prReviewSeatPrompt — collectFolded option (collect-wave fold)", () =
     expect(recon).toBeGreaterThan(fold);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Incomplete verdict — a bounded/stopped run is neither a pass nor a failure:
+// the token is overridden, the count-derived score/band stay (labelled
+// `partial`), and the cause + unscanned scope travel with it.
+// ---------------------------------------------------------------------------
+
+describe("computePrTally — incomplete verdict", () => {
+  test("omitting incomplete leaves the derived verdict and the two-line header unchanged", () => {
+    const result = computePrTally({ findings: [{ mergeClass: "must-fix" }, { mergeClass: "nit" }] });
+    expect(result.verdict).toBe("blocked");
+    expect(result.incomplete).toBeUndefined();
+    expect(result.chatHeader).toBe("blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 nit=1 unverified=0");
+  });
+
+  test("a marked-incomplete run keeps the count-derived score/band as a partial grade and states cause + scope", () => {
+    const findings = [{ mergeClass: "must-fix" as const }, { mergeClass: "nit" as const }];
+    const settled = computePrTally({ findings });
+    const reason = "wall-clock budget reached with the security domain still unopened";
+    const unscanned = ["src/auth.ts", "packages/engine"];
+    const partial = computePrTally({ findings, incomplete: { reason, unscanned } });
+
+    // The token is overridden; the grade the collected findings earn is not.
+    expect(settled.verdict).toBe("blocked");
+    expect(partial.verdict).toBe("incomplete");
+    expect(partial.scorePct).toBe(settled.scorePct);
+    expect(partial.band).toBe(settled.band);
+    expect(partial.tally).toEqual(settled.tally);
+    expect(partial.chatHeader).toBe(
+      `incomplete \u00b7 ${settled.scorePct}% (${settled.band}, partial)\n` +
+        `must-fix=1 should-fix=0 nit=1 unverified=0\n` +
+        `cause: ${reason}\n` +
+        `unscanned: ${unscanned.join(", ")}`,
+    );
+    expect(partial.incomplete).toEqual({ reason, unscanned });
+  });
+
+  test("an empty unscanned scope renders the explicit none marker", () => {
+    const result = computePrTally({ findings: [], incomplete: { reason: "operator cancelled the run", unscanned: [] } });
+    expect(result.verdict).toBe("incomplete");
+    expect(result.scorePct).toBe(100);
+    expect(result.chatHeader).toBe(
+      "incomplete \u00b7 100% (mergeable, partial)\n" +
+        "must-fix=0 should-fix=0 nit=0 unverified=0\n" +
+        "cause: operator cancelled the run\n" +
+        "unscanned: none",
+    );
+  });
+});
+
+describe("validateMstarReviewV1 — incomplete verdict facts", () => {
+  const INCOMPLETE = { reason: "budget spent before the security domain", unscanned: ["src/auth.ts"] };
+  const INCOMPLETE_TALLY = computePrTally({ findings: [{ mergeClass: "must-fix" }], incomplete: INCOMPLETE });
+
+  function incompleteDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return reviewDoc({
+      verdict: "incomplete",
+      findings: [{ mergeClass: "must-fix", title: "Unbounded retry", body: "the retry loop has no cap" }],
+      tally: INCOMPLETE_TALLY,
+      incomplete: INCOMPLETE,
+      ...overrides,
+    });
+  }
+
+  test("an incomplete envelope carrying its cause and scope passes", () => {
+    const gate = validateMstarReviewV1(incompleteDoc());
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("synthesizeReview produces a valid incomplete envelope (its own gate accepts its product)", () => {
+    const envelope = synthesizeReview({
+      findings: [{ mergeClass: "must-fix", title: "Unbounded retry", body: "the retry loop has no cap" }],
+      incomplete: INCOMPLETE,
+    });
+    expect(envelope.verdict).toBe("incomplete");
+    expect(envelope.incomplete).toEqual(INCOMPLETE);
+    expect(envelope.tally?.verdict).toBe("incomplete");
+    expect(envelope.tally?.incomplete).toEqual(INCOMPLETE);
+    const gate = validateMstarReviewV1(envelope);
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+
+    // A settled synth still carries no incomplete fact at all.
+    expect(synthesizeReview({ findings: [] }).incomplete).toBeUndefined();
+  });
+
+  test("the incomplete token is never published bare", () => {
+    const doc = incompleteDoc();
+    delete doc.incomplete;
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.missing-incomplete");
+  });
+
+  test("a malformed incomplete fact is rejected with review.incomplete-malformed", () => {
+    const cases: unknown[] = [
+      { reason: "   ", unscanned: ["src/auth.ts"] },
+      { reason: 42, unscanned: ["src/auth.ts"] },
+      { reason: "budget spent", unscanned: "src/auth.ts" },
+      { reason: "budget spent", unscanned: ["src/auth.ts", " "] },
+      "not an object",
+    ];
+    for (const broken of cases) {
+      const gate = validateMstarReviewV1(incompleteDoc({ incomplete: broken }));
+      expect(gate.ok, JSON.stringify(broken)).toBe(false);
+      expect(codes(gate)).toContain("review.incomplete-malformed");
+    }
+  });
+
+  test("an empty unscanned array is a legal fact (nothing was left unscanned)", () => {
+    const gate = validateMstarReviewV1(incompleteDoc({ incomplete: { reason: "operator cancelled the run", unscanned: [] } }));
+    expect(gate.ok).toBe(true);
+  });
+
+  test("incomplete carried by any other verdict is rejected", () => {
+    const gate = validateMstarReviewV1(reviewDoc({ incomplete: INCOMPLETE }));
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.incomplete-unexpected");
+  });
+
+  test("the tally-verdict consistency rule still binds the incomplete token", () => {
+    const doc = incompleteDoc();
+    (doc.tally as Record<string, unknown>).verdict = "blocked";
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("review.verdict-tally-mismatch");
+  });
+});
+
+describe("validatePrReviewReport — incomplete verdict frontmatter", () => {
+  const INCOMPLETE_FACTS = "incomplete_reason: budget spent before the security domain\nunscanned: src/auth.ts, packages/engine\n";
+
+  /** The minimal fixture re-authored as an incomplete report: 1 must-fix ⇒ 55/fail. */
+  function incompleteReport(facts: string): string {
+    return report(facts)
+      .replace("verdict: needs fixes", "verdict: incomplete")
+      .replace("score_pct: 85", "score_pct: 55")
+      .replace("tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }", "tally: { must-fix: 1, should-fix: 0, nit: 0, unverified: 0 }");
+  }
+
+  test("an incomplete report with its cause and scope passes (unchanged score recompute, skipped mismatch)", () => {
+    const gate = validatePrReviewReport(incompleteReport(INCOMPLETE_FACTS));
+    expect(gate.ok).toBe(true);
+    expect(codes(gate)).toEqual([]);
+  });
+
+  test("none is a legal unscanned value; a blank entry is not", () => {
+    const none = validatePrReviewReport(incompleteReport("incomplete_reason: operator cancelled the run\nunscanned: none\n"));
+    expect(none.ok).toBe(true);
+    const blank = validatePrReviewReport(incompleteReport("incomplete_reason: operator cancelled the run\nunscanned: src/a.ts,,src/b.ts\n"));
+    expect(codes(blank)).toContain("prreview.report.invalid-unscanned");
+  });
+
+  test("both facts are required for verdict: incomplete", () => {
+    const noReason = validatePrReviewReport(incompleteReport("unscanned: src/auth.ts\n"));
+    expect(codes(noReason)).toContain("prreview.report.missing-incomplete_reason");
+
+    const noScope = validatePrReviewReport(incompleteReport("incomplete_reason: budget spent\n"));
+    expect(codes(noScope)).toContain("prreview.report.missing-unscanned");
+
+    const emptyReason = validatePrReviewReport(incompleteReport("incomplete_reason: \"\"\nunscanned: src/auth.ts\n"));
+    expect(codes(emptyReason)).toContain("prreview.report.invalid-incomplete-reason");
+  });
+
+  test("the mismatch skip is confined to the token: score drift is still flagged", () => {
+    const drifted = incompleteReport(INCOMPLETE_FACTS).replace("score_pct: 55", "score_pct: 90");
+    const gate = validatePrReviewReport(drifted);
+    expect(codes(gate)).toContain("prreview.report.score-mismatch");
+    expect(codes(gate)).not.toContain("prreview.report.verdict-mismatch");
+  });
+
+  test("another verdict carrying the incomplete facts is rejected", () => {
+    const gate = validatePrReviewReport(report(INCOMPLETE_FACTS));
+    expect(gate.ok).toBe(false);
+    expect(codes(gate)).toContain("prreview.report.incomplete-unexpected");
+  });
+});

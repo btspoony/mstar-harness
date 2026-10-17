@@ -458,6 +458,7 @@ export type {
   MstarReviewFinding,
   MstarReviewTally,
   MstarReviewV1,
+  PrIncomplete,
   PrReportTarget,
   PrReviewSeatPromptOptions,
   PrReviewSizing,
