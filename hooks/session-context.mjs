@@ -1592,7 +1592,7 @@ function regexCheck(regex) {
   }
 }
 function factorySpace(effects, ok2, type, max) {
-  const limit = max ? max - 1 : Number.POSITIVE_INFINITY;
+  const limit = max ? max - 1 : Infinity;
   let size = 0;
   return start;
   function start(code) {
@@ -1609,6 +1609,29 @@ function factorySpace(effects, ok2, type, max) {
     }
     effects.exit(type);
     return ok2(code);
+  }
+}
+function factorySpaceMinMax(effects, ok2, nok, type, min, max) {
+  let size = 0;
+  return start;
+  function start(code) {
+    if (max > 0 && markdownSpace(code)) {
+      effects.enter(type);
+      return prefix(code);
+    }
+    return after(code);
+  }
+  function prefix(code) {
+    if (markdownSpace(code) && size < max) {
+      effects.consume(code);
+      size++;
+      return prefix;
+    }
+    effects.exit(type);
+    return after(code);
+  }
+  function after(code) {
+    return size >= min ? ok2(code) : nok(code);
   }
 }
 function initializeContent(effects) {
@@ -1658,6 +1681,64 @@ function initializeContent(effects) {
     return data;
   }
 }
+
+class EditMap {
+  constructor() {
+    this.index = new Map;
+    this.map = [];
+  }
+  add(index, remove, add) {
+    addImplementation(this, index, remove, add, false);
+  }
+  addBefore(index, remove, add) {
+    addImplementation(this, index, remove, add, true);
+  }
+  consume(events) {
+    this.map.sort(function(a, b) {
+      return a[0] - b[0];
+    });
+    if (this.map.length === 0) {
+      return;
+    }
+    let index = this.map.length;
+    const vecs = [];
+    while (index > 0) {
+      index -= 1;
+      vecs.push(events.slice(this.map[index][0] + this.map[index][1]), this.map[index][2]);
+      events.length = this.map[index][0];
+    }
+    vecs.push(events.slice());
+    events.length = 0;
+    let slice = vecs.pop();
+    while (slice) {
+      for (const element of slice) {
+        events.push(element);
+      }
+      slice = vecs.pop();
+    }
+    this.map.length = 0;
+    this.index.clear();
+  }
+}
+function addImplementation(editMap, at, remove, add, before) {
+  if (remove === 0 && add.length === 0) {
+    return;
+  }
+  const existing = editMap.index.get(at);
+  if (existing) {
+    existing[1] += remove;
+    if (before) {
+      add.push(...existing[2]);
+      existing[2] = add;
+    } else {
+      existing[2].push(...add);
+    }
+    return;
+  }
+  const change = [at, remove, add];
+  editMap.map.push(change);
+  editMap.index.set(at, change);
+}
 function initializeDocument(effects) {
   const self = this;
   const stack = [];
@@ -1699,8 +1780,10 @@ function initializeDocument(effects) {
         self.events[index][1].end = { ...point };
         index++;
       }
-      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
-      self.events.length = index;
+      const editMap = new EditMap;
+      editMap.add(indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
+      editMap.add(indexBeforeExits, index - indexBeforeExits, []);
+      editMap.consume(self.events);
       return checkNewContainers(code);
     }
     return start(code);
@@ -1719,8 +1802,9 @@ function initializeDocument(effects) {
     return effects.check(containerConstruct, thereIsANewContainer, thereIsNoNewContainer)(code);
   }
   function thereIsANewContainer(code) {
-    if (childFlow)
+    if (childFlow) {
       closeFlow();
+    }
     exitContainers(continued);
     return documentContinued(code);
   }
@@ -1742,8 +1826,9 @@ function initializeDocument(effects) {
   }
   function flowStart(code) {
     if (code === codes.eof) {
-      if (childFlow)
+      if (childFlow) {
         closeFlow();
+      }
       exitContainers(0);
       effects.consume(code);
       return;
@@ -1776,11 +1861,13 @@ function initializeDocument(effects) {
   function writeToChild(token, endOfFile) {
     ok(childFlow, "expected `childFlow` to be defined when continuing");
     const stream = self.sliceStream(token);
-    if (endOfFile)
+    if (endOfFile) {
       stream.push(null);
+    }
     token.previous = childToken;
-    if (childToken)
+    if (childToken) {
       childToken.next = token;
+    }
     childToken = token;
     childFlow.defineSkip(token.start);
     childFlow.write(stream);
@@ -1811,8 +1898,10 @@ function initializeDocument(effects) {
         self.events[index][1].end = { ...point };
         index++;
       }
-      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
-      self.events.length = index;
+      const editMap = new EditMap;
+      editMap.add(indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
+      editMap.add(indexBeforeExits, index - indexBeforeExits, []);
+      editMap.consume(self.events);
     }
   }
   function exitContainers(size) {
@@ -2068,53 +2157,10 @@ function tokenizeAutolink(effects, ok2, nok) {
     return nok(code);
   }
 }
-function factorySpace2(effects, ok2, type, max) {
-  const limit = max ? max - 1 : Infinity;
-  let size = 0;
-  return start;
-  function start(code) {
-    if (markdownSpace(code)) {
-      effects.enter(type);
-      return prefix(code);
-    }
-    return ok2(code);
-  }
-  function prefix(code) {
-    if (markdownSpace(code) && size++ < limit) {
-      effects.consume(code);
-      return prefix;
-    }
-    effects.exit(type);
-    return ok2(code);
-  }
-}
-function factorySpaceMinMax(effects, ok2, nok, type, min, max) {
-  let size = 0;
-  return start;
-  function start(code) {
-    if (max > 0 && markdownSpace(code)) {
-      effects.enter(type);
-      return prefix(code);
-    }
-    return after(code);
-  }
-  function prefix(code) {
-    if (markdownSpace(code) && size < max) {
-      effects.consume(code);
-      size++;
-      return prefix;
-    }
-    effects.exit(type);
-    return after(code);
-  }
-  function after(code) {
-    return size >= min ? ok2(code) : nok(code);
-  }
-}
 function tokenizeBlankLine(effects, ok2, nok) {
   return start;
   function start(code) {
-    return markdownSpace(code) ? factorySpace2(effects, after, types.linePrefix)(code) : after(code);
+    return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
   }
   function after(code) {
     return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
@@ -2157,7 +2203,7 @@ function tokenizeBlockQuoteContinuation(effects, ok2, nok) {
   function contStart(code) {
     if (markdownSpace(code)) {
       ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      return factorySpace2(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+      return factorySpace(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
     }
     return contBefore(code);
   }
@@ -2296,7 +2342,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
       return nok(code);
     }
     effects.exit(types.codeFencedFenceSequence);
-    return markdownSpace(code) ? factorySpace2(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
+    return markdownSpace(code) ? factorySpace(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
   }
   function infoBefore(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -2316,7 +2362,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     if (markdownSpace(code)) {
       effects.exit(types.chunkString);
       effects.exit(types.codeFencedFenceInfo);
-      return factorySpace2(effects, metaBefore, types.whitespace)(code);
+      return factorySpace(effects, metaBefore, types.whitespace)(code);
     }
     if (code === codes.graveAccent && code === marker) {
       return nok(code);
@@ -2356,7 +2402,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     return contentStart;
   }
   function contentStart(code) {
-    return initialPrefix > 0 && markdownSpace(code) ? factorySpace2(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
+    return initialPrefix > 0 && markdownSpace(code) ? factorySpace(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
   }
   function beforeContentChunk(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -2390,7 +2436,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     function start2(code) {
       ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
       effects2.enter(types.codeFencedFence);
-      return markdownSpace(code) ? factorySpace2(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
+      return markdownSpace(code) ? factorySpace(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
     }
     function beforeSequenceClose(code) {
       if (code === marker) {
@@ -2407,7 +2453,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
       }
       if (size >= sizeOpen) {
         effects2.exit(types.codeFencedFenceSequence);
-        return markdownSpace(code) ? factorySpace2(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
+        return markdownSpace(code) ? factorySpace(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
       }
       return nok2(code);
     }
@@ -2863,7 +2909,7 @@ function tokenizeContinuation(effects, ok2, nok) {
     effects.enter(types.lineEnding);
     effects.consume(code);
     effects.exit(types.lineEnding);
-    return factorySpace2(effects, prefixed, types.linePrefix);
+    return factorySpace(effects, prefixed, types.linePrefix);
   }
   function prefixed(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -3124,7 +3170,7 @@ function tokenizeDefinition(effects, ok2, nok) {
     return effects.attempt(titleBefore, after, after)(code);
   }
   function after(code) {
-    return markdownSpace(code) ? factorySpace2(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
+    return markdownSpace(code) ? factorySpace(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
   }
   function afterWhitespace(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -3144,7 +3190,7 @@ function tokenizeTitleBefore(effects, ok2, nok) {
     return factoryTitle(effects, titleAfter, nok, types.definitionTitle, types.definitionTitleMarker, types.definitionTitleString)(code);
   }
   function titleAfter(code) {
-    return markdownSpace(code) ? factorySpace2(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
+    return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
   }
   function titleAfterOptionalWhitespace(code) {
     return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
@@ -3232,7 +3278,7 @@ function tokenizeHeadingAtx(effects, ok2, nok) {
       return ok2(code);
     }
     if (markdownSpace(code)) {
-      return factorySpace2(effects, atBreak, types.whitespace)(code);
+      return factorySpace(effects, atBreak, types.whitespace)(code);
     }
     effects.enter(types.atxHeadingText);
     return data(code);
@@ -3904,7 +3950,7 @@ function tokenizeHtmlText(effects, ok2, nok) {
   }
   function lineEndingAfter(code) {
     ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return markdownSpace(code) ? factorySpace2(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
+    return markdownSpace(code) ? factorySpace(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
   }
   function lineEndingAfterPrefix(code) {
     effects.enter(types.htmlTextData);
@@ -4181,7 +4227,7 @@ function tokenizeLineEnding(effects, ok2) {
     effects.enter(types.lineEnding);
     effects.consume(code);
     effects.exit(types.lineEnding);
-    return factorySpace2(effects, ok2, types.linePrefix);
+    return factorySpace(effects, ok2, types.linePrefix);
   }
 }
 function tokenizeThematicBreak(effects, ok2, nok) {
@@ -4215,7 +4261,7 @@ function tokenizeThematicBreak(effects, ok2, nok) {
       return sequence;
     }
     effects.exit(types.thematicBreakSequence);
-    return markdownSpace(code) ? factorySpace2(effects, atBreak, types.whitespace)(code) : atBreak(code);
+    return markdownSpace(code) ? factorySpace(effects, atBreak, types.whitespace)(code) : atBreak(code);
   }
 }
 function tokenizeListStart(effects, ok2, nok) {
@@ -4295,7 +4341,7 @@ function tokenizeListContinuation(effects, ok2, nok) {
     ok(self.containerState, "expected state");
     ok(typeof self.containerState.size === "number", "expected size");
     self.containerState.furtherBlankLines = self.containerState.furtherBlankLines || self.containerState.initialBlankLine;
-    return factorySpace2(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
+    return factorySpace(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
   }
   function notBlank(code) {
     ok(self.containerState, "expected state");
@@ -4313,14 +4359,14 @@ function tokenizeListContinuation(effects, ok2, nok) {
     self.containerState._closeFlow = true;
     self.interrupt = undefined;
     ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return factorySpace2(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+    return factorySpace(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
   }
 }
 function tokenizeIndent(effects, ok2, nok) {
   const self = this;
   ok(self.containerState, "expected state");
   ok(typeof self.containerState.size === "number", "expected size");
-  return factorySpace2(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
+  return factorySpace(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
   function afterPrefix(code) {
     ok(self.containerState, "expected state");
     const tail = self.events[self.events.length - 1];
@@ -4335,69 +4381,11 @@ function tokenizeListEnd(effects) {
 function tokenizeListItemPrefixWhitespace(effects, ok2, nok) {
   const self = this;
   ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-  return factorySpace2(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
+  return factorySpace(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
   function afterPrefix(code) {
     const tail = self.events[self.events.length - 1];
     return !markdownSpace(code) && tail && tail[1].type === types.listItemPrefixWhitespace ? ok2(code) : nok(code);
   }
-}
-
-class EditMap {
-  constructor() {
-    this.index = new Map;
-    this.map = [];
-  }
-  add(index, remove, add) {
-    addImplementation(this, index, remove, add, false);
-  }
-  addBefore(index, remove, add) {
-    addImplementation(this, index, remove, add, true);
-  }
-  consume(events) {
-    this.map.sort(function(a, b) {
-      return a[0] - b[0];
-    });
-    if (this.map.length === 0) {
-      return;
-    }
-    let index = this.map.length;
-    const vecs = [];
-    while (index > 0) {
-      index -= 1;
-      vecs.push(events.slice(this.map[index][0] + this.map[index][1]), this.map[index][2]);
-      events.length = this.map[index][0];
-    }
-    vecs.push(events.slice());
-    events.length = 0;
-    let slice = vecs.pop();
-    while (slice) {
-      for (const element of slice) {
-        events.push(element);
-      }
-      slice = vecs.pop();
-    }
-    this.map.length = 0;
-    this.index.clear();
-  }
-}
-function addImplementation(editMap, at, remove, add, before) {
-  if (remove === 0 && add.length === 0) {
-    return;
-  }
-  const existing = editMap.index.get(at);
-  if (existing) {
-    existing[1] += remove;
-    if (before) {
-      add.push(...existing[2]);
-      existing[2] = add;
-    } else {
-      existing[2].push(...add);
-    }
-    return;
-  }
-  const change = [at, remove, add];
-  editMap.map.push(change);
-  editMap.index.set(at, change);
 }
 function resolveToSetextUnderline(events, context) {
   const editMap = new EditMap;
@@ -4475,7 +4463,7 @@ function tokenizeSetextUnderline(effects, ok2, nok) {
       return inside;
     }
     effects.exit(types.setextHeadingLineSequence);
-    return markdownSpace(code) ? factorySpace2(effects, after, types.lineSuffix)(code) : after(code);
+    return markdownSpace(code) ? factorySpace(effects, after, types.lineSuffix)(code) : after(code);
   }
   function after(code) {
     if (code === codes.eof || markdownLineEnding(code)) {
@@ -4587,6 +4575,7 @@ function createResolver(extraResolver) {
   }
 }
 function resolveAllLineSuffixes(events, context) {
+  const editMap = new EditMap;
   let eventIndex = 0;
   while (++eventIndex <= events.length) {
     if ((eventIndex === events.length || events[eventIndex][1].type === types.lineEnding) && events[eventIndex - 1][1].type === types.data) {
@@ -4604,8 +4593,9 @@ function resolveAllLineSuffixes(events, context) {
             size++;
             bufferIndex--;
           }
-          if (bufferIndex)
+          if (bufferIndex) {
             break;
+          }
           bufferIndex = -1;
         } else if (chunk === codes.horizontalTab) {
           tabs = true;
@@ -4634,13 +4624,16 @@ function resolveAllLineSuffixes(events, context) {
         if (data.start.offset === data.end.offset) {
           Object.assign(data, token);
         } else {
-          events.splice(eventIndex, 0, ["enter", token, context], ["exit", token, context]);
-          eventIndex += 2;
+          editMap.add(eventIndex, 0, [
+            ["enter", token, context],
+            ["exit", token, context]
+          ]);
         }
       }
       eventIndex++;
     }
   }
+  editMap.consume(events);
   return events;
 }
 function createDebug(namespace) {
@@ -4720,11 +4713,10 @@ function createTokenizer(parser, initialize, from) {
     debug("position: define skip: `%j`", point);
   }
   function main() {
-    let chunkIndex;
     while (point._index < chunks.length) {
       const chunk = chunks[point._index];
       if (typeof chunk === "string") {
-        chunkIndex = point._index;
+        const chunkIndex = point._index;
         if (point._bufferIndex < 0) {
           point._bufferIndex = 0;
         }
@@ -4933,7 +4925,7 @@ function serializeChunks(chunks, expandTabs) {
     let value;
     if (typeof chunk === "string") {
       value = chunk;
-    } else
+    } else {
       switch (chunk) {
         case codes.carriageReturn: {
           value = values.cr;
@@ -4952,8 +4944,9 @@ function serializeChunks(chunks, expandTabs) {
           break;
         }
         case codes.virtualSpace: {
-          if (!expandTabs && atTab)
+          if (!expandTabs && atTab) {
             continue;
+          }
           value = values.space;
           break;
         }
@@ -4962,6 +4955,7 @@ function serializeChunks(chunks, expandTabs) {
           value = String.fromCharCode(chunk);
         }
       }
+    }
     atTab = chunk === codes.horizontalTab;
     result.push(value);
   }
@@ -4999,14 +4993,9 @@ function preprocess() {
   let atCarriageReturn;
   return preprocessor;
   function preprocessor(value, encoding, end) {
-    const chunks = [];
-    let match;
-    let next;
-    let startPosition;
-    let endPosition;
-    let code;
     value = buffer + (typeof value === "string" ? value.toString() : new TextDecoder(encoding || undefined).decode(value));
-    startPosition = 0;
+    const chunks = [];
+    let startPosition = 0;
     buffer = "";
     if (start) {
       if (value.charCodeAt(0) === codes.byteOrderMarker) {
@@ -5016,9 +5005,9 @@ function preprocess() {
     }
     while (startPosition < value.length) {
       search.lastIndex = startPosition;
-      match = search.exec(value);
-      endPosition = match && match.index !== undefined ? match.index : value.length;
-      code = value.charCodeAt(endPosition);
+      const match = search.exec(value);
+      const endPosition = match && match.index !== undefined ? match.index : value.length;
+      const code = value.charCodeAt(endPosition);
       if (!match) {
         buffer = value.slice(startPosition);
         break;
@@ -5042,10 +5031,11 @@ function preprocess() {
             break;
           }
           case codes.ht: {
-            next = Math.ceil(column / constants.tabSize) * constants.tabSize;
+            const next = Math.ceil(column / constants.tabSize) * constants.tabSize;
             chunks.push(codes.horizontalTab);
-            while (column++ < next)
+            while (column++ < next) {
               chunks.push(codes.virtualSpace);
+            }
             break;
           }
           case codes.lf: {
@@ -5062,10 +5052,12 @@ function preprocess() {
       startPosition = endPosition + 1;
     }
     if (end) {
-      if (atCarriageReturn)
+      if (atCarriageReturn) {
         chunks.push(codes.carriageReturn);
-      if (buffer)
+      }
+      if (buffer) {
         chunks.push(buffer);
+      }
       chunks.push(codes.eof);
     }
     return chunks;
@@ -5119,6 +5111,8 @@ function fromMarkdown(value, encoding, options) {
 }
 function compiler(options) {
   const config = {
+    afterExit: [],
+    beforeEnter: [],
     transforms: [],
     canContainEols: ["emphasis", "fragment", "heading", "paragraph", "strong"],
     enter: {
@@ -5220,7 +5214,7 @@ function compiler(options) {
   const data = {};
   return compile;
   function compile(events) {
-    let tree = { type: "root", children: [] };
+    let tree = { type: "root", children: [], position: undefined };
     const context = {
       stack: [tree],
       tokenStack: [],
@@ -5232,23 +5226,32 @@ function compiler(options) {
       data
     };
     const listStack = [];
+    const prepared = [];
     let index2 = -1;
     while (++index2 < events.length) {
+      prepared.push(events[index2]);
       if (events[index2][1].type === types.listOrdered || events[index2][1].type === types.listUnordered) {
         if (events[index2][0] === "enter") {
-          listStack.push(index2);
+          listStack.push(prepared.length - 1);
         } else {
           const tail = listStack.pop();
           ok(typeof tail === "number", "expected list to be open");
-          index2 = prepareList(events, tail, index2);
+          prepareList(prepared, tail);
         }
       }
     }
+    events = prepared;
     index2 = -1;
     while (++index2 < events.length) {
       const handler = config[events[index2][0]];
+      if (events[index2][0] === "enter" && config.beforeEnter.length > 0) {
+        callListeners(config.beforeEnter, { ...context, sliceSerialize: events[index2][2].sliceSerialize }, events[index2][1]);
+      }
       if (own2.call(handler, events[index2][1].type)) {
-        handler[events[index2][1].type].call(Object.assign({ sliceSerialize: events[index2][2].sliceSerialize }, context), events[index2][1]);
+        handler[events[index2][1].type].call({ ...context, sliceSerialize: events[index2][2].sliceSerialize }, events[index2][1]);
+      }
+      if (events[index2][0] === "exit" && config.afterExit.length > 0) {
+        callListeners(config.afterExit, { ...context, sliceSerialize: events[index2][2].sliceSerialize }, events[index2][1]);
       }
     }
     if (context.tokenStack.length > 0) {
@@ -5266,7 +5269,14 @@ function compiler(options) {
     }
     return tree;
   }
-  function prepareList(events, start, length) {
+  function callListeners(listeners, context, token) {
+    let index2 = -1;
+    while (++index2 < listeners.length) {
+      listeners[index2].call(context, token);
+    }
+  }
+  function prepareList(events, start) {
+    const end = events.length - 1;
     let index2 = start - 1;
     let containerBalance = -1;
     let listSpread = false;
@@ -5274,7 +5284,8 @@ function compiler(options) {
     let lineIndex;
     let firstBlankLineIndex;
     let atMarker;
-    while (++index2 <= length) {
+    const insertions = [];
+    while (++index2 <= end) {
       const event = events[index2];
       switch (event[1].type) {
         case types.listUnordered:
@@ -5331,9 +5342,10 @@ function compiler(options) {
             listItem2._spread = true;
           }
           listItem2.end = Object.assign({}, lineIndex ? events[lineIndex][1].start : event[1].end);
-          events.splice(lineIndex || index2, 0, ["exit", listItem2, event[2]]);
-          index2++;
-          length++;
+          insertions.push({
+            at: lineIndex || index2,
+            event: ["exit", listItem2, event[2]]
+          });
         }
         if (event[1].type === types.listItemPrefix) {
           const item = {
@@ -5343,16 +5355,23 @@ function compiler(options) {
             end: undefined
           };
           listItem2 = item;
-          events.splice(index2, 0, ["enter", item, event[2]]);
-          index2++;
-          length++;
+          insertions.push({ at: index2, event: ["enter", item, event[2]] });
           firstBlankLineIndex = undefined;
           atMarker = true;
         }
       }
     }
+    const listEvents = events.splice(start);
+    let insertion = 0;
+    index2 = -1;
+    while (++index2 < listEvents.length) {
+      while (insertion < insertions.length && insertions[insertion].at === start + index2) {
+        events.push(insertions[insertion++].event);
+      }
+      events.push(listEvents[index2]);
+    }
+    ok(insertion === insertions.length, "expected insertions to be merged");
     events[start][1]._spread = listSpread;
-    return length;
   }
   function opener(create, and) {
     return open;
@@ -5392,7 +5411,8 @@ function compiler(options) {
     const open = this.tokenStack.pop();
     if (!open) {
       throw new Error("Cannot close `" + token.type + "` (" + stringifyPosition({ start: token.start, end: token.end }) + "): it’s not open");
-    } else if (open[0].type !== token.type) {
+    }
+    if (open[0].type !== token.type) {
       if (onExitError) {
         onExitError.call(this, token, open[0]);
       } else {
@@ -5689,13 +5709,19 @@ function compiler(options) {
     node2.url = "mailto:" + this.sliceSerialize(token);
   }
   function blockQuote2() {
-    return { type: "blockquote", children: [] };
+    return { type: "blockquote", children: [], position: undefined };
   }
   function codeFlow() {
-    return { type: "code", lang: null, meta: null, value: "" };
+    return {
+      type: "code",
+      lang: null,
+      meta: null,
+      value: "",
+      position: undefined
+    };
   }
   function codeText2() {
-    return { type: "inlineCode", value: "" };
+    return { type: "inlineCode", value: "", position: undefined };
   }
   function definition2() {
     return {
@@ -5703,30 +5729,44 @@ function compiler(options) {
       identifier: "",
       label: null,
       title: null,
-      url: ""
+      url: "",
+      position: undefined
     };
   }
   function emphasis() {
-    return { type: "emphasis", children: [] };
+    return { type: "emphasis", children: [], position: undefined };
   }
   function heading() {
     return {
       type: "heading",
       depth: 0,
-      children: []
+      children: [],
+      position: undefined
     };
   }
   function hardBreak() {
-    return { type: "break" };
+    return { type: "break", position: undefined };
   }
   function html() {
-    return { type: "html", value: "" };
+    return { type: "html", value: "", position: undefined };
   }
   function image() {
-    return { type: "image", title: null, url: "", alt: null };
+    return {
+      type: "image",
+      title: null,
+      url: "",
+      alt: null,
+      position: undefined
+    };
   }
   function link() {
-    return { type: "link", title: null, url: "", children: [] };
+    return {
+      type: "link",
+      title: null,
+      url: "",
+      children: [],
+      position: undefined
+    };
   }
   function list2(token) {
     return {
@@ -5734,7 +5774,8 @@ function compiler(options) {
       ordered: token.type === "listOrdered",
       start: null,
       spread: token._spread,
-      children: []
+      children: [],
+      position: undefined
     };
   }
   function listItem(token) {
@@ -5742,20 +5783,21 @@ function compiler(options) {
       type: "listItem",
       spread: token._spread,
       checked: null,
-      children: []
+      children: [],
+      position: undefined
     };
   }
   function paragraph() {
-    return { type: "paragraph", children: [] };
+    return { type: "paragraph", children: [], position: undefined };
   }
   function strong() {
-    return { type: "strong", children: [] };
+    return { type: "strong", children: [], position: undefined };
   }
   function text3() {
-    return { type: "text", value: "" };
+    return { type: "text", value: "", position: undefined };
   }
   function thematicBreak2() {
-    return { type: "thematicBreak" };
+    return { type: "thematicBreak", position: undefined };
   }
 }
 function point2(d) {
@@ -5791,6 +5833,14 @@ function extension(combined, extension2) {
           }
           break;
         }
+        case "afterExit":
+        case "beforeEnter": {
+          const right = extension2[key];
+          if (right) {
+            combined[key].push(right);
+          }
+          break;
+        }
         case "enter":
         case "exit": {
           const right = extension2[key];
@@ -5806,9 +5856,8 @@ function extension(combined, extension2) {
 function defaultOnError(left, right) {
   if (left) {
     throw new Error("Cannot close `" + left.type + "` (" + stringifyPosition({ start: left.start, end: left.end }) + "): a different token (`" + right.type + "`, " + stringifyPosition({ start: right.start, end: right.end }) + ") is open");
-  } else {
-    throw new Error("Cannot close document, a token (`" + right.type + "`, " + stringifyPosition({ start: right.start, end: right.end }) + ") is still open");
   }
+  throw new Error("Cannot close document, a token (`" + right.type + "`, " + stringifyPosition({ start: right.start, end: right.end }) + ") is still open");
 }
 function ccount(value, character) {
   const source = String(value);
@@ -5987,15 +6036,13 @@ function findAndReplace(tree, list2, options) {
         find.lastIndex = position2 + 1;
       } else {
         if (start !== position2) {
-          nodes.push({
-            type: "text",
-            value: node2.value.slice(start, position2)
-          });
+          add({ type: "text", value: node2.value.slice(start, position2) });
         }
         if (Array.isArray(value)) {
-          nodes.push(...value);
+          for (const child of value)
+            add(child);
         } else if (value) {
-          nodes.push(value);
+          add(value);
         }
         start = position2 + match[0].length;
         change = true;
@@ -6007,20 +6054,28 @@ function findAndReplace(tree, list2, options) {
     }
     if (change) {
       if (start < node2.value.length) {
-        nodes.push({ type: "text", value: node2.value.slice(start) });
+        add({ type: "text", value: node2.value.slice(start) });
       }
       parent.children.splice(index2, 1, ...nodes);
     } else {
       nodes = [node2];
     }
     return index2 + nodes.length;
+    function add(child) {
+      const previous2 = nodes[nodes.length - 1];
+      if (previous2 && previous2.type === "text" && child.type === "text") {
+        previous2.value += child.value;
+      } else {
+        nodes.push(child);
+      }
+    }
   }
 }
 function toPairs(tupleOrList) {
-  const result = [];
   if (!Array.isArray(tupleOrList)) {
     throw new TypeError("Expected find and replace tuple or list of tuples");
   }
+  const result = [];
   const list2 = !tupleOrList[0] || Array.isArray(tupleOrList[0]) ? tupleOrList : [tupleOrList];
   let index2 = -1;
   while (++index2 < list2.length) {
@@ -6218,23 +6273,27 @@ function gfmStrikethroughFromMarkdown() {
   };
 }
 function enterStrikethrough(token) {
-  this.enter({ type: "delete", children: [] }, token);
+  this.enter({ type: "delete", children: [], position: undefined }, token);
 }
 function exitStrikethrough(token) {
   this.exit(token);
 }
 function handleDelete(node2, _, state, info) {
   const tracker = state.createTracker(info);
+  const sequence = state.stack.includes("strikethrough") ? "~" : "~~";
   const exit2 = state.enter("strikethrough");
-  let value = tracker.move("~~");
+  let value = tracker.move(sequence);
   value += state.containerPhrasing(node2, {
     ...tracker.current(),
     before: value,
     after: "~"
   });
-  value += tracker.move("~~");
+  value += tracker.move(sequence);
   exit2();
   return value;
+}
+function attentionDelete() {
+  return { construct: "strikethrough", markers: ["~"], sizes: [2, 1] };
 }
 function peekDelete() {
   return "~";
@@ -29989,7 +30048,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
       configurable: true,
       set: __exportSetter2.bind(all, name)
     });
-}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, init_dev7, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev8, content2, continuationConstruct, init_content2, init_dev9, init_dev10, init_dev11, init_dev12, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev13, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev14, characterEscapeOrReference, init_dev15, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev16, convert = function(test) {
+}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
   if (test === null || test === undefined) {
     return ok2;
   }
@@ -30003,7 +30062,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev17, indent, init_syntax2, init_dev18, init_syntax3, init_dev19, init_infer, init_syntax4, init_dev20, tasklistCheck, init_syntax5, init_dev21, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, AUDIT_STATUS_FIELDS, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, hasEnrichedMetadata = (finding) => finding.fingerprint !== undefined || finding.trace !== undefined || finding.severity !== undefined || finding.evidence.some((item) => typeof item !== "string"), AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, exports_store_activation, ACTIVATION_PROTOCOL_VERSION = 1, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, AUDIT_STATUS_FIELDS, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, hasEnrichedMetadata = (finding) => finding.fingerprint !== undefined || finding.trace !== undefined || finding.severity !== undefined || finding.evidence.some((item) => typeof item !== "string"), AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, exports_store_activation, ACTIVATION_PROTOCOL_VERSION = 1, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -33268,7 +33327,6 @@ var init_engine = __esm(() => {
     init_development();
     init_dev5();
     init_dev4();
-    init_dev();
     init_default();
     document = { tokenize: initializeDocument };
     containerConstruct = { tokenize: tokenizeContainer };
@@ -33294,18 +33352,15 @@ var init_engine = __esm(() => {
     init_default();
     autolink = { name: "autolink", tokenize: tokenizeAutolink };
   });
-  init_dev7 = __esm2(() => {
-    init_dev4();
-  });
   init_blank_line = __esm2(() => {
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     blankLine = { partial: true, tokenize: tokenizeBlankLine };
   });
   init_block_quote = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     blockQuote = {
@@ -33345,7 +33400,7 @@ var init_engine = __esm(() => {
   });
   init_code_fenced = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     init_partial_non_lazy_continuation();
@@ -33357,7 +33412,7 @@ var init_engine = __esm(() => {
   });
   init_code_indented = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     codeIndented = {
@@ -33380,7 +33435,7 @@ var init_engine = __esm(() => {
   init_splice_buffer = __esm2(() => {
     init_default();
   });
-  init_dev8 = __esm2(() => {
+  init_dev7 = __esm2(() => {
     init_development();
     init_dev();
     init_default();
@@ -33388,19 +33443,24 @@ var init_engine = __esm(() => {
   });
   init_content2 = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
-    init_dev8();
+    init_dev7();
     init_default();
     content2 = { resolve: resolveContent, tokenize: tokenizeContent };
     continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
   });
+  init_dev8 = __esm2(() => {
+    init_dev4();
+    init_default();
+  });
   init_dev9 = __esm2(() => {
+    init_development();
     init_dev4();
     init_default();
   });
   init_dev10 = __esm2(() => {
-    init_development();
+    init_dev5();
     init_dev4();
     init_default();
   });
@@ -33409,18 +33469,13 @@ var init_engine = __esm(() => {
     init_dev4();
     init_default();
   });
-  init_dev12 = __esm2(() => {
-    init_dev5();
-    init_dev4();
-    init_default();
-  });
   init_definition = __esm2(() => {
     init_development();
+    init_dev8();
     init_dev9();
+    init_dev5();
     init_dev10();
-    init_dev7();
     init_dev11();
-    init_dev12();
     init_dev4();
     init_dev3();
     init_default();
@@ -33438,7 +33493,7 @@ var init_engine = __esm(() => {
   });
   init_heading_atx = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_dev();
     init_default();
@@ -33532,17 +33587,17 @@ var init_engine = __esm(() => {
   });
   init_html_text = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     htmlText = { name: "htmlText", tokenize: tokenizeHtmlText };
   });
   init_label_end = __esm2(() => {
     init_development();
+    init_dev8();
     init_dev9();
     init_dev10();
     init_dev11();
-    init_dev12();
     init_dev4();
     init_dev();
     init_dev3();
@@ -33579,14 +33634,14 @@ var init_engine = __esm(() => {
   });
   init_line_ending = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     lineEnding = { name: "lineEnding", tokenize: tokenizeLineEnding };
   });
   init_thematic_break = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     thematicBreak = {
@@ -33596,7 +33651,7 @@ var init_engine = __esm(() => {
   });
   init_list = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     init_blank_line();
@@ -33615,7 +33670,7 @@ var init_engine = __esm(() => {
   });
   init_setext_underline = __esm2(() => {
     init_development();
-    init_dev7();
+    init_dev5();
     init_dev4();
     init_default();
     setextUnderline = {
@@ -33624,7 +33679,7 @@ var init_engine = __esm(() => {
       tokenize: tokenizeSetextUnderline
     };
   });
-  init_dev13 = __esm2(() => {
+  init_dev12 = __esm2(() => {
     init_attention();
     init_autolink();
     init_blank_line();
@@ -33650,7 +33705,7 @@ var init_engine = __esm(() => {
   });
   init_flow = __esm2(() => {
     init_development();
-    init_dev13();
+    init_dev12();
     init_dev5();
     init_dev4();
     init_default();
@@ -33676,7 +33731,7 @@ var init_engine = __esm(() => {
     text: () => text2
   });
   init_constructs = __esm2(() => {
-    init_dev13();
+    init_dev12();
     init_default();
     init_text();
     document2 = {
@@ -33752,18 +33807,18 @@ var init_engine = __esm(() => {
     init_create_tokenizer();
   });
   init_postprocess = __esm2(() => {
-    init_dev8();
+    init_dev7();
   });
   init_preprocess = __esm2(() => {
     init_default();
     search = /[\0\t\n\r]/g;
   });
-  init_dev14 = __esm2(() => {
+  init_dev13 = __esm2(() => {
     init_parse();
     init_postprocess();
     init_preprocess();
   });
-  init_dev15 = __esm2(() => {
+  init_dev14 = __esm2(() => {
     init_decode_named_character_reference();
     init_dev2();
     init_default();
@@ -33772,16 +33827,16 @@ var init_engine = __esm(() => {
   init_lib2 = __esm2(() => {
     init_development();
     init_mdast_util_to_string();
-    init_dev14();
+    init_dev13();
     init_dev2();
-    init_dev15();
+    init_dev14();
     init_dev3();
     init_default();
     init_decode_named_character_reference();
     init_unist_util_stringify_position();
     own2 = {}.hasOwnProperty;
   });
-  init_dev16 = __esm2(() => {
+  init_dev15 = __esm2(() => {
     init_lib2();
   });
   init_lib3 = __esm2(() => {
@@ -33815,6 +33870,7 @@ var init_engine = __esm(() => {
     init_lib6();
   });
   init_lib7 = __esm2(() => {
+    handleDelete.attention = attentionDelete;
     handleDelete.peek = peekDelete;
   });
   init_mdast_util_gfm_strikethrough = __esm2(() => {
@@ -33887,19 +33943,19 @@ var init_engine = __esm(() => {
     text3[codes.uppercaseW] = [emailAutolink, wwwAutolink];
     text3[codes.lowercaseW] = [emailAutolink, wwwAutolink];
   });
-  init_dev17 = __esm2(() => {
+  init_dev16 = __esm2(() => {
     init_syntax();
   });
   init_syntax2 = __esm2(() => {
     init_development();
-    init_dev13();
+    init_dev12();
     init_dev5();
     init_dev4();
     init_dev3();
     init_default();
     indent = { tokenize: tokenizeIndent2, partial: true };
   });
-  init_dev18 = __esm2(() => {
+  init_dev17 = __esm2(() => {
     init_syntax2();
   });
   init_syntax3 = __esm2(() => {
@@ -33908,7 +33964,7 @@ var init_engine = __esm(() => {
     init_dev6();
     init_default();
   });
-  init_dev19 = __esm2(() => {
+  init_dev18 = __esm2(() => {
     init_syntax3();
   });
   init_infer = __esm2(() => {
@@ -33921,7 +33977,7 @@ var init_engine = __esm(() => {
     init_default();
     init_infer();
   });
-  init_dev20 = __esm2(() => {
+  init_dev19 = __esm2(() => {
     init_syntax4();
   });
   init_syntax5 = __esm2(() => {
@@ -33931,16 +33987,16 @@ var init_engine = __esm(() => {
     init_default();
     tasklistCheck = { name: "tasklistCheck", tokenize: tokenizeTasklistCheck };
   });
-  init_dev21 = __esm2(() => {
+  init_dev20 = __esm2(() => {
     init_syntax5();
   });
   init_micromark_extension_gfm = __esm2(() => {
     init_micromark_util_combine_extensions();
+    init_dev16();
     init_dev17();
     init_dev18();
     init_dev19();
     init_dev20();
-    init_dev21();
   });
   init_core = __esm2(() => {
     SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
@@ -34010,7 +34066,7 @@ var init_engine = __esm(() => {
     };
   });
   init_roadmap_content = __esm2(() => {
-    init_dev16();
+    init_dev15();
     init_mdast_util_gfm();
     init_micromark_extension_gfm();
     init_iteration();
