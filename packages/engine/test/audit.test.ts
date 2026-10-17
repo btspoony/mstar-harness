@@ -415,16 +415,18 @@ describe("scaffoldAuditReport", () => {
     expect(readReport(reviews, "2026-08-10")).not.toContain("Rotate leaked AWS keys");
   });
 
-  test("concurrent auto-allocated runs each get their own round — no report is overwritten", async () => {
+  test("repeated auto-allocated runs each get their own round — no report is overwritten", () => {
     const reviews = join(tmp, "reviews-alloc");
     mkdirSync(reviews, { recursive: true });
-    const [first, second] = await Promise.all([
-      Promise.resolve().then(() => scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" })),
-      Promise.resolve().then(() => scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" })),
-    ]);
-    expect([first.round, second.round].sort()).toEqual([1, 2]);
+    // Sequential form on purpose: `scaffoldAuditReport` is synchronous, so a
+    // `Promise.all` here would still run the calls one after another and
+    // could not exercise the concurrent-writer race. This locks the visible
+    // "a run never reuses another run's directory" behaviour; the race
+    // itself is closed by the atomic, non-recursive `mkdir` retry.
+    const first = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" });
+    const second = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" });
+    expect([first.round, second.round]).toEqual([1, 2]);
     expect(first.outDir).not.toBe(second.outDir);
-    // Both reports survive: neither run destroyed the other's.
     expect(readdirSync(reviews).sort()).toEqual([
       "2026-08-19-codebase-standard-1",
       "2026-08-19-codebase-standard-2",

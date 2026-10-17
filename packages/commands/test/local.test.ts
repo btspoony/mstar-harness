@@ -106,6 +106,11 @@ describe("shared host-health helpers", () => {
       status: "ok",
       data: {
         harnessDir: path.join(root, ".mstar"),
+        specsDir: path.join(root, ".mstar", "specs"),
+        workflowDir: path.join(root, ".mstar", "workflows"),
+        projectDir: path.join(root, ".mstar", "projects"),
+        // The override points outside the harness: the default would be
+        // <root>/.mstar/reviews, so this proves the declaration is honored.
         reviewDir: path.join(root, "process", "reviews"),
       },
     });
