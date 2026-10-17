@@ -63,12 +63,14 @@ describe('registry peer contract (npm, no link farm)', () => {
     // this asserts.
     //
     // The scan is deliberately not lock-wide: a dev-only third-party plugin
-    // (`dsh-llm-fallbacks`) declares the PREVIOUS prerelease range for its own
-    // peers (~`^0.2.0-rc.2`, which a later prerelease like `0.2.1-rc.1` does
-    // not satisfy), so bun keeps nested copies of those names for THAT
-    // dependency. Those copies are not in this plugin's resolution and must
-    // not fail its cohort assertion — the invariant is about the versions this
-    // package's rows answer from, not about every copy on the machine.
+    // (`dsh-llm-fallbacks@0.6.6`) now declares the current `^0.2.1-rc.2` cohort
+    // for its own peers, but the lock still carries a transitive
+    // `@deepseek-ai/dsh-client-ui-plugin-manager` copy at the older
+    // `0.2.0-rc.2` (with nested `dsh-timeout` / `dsh-typert-protocol` /
+    // `dsh-brand` at that version). `packages/dsh` declares no direct peer for
+    // plugin-manager, so those copies are not in this package's resolution and
+    // must not fail its cohort assertion — the invariant is about the versions
+    // this package's rows answer from, not about every copy on the machine.
     const lock = readFileSync(join(repoRoot, 'bun.lock'), 'utf8')
     const escape = (name: string): string => name.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')
     /** Version a name resolves to in the lock's own `packages` map (`"<name>": ["<name>@<version>", …]`). */
