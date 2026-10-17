@@ -204,6 +204,27 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
       `computePrTally: unverifiedCount must be a non-negative integer - got ${String(input.unverifiedCount)}`,
     );
   }
+ // Engine boundary guard : the `incomplete` fact IS the
+ // verdict's cause — a blank reason renders a bare token with no cause
+ // and an envelope its own validator (`review.incomplete-malformed`)
+ // rejects, so no consumer can publish it. An empty `unscanned` array
+ // stays legal: it means nothing was left unscanned.
+  if (input.incomplete !== undefined) {
+    if (typeof input.incomplete.reason !== "string" || input.incomplete.reason.trim() === "") {
+      throw new TypeError(
+        `computePrTally: incomplete.reason must be a non-empty string - got ${JSON.stringify(input.incomplete.reason)}`,
+      );
+    }
+    if (
+      !Array.isArray(input.incomplete.unscanned) ||
+      !input.incomplete.unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "")
+    ) {
+      throw new TypeError(
+        "computePrTally: incomplete.unscanned must be an array of non-empty strings - " +
+          `got ${JSON.stringify(input.incomplete.unscanned)}`,
+      );
+    }
+  }
   let mustFix = 0;
   let shouldFix = 0;
   let nit = 0;

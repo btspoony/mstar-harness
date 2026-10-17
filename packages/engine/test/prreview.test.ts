@@ -1572,6 +1572,36 @@ describe("computePrTally — incomplete verdict", () => {
         "unscanned: none",
     );
   });
+
+  test.each(["", "   ", "\t\n"])(
+    "a blank cause %p is rejected before an unexplained incomplete verdict exists",
+    (reason) => {
+      expect(() => computePrTally({ findings: [], incomplete: { reason, unscanned: [] } })).toThrow(TypeError);
+      expect(() => computePrTally({ findings: [], incomplete: { reason, unscanned: [] } })).toThrow(
+        /incomplete\.reason must be a non-empty string/,
+      );
+    },
+  );
+
+  test("a non-string cause is rejected", () => {
+    expect(() =>
+      computePrTally({ findings: [], incomplete: { reason: 42 as unknown as string, unscanned: [] } }),
+    ).toThrow(/incomplete\.reason must be a non-empty string/);
+  });
+
+  test.each([
+    { unscanned: "src/auth.ts" as unknown as string[] },
+    { unscanned: ["src/auth.ts", "  "] },
+    { unscanned: [""] },
+  ])("a non-array or blank-element unscanned scope is rejected: %p", ({ unscanned }) => {
+    expect(() => computePrTally({ findings: [], incomplete: { reason: "operator cancelled", unscanned } })).toThrow(
+      /incomplete\.unscanned must be an array of non-empty strings/,
+    );
+  });
+
+  test("synthesizeReview cannot mint the envelope its own validator rejects", () => {
+    expect(() => synthesizeReview({ findings: [], incomplete: { reason: " ", unscanned: [] } })).toThrow(TypeError);
+  });
 });
 
 describe("validateMstarReviewV1 — incomplete verdict facts", () => {
