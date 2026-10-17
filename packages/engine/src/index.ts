@@ -435,10 +435,13 @@ export type {
 } from "./roles.js";
 export {
   DEV_TRACK_PARAMS,
+  LEGACY_ARCHIVE_SKILL,
   QC_REVIEWER_PARAMS,
   ROLE_MAPPING,
   SHARED_FAMILIES,
+  collectLegacyArchiveReferenceTexts,
   lintLoadOrder,
+  mergeLegacyArchiveReferences,
   validateRoleMapping,
 } from "./roles.js";
 export type { DetectResult, HostAdapter, HostId, SkillRootPaths, ToolSignal } from "./host.js";

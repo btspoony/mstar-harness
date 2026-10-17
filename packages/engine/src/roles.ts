@@ -24,13 +24,16 @@
  * - `mstar-engine-legacy` SKILL.md § Decision Rules (inbound-only) — the
  * engine-absent condition archive never names another `mstar-*` topic:
  * runtime skills may point at the archive, the archive never points at
- * them (`roles.loadorder.legacy.archive.reference`).
+ * them (`roles.loadorder.legacy.archive.reference`). Callers cover its whole
+ * text face by merging its `references/*.md` through
+ * `mergeLegacyArchiveReferences` (or `collectLegacyArchiveReferenceTexts`
+ * for a skills root).
  *
  * The parameter tables live here as machine data (roadmap §4.3:
  * "parameter tables → data"); `validateRoleMapping` checks the tables'
  * integrity against the on-disk skill layout and the parameter contract.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
@@ -325,6 +328,61 @@ function extractLoadOrderSection(text: string): string | null {
     section.push(lines[i]);
   }
   return section.join("\n");
+}
+
+/**
+ * The engine-absent archive skill id: exempt from core-first by exact name and
+ * inbound-only over its whole text face.
+ */
+export const LEGACY_ARCHIVE_SKILL = "mstar-engine-legacy";
+
+/**
+ * Merge the engine-absent archive's reference texts into `skillTexts` so the
+ * inbound-only rule covers `SKILL.md` **and** `references/*.md` (the archive
+ * carries contract prose in both). Unconditional in the archive's favor:
+ * whenever reference texts exist the `mstar-engine-legacy` key is present and
+ * linted even when its `SKILL.md` was not collected; with no references the
+ * input is copied unchanged (no key is invented). Pure — the caller's map is
+ * left alone for its own reporting.
+ */
+export function mergeLegacyArchiveReferences(
+  skillTexts: Record<string, string>,
+  referenceTexts: readonly string[],
+): Record<string, string> {
+  if (referenceTexts.length === 0) return { ...skillTexts };
+  const skill = skillTexts[LEGACY_ARCHIVE_SKILL];
+  return {
+    ...skillTexts,
+    [LEGACY_ARCHIVE_SKILL]: (skill === undefined ? [...referenceTexts] : [skill, ...referenceTexts]).join("\n"),
+  };
+}
+
+/**
+ * Best-effort read of `mstar-engine-legacy/references/*.md` under
+ * `skillsRoot` (deterministic file-name order). A missing or unreadable
+ * directory yields `[]` and an unreadable file is skipped, so callers may
+ * pass a partial skills root without guarding — the same best-effort shape as
+ * the sibling `SKILL.md` reads, because this lint must never take a gate down.
+ */
+export function collectLegacyArchiveReferenceTexts(skillsRoot: string): string[] {
+  const dir = join(skillsRoot, LEGACY_ARCHIVE_SKILL, "references");
+  let names: string[];
+  try {
+    names = readdirSync(dir)
+      .filter((name) => name.endsWith(".md"))
+      .sort();
+  } catch {
+    return [];
+  }
+  const texts: string[] = [];
+  for (const name of names) {
+    try {
+      texts.push(readFileSync(join(dir, name), "utf8"));
+    } catch {
+      // skip unreadable reference — best-effort read
+    }
+  }
+  return texts;
 }
 
 /**

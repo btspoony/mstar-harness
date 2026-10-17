@@ -39,7 +39,7 @@
  * failure row (never a silent skip that would flood every citation).
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -886,11 +886,13 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
         text: readFileSync(join(SKILLS_ROOT, entry.name, "SKILL.md"), "utf8"),
       }));
     const archiveRefs = join(SKILLS_ROOT, "mstar-engine-legacy", "references");
-    for (const name of readdirSync(archiveRefs).filter((file) => file.endsWith(".md")).sort()) {
-      entries.push({
-        rel: `skills/mstar-engine-legacy/references/${name}`,
-        text: readFileSync(join(archiveRefs, name), "utf8"),
-      });
+    if (existsSync(archiveRefs)) {
+      for (const name of readdirSync(archiveRefs).filter((file) => file.endsWith(".md")).sort()) {
+        entries.push({
+          rel: `skills/mstar-engine-legacy/references/${name}`,
+          text: readFileSync(join(archiveRefs, name), "utf8"),
+        });
+      }
     }
     return entries;
   };

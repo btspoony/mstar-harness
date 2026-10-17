@@ -32,10 +32,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   DEV_TRACK_PARAMS,
+  LEGACY_ARCHIVE_SKILL,
   QC_REVIEWER_PARAMS,
   ROLE_MAPPING,
   SHARED_FAMILIES,
+  collectLegacyArchiveReferenceTexts,
   lintLoadOrder,
+  mergeLegacyArchiveReferences,
   validateRoleMapping,
   type DevTrackParam,
   type QcReviewerParam,
@@ -584,5 +587,71 @@ describe("lintLoadOrder", () => {
     expect(result.ok).toBe(false);
     expect(result.violations).toHaveLength(1);
     expect(result.violations[0]?.message).toContain("mstar-bad");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mergeLegacyArchiveReferences / collectLegacyArchiveReferenceTexts
+// ---------------------------------------------------------------------------
+
+describe("legacy archive corpus helpers", () => {
+  test("merge is unconditional: references lint even when the archive SKILL.md was not collected", () => {
+    const merged = mergeLegacyArchiveReferences(
+      { "mstar-artifacts": "## Load Order\nRead `mstar-harness-core` first.\n" },
+      ["Engine-present fields → `mstar-artifacts`.\n"],
+    );
+    expect(Object.keys(merged)).toContain(LEGACY_ARCHIVE_SKILL);
+    expect(lintLoadOrder(merged).violations.map((v) => v.code)).toEqual([
+      "roles.loadorder.legacy.archive.reference",
+    ]);
+  });
+
+  test("merge keeps the archive SKILL.md text and appends the reference texts", () => {
+    const merged = mergeLegacyArchiveReferences(
+      { [LEGACY_ARCHIVE_SKILL]: "## Load Order\nFollow the host-selected lifecycle authority first.\n" },
+      ["Reference body.\n"],
+    );
+    expect(merged[LEGACY_ARCHIVE_SKILL]).toBe(
+      "## Load Order\nFollow the host-selected lifecycle authority first.\n\nReference body.\n",
+    );
+    expect(lintLoadOrder(merged).violations).toEqual([]);
+  });
+
+  test("no reference texts → input copied unchanged, no archive key invented", () => {
+    const input = { "mstar-artifacts": "# Artifacts\n" };
+    const merged = mergeLegacyArchiveReferences(input, []);
+    expect(merged).toEqual(input);
+    expect(Object.keys(merged)).not.toContain(LEGACY_ARCHIVE_SKILL);
+  });
+
+  test("collect is best-effort: missing or non-directory references path yields []", () => {
+    expect(collectLegacyArchiveReferenceTexts(join(tmpdir(), "mstar-archive-missing-root"))).toEqual([]);
+    const root = mkdtempSync(join(tmpdir(), "mstar-archive-"));
+    try {
+      mkdirSync(join(root, LEGACY_ARCHIVE_SKILL), { recursive: true });
+      writeFileSync(join(root, LEGACY_ARCHIVE_SKILL, "references"), "not a directory");
+      expect(collectLegacyArchiveReferenceTexts(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(CORPUS === null)("collect reads every shipped archive reference file", () => {
+    const corpus = CORPUS as string;
+    const texts = collectLegacyArchiveReferenceTexts(corpus);
+    const shipped = readdirSync(join(corpus, LEGACY_ARCHIVE_SKILL, "references")).filter((name) =>
+      name.endsWith(".md"),
+    );
+    expect(texts).toHaveLength(shipped.length);
+    expect(texts.some((text) => text.includes("# Status v1→v2 field history"))).toBe(true);
+  });
+
+  test.skipIf(CORPUS === null)("collect resolves nothing for a root without the archive", () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-noarchive-"));
+    try {
+      expect(collectLegacyArchiveReferenceTexts(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

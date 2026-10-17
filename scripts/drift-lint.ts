@@ -86,11 +86,13 @@ import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
 import {
   AUDIT_CATEGORIES,
+  LEGACY_ARCHIVE_SKILL,
   classifySkillLint,
   findEphemeralCitations,
   findProvenanceCitations,
   lintFiveQuestion,
   lintLoadOrder,
+  mergeLegacyArchiveReferences,
   stripFrontmatter,
   validateRoleMapping,
 } from "../packages/engine/src/index.ts";
@@ -340,16 +342,12 @@ export function checkRolesCorpus(
     skillTexts[m[1]] = text;
   }
   // The engine-absent archive is inbound-only over its whole text face, so its
-  // reference files are linted with its SKILL.md; every other skill stays
-  // SKILL.md-only.
-  const archive = "mstar-engine-legacy";
-  if (skillTexts[archive] !== undefined) {
-    const refs = files
-      .filter(({ rel }) => rel.startsWith(`skills/${archive}/references/`) && rel.endsWith(".md"))
-      .map(({ text }) => text);
-    if (refs.length > 0) skillTexts[archive] = [skillTexts[archive], ...refs].join("\n");
-  }
-  const loadOrder = lintLoadOrder(skillTexts);
+  // reference files are linted with its SKILL.md (shared engine merge); every
+  // other skill stays SKILL.md-only.
+  const archiveRefs = files
+    .filter(({ rel }) => rel.startsWith(`skills/${LEGACY_ARCHIVE_SKILL}/references/`) && rel.endsWith(".md"))
+    .map(({ text }) => text);
+  const loadOrder = lintLoadOrder(mergeLegacyArchiveReferences(skillTexts, archiveRefs));
   for (const v of loadOrder.violations) {
     failures.push(`roles: load-order ${v.code} - ${v.message}`);
   }

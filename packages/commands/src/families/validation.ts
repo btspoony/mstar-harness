@@ -24,6 +24,8 @@ import {
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
+  collectLegacyArchiveReferenceTexts,
+  mergeLegacyArchiveReferences,
   lintStrategySections,
   parseAssignmentBranchForms,
   parseAssignmentFields,
@@ -405,7 +407,12 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           if (!existsSync(file)) continue;
           try { skillTexts[entry.name] = readFileSync(file, "utf8"); } catch { /* preserve best-effort CLI behavior */ }
         }
-        const loadOrder = lintLoadOrder(skillTexts);
+        // The engine-absent archive is linted over its whole text face; every
+        // other sibling stays SKILL.md-only. Missing/unreadable reference dirs
+        // contribute nothing (the collector is best-effort).
+        const loadOrder = lintLoadOrder(
+          mergeLegacyArchiveReferences(skillTexts, collectLegacyArchiveReferenceTexts(skillsRoot)),
+        );
         violations.push(...loadOrder.violations);
         const gate = { ok: violations.length === 0, violations };
         return gate.ok ? ok(id, { ...gateData(gate), siblingCount: Object.keys(skillTexts).length, loadOrderChecked: Object.keys(skillTexts).filter((name) => name !== "mstar-harness-core").length }) : rejected(id, gate, "roles.invalid");
