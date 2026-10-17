@@ -55,26 +55,36 @@ describe('registry peer contract (npm, no link farm)', () => {
     }
   })
 
-  it('the resolved @deepseek-ai/dsh-* graph is a single line (one version, no dsh-client-web-react)', () => {
-    // Lock-wide complement of the manifest pin: bun.lock is the ground truth
-    // of what actually resolves. Caret peer ranges alone do not guarantee a
-    // single line — a conflicting peer can leave nested prerelease copies
-    // behind while the manifest still reads one range. ANY dsh-* entry off
-    // the unique resolved version fails here.
+  it('the resolved @deepseek-ai/dsh-* peer cohort is a single line (one version, no dsh-client-web-react)', () => {
+    // Lock complement of the manifest pin, scoped to THIS package's cohort:
+    // bun.lock's `packages` map records what each name actually resolves to,
+    // and every `@deepseek-ai/dsh-*` peer THIS package declares must resolve to
+    // ONE version — a host service answering from two revisions is the failure
+    // this asserts.
+    //
+    // The scan is deliberately not lock-wide: a dev-only third-party plugin
+    // (`dsh-llm-fallbacks`) declares the PREVIOUS prerelease range for its own
+    // peers (~`^0.2.0-rc.2`, which a later prerelease like `0.2.1-rc.1` does
+    // not satisfy), so bun keeps nested copies of those names for THAT
+    // dependency. Those copies are not in this plugin's resolution and must
+    // not fail its cohort assertion — the invariant is about the versions this
+    // package's rows answer from, not about every copy on the machine.
     const lock = readFileSync(join(repoRoot, 'bun.lock'), 'utf8')
-    const resolvedNames = new Set<string>()
-    const resolvedVersions = new Set<string>()
-    for (const match of lock.matchAll(/(@deepseek-ai\/dsh-[^@"]+)@([0-9]+\.[0-9]+\.[0-9][^"]*)/g)) {
-      resolvedNames.add(match[1])
-      resolvedVersions.add(match[2])
-    }
+    const escape = (name: string): string => name.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')
+    /** Version a name resolves to in the lock's own `packages` map (`"<name>": ["<name>@<version>", …]`). */
+    const resolvedVersion = (name: string): string | undefined =>
+      new RegExp(`"${escape(name)}": \\["${escape(name)}@([^"]+)"`).exec(lock)?.[1]
+
+    const cohortVersions: string[] = []
     for (const name of deepseekKeys(pkg.peerDependencies)) {
-      if (name.startsWith('@deepseek-ai/dsh-')) {
-        expect(resolvedNames.has(name), `${name} missing from bun.lock resolution graph`).toBe(true)
-      }
+      if (!name.startsWith('@deepseek-ai/dsh-')) continue
+      const version = resolvedVersion(name)
+      expect(version, `${name} missing from bun.lock resolution graph`).toBeDefined()
+      cohortVersions.push(version!)
     }
-    expect(resolvedVersions.size, `split dsh-* graph: ${[...resolvedVersions].join(', ')}`).toBe(1)
-    expect(resolvedNames.has('@deepseek-ai/dsh-client-web-react')).toBe(false)
+    expect(cohortVersions.length).toBeGreaterThan(0)
+    expect([...new Set(cohortVersions)], `split dsh-* cohort: ${cohortVersions.join(', ')}`).toHaveLength(1)
+    expect(resolvedVersion('@deepseek-ai/dsh-client-web-react')).toBeUndefined()
   })
 
   it('peers are NOT marked optional (bun must auto-install them from the registry)', () => {

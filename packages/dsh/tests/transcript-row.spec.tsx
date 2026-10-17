@@ -94,6 +94,13 @@ function harvestChatBundle(): {
         renderers.set(options.key ?? options.id ?? options.name, component)
         return () => {}
       },
+      // rc.1's chat bundle also registers reusable Component factories
+      // (`slots.registerFactory({ name, scope, locale }, Component)`); the
+      // double records them like `register` so the bundle's apply() runs.
+      registerFactory: (definition: { key?: string; id?: string; name: string }, component: (props: unknown) => unknown) => {
+        renderers.set(definition.key ?? definition.id ?? definition.name, component)
+        return () => {}
+      },
     },
     effect: (fn: () => unknown) => { const disposer = fn(); return typeof disposer === 'function' ? disposer : () => {} },
     locale: {

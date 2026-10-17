@@ -6,7 +6,7 @@
  * dispatches carry the SAME Assignment-shaped `{ description, prompt }` args
  * and ride the SAME seams — `tools/pre-execute` (dispatch gate),
  * `tools/post-execute` (settle pairing, dispatchTools-matched), and the
- * native persona channel on the child start. This spec proves all three
+ * native role-preset channel on the child start. This spec proves all three
  * compose on `subagent_fork` once the tool joins `DEFAULT_DISPATCH_TOOLS`:
  *
  * - (a) a fork dispatch with an invalid Assignment under `Enforcement: hard`
@@ -21,9 +21,9 @@
  *   plus the bare-context foreground pairing probe with an EMPTY config
  *   (the DEFAULT tool set alone matches `subagent_fork`);
  * - (d) a fork child (Assignment-seeded, same prompt shape) whose start
- *   merges the role persona via the native subagent persona channel — the
- *   channel keys on the request prompt, so a fork start gets the same merge
- *   with no fork-specific code.
+ *   SELECTS the configured role preset on the native activation spec — the
+ *   channel keys on the request prompt, so a fork start gets the same
+ *   selection with no fork-specific code.
  *
  * Harness: the SAME real-composition boot as dispatch-gate.spec.ts / the
  * agent-flow upstream seam probes; the fork tool is registered like the
@@ -40,10 +40,9 @@ import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { JobId } from '@deepseek-ai/dsh-jobs'
 import { readAgentFlow, recordDispatch, SETTLE_SEAM } from '../src/index.ts'
 import type { AgentFlowView } from '../src/index.ts'
-import type { SubagentStartRequest, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, bootApp, seedActiveWorkflow, selectedGenerationFor, startViaNativeChannel, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, bootApp, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -79,11 +78,11 @@ const MISSING_EXECUTE_AS = `## Assignment
 Do the thing.
 `
 
-/** The mstar role id the fork-child Assignment declares and the persona is keyed by. */
+/** The mstar role id the fork-child Assignment declares and the preset is mapped by. */
 const EXECUTE_AS = 'fullstack-dev'
 
-/** The configured persona text for `fullstack-dev`. */
-const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+/** The deployed agent preset id `fullstack-dev` maps to (the Config `rolePresets` payload). */
+const ROLE_PRESET = 'mstar-execute'
 
 /** One mstar-style Assignment prompt seeded into a fork child session. */
 const FORK_ASSIGNMENT_PROMPT = [
@@ -333,29 +332,28 @@ describe('background settle subscription lifecycle', () => {
   })
 })
 
-/* ------------------------- (d) native persona channel cross-check ------------------------- */
+/* ------------------------- (d) native role-preset channel cross-check ------------------------- */
 
-describe('fork persona — the native channel composes on fork dispatches', () => {
-  it('(d) a fork Assignment start merges the role persona into the native request persona', async () => {
+describe('fork preset — the native channel composes on fork dispatches', () => {
+  it('(d) a fork Assignment start selects the configured role preset on the native activation spec', async () => {
     // Fork dispatches carry the SAME Assignment-shaped prompt as `subagent`
-    // starts, and both ride `ctx.subagents.start` — the native persona
-    // channel (role-persona.ts) keys on the prompt, so a fork start gets the
-    // same merge with no fork-specific code.
+    // starts, and both ride `ctx.subagents.startActivation` — the native
+    // role-preset channel (role-persona.ts) keys on the prompt, so a fork
+    // start gets the same selection with no fork-specific code.
     const app = booted = await bootApp({
-      agentsService: 'fake',
-      subagents: 'real',
-      rolePersonas: { [EXECUTE_AS]: PERSONA },
+      subagents: 'fake',
+      agentPresetsService: [ROLE_PRESET],
+      rolePresets: { [EXECUTE_AS]: ROLE_PRESET },
     })
-    const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
-    ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
+    const provider = new FakeSubagentProvider('fake-spawn', { agentPresetCapability: true })
+    ;(app.ctx.subagents as unknown as FakeSubagentService).registerProvider(provider)
 
-    await startViaNativeChannel(app, 'fake-spawn', {
-      prompt: [{ type: 'text', text: FORK_ASSIGNMENT_PROMPT }],
-      parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
-      signal: new AbortController().signal,
-    } as unknown as SubagentStartRequest)
+    await startActivationViaNativeChannel(app, {
+      provider: 'fake-spawn',
+      request: { prompt: [{ type: 'text', text: FORK_ASSIGNMENT_PROMPT }] },
+    })
 
     expect(provider.starts).toHaveLength(1)
-    expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+    expect(provider.starts[0]!.request.agentPreset).toBe(ROLE_PRESET)
   })
 })

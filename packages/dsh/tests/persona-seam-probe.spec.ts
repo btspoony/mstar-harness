@@ -6,10 +6,11 @@
  * - the seam NAME: `PERSONA_SEAM_EVENT` is the cordis `internal/get`
  *   service-read waterfall event; a rename is a one-line, intentional edit
  *   in `role-persona.ts` whose trigger is this file going red;
- * - the wrapper INSTALL: on the real composition, `subagents` reads through
+ * - the wrapper INSTALL: on a real composition, `subagents` reads through
  *   a runtime-bearing context resolve to the branded wrapper (exactly one
  *   own symbol, value `true`, non-enumerable, key surface unchanged) and a
- *   start through the native channel still merges the persona;
+ *   start through the native channel still SELECTS the role's preset
+ *   (`request.agentPreset`);
  * - the probe VERDICTS: the full `evaluateSeamProbe` outcome table (f2–f6
  *   below are the authoritative table home; Task 1's unit originals p1–p6
  *   live in `role-persona.spec.ts`), the sanctioned apply-ctx
@@ -20,7 +21,7 @@
  * Context shapes (Task 1 report note): a proxied `internal/get` dispatch
  * only happens on a RUNTIME-BEARING context — the full branded-`ok` probe
  * runs inside the same inject scope the harness's real subagents resolution
- * uses (`startViaNativeChannel`); a plugin-fiber apply context
+ * uses (`startActivationViaNativeChannel`); a plugin-fiber apply context
  * (`inject: ['loader']`, the wiring shape) cannot resolve `subagents` and
  * lands `service-absent` by design — never a warn; a root-fiber context
  * does not dispatch the waterfall at all → `seam-absent` → the fail-loud
@@ -28,12 +29,12 @@
  */
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, afterEach } from 'bun:test'
-import type { SubagentStartRequest, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import {
   FakeLoaderRegistry,
   FakeSubagentProvider,
+  FakeSubagentService,
   bootApp,
-  startViaNativeChannel,
+  startActivationViaNativeChannel,
   type BootResult,
 } from './harness.ts'
 import {
@@ -45,6 +46,7 @@ import {
   setRolePersonaLogger,
   type PersonaSeamProbeResult,
   type RolePersonaLogLevel,
+  type SubagentsServiceView,
 } from '../src/gates/role-persona.ts'
 
 let booted: BootResult | undefined
@@ -54,11 +56,14 @@ afterEach(async () => {
   booted = undefined
 })
 
-/** The mstar role id the test Assignment declares and the persona is keyed by. */
+/** The mstar role id the test Assignment declares and the preset map is keyed by. */
 const EXECUTE_AS = 'fullstack-dev'
 
-/** The configured persona text for `fullstack-dev`. */
-const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+/** The registered provider name every start is driven against. */
+const PROVIDER = 'fake-spawn'
+
+/** The deployed agent preset id the role selects (the channel's merge target). */
+const PRESET = 'mstar-execute'
 
 /** One mstar-style Assignment prompt sent as the start request's task text. */
 const ASSIGNMENT_PROMPT = [
@@ -75,7 +80,7 @@ const ASSIGNMENT_PROMPT = [
  * reason suffix) — the warn-emission pin asserts this verbatim, so a
  * wording or seam drift in the operator-facing message fails here.
  */
-const SEAM_WARN_TEXT = `role persona channel not installed — cordis '${PERSONA_SEAM_EVENT}' seam missing or unrecognized (rolePersonas will not be merged into subagent starts)`
+const SEAM_WARN_TEXT = `role persona channel not installed — cordis '${PERSONA_SEAM_EVENT}' seam missing or unrecognized (role presets will not be selected for subagent starts)`
 
 /** Capture role-persona logs through the module sink (agent-flow test pattern). */
 function captureLogs(): { captured: Array<[RolePersonaLogLevel, string]>; restore: () => void } {
@@ -91,23 +96,24 @@ function brandedWrapper(proto: object = {}): object {
   return wrapper
 }
 
-/** A real start request whose prompt text carries `text` (Assignment or plain). */
-function startRequest(text: string): SubagentStartRequest {
-  return {
-    prompt: [{ type: 'text', text }],
-    parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
-    signal: new AbortController().signal,
-  } as unknown as SubagentStartRequest
+/** One native `startActivation` spec whose request prompt text carries `text` (Assignment or plain). */
+function startSpec(text: string): Parameters<SubagentsServiceView['startActivation']>[0] {
+  return { provider: PROVIDER, request: { prompt: [{ type: 'text', text }] } }
 }
 
-/** Boot the REAL subagents runtime + one persona-capable fake provider (the delivery composition). */
+/**
+ * Boot the delivery composition: the FAKE subagents service (the channel's
+ * wrap target — its `startActivation` is the one start surface of dsh 0.2.1)
+ * + the fake `agentPresets` registry declaring the role's preset + one
+ * preset-capable provider.
+ */
 async function bootWithProvider(): Promise<{ app: BootResult; provider: FakeSubagentProvider }> {
-  booted = await bootApp({ agentsService: 'fake', subagents: 'real', rolePersonas: { [EXECUTE_AS]: PERSONA } })
-  const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
+  booted = await bootApp({ subagents: 'fake', agentPresetsService: [PRESET], rolePresets: { [EXECUTE_AS]: PRESET } })
+  const provider = new FakeSubagentProvider(PROVIDER, { agentPresetCapability: true })
   // Registration targets the raw root-context read (the root fiber has no
   // runtime, so the read bypasses the channel wrapper — the direct registry
   // path; the wrapper delegates the same registry anyway).
-  ;(booted.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
+  ;(booted.ctx.subagents as unknown as FakeSubagentService).registerProvider(provider)
   return { app: booted, provider }
 }
 
@@ -156,16 +162,16 @@ describe('persona seam probe — decision table (pure evaluateSeamProbe, one hom
   })
 })
 
-describe('persona seam probe — real composition (bootApp, real subagents runtime)', () => {
-  it('(f7) full probe from an inject-scoped runtime-bearing ctx → ok:true, silent; the read is branded; start still merges', async () => {
+describe('persona seam probe — real composition (bootApp, fake subagents service)', () => {
+  it('(f7) full probe from an inject-scoped runtime-bearing ctx → ok:true, silent; the read is branded; start still selects the preset', async () => {
     const { app, provider } = await bootWithProvider()
 
     const { captured, restore } = captureLogs()
     try {
       // The probe runs inside the SAME inject scope the harness's real
-      // subagents resolution uses (startViaNativeChannel) — the runtime-
-      // bearing context whose proxied read dispatches the waterfall, so the
-      // branded-`ok` branch is exercised end to end.
+      // subagents resolution uses (startActivationViaNativeChannel) — the
+      // runtime-bearing context whose proxied read dispatches the waterfall,
+      // so the branded-`ok` branch is exercised end to end.
       const probed = Promise.withResolvers<PersonaSeamProbeResult>()
       const wrapperReady = Promise.withResolvers<unknown>()
       void app.ctx.inject(['subagents'], (sctx) => {
@@ -195,12 +201,13 @@ describe('persona seam probe — real composition (bootApp, real subagents runti
       expect(Object.getOwnPropertySymbols(wrapper)).toEqual([ROLE_PERSONA_WRAPPER_BRAND])
       expect((wrapper as Record<symbol, unknown>)[ROLE_PERSONA_WRAPPER_BRAND]).toBe(true)
       expect(Object.getOwnPropertyDescriptor(wrapper, ROLE_PERSONA_WRAPPER_BRAND)?.enumerable).toBe(false)
-      expect(Object.keys(wrapper).sort()).toEqual(['start', 'startContinuable'])
+      expect(Object.keys(wrapper)).toEqual(['startActivation'])
 
-      // Delivery unchanged through the probed channel: the start merges the
-      // persona (the one delivery debug is the only log — still zero warns).
-      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
-      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+      // Delivery unchanged through the probed channel: the start SELECTS the
+      // role's preset in the resolved request (the one delivery debug is the
+      // only log — still zero warns).
+      await startActivationViaNativeChannel(app, startSpec(ASSIGNMENT_PROMPT))
+      expect(provider.starts[0]!.request.agentPreset).toBe(PRESET)
       expect(captured).toHaveLength(1)
       expect(captured[0]![0]).toBe('debug')
     } finally {

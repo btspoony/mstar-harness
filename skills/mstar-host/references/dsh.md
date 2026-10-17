@@ -444,7 +444,7 @@ dispatch.
 
 **Role-binding field:** none — binding is **prompt-only** on dsh (the tool has
 no role field; the header region of the Assignment body is what the gate and
-the role-persona channel read, so `Execute as` / `Act as` + skill load must be
+the role-preset channel read, so `Execute as` / `Act as` + skill load must be
 in the prompt). A dispatch that drops those lines has no field to fall back on
 — it is a bare delegation.
 
@@ -555,11 +555,13 @@ Task category: audit
 ```
 
 Role binding on dsh is prompt-only (there is no `agent` field), and the same
-engine grammar is what the role-persona channel parses
+engine grammar is what the role-preset channel parses
 (`packages/dsh/src/gates/role-persona.ts` reads only the header region) — so
-`Execute as: qc-specialist` resolves the QC role persona for that child. Keep
-body-quoted field examples out of the header region, and never pass the deferred
-`agentType` option: the engine rejects it loudly.
+`Execute as: qc-specialist` selects the agent preset the deployment declared for
+that role (dsh 0.2.1 delivers a child's identity through preset selection; a
+role with no configured preset leaves the child on the delegating agent's
+composition). Keep body-quoted field examples out of the header region, and
+never pass the deferred `agentType` option: the engine rejects it loudly.
 
 | Operator types | N | Tool | `meta.name` | Operator sees |
 |---|---|---|---|---|

@@ -1,83 +1,71 @@
 /**
- * Native-first role-persona delivery : a role-matched subagent start merges the persona into the request's
- * NATIVE `persona` slot (`@deepseek-ai/dsh-subagent`
- * `SubagentStartRequest.persona`) — the additive `mstar:role-persona`
- * system-prompt section is gone. Native semantics: the request persona
- * registers the scoped `deployment:persona` section (order
- * `DEPLOYMENT_PERSONA` = 0) on the child, SHADOWING the deployment persona
- * for that child alone, is persisted in the child descriptor, and is
- * reapplied on resume — delivery, persistence, and resume replay all belong
- * to dsh. BOTH start surfaces are wrapped: the one-shot `start` AND the
- * opt-in continuable `startContinuable` (tool-subagent
- * `backgroundMode: 'continuable'` routes its background run through
- * `ContinuableStartSpec.request`) — the old `subagent/start` emit
- * decoration covered continuable children too, and this channel must not
- * regress that.
+ * Role-persona delivery through the upstream Agent Preset selection — a
+ * role-matched subagent start selects the preset the deployment declared for
+ * that role (`Config.rolePresets` → `SubagentStartRequest.agentPreset`).
+ *
+ * Why not the persona slot: dsh 0.2.1 removed `SubagentStartRequest.persona`
+ * (and the `start`/`startContinuable` pair) — `tool-subagent` rejects the old
+ * `persona` config with "configure persona and tool plugins in an Agent Preset
+ * and select it with agentPreset (spawn only)", and the continuation manager
+ * composes a fresh child from `request.agentPreset` ALONE
+ * (`applyChildComposition`: explicit selection mounts the named preset,
+ * omission joins the parent's live generation). Persona text is therefore
+ * owned by a preset row (`@deepseek-ai/dsh-persona`), and this channel owns
+ * only the role → preset SELECTION. The selected preset owns the child's whole
+ * composition (persona, tools, skills) — it is never a persona-only patch, so
+ * the deployment declares one complete preset per role and lists its id here.
  *
  * Interception seam: the cordis service-read waterfall
  * (`Events['internal/get']`, `@deepseek-ai/cordis` 4.0.2
  * `lib/types/events.d.ts`) — the framework's documented interception hook
  * for values read through the context proxy. The listener wraps the
  * `subagents` service VALUE on read (a prototype-delegating wrapper whose
- * `start`/`startContinuable` merge the role persona into the request before
+ * `startActivation` merges the role's preset into the spec before
  * delegating); the real `SubagentRuntime` object is never mutated — readers
  * of `ctx.subagents` (the tool-subagent reads it per call through a
  * plugin-fiber context) transparently receive the wrapper. The listener is
  * owned by the applying fiber (cordis listener effects), so an HMR fiber
  * swap unwinds and restores it like every other registration.
  *
- * The continuable request has no earlier seam: `registerContinuableSetup`
- * contributions are child-scope installers (`(childCtx) => () => void` —
- * no per-start data slot), so the earliest point where the continuable
- * request exists is the `startContinuable(spec)` call itself, which the
- * wrapper owns.
+ * `startActivation(spec)` is the ONE start surface in dsh 0.2.1 (local and
+ * external children alike), so both delegation shapes — a one-shot run and a
+ * continuable background child — are covered by the single merge.
  *
  * Role identity uses the engine Assignment header grammar — the SAME
  * parsers the dispatch gate uses (`assignmentHeaderRegion` +
  * `parseAssignmentFields`) — over the start request's prompt text (the
- * `ContentBlock[]` the child receives as its first user message). Persona
- * lookup  is the single
- * {@link personaFor} surface — `Config.rolePersonas[executeAs]` →
- * `harness-agents/` mirror default → skip (never gated on `roleMap` or on
- * the fallbacks mounted state: persona delivery is fallbacks-independent).
- * `roleMap` is a taxonomy bridge for logging + future rule-driven interop
- * only. The mirror root is bound at apply (`setRolePersonaAgentsDir` ←
- * `packagedAgentsDir()`), package-relative so the shipped bundle works from
- * any launch cwd. Lifetime: the root is a module-level binding with ONE
- * writer — the per-apply `setRolePersonaAgentsDir` call — and it is read
- * per start, so every start observes an apply-constant value; re-calling
- * the setter (an HMR re-apply) IS the re-bind, and that re-bind is the
- * intended reset (it also re-arms the mirror-absent latch below). The
- * per-apply payload `Config.rolePersonas` is the contrast: closed over per
- * apply in `registerRolePersonaChannel`.
+ * `ContentBlock[]` the child receives as its first user message).
+ * `Config.rolePresets[executeAs]` is the channel's only payload source
+ * (never gated on `roleMap` or on the fallbacks mounted state: delivery is
+ * fallbacks-independent) and is closed over per apply in
+ * `registerRolePersonaChannel`. `roleMap` is a taxonomy bridge for logging +
+ * future rule-driven interop only.
  *
- * Capability gates (native fail-loud contracts, per surface): one-shot
- * `SubagentRuntime.start` REJECTS a request carrying `persona` for a
- * provider whose `SubagentCapabilities.persona` is false (e.g.
- * out-of-process providers) — "rejected rather than accepted-then-ignored"
- * — so the one-shot merge checks `getProvider(name).capabilities.persona`
- * first. Continuable children are composed by the continuation manager
- * itself and are gated by `SubagentProvider.prepareContinuable` instead
- * (upstream `SubagentCapabilities` doc: the flags "describe the ONE-SHOT
- * path"), so the continuable merge checks `prepareContinuable` — the
- * manager applies a merged persona unconditionally. Either way: gate miss →
- * the persona is skipped with one contained debug log and the start
- * proceeds unchanged — the contained degrade, never a failed dispatch.
+ * Capability gates (upstream `tool-subagent` `assertProvider`): independent
+ * preset selection requires a provider whose
+ * `SubagentCapabilities.agentPreset` is true and whose
+ * `inheritsParentContext` is false — "provider does not support independent
+ * agent preset selection" otherwise. The selection also requires the
+ * `agentPresets` service (the web-app and headless bundles mount
+ * `@deepseek-ai/dsh-agent-preset-registry`; a composition without it cannot
+ * mount a preset and dsh fails loud `PRESET_UNAVAILABLE`). Gate miss → the
+ * selection is skipped with one contained debug log and the start proceeds
+ * unchanged — the contained degrade, never a failed dispatch.
  *
- * Precedence: an explicit `request.persona` (e.g. tool-subagent's own
- * `Config.persona`) is caller intent and WINS — the role persona fills the
- * slot only when the request does not already carry one.
+ * Precedence: a request that already carries `agentPreset` (the tool's
+ * configured default or the model's own `agent_preset` choice) is caller
+ * intent and WINS — the channel fills the slot only when it is free.
  *
  * Degradation (the wrapper never throws before delegating — contained like
- * the dispatch gate's degrade path): unparseable prompt / role-unmatched →
- * silent pass-through; persona lookup miss with NO mirror → one debug log
- * per apply (S-002 latch); a throwing merge aborts the merge only — the
- * ORIGINAL request reaches the service and the start is never affected.
+ * the dispatch gate's degrade path): unparseable prompt / role without a
+ * configured preset → silent pass-through; a throwing merge aborts the
+ * merge only — the ORIGINAL request reaches the service and the start is
+ * never affected.
  *
  * Seam probe (apply-time, observation only): a future cordis rename/removal
- * of `internal/get` would stop the listener from ever firing — persona
- * delivery would silently degrade to the raw service with no runtime
- * signal. {@link probeRolePersonaSeam} runs ONCE per apply right after
+ * of `internal/get` would stop the listener from ever firing — delivery
+ * would silently degrade to the raw service with no runtime signal.
+ * {@link probeRolePersonaSeam} runs ONCE per apply right after
  * {@link registerRolePersonaChannel}: a temporary canary listener + ONE
  * controlled proxied read (`ctx.subagents` — NEVER `ctx.get`, whose accessor
  * bypasses the waterfall and would false-warn every healthy boot) assert
@@ -90,13 +78,11 @@
  * dispatch. The decision core is the pure {@link evaluateSeamProbe}, so the
  * whole outcome table is unit-pinnable without cordis internals.
  *
- * Persona text is rendered by dsh system-prompt's STRICT `{{...}}`
- * interpolation (the native persona has the same template semantics as the
- * deployment persona), so persona values MUST NOT contain `{{` paired with
- * a later `}}` — the Config schema rejects such values at plugin mount (see
- * `_shared.ts` `rolePersonas` / `PERSONA_INTERPOLATION_HAZARD`); a mirror
- * default carrying the hazard is warned + skipped at extraction (never a
- * boot throw).
+ * Configured preset ids are validated ONCE per apply as soon as the
+ * `agentPresets` service resolves: an id the roster does not declare is
+ * reported with ONE warning (the deployment's own `agent-preset/not-found`
+ * would otherwise surface only when a role-matched child fails to start) and
+ * is left configured — a later-mounting row may still declare it.
  *
  * Module boundary: no barrel — the entry imports this module by explicit
  * relative path and re-exports the public names verbatim, EXCEPT the four
@@ -104,20 +90,26 @@
  * `evaluateSeamProbe`, `probeRolePersonaSeam`), which are deliberately NOT
  * re-exported from the entry: the frozen entry surface keeps the probe
  * observable only through this module (tests import it directly; the
- * shipped bundle exports no probe symbol). No dsh-subagent
- * dependency: the runtime surface is consumed structurally (same pattern as
- * the probe's `LoaderEntryView` and T2's `fallbacks-structural.ts`).
+ * shipped bundle exports no probe symbol). No dsh-subagent dependency: the
+ * runtime surface is consumed structurally (same pattern as the probe's
+ * `LoaderEntryView` and T2's `fallbacks-structural.ts`).
  */
 import type { Context } from '@deepseek-ai/cordis'
+// Type-only: loads the registry's `Context` augmentation (the `agentPresets`
+// service name) without a runtime dependency — the plugin consumes the host
+// service structurally.
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import type { Config } from './_shared.ts'
-import { personaFor } from './agent-personas.ts'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
 export const ROLE_PERSONA_LOGGER = 'mstar/role-persona'
 
 /** The cordis service name the channel intercepts (`ctx.subagents`). */
 const SUBAGENTS_SERVICE = 'subagents'
+
+/** The cordis service name a selected preset is resolved from (`ctx.agentPresets`). */
+const AGENT_PRESETS_SERVICE = 'agentPresets'
 
 /**
  * The interception seam: the cordis service-read waterfall event the channel
@@ -147,72 +139,68 @@ interface PromptBlockView {
 /**
  * Structural view of the one-shot start request the channel merges into
  * (`@deepseek-ai/dsh-subagent` `SubagentStartRequest` — consumed fields
- * only: `prompt` is the role-extraction source, `persona` is the merge
- * target). The wrapper forwards the request object SPREAD, so every
- * non-consumed field (`label`, `parent`, `signal`, `agentOptions`, …)
- * reaches the service unchanged at runtime; the view types only what this
- * module reads. The continuable surface merges into the SAME view
- * (`ContinuableStartSpec.request` is `Omit<SubagentStartRequest, 'label' |
- * 'signal' | 'outputSchema'>` — same `prompt`/`persona` shape).
+ * only: `prompt` is the role-extraction source, `agentPreset` is the
+ * selection target). The wrapper forwards the request object SPREAD, so
+ * every non-consumed field (`cwd`, `label`, `parent`, `signal`,
+ * `agentOptions`, …) reaches the service unchanged at runtime; the view
+ * types only what this module reads.
  */
 export interface SubagentStartRequestView {
   /** Content delivered as the child's user message (the Assignment carrier). */
   readonly prompt: readonly PromptBlockView[]
-  /** Optional per-child persona — when already set, the caller wins. */
-  readonly persona?: string
+  /** Optional preset already selected by the tool or the model — caller intent wins. */
+  readonly agentPreset?: string
 }
 
 /**
- * Structural view of the continuable start spec the channel merges into
- * (`@deepseek-ai/dsh-subagent` `ContinuableStartSpec` — consumed fields
+ * Structural view of the activation spec the channel merges into
+ * (`@deepseek-ai/dsh-subagent` `SubagentActivationSpec` — consumed fields
  * only). The wrapper forwards the spec object SPREAD, so every
- * non-consumed field (`label`, `childId`, `signal`) reaches the service
- * unchanged at runtime; the view types only what this module reads.
+ * non-consumed field (`label`, `childId`, `signal`, `delivery`) reaches the
+ * service unchanged at runtime; the view types only what this module reads.
  */
-export interface ContinuableStartSpecView {
-  /** The `ctx.subagents` provider whose continuable creation establishes the child. */
+export interface SubagentActivationSpecView {
+  /** Registered backend the child is started on (the capability-gate key). */
   readonly provider: string
-  /** The delegation request (the merge target: same view as the one-shot request). */
+  /** The delegation request (the merge target). */
   readonly request: SubagentStartRequestView
 }
 
 /**
  * Structural view of the capability set the channel gates on
- * (`@deepseek-ai/dsh-subagent` `SubagentCapabilities` — only `persona` is
- * consumed: the ONE-SHOT fail-loud contract rejects a persona request for a
- * provider without it, so the one-shot merge must pre-check).
+ * (`@deepseek-ai/dsh-subagent` `SubagentCapabilities` — only `agentPreset`
+ * is consumed: an independent selection requires it, and the runtime rejects
+ * one for a provider without it).
  */
 interface SubagentCapabilitiesView {
-  readonly persona?: boolean
+  readonly agentPreset?: boolean
 }
 
 /**
  * Structural view of one registered provider (`SubagentProvider` consumed
- * surface). `prepareContinuable` is the NATIVE continuable gate (upstream:
- * continuable children "are composed by the continuation manager itself
- * and are gated by `SubagentProvider.prepareContinuable` instead") — its
- * presence, not the one-shot `persona` flag, decides whether a merged
- * persona can be honored on the continuable surface.
+ * surface). A provider that inherits its parent's conversation cannot accept
+ * an independent composition (upstream `tool-subagent` rejects the pair
+ * `!capabilities.agentPreset || inheritsParentContext`), so the selection is
+ * skipped for it.
  */
 interface SubagentProviderView {
   readonly capabilities: SubagentCapabilitiesView
-  readonly prepareContinuable?: unknown
+  readonly inheritsParentContext?: boolean
 }
 
 /**
  * Structural view of the `subagents` runtime the wrapper delegates to
  * (`@deepseek-ai/dsh-subagent` `SubagentRuntime` consumed surface:
- * capability reads + one-shot and continuable starts). Start methods
- * return the service's own promises/ids — opaque here, forwarded untouched.
+ * capability reads + the one start call). `startActivation` returns the
+ * service's own promise — opaque here, forwarded untouched.
  */
 export interface SubagentsServiceView {
   /** Look up a provider by name (the capability-gate read). */
   getProvider(name: string): SubagentProviderView | undefined
-  /** Establish one published child on the named provider (the delegated one-shot start). */
-  start(name: string, request: SubagentStartRequestView): unknown
-  /** Establish one durable continuable child (the delegated continuable start). */
-  startContinuable(spec: ContinuableStartSpecView): unknown
+  /** Establish one child on the named provider (the delegated start). */
+  startActivation(spec: SubagentActivationSpecView): unknown
 }
+
 
 /** Role-persona log levels the module sink understands. */
 export type RolePersonaLogLevel = 'debug' | 'warn'
@@ -234,95 +222,79 @@ export function setRolePersonaLogger(sink: RolePersonaLogSink): RolePersonaLogSi
 }
 
 /**
- * The persona-defaults mirror root (`harness-agents/`), bound by the entry
- * `apply` to the packaged mirror (package-relative resolution — the shipped
- * bundle works from any launch cwd). `undefined` → the channel is
- * config-only (no mirror defaults).
- *
- * Lifetime (module sink, deliberately not apply-closed): one binding per
- * process with exactly ONE writer — {@link setRolePersonaAgentsDir},
- * called once per apply from the entry (`packagedAgentsDir()`) — while the
- * only read (`withRolePersona`, per start) observes an apply-constant
- * value: the binding cannot change mid-apply, so the module variable is
- * apply-scoped in effect. Contrast: the persona payload
- * `Config.rolePersonas` is apply-closed (closed over in
- * `registerRolePersonaChannel`); the mirror root is apply-scoped by
- * re-binding rather than by closure.
+ * Wrapper identity cache — one wrapper per (service value, per-apply channel
+ * state). Repeated reads of the same service under the same registration agree
+ * on one wrapper; an HMR re-apply creates a NEW state object, so the identity
+ * check re-wraps with the fresh binding (the old fiber's listener is gone by
+ * then — its wrapper is unreachable).
  */
-let rolePersonaAgentsDir: string | undefined
+const wrapperCache = new WeakMap<object, { state: ChannelState; wrapper: unknown }>()
 
 /**
- * S-002: once-per-apply latch for the mirror-absent debug — the latch is
- * keyed on the agents-dir binding (each `setRolePersonaAgentsDir` call,
- * i.e. each apply, resets it), so the "no mirror" debug fires at most once
- * per apply instead of once per start (advisory-latch pattern).
+ * Per-apply channel state — never a process global (two applies must not
+ * cross-talk). It carries the once-per-apply latch for the missing-registry
+ * debug; the registry itself is read per start through
+ * {@link agentPresetsService} (an accessor read, which cordis permits without
+ * an injection), so a row that mounts later is picked up without a re-apply.
  */
-let mirrorAbsentDebugged = false
-
-/**
- * Bind the persona-defaults mirror root — the module sink's only writer,
- * invoked once per apply from the entry with `packagedAgentsDir()`, so an
- * HMR re-apply re-binds the root instead of inheriting the previous
- * apply's binding. That re-bind is the intended reset: beyond swapping the
- * root it re-arms the S-002 mirror-absent latch (`mirrorAbsentDebugged`),
- * keeping the "no mirror" debug at most once per apply, and the returned
- * PRIOR binding lets a caller restore the previous root (test pattern:
- * {@link setRolePersonaLogger}).
- * @param dir - the mirror root, or `undefined` to disable mirror defaults.
- */
-export function setRolePersonaAgentsDir(dir: string | undefined): string | undefined {
-  const prior = rolePersonaAgentsDir
-  rolePersonaAgentsDir = dir
-  mirrorAbsentDebugged = false
-  return prior
+interface ChannelState {
+  /** Once-per-apply latch for the missing-registry debug. */
+  registryAbsentLogged: boolean
 }
 
 /**
- * Wrapper identity cache — one wrapper per (service value, persona-config
- * generation). Repeated reads of the same service under the same
- * registration agree on one wrapper; an HMR re-apply binds a NEW validated
- * Config object, so the identity check re-wraps with the fresh binding
- * (the old fiber's listener is gone by then — its wrapper is unreachable).
+ * Read the OPTIONAL `agentPresets` registry for one start — through the
+ * accessor (`ctx.get`), not a service property: cordis refuses to READ a
+ * service the reading context does not inject ("cannot get property
+ * `agentPresets` without inject"), while the accessor is the documented
+ * structural read for a host service this package does not inject (house
+ * pattern: `fallbacks-probe.ts`, `plan-mode-bridge.ts`). A composition
+ * without the registry row (the base and SDK bundles mount none) answers
+ * `undefined`, and the selection is skipped.
+ * @param ctx - the registrant context the wrapper was created for.
+ * @returns the registry, or `undefined` when this composition mounts none.
  */
-const wrapperCache = new WeakMap<object, { rolePersonas: Config['rolePersonas']; wrapper: unknown }>()
+function agentPresetsService(ctx: Context): Context['agentPresets'] | undefined {
+  return ctx.get('agentPresets')
+}
 
 /**
- * Register the native persona channel on the plugin's context: an
+ * Register the role-preset channel on the plugin's context: an
  * `internal/get` waterfall listener (the cordis service-read interception
  * hook) that wraps `ctx.subagents` reads. The listener is owned by the
  * applying fiber — an HMR fiber swap unwinds it (reads return the raw
  * service again) and a re-apply restores it.
  *
- * Composition-order independence (`prepend`): the SAME seam is wrapped by a
- * mounted role-identity layer (`dsh-llm-fallbacks` — its dispatch seam resolves
- * the Assignment's declared role and merges that role's declared `persona`),
- * and BOTH wrappers fill the SAME native `persona` slot, each only when it is
- * free — so whichever wrapper runs FIRST owns the slot. A waterfall runs
- * listeners outermost-first, and `prepend` registers this one at the front,
- * so the harness channel is outermost on ANY row order: the default profile
- * mounts the mstar row first, while a re-ordered profile (or a re-applied
- * plugin row) mounts it last. The operator's `rolePersonas` override — the
- * harness's authoritative role identity for a role it resolves — therefore
- * wins the slot over a fallbacks-side persona for the same role instead of
- * losing it to whichever layer happened to apply first. A role the harness
- * resolves NOTHING for still falls through to the fallbacks seam (the
- * outermost wrapper delegates the caller's own request object on every skip
- * path), and reads of every other service are returned untouched.
+ * Composition-order independence (`prepend`): the SAME seam may be wrapped by
+ * another layer, and each wrapper only fills a slot that is still free — so
+ * whichever wrapper runs FIRST owns it. A waterfall runs listeners
+ * outermost-first, and `prepend` registers this one at the front, so the
+ * harness channel is outermost on ANY row order: the default profile mounts
+ * the mstar row first, while a re-ordered profile (or a re-applied plugin row)
+ * mounts it last. That matters because an operator's `rolePresets` are the
+ * harness's authoritative role identity — the channel must not lose the slot
+ * to whichever layer happened to apply first (the previous competing layer,
+ * `dsh-llm-fallbacks`, filled the removed native `persona` slot and can no
+ * longer reach this one). A role the harness maps to no preset still falls
+ * through to the other layer (the outermost wrapper delegates the caller's own
+ * request object on every skip path), and reads of every other service are
+ * returned untouched.
  *
  * Never throws: the wrap step is contained — on any internal error the read
- * returns the UNWRAPPED service value (persona delivery degrades, the
- * runtime is untouched).
+ * returns the UNWRAPPED service value (delivery degrades, the runtime is
+ * untouched).
  *
  * @param ctx - the plugin's registrant context (the app composition root).
- * @param config - validated plugin configuration (`rolePersonas` is the
- *   only payload source; `roleMap` is never consulted for the merge).
+ * @param config - validated plugin configuration (`rolePresets` is the
+ *   only payload source; `roleMap` is never consulted for the selection).
  */
 export function registerRolePersonaChannel(ctx: Context, config: Config): void {
-  // The persona payload source is closed over from THIS apply's validated
-  // Config — never a process global (two applies must not cross-talk), and
-  // the wrapper's `start`/`startContinuable` signatures stay the service's
-  // own (the closure carries the binding).
-  const rolePersonas = config.rolePersonas
+  // The preset mapping is closed over from THIS apply's validated Config —
+  // never a process global (two applies must not cross-talk), and the
+  // wrapper's `startActivation` signature stays the service's own (the
+  // closure carries the binding).
+  const rolePresets = config.rolePresets
+  const state: ChannelState = { registryAbsentLogged: false }
   // Waterfall listener: `(ctx, name, error, next)` — calling `next()` runs
   // the remaining chain (finally the built-in resolution) and its return is
   // the value readers receive. Dispatch carries no `this`, so no context
@@ -332,18 +304,63 @@ export function registerRolePersonaChannel(ctx: Context, config: Config): void {
     const value: unknown = next()
     if (name !== SUBAGENTS_SERVICE) return value
     try {
-      return wrapSubagentsService(value, rolePersonas)
+      return wrapSubagentsService(value, rolePresets, state, ctx)
     } catch (error) {
       // Contained: an internal wrap error degrades to the raw service —
-      // persona delivery is skipped, the runtime is untouched.
-      log('warn', `role persona channel degraded to pass-through (subagent starts unaffected): ${errorMessage(error)}`)
+      // delivery is skipped, the runtime is untouched.
+      log('warn', `role preset channel degraded to pass-through (subagent starts unaffected): ${errorMessage(error)}`)
       return value
     }
   }, { prepend: true })
+  bindAgentPresetRegistry(ctx, rolePresets)
+}
+
+/**
+ * Bind the OPTIONAL `agentPresets` registry for this apply and validate the
+ * configured ids once it resolves.
+ *
+ * The binding is an injection, not a property read: cordis refuses to read a
+ * service the reading context does not inject ("cannot get property
+ * \`agentPresets\` without inject"), and the channel's wrapper runs on a
+ * service read from an arbitrary fiber — so the registry is captured here, in
+ * the one context that owns the injection, and consulted as plain state at
+ * start time. A composition without the registry row (the base and SDK
+ * bundles mount none) simply never resolves it: the ids stay configured and
+ * the start-time gate logs one debug for the apply.
+ *
+ * Validation is advisory: one warning per id the roster does not declare
+ * (otherwise a typo would surface only as a failed child start). The mapping
+ * itself is untouched — a later-mounting row that declares the id still works.
+ *
+ * @param ctx - the plugin's registrant context (the injection owner).
+ * @param state - this apply's channel state (receives the resolved service).
+ * @param rolePresets - the configured role → preset mapping, when any.
+ */
+function bindAgentPresetRegistry(ctx: Context, rolePresets: Config['rolePresets']): void {
+  const validate = async (presets: Context['agentPresets']): Promise<void> => {
+    for (const [role, presetId] of Object.entries(rolePresets ?? {})) {
+      try {
+        await presets.readDocument(presetId)
+      } catch (error) {
+        log('warn', `rolePresets["${role}"] = "${presetId}" is not a deployed agent preset (${errorMessage(error)}) — a role-matched delegation for that role will fail loud at start; declare the preset or remove the mapping`)
+      }
+    }
+  }
+  if (rolePresets === undefined || Object.keys(rolePresets).length === 0) return
+  try {
+    ctx.inject([AGENT_PRESETS_SERVICE], (sctx) => {
+      void validate(sctx.agentPresets).catch(() => {})
+    })
+  } catch (error) {
+    // Contained: validation is advisory — a context that cannot register the
+    // optional injection must not fail apply (the start-time gate then
+    // reports the registry as absent).
+    log('debug', `role preset id validation unavailable (${errorMessage(error)})`)
+  }
 }
 
 /** The fail-loud warn (ONE per apply, `ok === false`) — the reason is appended. */
-const SEAM_WARN = `role persona channel not installed — cordis '${PERSONA_SEAM_EVENT}' seam missing or unrecognized (rolePersonas will not be merged into subagent starts)`
+const SEAM_WARN = `role persona channel not installed — cordis '${PERSONA_SEAM_EVENT}' seam missing or unrecognized (role presets will not be selected for subagent starts)`
 
 /** Outcome of one apply-time seam probe ({@link probeRolePersonaSeam}). */
 export interface PersonaSeamProbeResult {
@@ -403,10 +420,10 @@ export function evaluateSeamProbe({ dispatched, readError, value }: SeamProbeInp
  *    (`(ctx, name, error, next) => { dispatched = true; return next() }`),
  *    keeping the disposer `ctx.on` returns;
  * 2. perform ONE controlled proxied read `ctx.subagents` inside try/catch —
- *    the exact read path the per-call `ctx.subagents.start(...)` dispatch
- *    takes. NEVER `ctx.get('subagents')`: the accessor reads the service
- *    store directly and bypasses the waterfall, which would false-warn
- *    `seam-absent` on every healthy boot;
+ *    the exact read path the per-call `ctx.subagents.startActivation(...)`
+ *    dispatch takes. NEVER `ctx.get('subagents')`: the accessor reads the
+ *    service store directly and bypasses the waterfall, which would
+ *    false-warn `seam-absent` on every healthy boot;
  * 3. dispose the canary SYNCHRONOUSLY (`finally` — also on the throwing
  *    read path);
  * 4. classify via {@link evaluateSeamProbe} and log: `ok === false` → ONE
@@ -431,7 +448,10 @@ export function probeRolePersonaSeam(ctx: Context): PersonaSeamProbeResult {
       return next()
     })
     try {
-      value = (ctx as unknown as { subagents?: unknown }).subagents
+      // Unchecked cast: the seam is asserted by the breach itself, and the
+      // resolved value is classified structurally below.
+      const host = ctx as unknown as { subagents?: unknown }
+      value = host.subagents
     } catch (error) {
       readError = error
     } finally {
@@ -463,97 +483,77 @@ export function probeRolePersonaSeam(ctx: Context): PersonaSeamProbeResult {
 /**
  * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
  * (the service is absent) pass through untouched. The wrapper is a
- * prototype-delegating object whose OWN `start`/`startContinuable` merge
- * the role persona into the request before delegating — the underlying
- * service object is never mutated (no monkey-patching), and no surface the
- * service does not carry is invented (a runtime without `startContinuable`
- * keeps answering `typeof service.startContinuable === 'undefined'`).
- * Identity is cached per (service value, persona-config generation) so
- * repeated reads agree and re-applies re-bind.
+ * prototype-delegating object whose OWN `startActivation` merges the role's
+ * preset into the spec before delegating — the underlying service object is
+ * never mutated (no monkey-patching), and no surface the service does not
+ * carry is invented (a runtime without `startActivation` keeps answering
+ * `typeof service.startActivation === 'undefined'`). Identity is cached per
+ * (service value, preset mapping, registrant context) so repeated reads
+ * agree and re-applies re-bind.
  */
-function wrapSubagentsService(value: unknown, rolePersonas: Config['rolePersonas']): unknown {
+function wrapSubagentsService(value: unknown, rolePresets: Config['rolePresets'], state: ChannelState, ctx: Context): unknown {
   if (typeof value !== 'object' || value === null) return value
   const service = value as SubagentsServiceView
-  if (typeof service.start !== 'function' || typeof service.getProvider !== 'function') return value
+  if (typeof service.startActivation !== 'function' || typeof service.getProvider !== 'function') return value
   const cached = wrapperCache.get(value)
-  if (cached !== undefined && cached.rolePersonas === rolePersonas) return cached.wrapper
+  if (cached !== undefined && cached.state === state) return cached.wrapper
   const wrapper: SubagentsServiceView = Object.create(value)
   // Wrapper brand (seam-probe assertion target): a NON-enumerable symbol own
   // property — invisible to Object.keys/spread/JSON, so the wrapper's key
   // and spread surface stays identical to the service's (no behavior change).
   Object.defineProperty(wrapper, ROLE_PERSONA_WRAPPER_BRAND, { value: true, enumerable: false })
-  wrapper.start = (name: string, request: SubagentStartRequestView) => {
-    let merged = request
+  wrapper.startActivation = (spec: SubagentActivationSpecView) => {
+    let merged = spec
     try {
-      merged = withRolePersona(service, name, request, rolePersonas, 'one-shot')
+      const mergedRequest = withRolePreset(agentPresetsService(ctx), state, service, spec.provider, spec.request, rolePresets)
+      if (mergedRequest !== spec.request) merged = { ...spec, request: mergedRequest }
     } catch (error) {
       // Contained like the gate's degrade path: the merge aborts, the
-      // ORIGINAL request reaches the service — the start is never affected.
-      log('warn', `role persona merge degraded to pass-through (subagent start unaffected): ${errorMessage(error)}`)
+      // ORIGINAL spec reaches the service — the start is never affected.
+      log('warn', `role preset merge degraded to pass-through (subagent start unaffected): ${errorMessage(error)}`)
     }
-    return service.start(name, merged)
+    return service.startActivation(merged)
   }
-  if (typeof service.startContinuable === 'function') {
-    wrapper.startContinuable = (spec: ContinuableStartSpecView) => {
-      let merged = spec
-      try {
-        const mergedRequest = withRolePersona(service, spec.provider, spec.request, rolePersonas, 'continuable')
-        if (mergedRequest !== spec.request) merged = { ...spec, request: mergedRequest }
-      } catch (error) {
-        // Contained like the one-shot path: the merge aborts, the ORIGINAL
-        // spec reaches the service — the continuable start is never affected.
-        log('warn', `role persona merge degraded to pass-through (continuable subagent start unaffected): ${errorMessage(error)}`)
-      }
-      return service.startContinuable(merged)
-    }
-  }
-  wrapperCache.set(value, { rolePersonas, wrapper })
+  wrapperCache.set(value, { state, wrapper })
   return wrapper
 }
 
 /**
- * Resolve the role persona for one start request and merge it into the
- * native `persona` slot (one-shot AND continuable — the decision chain is
- * shared, only the terminal capability gate differs). Pure decision
- * function — returns the request UNCHANGED on every skip path (no-op is
- * silent unless a debug log is explicitly part of the contract below):
+ * Resolve the role's preset for one start request and merge it into the
+ * native `agentPreset` slot. Pure decision function — returns the request
+ * UNCHANGED on every skip path (no-op is silent unless a debug log is
+ * explicitly part of the contract below):
  *
- * 1. request already carries `persona` → caller intent wins (silent).
- * 2. perf guard: no `rolePersonas` AND no mirror → nothing to resolve
+ * 1. request already carries `agentPreset` → caller intent wins (silent).
+ * 2. perf guard: no `rolePresets` (or none configured) → nothing to resolve
  *    (silent; `== null` covers schemastery's nullable pass-through).
  * 3. prompt carries no text → nothing to parse (silent).
  * 4. prompt is not Assignment-shaped (`Execute as` absent) → silent.
- * 5. persona lookup miss: mirror ABSENT → one debug log per apply (S-002
- *    latch); mirror present → silent (no eligible shell).
+ * 5. the role has no configured preset → silent (only mapped roles select).
  * 6. provider unknown → silent (the service fails loud its own way —
  *    `NO_PROVIDER` — the channel must not shadow that).
- * 7. surface capability gate (see below) → one debug log, request
- *    unchanged — merging what the runtime would reject is never acceptable.
- * 8. hit → merge + one debug log naming the surface and the source.
- *
- * The gate per surface (native fail-loud contracts): one-shot
- * `SubagentRuntime.start` rejects a persona for a provider without
- * `SubagentCapabilities.persona` ("fail loud, no silent degradation");
- * continuable children are composed by the continuation manager itself and
- * gated by `provider.prepareContinuable` instead (upstream
- * `SubagentCapabilities` doc — the flags describe the ONE-SHOT path), and a
- * provider without it rejects the continuable start loud regardless of any
- * persona, so the merge is skipped there.
+ * 7. capability gate → one debug log, request unchanged — selecting a
+ *    preset the runtime would reject is never acceptable: the provider must
+ *    support an independent selection (`capabilities.agentPreset`) and must
+ *    not inherit its parent's conversation.
+ * 8. the registry is not mounted → one debug log per APPLY (latch) — dsh
+ *    fails loud `PRESET_UNAVAILABLE` for a selection it cannot mount.
+ * 9. hit → merge (one debug log naming the role and the preset).
  */
-function withRolePersona(
+function withRolePreset(
+  presets: Context['agentPresets'] | undefined,
+  state: ChannelState,
   service: SubagentsServiceView,
   providerName: string,
   request: SubagentStartRequestView,
-  rolePersonas: Config['rolePersonas'],
-  surface: 'one-shot' | 'continuable',
+  rolePresets: Config['rolePresets'],
 ): SubagentStartRequestView {
-  // (1) Explicit caller persona wins — mstar never overrides caller intent.
-  if (request.persona !== undefined) return request
-  // (2) Perf guard: with `rolePersonas` unset (or empty) AND no persona
-  // mirror there is nothing to resolve — skip the Assignment parse entirely.
-  const personas = rolePersonas
-  const agentsDir = rolePersonaAgentsDir
-  if ((personas == null || Object.keys(personas).length === 0) && agentsDir === undefined) return request
+  // (1) An explicit selection (tool default or the model's own choice) wins
+  // — mstar never overrides caller intent.
+  if (request.agentPreset !== undefined) return request
+  // (2) Perf guard: with no mapping there is nothing to resolve — skip the
+  // Assignment parse entirely.
+  if (rolePresets == null || Object.keys(rolePresets).length === 0) return request
   // (3) The prompt text: text blocks joined with newlines (the same
   // projection the child's seeded user message carries).
   const taskPrompt = (request.prompt ?? [])
@@ -565,44 +565,37 @@ function withRolePersona(
   // header region only, so a body-quoted field line cannot shape a merge.
   const executeAs = parseAssignmentFields(assignmentHeaderRegion(taskPrompt)).executeAs
   if (executeAs === undefined) return request
-  // (5) Single lookup (personaFor): `rolePersonas[role]` → mirror default →
-  // skip. A mirror default carrying the interpolation hazard is warned +
-  // skipped at extraction (never a boot throw).
-  const persona = personaFor(executeAs, { rolePersonas: personas, agentsDir }, (message) => log('warn', message))
-  if (persona === undefined) {
-    // Case (e): with NO mirror the lookup was config-only — one debug log
-    // per APPLY (S-002 latch), not per start. With the mirror present and
-    // no eligible shell, the miss stays silent.
-    if (agentsDir === undefined && !mirrorAbsentDebugged) {
-      mirrorAbsentDebugged = true
-      log('debug', 'harness-agents mirror absent — role persona skipped (config-only lookups; mirror defaults unavailable)')
-    }
-    return request
-  }
-  // (6) Provider unknown → silent: `start` fails loud its own way
+  // (5) Only a mapped role selects a preset (an empty mapping value is
+  // treated as unmapped).
+  const presetId = rolePresets[executeAs]
+  if (presetId === undefined || presetId.trim().length === 0) return request
+  // (6) Provider unknown → silent: `startActivation` fails loud its own way
   // (`NO_PROVIDER`), and the channel must not shadow that contract.
   const provider = service.getProvider(providerName)
   if (provider === undefined) return request
-  // (7) Surface capability gate: the native contracts reject a merged
-  // persona the runtime cannot honor ("fail loud, no silent degradation")
-  // — merging would fail the start, so the persona is skipped instead and
-  // the start proceeds unchanged (the contained degrade).
-  if (surface === 'one-shot' ? provider.capabilities?.persona !== true : typeof provider.prepareContinuable !== 'function') {
+  // (7) Capability gate: an independent selection needs provider support and
+  // a provider that does not inherit its parent's conversation (upstream
+  // rejects the pair).
+  if (provider.capabilities?.agentPreset !== true || provider.inheritsParentContext === true) {
     log(
       'debug',
-      surface === 'one-shot'
-        ? `subagent provider '${providerName}' lacks the persona capability — role persona for '${executeAs}' skipped (start proceeds unchanged)`
-        : `subagent provider '${providerName}' does not support continuable children — role persona for '${executeAs}' skipped (the native continuable start fails loud its own way)`,
+      `subagent provider '${providerName}' does not support independent preset selection — role preset for '${executeAs}' skipped (start proceeds unchanged)`,
     )
     return request
   }
-  // (8) Hit — merge into the native slot. dsh composes it as the scoped
-  // `deployment:persona` section (SHADOWING the deployment persona for this
-  // child), persists it in the child descriptor, and reapplies it on resume
-  // (one-shot via the resolved provider request; continuable via the
-  // manager's descriptor + composition).
-  log('debug', `role persona delivered via the native subagent persona channel for role '${executeAs}' (${surface} start, source: ${persona.source === 'config' ? 'mstar Config' : 'harness-agents default'})`)
-  return { ...request, persona: persona.text }
+  // (8) The selection is only usable where the registry is mounted.
+  if (presets === undefined) {
+    if (!state.registryAbsentLogged) {
+      state.registryAbsentLogged = true
+      log('debug', `role preset selection skipped: the '${AGENT_PRESETS_SERVICE}' service is not mounted in this composition (the web and headless bundles mount @deepseek-ai/dsh-agent-preset-registry)`)
+    }
+    return request
+  }
+  // (9) Hit — merge into the native selection slot. dsh mounts the named
+  // preset as the child's composition (persona, tools and skills), records
+  // the selection in the child's log, and replays it on cold resume.
+  log('debug', `role preset delivered through the native subagent preset channel for role '${executeAs}' → preset '${presetId}' (provider: ${providerName})`)
+  return { ...request, agentPreset: presetId }
 }
 
 /** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */

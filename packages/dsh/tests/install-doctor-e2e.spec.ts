@@ -18,19 +18,21 @@
  *   Cell 1 (uninstalled): `init --target dsh --no-fallbacks` → doctor exit 1
  *     `dsh-llm-fallbacks: uninstalled`; dsh side — installed artifact boots
  *     WITHOUT the fallbacks row: fallbacksMounted false, advisory not
- *     invoked (false, zero logs), the native persona channel still merges
- *     the persona from Config (degradation path does not crash).
+ *     invoked (false, zero logs), the native role-preset channel still
+ *     selects the configured preset from Config — armed only on an artifact
+ *     that carries the ported channel, else reported as an explicit
+ *     deviation (degradation path does not crash).
  *   Cell 2 (disabled): fallbacks row added, disabled via the REAL
  *     `cordis.patch.yml` mechanism → doctor exit 1 `dsh-llm-fallbacks:
  *     disabled`; dsh side — loader entry present (dump carries the disabled
  *     row) but capability off: fallbacksMounted false, advisory false.
  *   Cell 3 (mounted): patch reverted → doctor exit 0, both rows `mounted`,
  *     healthy; runtime seeds = Task 1 e2e (13 roles, cited).
- *   Cell 4 (drifted): the fallbacks row downgraded in the profile by a real
- *     `dsh plugin add` of the previous release → doctor exit 1 with
- *     `dsh-llm-fallbacks@<pin>: drifted (installed <old>, pinned <pin>)`
+ *   Cell 4 (drifted): the profile's INSTALLED fallbacks manifest is rewritten
+ *     to a synthetic version → doctor exit 1 with
+ *     `dsh-llm-fallbacks@<pin>: drifted (installed <synthetic>, pinned <pin>)`
  *     (the pinned spec is NOT echoed as `mounted`); `init --target dsh`
- *     re-adds the pin → doctor exit 0, `mounted`.
+ *     re-installs the pin → doctor exit 0, `mounted`.
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -38,10 +40,10 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { FakeSubagentProvider, bootApp, startViaNativeChannel, type BootResult, type FakeLoaderRegistry } from './harness.ts'
+import { FakeSubagentProvider, FakeSubagentService, bootApp, startActivationViaNativeChannel, type BootResult, type FakeLoaderRegistry } from './harness.ts'
 import { FALLBACKS_ENTRY_NAME, fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
 import { setAdvisoryLogger, runFallbacksAdvisory, type AdvisoryLogLevel } from '../src/gates/fallbacks-advisory.ts'
-import type { SubagentRuntime, SubagentStartRequest } from '@deepseek-ai/dsh-subagent'
+import type { SubagentActivationSpecView } from '../src/gates/role-persona.ts'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 import { dshFallbacksVersion } from '@mstar-harness/commands'
 
@@ -55,14 +57,13 @@ const DSH_PROFILE = 'web'
 const MSTAR_SPEC = '@mstar-harness/dsh'
 /** The fallbacks plugin spec (doctor capability words). */
 const FALLBACKS_SPEC = `dsh-llm-fallbacks@${dshFallbacksVersion()}`
-/** A published release on the fallbacks generation boundary: the pin
- * (`dsh-llm-fallbacks@0.6.4`) rides the `^0.2.0-rc.1` peer cohort, while the
- * PREVIOUS release (0.5.2) predates it — installing it for real materializes
- * a version-drifted profile across the generation. Drift is just
- * `installed ≠ pin`, so this only has to be a published version that is not
- * the pinned one — 0.5.2 is the release the pin moved away from. */
-const PREVIOUS_FALLBACKS_VERSION = '0.5.2'
-const PREVIOUS_FALLBACKS_SPEC = `dsh-llm-fallbacks@${PREVIOUS_FALLBACKS_VERSION}`
+/** The synthetic installed version cell 4 fabricates to materialize a drifted
+ * profile. Drift is just `installed ≠ pin`, so the cell must not lock a
+ * historical release: a literal older version would be a version pin this
+ * repo's tests must not carry, and the rc.1 host refuses to install such a
+ * release anyway. The value matches the doctor's own version shape
+ * (`X.Y.Z[-prerelease]`), so its reader accepts it. */
+const SYNTHETIC_DRIFT_VERSION = '0.0.0-drifted'
 
 /** Skip-guard probe (Task 1 pattern): `dsh` bin on PATH + registry
  * reachability. A missing prerequisite SKIPS with the reason printed —
@@ -151,19 +152,19 @@ const profileDir = (dshHome: string) => join(dshHome, 'profiles', DSH_PROFILE)
 const installedMstarDir = (dshHome: string) => join(profileDir(dshHome), 'node_modules/@mstar-harness/dsh')
 
 /** The shipped-surface marker (Task 1 pattern): the bundled seeds wiring +
- * the NATIVE persona channel (rc.1 `internal/get` + `request.persona` merge,
- * not the pre-rc.1 `mstar:role-persona` additive section) in `dist/index.js`,
- * plus the packaged `harness-agents` mirror. The doctor itself reads only
- * loader rows, but the dsh-side boots exercise the bundled
- * probe/advisory/persona-channel gates — pin the FULL shipped surface so the
- * boot evidence never runs against a stale version whose persona merge
- * targets a superseded subagent surface (3.5.1 was published on the old
- * additive-section path and its merge is invisible to the rc.1 channel). */
+ * the NATIVE role-preset channel (the `internal/get` seam wrap +
+ * `startActivation` preset selection, not the removed per-start persona
+ * slot) in `dist/index.js`, plus the packaged `harness-agents` mirror. The
+ * doctor itself reads only loader rows, but the dsh-side boots exercise the
+ * bundled probe/advisory/role-preset gates — pin the FULL shipped surface so
+ * the boot evidence never runs against a stale version whose preset
+ * selection targets a superseded subagent surface (artifacts published on the
+ * removed per-start persona slot carry no `startActivation` in their bundle). */
 function hasShippedSurface(mstarPkgDir: string): boolean {
   const distIndex = join(mstarPkgDir, 'dist/index.js')
   if (!existsSync(distIndex) || !existsSync(join(mstarPkgDir, 'harness-agents'))) return false
   const dist = readFileSync(distIndex, 'utf8')
-  return dist.includes('mstar seeds declared') && dist.includes('internal/get') && dist.includes('request.persona')
+  return dist.includes('mstar seeds declared') && dist.includes('internal/get') && dist.includes('startActivation')
 }
 
 /** Read the `version` field of a package.json (Task 1 pattern). */
@@ -191,7 +192,7 @@ async function hostCopyInstalledMstar(dshHome: string): Promise<string> {
   return root
 }
 
-/** One mstar-style Assignment prompt (persona-channel fixture pattern). */
+/** One mstar-style Assignment prompt (role-preset fixture pattern). */
 const ASSIGNMENT_PROMPT = [
   '**Execute as**: fullstack-dev',
   '**Delegation**: forbidden',
@@ -200,16 +201,12 @@ const ASSIGNMENT_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
-/** The configured persona for `fullstack-dev` (Config source). */
-const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+/** The deployed agent preset id `fullstack-dev` maps to (Config `rolePresets`). */
+const ROLE_PRESET = 'mstar-execute'
 
-/** A real start request whose prompt text carries `text` (role-persona.spec pattern). */
-function startRequest(text: string): SubagentStartRequest {
-  return {
-    prompt: [{ type: 'text', text }],
-    parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
-    signal: new AbortController().signal,
-  } as unknown as SubagentStartRequest
+/** A native activation spec whose request prompt carries `text` (role-persona.spec pattern). */
+function activationSpec(text: string): SubagentActivationSpecView {
+  return { provider: 'fake-spawn', request: { prompt: [{ type: 'text', text }] } }
 }
 
 /** A DISABLED fallbacks loader entry (the real profile's loader view for a
@@ -250,13 +247,24 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // repo-shipped version when the surface is missing.
     if (!hasShippedSurface(installedMstarDir(dshHome))) {
       const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      console.log(`install-doctor-e2e: default add lacks the shipped surface (native persona channel) — re-adding pinned @${repoVersion} (Task 1 deviation)`)
+      console.log(`install-doctor-e2e: default add lacks the shipped surface (native role-preset channel) — re-adding pinned @${repoVersion} (Task 1 deviation)`)
       runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `${MSTAR_SPEC}@${repoVersion}`], 300_000)
       // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
       // re-add must not duplicate the mstar loader row (the --no-fallbacks
       // shape keeps exactly one row).
       const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
       expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after pinned re-add').toBe(1)
+    }
+    // Vintage arm (Task 1 pattern): the cell-1 preset-selection assertion
+    // below runs only against an artifact that carries the ported channel —
+    // a published artifact still on the removed per-start persona slot does
+    // not wrap a `startActivation`-only runtime at all, so it cannot select a
+    // preset. Instead of a green-by-omission the run prints the explicit
+    // deviation; `tests/role-persona.spec.ts` owns the channel behavior at
+    // src level, and the release carrying the port arms this assertion.
+    const presetChannelArmed = hasShippedSurface(installedMstarDir(dshHome))
+    if (!presetChannelArmed) {
+      console.log('install-doctor-e2e: installed artifact lacks the ported role-preset channel — cell1 dsh-side preset selection DISARMED (degradation facts still asserted)')
     }
 
     // --- CELL 1: fallbacks uninstalled ---
@@ -274,14 +282,21 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
 
       // dsh side — the `--no-fallbacks` deployment boots WITHOUT the
       // fallbacks row: fallbacksMounted false, the advisory is NOT invoked
-      // (false, zero logs), and the native persona channel still merges the
-      // persona from the Config source (degradation path never crashes).
+      // (false, zero logs), and the native role-preset channel still
+      // selects the configured presets from the Config source (degradation
+      // path never crashes).
       hostCopyRoot = await hostCopyInstalledMstar(dshHome)
       // Dynamic import exception (runtime-selected specifier): the installed
       // dist path is only known after the REAL install — static imports
       // cannot name it (Task 1 pattern).
       const pluginModule = await import(pathToFileURL(join(hostCopyRoot, 'dsh/dist/index.js')).href)
-      booted = await bootApp({ pluginModule, agentsService: 'fake', subagents: 'real', rolePersonas: { 'fullstack-dev': PERSONA } })
+      booted = await bootApp({
+        pluginModule,
+        agentsService: 'fake',
+        subagents: 'fake',
+        agentPresetsService: [ROLE_PRESET],
+        rolePresets: { 'fullstack-dev': ROLE_PRESET },
+      })
       const app = booted
       expect(fallbacksMounted(app.ctx)).toBe(false)
       const advisoryLogs: Array<[AdvisoryLogLevel, string]> = []
@@ -292,14 +307,18 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       } finally {
         setAdvisoryLogger(priorAdvisory)
       }
-      // Native persona channel: the installed dist registers the
+      // Native role-preset channel: the installed dist registers the
       // `internal/get` wrapper — a role-matched start through a plugin-fiber
-      // context merges the persona into the request's `persona` slot.
-      const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
-      ;(app.ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
-      await startViaNativeChannel(app, 'fake-spawn', startRequest(ASSIGNMENT_PROMPT))
-      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
-      console.log('install-doctor-e2e: cell1 dsh-side — fallbacksMounted false, advisory false (0 logs), persona merged via the native channel (no crash)')
+      // context SELECTS the preset for the request's `agentPreset` slot.
+      // Armed only on an artifact carrying the ported channel (see above).
+      if (presetChannelArmed) {
+        const provider = new FakeSubagentProvider('fake-spawn', { agentPresetCapability: true })
+        ;(app.ctx.subagents as unknown as FakeSubagentService).registerProvider(provider)
+        await startActivationViaNativeChannel(app, activationSpec(ASSIGNMENT_PROMPT))
+        expect(provider.starts[0]!.request.agentPreset).toBe(ROLE_PRESET)
+        console.log(`install-doctor-e2e: cell1 dsh-side — role preset '${ROLE_PRESET}' selected via the native channel (no crash)`)
+      }
+      console.log('install-doctor-e2e: cell1 dsh-side — fallbacksMounted false, advisory false (0 logs)')
       await app.dispose()
       booted = undefined
       await rm(hostCopyRoot, { recursive: true, force: true })
@@ -334,8 +353,8 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       // dist path is only known after the REAL install — static imports
       // cannot name it (Task 1 pattern).
       const pluginModule = await import(pathToFileURL(join(hostCopyRoot, 'dsh/dist/index.js')).href)
-      booted = await bootApp({ pluginModule, agentsService: 'fake', rolePersonas: { 'fullstack-dev': PERSONA } })
-      ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [disabledFallbacksEntry]
+      booted = await bootApp({ pluginModule, agentsService: 'fake', rolePresets: { 'fullstack-dev': ROLE_PRESET } })
+      ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [disabledFallbacksEntry]
       expect(fallbacksMounted(booted.ctx)).toBe(false)
       const advisoryLogs: Array<[AdvisoryLogLevel, string]> = []
       const priorAdvisory = setAdvisoryLogger((level, message) => { advisoryLogs.push([level, message]) })
@@ -383,29 +402,46 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       expect(doctor.exitCode).toBe(0)
       expect(doctor.stdout).toContain(`${MSTAR_SPEC}: mounted`)
       expect(doctor.stdout).toContain(`${FALLBACKS_SPEC}: mounted`)
-      expect(doctor.stdout).toContain('Doctor result: healthy')
+      // The healthy signal is the CLI's own envelope (`ok('doctor', …)` →
+      // `"code":"doctor.ok"`): the human "Doctor result: healthy" summary this
+      // line once asserted is not rendered by the CLI. Only reachable when a
+      // `dsh` bin is on PATH, so CI never ran this stale line.
+      expect(doctor.stdout).toContain('"code":"doctor.ok"')
       // Runtime half of cell 3 (roles seeded) = Task 1 installed-deployment
       // e2e (non-skip PASS: 13 mstar ids seeded, personas non-empty) — cited.
       console.log('install-doctor-e2e: cell3 runtime seeded evidence = Task 1 install-e2e (13 roles seeded, cited)')
     }
 
     // --- CELL 4: the fallbacks row installed at a NON-pinned version (the
-    // operator upgrade path). Real downgrade install; doctor must fail loud
+    // operator upgrade path). The drift is FABRICATED — the profile's
+    // INSTALLED manifest is rewritten to a synthetic version (what doctor
+    // reads) and pnpm's install-state file is dropped — because the subject
+    // is doctor's drift detection and the operator repair, not pnpm's
+    // ability to install a historical release (the rc.1 host refuses that
+    // install, and a literal older version would be a release pin this
+    // repo's tests must not carry). Dropping the state file matters: the
+    // manifest fabrication is invisible to pnpm's bookkeeping, so without it
+    // the repair below would report `installed:` while pnpm no-ops and the
+    // fabricated version survives (a real drift is exactly a link state that
+    // no longer agrees with the installed manifest). doctor must fail loud
     // instead of echoing the pinned spec as `mounted`, and `init --target dsh`
-    // must re-add the pin and return doctor to exit 0. ---
+    // must re-install the pin and return doctor to exit 0. ---
     {
-      runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', PREVIOUS_FALLBACKS_SPEC], 300_000)
+      const installedManifestPath = join(profileDir(dshHome), 'node_modules', 'dsh-llm-fallbacks', 'package.json')
+      const installedManifest = JSON.parse(await readFile(installedManifestPath, 'utf8')) as Record<string, unknown>
+      await writeFile(installedManifestPath, JSON.stringify({ ...installedManifest, version: SYNTHETIC_DRIFT_VERSION }), 'utf8')
+      await rm(join(profileDir(dshHome), 'node_modules', '.modules.yaml'), { force: true })
       const driftDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
       // The loader row name stays version-free — the drift is only visible in
       // the profile's installed node_modules, which doctor reads.
       expect(driftDump).toContain('name: dsh-llm-fallbacks')
       const doctor = runCliDoctor(dshHome)
-      console.log(`install-doctor-e2e: cell4(drifted ${PREVIOUS_FALLBACKS_VERSION}) doctor exit ${doctor.exitCode}`)
+      console.log(`install-doctor-e2e: cell4(drifted ${SYNTHETIC_DRIFT_VERSION}) doctor exit ${doctor.exitCode}`)
       for (const line of doctor.stdout.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cell4 doctor | ${line}`)
       expect(doctor.exitCode).toBe(1)
       expect(doctor.stdout).toContain(`${MSTAR_SPEC}: mounted`)
       expect(doctor.stdout).toContain(
-        `${FALLBACKS_SPEC}: drifted (installed ${PREVIOUS_FALLBACKS_VERSION}, pinned ${dshFallbacksVersion()})`,
+        `${FALLBACKS_SPEC}: drifted (installed ${SYNTHETIC_DRIFT_VERSION}, pinned ${dshFallbacksVersion()})`,
       )
       expect(doctor.stdout).toContain(`${FALLBACKS_SPEC} is drifted`)
       expect(doctor.stdout).toContain('Run: mstar-harness init --target dsh')
@@ -420,7 +456,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       for (const line of repaired.stdout.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cell4 repaired doctor | ${line}`)
       expect(repaired.exitCode).toBe(0)
       expect(repaired.stdout).toContain(`${FALLBACKS_SPEC}: mounted`)
-      expect(repaired.stdout).toContain('Doctor result: healthy')
+      expect(repaired.stdout).toContain('"code":"doctor.ok"')
     }
   }, { timeout: 600_000 })
 })

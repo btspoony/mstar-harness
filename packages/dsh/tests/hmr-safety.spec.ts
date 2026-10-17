@@ -25,14 +25,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
-import SubagentRuntimePlugin, { type SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { SkillLintAdvisory } from '../src/index.ts'
-import { FakeAgentRegistry, FakeLoaderRegistry, FakeSubagentProvider } from './harness.ts'
+import { FakeAgentPresetRegistry, FakeLoaderRegistry, FakeSubagentProvider, FakeSubagentService } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -44,11 +43,11 @@ const MISSING_EXECUTE_AS = `## Assignment
 Do the thing.
 `
 
-/** The mstar role id the persona-channel test Assignment declares + persona key. */
+/** The mstar role id the role-preset channel test Assignment declares + preset key. */
 const EXECUTE_AS = 'fullstack-dev'
 
-/** The configured persona text for `fullstack-dev`. */
-const PERSONA = 'You are a fullstack-dev executor for the Morning Star harness.'
+/** The deployed agent preset id the channel selects for `fullstack-dev`. */
+const PRESET = 'mstar-execute'
 
 /** One mstar-style Assignment prompt seeded into a child session. */
 const ASSIGNMENT_PROMPT = [
@@ -191,44 +190,41 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.
     new FakeLoaderRegistry(ctx)
-    // The REAL subagents runtime + a recording provider — the channel's
-    // target surface (`ctx.subagents.start` reads go through the
-    // `internal/get` wrapper; the runtime injects `agents`, so the fake
-    // agents row must mount first).
-    new FakeAgentRegistry(ctx)
-    await ctx.plugin(SubagentRuntimePlugin as Parameters<Context['plugin']>[0])
-    const provider = new FakeSubagentProvider('fake-spawn', { personaCapability: true })
-    ;(ctx.subagents as unknown as SubagentRuntime).registerProvider(provider as never)
+    // The FAKE subagents service + the fake agent-preset registry: the
+    // channel's target surface is the `ctx.subagents` value read from a
+    // runtime-bearing context (the `internal/get` wrapper merges into the
+    // spec before delegating), and a role-matched selection only happens
+    // where a registry is mounted.
+    new FakeSubagentService(ctx)
+    new FakeAgentPresetRegistry(ctx, { declared: [PRESET] })
+    const provider = new FakeSubagentProvider('fake-spawn', { agentPresetCapability: true })
+    ;(ctx.subagents as unknown as FakeSubagentService).registerProvider(provider)
     const startOnce = async (): Promise<void> => {
       const { promise, resolve, reject } = Promise.withResolvers<void>()
       void ctx.inject(['subagents'], (sctx) => {
-        ;(sctx.subagents as unknown as SubagentRuntime)
-          .start('fake-spawn', {
-            prompt: [{ type: 'text', text: ASSIGNMENT_PROMPT }],
-            parent: { id: 'parent-fake', session: { id: 'parent-fake' } },
-            signal: new AbortController().signal,
-          } as unknown as Parameters<SubagentRuntime['start']>[1])
+        ;(sctx.subagents as unknown as FakeSubagentService)
+          .startActivation({ provider: 'fake-spawn', request: { prompt: [{ type: 'text', text: ASSIGNMENT_PROMPT }] } })
           .then(() => resolve(), reject)
       })
       return promise
     }
     try {
-      // Mount 1 — the channel is live: a role-matched start merges the
-      // persona into the request.
-      const fiber = await ctx.plugin(plugin, { harnessDir, rolePersonas: { [EXECUTE_AS]: PERSONA } })
+      // Mount 1 — the channel is live: a role-matched start selects the
+      // role's preset in the request.
+      const fiber = await ctx.plugin(plugin, { harnessDir, rolePresets: { [EXECUTE_AS]: PRESET } })
       await startOnce()
-      expect(provider.starts[0]!.request.persona).toBe(PERSONA)
+      expect(provider.starts[0]!.request.agentPreset).toBe(PRESET)
 
       // Dispose — the `internal/get` listener is unwound: a NEW start after
       // dispose is NOT merged (the channel is gone, not merely silent).
       await fiber.dispose()
       await startOnce()
-      expect(provider.starts[1]!.request.persona).toBeUndefined()
+      expect(provider.starts[1]!.request.agentPreset).toBeUndefined()
 
       // HMR reload — a fresh fiber restores the channel.
-      const reloaded = await ctx.plugin(plugin, { harnessDir, rolePersonas: { [EXECUTE_AS]: PERSONA } })
+      const reloaded = await ctx.plugin(plugin, { harnessDir, rolePresets: { [EXECUTE_AS]: PRESET } })
       await startOnce()
-      expect(provider.starts[2]!.request.persona).toBe(PERSONA)
+      expect(provider.starts[2]!.request.agentPreset).toBe(PRESET)
       await reloaded.dispose()
     } finally {
       await ctx.fiber.dispose().catch(() => {})

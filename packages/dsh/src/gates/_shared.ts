@@ -105,44 +105,39 @@ export interface Config {
   /**
    * Taxonomy bridge: mstar role id → fallbacks role id (the
    * `dsh-llm-fallbacks` role taxonomy). Logging + future rule-driven
-   * interop only — NOT required for persona delivery (`rolePersonas` is
+   * interop only — NOT required for persona delivery (`rolePresets` is
    * the channel's only payload source). Absent → no bridge mapping.
    */
   roleMap?: Record<string, string>
   /**
-   * mstar role id → persona text — the native persona channel's only
-   * payload source. A role-matched start (one-shot `start` or the opt-in
-   * continuable `startContinuable`) merges the persona into the request's
-   * native `persona` slot — dsh composes it as the scoped shadowing
-   * `deployment:persona` section on the child, persists it in the child
-   * descriptor, and reapplies it on resume. Lookup is DIRECT — never gated
-   * on `roleMap` or on the fallbacks mounted state (persona delivery is
-   * fallbacks-independent).
+   * mstar role id → agent preset id — the channel's only payload source. A
+   * role-matched subagent start selects that preset on the activation
+   * request (`SubagentStartRequest.agentPreset`), which is how dsh 0.2.1
+   * delivers a per-child identity: the preset owns the child's composition
+   * (persona via `@deepseek-ai/dsh-persona`, tools, skills), and the
+   * continuation manager mounts it in place of the parent's composition.
+   * The deployment declares one complete preset per role; mstar owns only
+   * the role → preset SELECTION. Lookup is DIRECT — never gated on
+   * `roleMap` or on the fallbacks mounted state.
    *
    * MERGE ORDER (doc-only statement of the decision chain in
-   * `role-persona.ts` / `agent-personas.ts` — no behavior change): the
-   * request's own `persona` wins AS-IS — a start that already carries one
-   * is returned untouched, with no role merge at all (caller intent is
-   * never overridden). Otherwise the per-role lookup is config over mirror:
-   * a non-empty `rolePersonas[roleId]` beats the bundled `harness-agents/`
-   * mirror default; an EMPTY-STRING value is treated as unset and falls
-   * through to the mirror default (parity with the pre-channel decoration's
-   * config check); an absent entry uses the mirror default; a lookup miss
-   * (no config value and no mirror default) → no merge.
+   * `role-persona.ts` — no behavior change): a request that already carries
+   * `agentPreset` (the delegation tool's configured default, or the model's
+   * own `agent_preset` choice) wins AS-IS — the channel fills the slot only
+   * when it is free, so caller intent is never overridden. Otherwise the
+   * role is read from the Assignment header (`Execute as: <role>`, the same
+   * engine grammar the dispatch gate uses) and a role with no configured
+   * preset stays silent. The selection is skipped — with one contained
+   * debug log and the start proceeds unchanged — when the provider does not
+   * support independent selection (`capabilities.agentPreset` false, or a
+   * provider that inherits its parent's conversation) or when the
+   * `agentPresets` registry is not mounted in the composition.
    *
-   * INTERPOLATION CONSTRAINT: dsh renders persona text with STRICT
-   * `{{variable}}` interpolation (the native persona has the same template
-   * semantics as the deployment persona) and throws on any `{{` paired with
-   * a later `}}` (unknown/malformed/undefined reference), so persona values
-   * MUST NOT contain that pattern — a violating persona would break child
-   * prompt assembly at the child's first render, for EVERY role-matched
-   * dispatch. The Config schema rejects such values at plugin mount with a
-   * clear error (see {@link PERSONA_INTERPOLATION_HAZARD}); a lone `{{` with
-   * no later `}}` is literal prose (safe), and the escape rule is single
-   * braces or rewording. Keep persona text concise; bound its length at
-   * deployment.
+   * Configured ids are validated once per apply, as soon as the registry
+   * resolves: an id the roster does not declare is reported with ONE
+   * warning (otherwise it would surface only as a failed start).
    */
-  rolePersonas?: Record<string, string>
+  rolePresets?: Record<string, string>
   /**
    * Workflow/ralph gate mode :
    * `off` disables the gate entirely (workflow/ralph calls pass through
@@ -221,20 +216,19 @@ export const Config: z<Config> = z.object({
   bundledSkillDir: z.string().default(undefined as unknown as string),
   catalogTtlMs: z.number().default(undefined as unknown as number),
   roleMap: z.dict(z.string()).default(undefined as unknown as Record<string, string>),
-  // Hardening (plan QC W-001): persona text is rendered by dsh system-prompt
-  // strict interpolation — a `{{` paired with a later `}}` throws at child
-  // prompt assembly. Reject such values HERE so a violating persona fails
-  // plugin mount with a clear error instead of breaking every role-matched
-  // dispatch later. The vendored schemastery fork has no `.refine`, and its
-  // transform callback receives no `options` (fork quirk), so the role key is
-  // interpolated into the message directly.
-  rolePersonas: z.transform(
+  // Load-time validation (upstream `SubagentPresetSelection` validates its
+  // configured ids the same way): an empty id would neither select a preset
+  // nor stay silent, so it fails plugin mount with a clear message instead of
+  // being discovered as a mis-selected child later. Whether an id is actually
+  // declared is answered by the registry at apply (one warning per unknown
+  // id), where the answer is available.
+  rolePresets: z.transform(
     z.dict(z.string()),
     (value) => {
-      for (const [role, persona] of Object.entries(value)) {
-        if (PERSONA_INTERPOLATION_HAZARD.test(persona)) {
+      for (const [role, presetId] of Object.entries(value)) {
+        if (presetId.trim().length === 0) {
           throw new z.ValidationError(
-            `rolePersonas["${role}"] must not contain a "{{" paired with a later "}}" (dsh system-prompt strict interpolation renders persona text and throws on unknown or malformed references — use single braces or reword)`,
+            `rolePresets["${role}"] must name a deployed agent preset id — an empty value selects nothing (remove the mapping to leave the role unmapped)`,
             {},
           )
         }
