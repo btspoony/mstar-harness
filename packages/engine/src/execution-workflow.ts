@@ -1254,6 +1254,29 @@ function applyWorkflowOperation(input: {
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
     case "delivery-anchors": {
+      // §1 the members a repair may name are the ADDRESSED header's own type's:
+      // `branch.work` is a delivery anchor of `type: plan` only (an iteration
+      // delivers through its `integration` anchor), so storing it here would
+      // leave a key no consumer of that type reads while the projection reports
+      // it as a delivery branch. Only an iteration narrows the set - `base` and
+      // `target` stay revisable for both types, and `integration` has no writer
+      // on either (the shape gate owns that key) - so no member that is legal
+      // for the addressed type is refused here.
+      const allowed = header.type === "iteration" ? ["base", "target"] : ["base", "work", "target"];
+      const refused = (["base", "work", "target"] as const).filter(
+        (member) => isNonEmptyString(operation.branch[member]) && !allowed.includes(member),
+      );
+      if (refused.length > 0) {
+        // One template literal, and the recovery sentence names the verb path
+        // itself rather than an `mstar` invocation: the reachability lint can
+        // only prove an advertised command statically when no runtime value is
+        // interpolated into it, so the example uses placeholders (this message's
+        // own first clause states the real workflow id).
+        throw invalidWorkflowTransition(
+          `workflow ${workflowId} records type ${JSON.stringify(header.type)}, whose delivery anchors are ${allowed.map((member) => `branch.${member}`).join(" | ")}: this repair names ${refused.map((member) => `branch.${member}`).join(", ")}, which that type does not carry. Retry workflow delivery-anchors --workflow <workflow-id> --branch-base <branch> --reason <why>. Every member the addressed type carries stays revisable.`,
+          { workflow_id: workflowId, type: header.type, refused_members: refused, allowed_members: allowed },
+        );
+      }
       // The repair MERGES into the registered anchors: an anchor this operation
       // names replaces that member, and every other member the header carries is
       // preserved verbatim — an iteration workflow's `base` / `integration`

@@ -2966,6 +2966,64 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     });
   });
 
+  test("a repair may name only the anchor members its own lifecycle type carries", async () => {
+    // The shape gate admits the union of both types' members; the type lives on
+    // the header, so the membership decision happens where the header is in
+    // hand. An iteration carries `base` / `integration` / `target`: `branch.work`
+    // is a `type: plan` delivery anchor, and storing it here would leave a key no
+    // iteration consumer reads while the projection reports it as a delivery
+    // branch.
+    const fixture = await workflowFixture("delivery-anchors-type-members", [], "iteration");
+    const before = await workflowFootprint(fixture.context);
+    const workRefusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-iteration-work", {
+        kind: "delivery-anchors",
+        branch: { work: "fix/wrong-type" },
+        reason: "the delivery branch of another lifecycle type",
+      }),
+    );
+    expect(workRefusal.code).toBe("coordination.invalid-transition");
+    expect(workRefusal.message).toContain('type "iteration"');
+    expect(workRefusal.message).toContain("branch.work");
+    expect(workRefusal.message).toContain("branch.base | branch.target");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // The anchors the type DOES carry stay revisable, and the header never gains
+    // the `work` key the repair refused.
+    const based = await workflowMutation(fixture, "op-anchors-iteration-base", {
+      kind: "delivery-anchors",
+      branch: { base: "release/root" },
+      reason: "the iteration's creation anchor was registered on the wrong branch",
+    });
+    const iterationBranch = (based.data.workflows[0]!.state as unknown as Record<string, unknown>).branch as Record<string, unknown>;
+    expect(iterationBranch).toEqual({ base: "release/root", target: "main", integration: INTEGRATION_BRANCH });
+    expect(Object.hasOwn(iterationBranch, "work")).toBe(false);
+
+    // A plan still names all three, exactly as before.
+    const planFixture = await workflowFixture("delivery-anchors-type-members-plan");
+    const plan = await workflowMutation(planFixture, "op-anchors-plan-all", {
+      kind: "delivery-anchors",
+      branch: { base: "release/root", work: "fix/repointed", target: "release" },
+      reason: "all three anchors of a plan lifecycle are revisable together",
+    });
+    expect((plan.data.workflows[0]!.state as unknown as Record<string, unknown>).branch).toEqual({
+      base: "release/root",
+      work: "fix/repointed",
+      target: "release",
+      integration: INTEGRATION_BRANCH,
+    });
+
+    // `integration` still has no writer on either type.
+    const integrationRefusal = await refusalOf(() =>
+      workflowMutation(fixture, "op-anchors-iteration-integration", {
+        kind: "delivery-anchors",
+        branch: { integration: INTEGRATION_BRANCH },
+        reason: "the integration anchor is not writable here",
+      } as never),
+    );
+    expect(integrationRefusal.code).toBe("coordination.forbidden-field");
+  });
+
   test("an anchorless, empty or reason-less repair is refused with no mutation", async () => {
     const fixture = await workflowFixture("delivery-anchors-refusals");
     const before = await workflowFootprint(fixture.context);

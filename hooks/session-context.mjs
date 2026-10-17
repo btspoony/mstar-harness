@@ -27609,6 +27609,11 @@ function applyWorkflowOperation(input) {
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
     case "delivery-anchors": {
+      const allowed = header.type === "iteration" ? ["base", "target"] : ["base", "work", "target"];
+      const refused2 = ["base", "work", "target"].filter((member) => isNonEmptyString(operation.branch[member]) && !allowed.includes(member));
+      if (refused2.length > 0) {
+        throw invalidWorkflowTransition(`workflow ${workflowId} records type ${JSON.stringify(header.type)}, whose delivery anchors are ${allowed.map((member) => `branch.${member}`).join(" | ")}: this repair names ${refused2.map((member) => `branch.${member}`).join(", ")}, which that type does not carry. Retry workflow delivery-anchors --workflow <workflow-id> --branch-base <branch> --reason <why>. Every member the addressed type carries stays revisable.`, { workflow_id: workflowId, type: header.type, refused_members: refused2, allowed_members: allowed });
+      }
       const registered = isPlainObject(header.branch) ? { ...header.branch } : {};
       if (isNonEmptyString(operation.branch.work))
         delete registered.source;

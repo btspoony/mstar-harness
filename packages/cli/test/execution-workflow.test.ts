@@ -591,6 +591,81 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(existsSync(strayCompass)).toBe(false);
   });
 
+  test("an iteration refuses an anchor its own type does not carry and records the ones it does", async () => {
+    const fixture = await activeFixture("mstar-workflow-anchor-type");
+    const identity = coordinatorIdentity(ITERATION_ID);
+    const registered = runCli(
+      [
+        "iteration",
+        "register",
+        "--workflow",
+        ITERATION_ID,
+        "--compass-ref",
+        `iterations/${ITERATION_ID}/delivery-compass.md`,
+        "--branch-base",
+        "main",
+        "--branch-integration",
+        INTEGRATION_BRANCH,
+        "--branch-target-iteration",
+        "main",
+        "--row",
+        JSON.stringify({ id: PLAN_ID, title: "Iteration row", file: `plans/${PLAN_ID}.md` }),
+        "--expect",
+        await rootTokenOf(fixture),
+        "--operation",
+        "register-iteration-anchor-type",
+        "--harness",
+        fixture.harnessDir,
+        "--session-id",
+        identity.sessionId,
+      ],
+      fixture,
+      identity,
+    );
+    if (registered.exitCode !== 0) throw new Error(`iteration registration failed: ${registered.stdout}${registered.stderr}`);
+    const bound = bindCoordinator(fixture, ITERATION_ID, await workflowTokenOf(fixture, ITERATION_ID), "bind-iteration-anchor-type");
+
+    // `branch.work` is a `type: plan` delivery anchor: the iteration refuses it
+    // and names its own members, so the caller corrects the call in one retry.
+    const refused = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "anchors-type-refused", [
+        "--branch-work",
+        "fix/wrong-type",
+        "--reason",
+        "the delivery branch of another lifecycle type",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(String(jsonOf(refused).code)).toBe("coordination.invalid-transition");
+    expect(String(jsonOf(refused).message)).toContain('type "iteration"');
+    expect(String(jsonOf(refused).message)).toContain("branch.work");
+    expect(String(jsonOf(refused).message)).toContain("branch.base | branch.target");
+    expect((await storedHeader(fixture, ITERATION_ID)).branch).toEqual({
+      base: "main",
+      target: "main",
+      integration: INTEGRATION_BRANCH,
+    });
+
+    // The anchors the type DOES carry stay revisable, and the header never gains
+    // the `work` key the refusal rejected.
+    const based = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "anchors-type-base", [
+        "--branch-base",
+        "release/root",
+        "--reason",
+        "the iteration's creation anchor was registered on the wrong branch",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(based.exitCode).toBe(0);
+    const recorded = (await storedHeader(fixture, ITERATION_ID)).branch as Record<string, unknown>;
+    expect(recorded).toEqual({ base: "release/root", target: "main", integration: INTEGRATION_BRANCH });
+    expect(Object.hasOwn(recorded, "work")).toBe(false);
+  });
+
   test("a stale token, a foreign identity and a mixed transport refuse without mutation", async () => {
     const fixture = await activeFixture("mstar-workflow-refusals");
     const identity = coordinatorIdentity();
