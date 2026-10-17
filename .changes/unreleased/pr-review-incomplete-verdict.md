@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, engine
+packages: root, engine, commands
 ---
 
 - **A PR review can now report `incomplete` instead of failing or asserting a pass** (requested by issue #503). `PR_VERDICTS` gains the neutral fourth token and `computePrTally` takes an optional `incomplete: { reason, unscanned }`: when supplied, `verdict` becomes `incomplete` while `scorePct`, `band` and the four counts stay the count-derived ones, and the chat header becomes four lines — `incomplete · <score>% (<band>, partial)` + the unchanged tally line + `cause: <reason>` + `unscanned: <csv|none>`. It is neither a pass nor a failure and never authorizes merge; without the declaration every existing run stays byte-identical (verdict, score, band and two-line header).

@@ -114,6 +114,12 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
  // A marked-incomplete run is all-or-nothing: the token without its cause
  // and unscanned scope is unreadable, so the two flags travel together.
       if ((input.incompleteReason === undefined) !== (input.unscanned === undefined)) throw new UsageError("--incomplete-reason and --unscanned go together");
+ // The cause renders on one header line (`cause: <reason>`), so a blank or
+ // multi-line value is a caller error refused here as usage (exit 2) rather
+ // than surfacing as the engine guard's internal failure (exit 1).
+      if (input.incompleteReason !== undefined && (input.incompleteReason.trim() === "" || /[\r\n]/.test(input.incompleteReason))) {
+        throw new UsageError("--incomplete-reason must be a single line of non-blank text");
+      }
       const incomplete = input.incompleteReason === undefined ? undefined : {
         reason: need(input.incompleteReason, "--incomplete-reason"),
         unscanned: (input.unscanned ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry !== ""),

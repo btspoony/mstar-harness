@@ -185,6 +185,29 @@ describe("mstar pr-review tally", () => {
       expect(message(result)).toContain("must be a non-negative integer no greater than 50");
     });
   });
+
+  test.each([" ", "budget spent\nsecurity domain still unopened"])(
+    "a blank or multi-line --incomplete-reason (%p) is refused as usage (exit 2), not an engine failure",
+    (reason) => {
+      withTempDir((dir) => {
+        const findings = join(dir, "findings.json");
+        writeFileSync(findings, "[]");
+        const result = runCli([
+          "pr-review",
+          "tally",
+          "--findings",
+          findings,
+          "--incomplete-reason",
+          reason,
+          "--unscanned",
+          "src/auth.ts",
+        ]);
+        expect(result.exitCode).toBe(2);
+        expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+        expect(message(result)).toContain("single line");
+      });
+    },
+  );
 });
 
 describe("mstar pr-review report-path", () => {

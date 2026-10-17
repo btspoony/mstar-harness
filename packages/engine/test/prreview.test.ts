@@ -1228,6 +1228,34 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
 must-fix=0 should-fix=0 nit=0 unverified=0`);
   });
 
+  test("an incomplete run states the partial mark, cause and unscanned scope in the omitted summary", () => {
+    const findings: MstarReviewFinding[] = [
+      { mergeClass: "must-fix", title: "Unbounded retry", body: "the retry loop has no cap" },
+      { mergeClass: "nit", title: "Typo in comment", body: "s/recieve/receive/" },
+    ];
+    // Same partial grade as the pinned override row (1 must-fix + 1 nit ⇒ 53 / fail).
+    const partial = synthesizeReview({
+      findings,
+      incomplete: { reason: "budget spent before the security domain", unscanned: ["src/auth.ts", "packages/engine"] },
+    });
+    expect(partial.summary_md).toBe(`## Verdict: incomplete \u00b7 53% (fail, partial)
+
+must-fix=1 should-fix=0 nit=1 unverified=0
+cause: budget spent before the security domain
+unscanned: src/auth.ts, packages/engine
+
+- must-fix: Unbounded retry
+- nit: Typo in comment`);
+
+    // An empty scope renders the explicit none marker, exactly as the chat header does.
+    const none = synthesizeReview({ findings: [], incomplete: { reason: "operator cancelled the run", unscanned: [] } });
+    expect(none.summary_md).toBe(`## Verdict: incomplete \u00b7 100% (mergeable, partial)
+
+must-fix=0 should-fix=0 nit=0 unverified=0
+cause: operator cancelled the run
+unscanned: none`);
+  });
+
   test("explicit summary_md is preserved verbatim", () => {
     const summary_md = "Custom prose summary from the main agent.";
     const synthesized = synthesizeReview({ findings: [], summary_md });
@@ -1573,12 +1601,12 @@ describe("computePrTally — incomplete verdict", () => {
     );
   });
 
-  test.each(["", "   ", "\t\n"])(
-    "a blank cause %p is rejected before an unexplained incomplete verdict exists",
+  test.each(["", "   ", "\t\n", "budget spent\nbefore the security domain was opened", "budget spent\r"])(
+    "a blank or multi-line cause %p is rejected before an unexplained incomplete verdict exists",
     (reason) => {
       expect(() => computePrTally({ findings: [], incomplete: { reason, unscanned: [] } })).toThrow(TypeError);
       expect(() => computePrTally({ findings: [], incomplete: { reason, unscanned: [] } })).toThrow(
-        /incomplete\.reason must be a non-empty string/,
+        /incomplete\.reason must be a non-empty single-line string/,
       );
     },
   );
@@ -1586,16 +1614,17 @@ describe("computePrTally — incomplete verdict", () => {
   test("a non-string cause is rejected", () => {
     expect(() =>
       computePrTally({ findings: [], incomplete: { reason: 42 as unknown as string, unscanned: [] } }),
-    ).toThrow(/incomplete\.reason must be a non-empty string/);
+    ).toThrow(/incomplete\.reason must be a non-empty single-line string/);
   });
 
   test.each([
     { unscanned: "src/auth.ts" as unknown as string[] },
     { unscanned: ["src/auth.ts", "  "] },
     { unscanned: [""] },
-  ])("a non-array or blank-element unscanned scope is rejected: %p", ({ unscanned }) => {
+    { unscanned: ["src/auth.ts", "src/b.ts\npackages/engine"] },
+  ])("a non-array, blank-element or multi-line unscanned scope is rejected: %p", ({ unscanned }) => {
     expect(() => computePrTally({ findings: [], incomplete: { reason: "operator cancelled", unscanned } })).toThrow(
-      /incomplete\.unscanned must be an array of non-empty strings/,
+      /incomplete\.unscanned must be an array of single-line non-empty strings/,
     );
   });
 

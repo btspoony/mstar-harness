@@ -267,6 +267,15 @@ describe("pr-review command family", () => {
     expect(diagnosticsOf(admitted, "one-sided incomplete flags")).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "unscanned", code: "required" }),
     ]));
+
+    // A blank or multi-line cause is a caller error (exit 2), not an engine failure.
+    for (const reason of [" ", "budget spent\nsecurity domain still unopened"]) {
+      const refused = await command("pr-review.tally").execute({ findings, incompleteReason: reason, unscanned: "src/auth.ts" }, context);
+      expect(refused).toMatchObject({
+        status: "usage", code: "command.invalid-input", exitCode: 2,
+        message: "--incomplete-reason must be a single line of non-blank text",
+      });
+    }
   });
 
   test("unknown outcome after posting does not claim success or retry", async () => {

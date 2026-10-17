@@ -389,6 +389,9 @@ The posted review body is a three-section report. Section order fixed; omit a su
 ````markdown
 ## <verdict-emoji> Verdict: `<verdict>` · Score <score_pct>% (<band>)
 
+cause: <reason>
+unscanned: <csv | none>
+
 | Findings | Count |
 | --- | --- |
 | 🔴 must-fix | <n> |
@@ -437,6 +440,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 
 **Slot rules (guidance — not part of the posted body):**
 
+- **Verdict**: render the band bare (`mergeable` | `good` | `pass` | `fail`). For `incomplete` only, render it as `<band>, partial` and keep the `cause:` / `unscanned:` lines under the heading — `cause` is why the run stopped, `unscanned` the comma-joined scope it never reached (`none` when nothing was left unscanned). Every other verdict deletes both lines, so a settled body keeps its exact shape.
 - **What this PR does**: from the PR description plus your own read of the changed files, not copied marketing text.
 - **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
 - **Linked-issue AC**: fill only when § Linked-issue hygiene applied; otherwise a bare `none`.
@@ -444,7 +448,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 - **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
 - **Plan to fix**: fix plan in markdown (ordered steps per finding, files touched, verification gates); when there is no fix plan, replace the whole `<details>` block with a single line `none`.
 
-- The Verdict section replaces the old two-line tally header on GitHub: same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured. The chat display contract (§ Display contract) is unchanged.
+- The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
 
 ### Local report archive
@@ -533,5 +537,5 @@ unscanned: {csv | none}
 
 Then ranked findings / leftover AC summary. Do not put `score_pct%` on the `- verdict:` token line.
 
-The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Score with its band + four-class emoji tally table).
+The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Score with its band + four-class emoji tally table) and, for `incomplete`, the partial mark plus the `cause:` / `unscanned:` lines.
 

@@ -207,20 +207,28 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
  // Engine boundary guard : the `incomplete` fact IS the
  // verdict's cause — a blank reason renders a bare token with no cause
  // and an envelope its own validator (`review.incomplete-malformed`)
- // rejects, so no consumer can publish it. An empty `unscanned` array
- // stays legal: it means nothing was left unscanned.
+ // rejects, so no consumer can publish it. A line break would break the
+ // four-line header contract (pr-review.md § Display contract), so the
+ // cause and every scope entry stay single-line. An empty `unscanned`
+ // array stays legal: it means nothing was left unscanned.
   if (input.incomplete !== undefined) {
-    if (typeof input.incomplete.reason !== "string" || input.incomplete.reason.trim() === "") {
+    if (
+      typeof input.incomplete.reason !== "string" ||
+      input.incomplete.reason.trim() === "" ||
+      /[\r\n]/.test(input.incomplete.reason)
+    ) {
       throw new TypeError(
-        `computePrTally: incomplete.reason must be a non-empty string - got ${JSON.stringify(input.incomplete.reason)}`,
+        `computePrTally: incomplete.reason must be a non-empty single-line string - got ${JSON.stringify(input.incomplete.reason)}`,
       );
     }
     if (
       !Array.isArray(input.incomplete.unscanned) ||
-      !input.incomplete.unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "")
+      !input.incomplete.unscanned.every(
+        (entry) => typeof entry === "string" && entry.trim() !== "" && !/[\r\n]/.test(entry),
+      )
     ) {
       throw new TypeError(
-        "computePrTally: incomplete.unscanned must be an array of non-empty strings - " +
+        "computePrTally: incomplete.unscanned must be an array of single-line non-empty strings - " +
           `got ${JSON.stringify(input.incomplete.unscanned)}`,
       );
     }
@@ -614,14 +622,23 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
  * caller omits `summary_md` (template locked in the
  * engine test; no LLM). Verdict line mirrors the chat display contract
  * (score with its band); each finding contributes one
- * `- <mergeClass>: <title>` bullet.
+ * `- <mergeClass>: <title>` bullet. A bounded/stopped run adds the `partial`
+ * mark and the two facts the token cannot carry — its cause and the scope it
+ * never reached — mirroring pr-review.md § Display contract.
  */
 function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
+  const incomplete = tally.incomplete;
   const lines = [
-    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band})`,
+    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band}${incomplete === undefined ? "" : ", partial"})`,
     "",
     `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
   ];
+  if (incomplete !== undefined) {
+    lines.push(
+      `cause: ${incomplete.reason}`,
+      `unscanned: ${incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ")}`,
+    );
+  }
   if (findings.length > 0) {
     lines.push("");
     for (const finding of findings) {
