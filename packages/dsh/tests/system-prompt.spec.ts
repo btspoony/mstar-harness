@@ -8,8 +8,8 @@
  * `buildCatalogSources` source — never the full status.json), visible to
  * the root session AND every dispatched child. The structural existence
  * check degrades (missing `ctx.systemPrompt` → `false` + one debug log;
- * boot unaffected), and the child persona is delivered through the NATIVE
- * subagent persona channel since
+ * boot unaffected), and the child identity rides the SELECTED agent preset
+ * of the native subagent channel since
  * Task 3 — NO child-scoped `mstar:role-persona` section exists anymore (g
  * pins the cutover). Task 3 (nb1): the section's enforcement word is LIVE —
  * a text provider re-reads the compass per assembly (soft/hard), so a
@@ -108,8 +108,9 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
-    // Order 2: after the deployment persona slot (0) and the child role
-    // persona (1), before plan:policy (50) and tool guidance (100-199).
+    // Order 2: after the deployment persona slot (0), before plan:policy
+    // (50) and tool guidance (100-199). No child-scoped role section exists
+    // any more (the selected agent preset carries the child identity).
     expect(HARNESS_RULES_SECTION_ORDER).toBe(2)
     const personaIndex = assembly.sections.findIndex((s) => s.name === 'deployment:persona')
     const rulesIndex = assembly.sections.findIndex((s) => s.name === HARNESS_RULES_SECTION_NAME)
@@ -223,13 +224,13 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     }
   })
 
-  it('(g) persona-channel cutover — NO child-scoped mstar:role-persona section exists; the global harness-rules section still reaches children', async () => {
-    // The child persona
-    // moved to the NATIVE subagent persona channel (`SubagentStartRequest.persona`,
+  it('(g) preset-channel cutover — NO child-scoped mstar:role-persona section exists; the global harness-rules section still reaches children', async () => {
+    // The child identity moved to the SELECTED agent preset of the NATIVE
+    // subagent channel (`SubagentStartRequest.agentPreset` via `rolePresets`,
     // role-persona.ts) — the old additive section is GONE. The global
     // harness-rules section must keep reaching dispatched children (the
     // regression this case originally pinned, minus the removed section).
-    const app = booted = await bootApp({ agentsService: 'fake', rolePersonas: { 'fullstack-dev': 'You are a fullstack-dev executor for the Morning Star harness.' } })
+    const app = booted = await bootApp({ agentsService: 'fake', rolePresets: { 'fullstack-dev': 'mstar-execute' } })
     await assembleWithEngineStatus(app.ctx)
     const { agent, scopeKey } = await fakeChild(app.ctx, '**Execute as**: fullstack-dev\n\nImplement the assigned work.')
     app.ctx.get('agents')!.register(agent)

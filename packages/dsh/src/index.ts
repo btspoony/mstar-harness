@@ -67,7 +67,6 @@ import {
   ROLE_PERSONA_LOGGER,
   probeRolePersonaSeam,
   registerRolePersonaChannel,
-  setRolePersonaAgentsDir,
   setRolePersonaLogger,
 } from './gates/role-persona.ts'
 import {
@@ -143,10 +142,9 @@ export type { DispatchGateAdvisory } from './gates/dispatch.ts'
 export {
   ROLE_PERSONA_LOGGER,
   registerRolePersonaChannel,
-  setRolePersonaAgentsDir,
   setRolePersonaLogger,
 } from './gates/role-persona.ts'
-export type { RolePersonaLogLevel, RolePersonaLogSink, SubagentStartRequestView, SubagentsServiceView } from './gates/role-persona.ts'
+export type { RolePersonaLogLevel, RolePersonaLogSink, SubagentActivationSpecView, SubagentStartRequestView, SubagentsServiceView } from './gates/role-persona.ts'
 export { ADVISORY_LOGGER, runFallbacksAdvisory, setAdvisoryLogger } from './gates/fallbacks-advisory.ts'
 export type { AdvisoryLogLevel, AdvisoryLogSink, AdvisoryPassReport } from './gates/fallbacks-advisory.ts'
 export { DshHostAdapter } from './gates/adapter.ts'
@@ -425,18 +423,11 @@ export function apply(ctx: Context, config: Config): void {
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  // Persona-defaults mirror root (
-  // the packaged `harness-agents/` mirror (synced from the repo
-  // root by `bundle-assets`; gitignored) — bound at apply so the channel's
-  // zero-config default lookup is package-relative (dist-depth) regardless
-  // of launch cwd; absent when `bundle-assets` has not run (config-only
-  // lookups).
-  setRolePersonaAgentsDir(packagedAgentsDir())
   // Harness-rules system-prompt injection (plan  
   // the global-layer `mstar:harness-rules` pointer section + the
   // `mstar:engine-status` runtime-context summary (visible to the root
-  // session AND dispatched children; child persona delivery rides the
-  // native subagent persona channel — mstar owns no child-scoped section).
+  // session AND dispatched children; child identity rides the native
+  // subagent preset channel — mstar owns no child-scoped section).
   // The module sink is bound to the dsh logger (module-sink pattern); the
   // registration itself is optional-unit — a composition without
   // dsh-system-prompt keeps boot unaffected (one debug log,
@@ -781,17 +772,18 @@ export function apply(ctx: Context, config: Config): void {
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, resolver, config, adapter, exec, next), { prepend: true })
 
-  // Native-first role-persona channel: an `internal/get`
-  // waterfall listener wraps `ctx.subagents` reads so a role-matched start
-  // — one-shot `start` AND the opt-in continuable `startContinuable` —
-  // merges the persona into the request's NATIVE `persona` slot
-  // (`@deepseek-ai/dsh-subagent` `SubagentStartRequest.persona` — the
-  // service composes it as the scoped shadowing `deployment:persona`
-  // section, persists it in the child descriptor, and reapplies it on
-  // resume). The additive `mstar:role-persona` system-prompt section is
-  // GONE. The underlying `SubagentRuntime` object is never mutated; the
-  // listener is owned by this fiber (HMR-safe). Persona delivery is
-  // fallbacks-independent and capability-gated — see `role-persona.ts`.
+  // Role → agent preset channel: an `internal/get`
+  // waterfall listener wraps `ctx.subagents` reads so a role-matched
+  // `startActivation` — the single start surface in dsh 0.2.1 — selects the
+  // preset the deployment declared for that role
+  // (`@deepseek-ai/dsh-subagent` `SubagentStartRequest.agentPreset`). dsh
+  // mounts that preset as the child's composition (persona through
+  // `@deepseek-ai/dsh-persona`, tools, skills) and replays the selection on
+  // resume: the old native `persona` slot is GONE in 0.2.1, so the preset is
+  // the upstream way to give a delegated child its role identity. The
+  // underlying `SubagentRuntime` object is never mutated; the listener is
+  // owned by this fiber (HMR-safe). Selection is capability-gated and
+  // fallbacks-independent — see `role-persona.ts`.
   registerRolePersonaChannel(ctx, config)
   // Seam probe (observation only, ONCE per apply — see `probeRolePersonaSeam`):
   // a cordis `internal/get` rename/removal would leave the channel registered

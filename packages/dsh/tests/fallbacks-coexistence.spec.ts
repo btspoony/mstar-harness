@@ -1,7 +1,7 @@
 /**
  * Task 4 — preset/mstar seeds coexistence  * the upstream `dsh-llm-fallbacks`
- * package (0.1.6+) self-declares its bundled omp-style preset roles
- * (`PRESET_ROLE_IDS`) at ITS OWN apply. Under upstream
+ * package self-declares its bundled omp-style preset roles (read from its
+ * `presetRoles` export) at ITS OWN apply. Under upstream
  * REPLACEMENT semantics (`declare` builds a new registry per batch — the
  * last declarer owns it; a non-preserved id keeps its config row but loses
  * its seeded annotation — R2), the preset batch and the mstar batch compete.
@@ -11,7 +11,7 @@
  * boot orders converge to the same fully-seeded registry (`UNION_COUNT` ids).
  *
  * The fake below models the installed upstream semantics faithfully
- * (`FallbacksSeedManager`, dist 0.1.7): the seed registry is replaced
+ * (`FallbacksSeedManager`): the seed registry is replaced
  * wholesale per declare, while the deployment taxonomy rows persist across
  * declares (`materialize` rewrites registry ids' row personas to the seed
  * personas and appends registry ids missing as rows — never deletes rows).
@@ -46,15 +46,16 @@ import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 const REAL_MIRROR = join(packageRoot, 'harness-agents')
 
 /**
- * Bundled omp-style preset role ids (upstream `presetRoles` — a
- * package-root VALUE export since 0.1.6; `dist/presets.d.ts`). Constant form
- * per the brief; anchored at runtime against the installed value below
- * (drift gate — a future preset-id change fails the suite, not production).
- * 0.5.2 dropped `designer` and `librarian` (5 ids; union with 13 mstar = 18).
+ * The bundled omp-style preset role ids and the mstar subagent role ids —
+ * both read from the source that OWNS them (the upstream `presetRoles` value
+ * export, and the packaged `harness-agents/` mirror), never re-listed here: a
+ * preset-id or role-set change upstream has to move these tests with it
+ * instead of silently drifting past a parallel literal.
  */
-const PRESET_ROLE_IDS = ['reviewer', 'scout', 'security-reviewer', 'sonic', 'task'] as const
+const PRESET_ROLE_IDS: readonly string[] = presetRoles.map((role) => role.id)
+const MSTAR_IDS: readonly string[] = existsSync(REAL_MIRROR) ? subagentRoleIds(REAL_MIRROR) : []
 const PRESET_COUNT = PRESET_ROLE_IDS.length
-const MSTAR_COUNT = 13
+const MSTAR_COUNT = MSTAR_IDS.length
 const UNION_COUNT = PRESET_COUNT + MSTAR_COUNT
 
 /** One structured log record captured from the module sink. */
@@ -77,14 +78,14 @@ async function runSeeds(
 }
 
 /**
- * A stateful seed-registry fake modeling the UPSTREAM semantics (installed
- * 0.1.7 `FallbacksSeedManager`): `declareSeeds` REPLACES the seed registry
+ * A stateful seed-registry fake modeling the UPSTREAM semantics (the
+ * installed `FallbacksSeedManager`): `declareSeeds` REPLACES the seed registry
  * with the new batch (new Map per batch), while the deployment taxonomy rows
  * PERSIST across declares — `materialize` rewrites registry ids' row personas
  * to the seed personas and appends registry ids missing as rows, never
  * `getEffectiveRoles` reads back the CURRENT rows with
  * seeded / seedPersona / personaOverridden / source derived from the CURRENT
- * registry (0.5.2: `source` is the declaring set's label when seeded, `user`
+ * registry (`source` is the declaring set's label when seeded, `user`
  * otherwise) — a row whose id left the registry stays present but unseeded.
  */
 class SeedRegistryFake {
@@ -177,15 +178,14 @@ function presetBatch(): SeedDeclaration[] {
 }
 
 describe(`preset/mstar seeds coexistence — both boot orders converge to ${UNION_COUNT} seeded ids`, () => {
-  it(`the PRESET_ROLE_IDS constant matches the installed upstream presetRoles ids (drift anchor — ${PRESET_COUNT} ids)`, () => {
-    const upstream = presetRoles.map((r) => r.id).sort()
-    expect(upstream).toHaveLength(PRESET_COUNT)
-
+  it(`the upstream presetRoles export declares ${PRESET_COUNT} unique ids (the inventory this suite seeds with)`, () => {
+    expect(PRESET_COUNT).toBeGreaterThan(0)
+    expect(new Set(PRESET_ROLE_IDS).size).toBe(PRESET_COUNT)
   })
 
   test.skipIf(!existsSync(REAL_MIRROR))(`id sets are disjoint: the ${PRESET_COUNT} preset ids and the mirror-derived ${MSTAR_COUNT} mstar subagent ids never collide`, () => {
     // The mstar ids are MIRROR-DERIVED (never hardcoded — brief).
-    const mstarIds = subagentRoleIds(REAL_MIRROR)
+    const mstarIds = [...MSTAR_IDS]
     expect(mstarIds).toHaveLength(MSTAR_COUNT)
     expect(mstarIds).not.toContain('project-manager')
     const presetIds = [...PRESET_ROLE_IDS]
@@ -211,7 +211,7 @@ describe(`preset/mstar seeds coexistence — both boot orders converge to ${UNIO
     const declaredIds = view.declared.map((d) => d.id)
     expect(declaredIds).toHaveLength(UNION_COUNT)
     expect(new Set(declaredIds).size).toBe(UNION_COUNT)
-    expect(new Set(declaredIds)).toEqual(new Set([...PRESET_ROLE_IDS, ...subagentRoleIds(REAL_MIRROR)]))
+    expect(new Set(declaredIds)).toEqual(new Set([...PRESET_ROLE_IDS, ...MSTAR_IDS]))
     expect(records.filter(([level]) => level === 'warn')).toEqual([])
 
     // Final effective state: UNION_COUNT rows, every one seeded, no duplicate ids.
@@ -243,7 +243,7 @@ describe(`preset/mstar seeds coexistence — both boot orders converge to ${UNIO
     expect(interim).toHaveLength(UNION_COUNT)
     expect(new Set(interim.map((r) => r.id)).size).toBe(UNION_COUNT)
     expect(interim.filter((r) => r.seeded).map((r) => r.id).sort()).toEqual([...PRESET_ROLE_IDS].sort())
-    expect(interim.filter((r) => !r.seeded).map((r) => r.id).sort()).toEqual(subagentRoleIds(REAL_MIRROR))
+    expect(interim.filter((r) => !r.seeded).map((r) => r.id).sort()).toEqual([...MSTAR_IDS])
 
     // ONE advisory decision-point pass: it awaits the idempotent re-declare
     // (merge-preserve carries the preset ids back) then reads the effective
@@ -259,7 +259,7 @@ describe(`preset/mstar seeds coexistence — both boot orders converge to ${UNIO
     // The convergence debug names all MSTAR_COUNT mstar ids (three-state: all seeded).
     const seededDebug = captured.find(([, message]) => message.includes('seeded at their defaults'))
     expect(seededDebug).toBeDefined()
-    for (const id of subagentRoleIds(REAL_MIRROR)) expect(seededDebug![1]).toContain(id)
+    for (const id of MSTAR_IDS) expect(seededDebug![1]).toContain(id)
 
     // Final effective state: UNION_COUNT rows, all seeded, no duplicate ids.
     const finalRows = registry.effectiveRows()

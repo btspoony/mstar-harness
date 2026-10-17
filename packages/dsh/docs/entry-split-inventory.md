@@ -27,7 +27,7 @@
 | `index.ts` | 插件 manifest（`name`/`inject`）+ `Config` + cordis augmentation + **`apply()` 启动接线** + 全部公共 re-export | 仍为唯一 re-export 汇聚点（禁 barrel 不变） |
 | `service.ts` | `DshMstar` service（`ctx.dshMstar`） | |
 | `types.ts` | 载荷/视图类型（`MstarEngineStatusSource`/`MstarEngineStatusPayload`/`MstarHarnessState`/`MstarIterationGateView` + agent-flow 视图类型） | |
-| `invariant.ts` | 单一版本不变量的独立入口（`@mstar-harness/dsh/invariant`） | |
+| `invariant.ts` | 包伴随入口（`@mstar-harness/dsh/invariant`）；dsh 0.2.1 移除 `invariants` 服务与 `./invariant` 约定后为文档化 no-op（可加载、无需宿主服务） | |
 | `engine-status-wire.ts` | **新增**：引擎状态信道的**唯一**线上地址声明（`/api` + `mstar/engineStatus` + namespace/method 字面量） | 无 import、无副作用 → 宿主半体与浏览器半体各自内联；两侧测试互钉 |
 | `engine-status-store.ts` | **新增**：`{HARNESS_DIR}/snapshots/engine-status.json` 持久化存储（写入 = 目录写锁 + 临时文件 rename；读取 = 显式 `unavailable` 原因） | 见 §0.3 依赖边 |
 | `engine-status-endpoint.ts` | **新增**：宿主半体 `/api/mstar/engineStatus`（typert 服务 + invocation descriptor + 可选单元安装/去重） | 同上 |

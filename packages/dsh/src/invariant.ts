@@ -5,18 +5,20 @@
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
-import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@mstar-harness/dsh'
+/* dsh 0.2.1-alpha.1 removed `@deepseek-ai/dsh-invariants`, its `./invariant`
+ * subpath convention and the `ctx.invariants` service, so there is no registry
+ * left to reserve package ownership in. The entry stays as a loadable no-op so
+ * a profile row naming `@mstar-harness/dsh/invariant` still activates. */
 
 /** Cordis companion plugin name. */
 export const name = 'dsh-invariant'
-/** Service required before the companion can reserve package ownership. */
-export const inject = ['invariants']
 
 /**
+ * Apply this package's invariant companion.
+ *
  * No runtime invariant: this package registers no package-owned mutable state
- * the invariant service could assert over an event/data relation. Its
+ * an invariant registry could assert over an event/data relation. Its
  * contributions are lifecycle registrations — the fs intent waterfall
  * listeners (`fs/write-intent` + `fs/edit-intent` status gate, the scoped
  * skill-lint gate, the v2 seam gates for design-md/audit/compound/roles
@@ -34,14 +36,9 @@ export const inject = ['invariants']
  * (`dsh.bundle.patch` in package.json) and the packaged `harness-skills/` /
  * `harness-commands/` mirrors are static package contents, not runtime state.
  * A config↔listener presence check would duplicate those tests.
+ *
+ * @param _ctx - Cordis context; unused, the host no longer offers an invariant registry.
+ * @returns the companion's disposer.
  */
-const install: InvariantInstaller = () => {}
-
-/**
- * Register this package's invariant companion.
- * @param ctx - Cordis context carrying the invariant service.
- * @returns the installed registration's disposer after setup succeeds.
- */
-export const apply = (ctx: Context): Promise<() => void> =>
-  Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))
+export const apply = (_ctx: Context): (() => void) => () => {}
 /* jscpd:ignore-end */

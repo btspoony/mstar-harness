@@ -455,7 +455,7 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
     // The loader mounts entries concurrently — at apply the row list is
     // empty, so the apply-time attempt sees unmounted and the latch stays
     // open; the first decision point (subagent/start) runs the pass.
-    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
     const { captured, restore } = captureLogs()
     try {
       booted.ctx.events.emit('subagent/start', startInfo('agent-1'))
@@ -479,7 +479,7 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
     const mirror = packagedAgentsDir()
     if (mirror === undefined) return // bundle-assets not run — the live mirror is a precondition
     booted = await bootApp()
-    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
     const { captured, restore } = captureLogs()
     try {
       // Two decision points in the SAME tick: the loader-fallback pass is
@@ -500,7 +500,7 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
     const mirror = packagedAgentsDir()
     if (mirror === undefined) return // bundle-assets not run — the live mirror is a precondition
     booted = await bootApp()
-    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
     const { captured, restore } = captureLogs()
     try {
       // First service instance — the first decision point runs ONE pass
@@ -535,7 +535,7 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
     const mirror = packagedAgentsDir()
     if (mirror === undefined) return // bundle-assets not run — the live mirror is a precondition
     booted = await bootApp()
-    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
     const { captured, restore } = captureLogs()
     try {
       // Service #1 with a CONTROLLED declareSeeds: the pass's await on the
@@ -592,7 +592,7 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
       return
     }
     booted = await bootApp()
-    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
     // A stub whose declareSeeds rejects the boot-window calls (the live
     // apply-window race shape, verbatim upstream string) and resolves after.
     let rejectDeclares = true
@@ -655,7 +655,7 @@ describe('fallbacks adoption advisory — mounted, warn-only, bounded', () => {
       return
     }
     booted = await bootApp()
-    ;(booted.ctx.get('loader') as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
+    ;(booted.ctx.get('loader') as unknown as FakeLoaderRegistry).entriesList = [liveEntry(rowConfig([]))]
     const fake = new FakeAdvisoryService({ roles: [] })
     let stubDeclares = 0
     fake.declareSeeds = async () => {
