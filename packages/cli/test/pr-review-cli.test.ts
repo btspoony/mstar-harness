@@ -208,6 +208,29 @@ describe("mstar pr-review tally", () => {
       });
     },
   );
+
+  test.each(["src/auth.ts\npackages/engine", "src/auth.ts,,packages/engine"])(
+    "a blank or multi-line --unscanned entry (%p) is refused as usage (exit 2), not an engine failure",
+    (scope) => {
+      withTempDir((dir) => {
+        const findings = join(dir, "findings.json");
+        writeFileSync(findings, "[]");
+        const result = runCli([
+          "pr-review",
+          "tally",
+          "--findings",
+          findings,
+          "--incomplete-reason",
+          "budget spent before the security domain",
+          "--unscanned",
+          scope,
+        ]);
+        expect(result.exitCode).toBe(2);
+        expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+        expect(message(result)).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+      });
+    },
+  );
 });
 
 describe("mstar pr-review report-path", () => {

@@ -6,5 +6,5 @@ export const MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
   findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
   tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated; optional band: mergeable | good | pass | fail (absent = legacy-valid)." },
   target: { required: false, type: "object", description: "Optional target identity." },
-  incomplete: { required: false, type: "object", description: 'Declared cause + unscanned scope of a bounded/stopped run — { reason: string; unscanned: string[] }; required exactly when verdict is "incomplete" and rejected for every other verdict.' },
+  incomplete: { required: false, type: "object", description: 'Declared cause + unscanned scope of a bounded/stopped run \u2014 { reason: string; unscanned: string[] }; required exactly when verdict is "incomplete" and rejected for every other verdict.' },
 } as const;
