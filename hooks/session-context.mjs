@@ -16406,6 +16406,10 @@ function probeStatus(worktreePath, opts) {
     return { error: error.message ?? "git status probe failed" };
   }
 }
+function anchorRecovery(workflowId, key) {
+  const flag = deliveryAnchorFlags[key];
+  return flag === null || flag === undefined ? `Integration is recorded only at iteration registration, so no running-workflow repair admits it. Close it with mstar workflow lifecycle --workflow ${workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `Record the missing branch.${key} with mstar workflow delivery-anchors --workflow ${workflowId} ${flag} <branch> --reason "<why branch.${key} is absent>", then rerun mstar worktree check --workflow ${workflowId} --entry.`;
+}
 function workflowEntryPreDispatchCheck(input, opts = {}) {
   const violations = [];
   const { base = "", target = "", integration = "" } = input.branch;
@@ -16413,8 +16417,7 @@ function workflowEntryPreDispatchCheck(input, opts = {}) {
   const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]];
   for (const [key, value] of anchors) {
     if (value.trim() === "") {
-      const recovery = iteration ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-work <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
-      violations.push(violation8("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, recovery));
+      violations.push(violation8("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, anchorRecovery(input.workflowId, key)));
     }
   }
   const expected = (iteration ? base : target).trim();
@@ -16422,7 +16425,7 @@ function workflowEntryPreDispatchCheck(input, opts = {}) {
     violations.push(violation8("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
   } else {
     if (expected === "")
-      violations.push(violation8("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, `Record a supported branch anchor when registering a replacement ${iteration ? "iteration" : "standalone plan"}, then rerun mstar worktree check --workflow <new-id> --entry.`));
+      violations.push(violation8("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, anchorRecovery(input.workflowId, iteration ? "base" : "target")));
     else
       violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
     const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree.branch && entry.branch !== expected);
@@ -30086,7 +30089,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -34686,6 +34689,12 @@ var init_engine = __esm(() => {
   });
   init_worktree = __esm2(() => {
     init_workflow();
+    deliveryAnchorFlags = {
+      base: "--branch-base",
+      work: "--branch-work",
+      target: "--branch-target",
+      integration: null
+    };
     QC_ALIGNMENT_FIELDS = [
       { key: "planId", label: "plan_id" },
       { key: "reviewRange", label: "Review range" },

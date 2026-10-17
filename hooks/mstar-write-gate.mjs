@@ -14947,9 +14947,16 @@ function readMainWorktree(cwd) {
   }
 }
 var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var deliveryAnchorFlags;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
   init_workflow();
+  deliveryAnchorFlags = {
+    base: "--branch-base",
+    work: "--branch-work",
+    target: "--branch-target",
+    integration: null
+  };
   QC_ALIGNMENT_FIELDS = [
     { key: "planId", label: "plan_id" },
     { key: "reviewRange", label: "Review range" },

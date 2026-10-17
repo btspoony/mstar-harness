@@ -254,6 +254,28 @@ function probeStatus(worktreePath: string, opts: BranchProbeOptions): { status: 
   }
 }
 
+/**
+ * The recordable branch anchors of `mstar workflow delivery-anchors`, keyed by
+ * the anchor name: `base`, `work` and `target` are that operation's admissible
+ * keys, so a missing one of those is repaired in place. An iteration's
+ * `integration` anchor is deliberately not admitted there (it is set only at
+ * `iteration register`), so it alone keeps the replacement route.
+ */
+const deliveryAnchorFlags: Readonly<Record<string, string | null>> = {
+  base: "--branch-base",
+  work: "--branch-work",
+  target: "--branch-target",
+  integration: null,
+};
+
+/** The one recovery for a missing branch anchor: repair it, or replace the lifecycle when no repair exists. */
+function anchorRecovery(workflowId: string, key: string): string {
+  const flag = deliveryAnchorFlags[key];
+  return flag === null || flag === undefined
+    ? `Integration is recorded only at iteration registration, so no running-workflow repair admits it. Close it with mstar workflow lifecycle --workflow ${workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.`
+    : `Record the missing branch.${key} with mstar workflow delivery-anchors --workflow ${workflowId} ${flag} <branch> --reason "<why branch.${key} is absent>", then rerun mstar worktree check --workflow ${workflowId} --entry.`;
+}
+
 /** Engine-enforced workflow-entry subset; this does not clear the full pre-dispatch checklist. */
 export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInput, opts: BranchProbeOptions = {}): WorkflowEntryPreDispatchResult {
   const violations: ValidationResult[] = [];
@@ -267,17 +289,14 @@ export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInp
     : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]] as const;
   for (const [key, value] of anchors) {
     if (value.trim() === "") {
-      const recovery = iteration
-        ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.`
-        : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-work <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
-      violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, recovery));
+      violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, anchorRecovery(input.workflowId, key)));
     }
   }
   const expected = (iteration ? base : target).trim();
   if (input.mainWorktree === null) {
     violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
   } else {
-    if (expected === "") violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, `Record a supported branch anchor when registering a replacement ${iteration ? "iteration" : "standalone plan"}, then rerun mstar worktree check --workflow <new-id> --entry.`));
+    if (expected === "") violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, anchorRecovery(input.workflowId, iteration ? "base" : "target")));
     else violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
     const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree!.branch && entry.branch !== expected);
     if (owner) {

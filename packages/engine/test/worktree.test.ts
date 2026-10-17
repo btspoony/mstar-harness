@@ -1476,10 +1476,14 @@ describe("workflowEntryPreDispatchCheck", () => {
       expect(codes).toContain("worktree.entry.integration-dirty");
       expect(codes).toContain("lease.merge-lease.missing-holder");
       expect(result.lease).toEqual({ claimed: true, lease: {} });
+      // An iteration's `target` is repairable on the running workflow, so this
+      // recovery must not send the operator to a replacement lifecycle (issue
+      // #499 review F1).
       const branchRecovery = result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix ?? "";
-      expect(branchRecovery).toContain("replacement iteration");
-      expect(branchRecovery).toContain("branch source, target, and integration options");
-      expect(branchRecovery).toContain("--workflow <new-id> --entry");
+      expect(branchRecovery).toContain("mstar workflow delivery-anchors --workflow wf --branch-target <branch> --reason");
+      expect(branchRecovery).toContain("rerun mstar worktree check --workflow wf --entry");
+      expect(branchRecovery).not.toContain("replacement");
+      expect(branchRecovery).not.toContain("new-id");
       expect(result.violations.find((entry) => entry.code === "worktree.entry.integration-branch-mismatch")?.fix).toContain(`git -C '${integration}' checkout 'wrong'`);
       const dirtyFix = result.violations.find((entry) => entry.code === "worktree.entry.integration-dirty")?.fix ?? "";
       expect(dirtyFix).toContain(`git -C '${integration}' status --short`);
@@ -1547,6 +1551,37 @@ describe("workflowEntryPreDispatchCheck", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.violations.map((entry) => entry.code)).toContain("worktree.entry.branch-work-missing");
+    const missing = result.violations.find((entry) => entry.code === "worktree.entry.branch-work-missing");
+    expect(missing?.fix).toContain("mstar workflow delivery-anchors --workflow wf-plan --branch-work <branch> --reason");
+    expect(missing?.fix).not.toContain("replacement");
+  });
+
+  // Issue #499 review F1: a standalone plan's `work` and `target` are writable
+  // through the guarded anchor member, so a plan missing either is repaired in
+  // place. Only an iteration's `integration` anchor keeps the replacement route.
+  test("points a standalone plan missing both delivery anchors at the repair, never at a replacement", () => {
+    const result = workflowEntryPreDispatchCheck({
+      workflowId: "wf-plan",
+      workflowType: "plan",
+      branch: {},
+      mainWorktree: { root: "/repo/main", branch: "main" },
+      lifecycleBranches: [],
+    });
+    expect(result.violations.map((entry) => entry.code)).toEqual([
+      "worktree.entry.branch-work-missing",
+      "worktree.entry.branch-target-missing",
+      "worktree.main.expected-branch-missing",
+    ]);
+    const fixOf = (code: string): string => result.violations.find((entry) => entry.code === code)?.fix ?? "";
+    expect(fixOf("worktree.entry.branch-work-missing")).toContain("mstar workflow delivery-anchors --workflow wf-plan --branch-work <branch> --reason");
+    expect(fixOf("worktree.entry.branch-target-missing")).toContain("mstar workflow delivery-anchors --workflow wf-plan --branch-target <branch> --reason");
+    expect(fixOf("worktree.main.expected-branch-missing")).toContain("mstar workflow delivery-anchors --workflow wf-plan --branch-target <branch> --reason");
+    for (const code of ["worktree.entry.branch-work-missing", "worktree.entry.branch-target-missing", "worktree.main.expected-branch-missing"]) {
+      expect(fixOf(code)).toContain("rerun mstar worktree check --workflow wf-plan --entry");
+      expect(fixOf(code)).not.toContain("replacement");
+      expect(fixOf(code)).not.toContain("new-id");
+      expect(fixOf(code)).not.toContain("workflow lifecycle");
+    }
   });
 
   test("iteration missing integration anchor refuses with achievable iteration recovery", () => {
@@ -1561,6 +1596,35 @@ describe("workflowEntryPreDispatchCheck", () => {
     expect(result.ok).toBe(false);
     expect(missing?.fix).toContain("replacement iteration");
     expect(missing?.fix).toContain("branch source, target, and integration options");
+    expect(missing?.fix).toContain("mstar workflow lifecycle --workflow wf-iteration --status failed");
+    // `branch.integration` is set only at `iteration register`: no running-workflow
+    // repair admits it, so this anchor — and only this anchor — keeps the
+    // replacement route (issue #499 review F1).
+    expect(missing?.fix).not.toContain("delivery-anchors");
+  });
+
+  // Issue #499 review F1, iteration side: the `base` anchor is repairable, so
+  // neither the anchor refusal nor the derived main-branch expectation sends the
+  // operator to a replacement iteration.
+  test("points an iteration missing its base anchor at the repair", () => {
+    const result = workflowEntryPreDispatchCheck({
+      workflowId: "wf-iteration",
+      workflowType: "iteration",
+      branch: { target: "release", integration: "integration/iter" },
+      integrationWorktreePath: "/missing/integration",
+      mainWorktree: { root: "/repo/main", branch: "main" },
+      lifecycleBranches: [],
+    });
+    const fixOf = (code: string): string => result.violations.find((entry) => entry.code === code)?.fix ?? "";
+    expect(result.violations.map((entry) => entry.code)).toEqual([
+      "worktree.entry.branch-base-missing",
+      "worktree.main.expected-branch-missing",
+      "worktree.entry.integration-missing",
+    ]);
+    expect(fixOf("worktree.entry.branch-base-missing")).toContain("mstar workflow delivery-anchors --workflow wf-iteration --branch-base <branch> --reason");
+    expect(fixOf("worktree.main.expected-branch-missing")).toContain("mstar workflow delivery-anchors --workflow wf-iteration --branch-base <branch> --reason");
+    expect(fixOf("worktree.entry.branch-base-missing")).not.toContain("replacement");
+    expect(fixOf("worktree.main.expected-branch-missing")).not.toContain("replacement");
   });
 });
 test("workflow entry recovery identifies the owner before switching main", () => {
