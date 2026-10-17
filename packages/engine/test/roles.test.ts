@@ -389,6 +389,39 @@ describe("lintLoadOrder", () => {
     },
   );
 
+  test("exact engine-legacy archive is exempt from core-first (no core mention needed)", () => {
+    const result = lintLoadOrder({
+      "mstar-engine-legacy": "# Legacy\n## Load Order\nFollow the host-selected lifecycle authority first.\n",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("archive text stays safe: own name, `mstar` CLI, a `mstar-*` wildcard and `@mstar-harness/engine` are not references", () => {
+    const result = lintLoadOrder({
+      "mstar-artifacts": "## Load Order\nRead `mstar-harness-core` first.\n",
+      "mstar-engine-legacy":
+        "## Load Order\nFollow the host-selected lifecycle authority first.\n\n" +
+        "The `mstar` CLI and the `mstar-*` topics are runtime concerns; host hooks import from " +
+        "`@mstar-harness/engine`. Engine-absent hosts read this `mstar-engine-legacy` archive instead.\n",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("archive naming another corpus skill → roles.loadorder.legacy.archive.reference", () => {
+    const result = lintLoadOrder({
+      "mstar-artifacts": "## Load Order\nRead `mstar-harness-core` first.\n",
+      "mstar-engine-legacy": "## Load Order\nEngine-absent hosts read `mstar-artifacts` for the current fields.\n",
+    });
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toEqual(["roles.loadorder.legacy.archive.reference"]);
+    const v = result.violations[0];
+    expect(v?.severity).toBe("medium");
+    expect(v?.message).toContain("mstar-engine-legacy");
+    expect(v?.message).toContain("mstar-artifacts");
+  });
+
   test("standalone claims inside another topic's Load Order do not waive core-first", () => {
     const result = lintLoadOrder({
       "mstar-other-topic": "## Load Order\nStandalone use requires no other skill.\n",
