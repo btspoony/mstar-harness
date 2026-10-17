@@ -83,6 +83,34 @@ describe("shared host-health helpers", () => {
     expect(() => joinWithinRoot(root, "..", "outside")).toThrow(`path escapes ${root}`);
   });
 
+  test("path resolve reports reviewDir, honoring a .mstarc review_dir override outside the harness", async () => {
+    const root = fixture();
+    writeText(root, ".mstarc", "[config]\nharness_dir=.mstar\nreview_dir=process/reviews\n");
+    mkdirSync(path.join(root, ".mstar"), { recursive: true });
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({}, {
+      cwd: root,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      data: {
+        harnessDir: path.join(root, ".mstar"),
+        reviewDir: path.join(root, "process", "reviews"),
+      },
+    });
+  });
+
   test("shared semver comparison applies prerelease precedence", () => {
     // Comparator spec vectors: a zero core plus synthetic prerelease
     // identifiers. The bare core is the release counterpart any prerelease

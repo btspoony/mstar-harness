@@ -415,12 +415,16 @@ describe("scaffoldAuditReport", () => {
     expect(readReport(reviews, "2026-08-10")).not.toContain("Rotate leaked AWS keys");
   });
 
-  test("repeated auto-allocated runs take their own round — a run never overwrites another", () => {
+  test("concurrent auto-allocated runs each get their own round — no report is overwritten", async () => {
     const reviews = join(tmp, "reviews-alloc");
     mkdirSync(reviews, { recursive: true });
-    const first = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" });
-    const second = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" });
-    expect([first.round, second.round]).toEqual([1, 2]);
+    const [first, second] = await Promise.all([
+      Promise.resolve().then(() => scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" })),
+      Promise.resolve().then(() => scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" })),
+    ]);
+    expect([first.round, second.round].sort()).toEqual([1, 2]);
+    expect(first.outDir).not.toBe(second.outDir);
+    // Both reports survive: neither run destroyed the other's.
     expect(readdirSync(reviews).sort()).toEqual([
       "2026-08-19-codebase-standard-1",
       "2026-08-19-codebase-standard-2",

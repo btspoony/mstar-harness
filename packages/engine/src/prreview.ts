@@ -613,9 +613,11 @@ function nextReportName(runDir: string): string {
 /**
  * The seat-evidence path inside `runDir`. A regular file there is the same
  * seat's prior evidence — re-running the seat overwrites it by design (one
- * stable file per seat). A directory would make the caller's write fail
- * (EISDIR) and a symlink would let it escape the run dir, so both are
- * refused rather than followed.
+ * stable file per seat). A directory at the name would make the caller's
+ * write fail (EISDIR), and a pre-existing symlink would let that write
+ * escape the run dir, so both are refused rather than followed. This is a
+ * resolution-time guard, not a race-free one: an entry that appears between
+ * this check and the caller's write is outside what it can promise.
  */
 function requireWritableEvidencePath(runDir: string, name: string): string {
   const target = join(runDir, name);
