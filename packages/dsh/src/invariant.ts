@@ -5,7 +5,8 @@
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
-import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
+/** Local stub: host removed @deepseek-ai/dsh-invariants as of 0.2.1-alpha.1 (no longer published). */
+type InvariantInstaller = () => void
 
 const PACKAGE_NAME = '@mstar-harness/dsh'
 
