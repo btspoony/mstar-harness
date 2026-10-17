@@ -732,6 +732,8 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(jsonOf(noReason)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(String(jsonOf(noReason).message)).toContain("a non-empty reason is required");
+    expect(String(jsonOf(noReason).message)).not.toContain("at least one delivery anchor is required");
     // The verb's own refusal — not a parser refusal of an unknown command.
     expect((jsonOf(noReason).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
 
@@ -760,6 +762,21 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(jsonOf(noAnchor)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect((jsonOf(noAnchor).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect(String(jsonOf(noAnchor).message)).toContain("at least one delivery anchor is required");
+    expect(String(jsonOf(noAnchor).message)).not.toContain("a non-empty reason is required");
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
+
+    // Neither an anchor nor a reason: BOTH are reported in one usage refusal, so
+    // a malformed call is not a repeated guessing loop (issue #499 review F2).
+    const neither = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-neither", []),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(neither)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(neither).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect(String(jsonOf(neither).message)).toContain("at least one delivery anchor is required");
+    expect(String(jsonOf(neither).message)).toContain("a non-empty reason is required");
     expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
 
     // The verb reaches the engine: a single named anchor is recorded and the

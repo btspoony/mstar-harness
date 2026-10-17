@@ -485,16 +485,23 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       const id = "workflow.delivery-anchors";
       try {
         if (input.workflow === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow is required; inspect registered workflows with mstar status validate." });
+        // Every flag this verb requires is reported in ONE usage refusal: an
+        // agent that omitted two of them must not have to guess its way to the
+        // second on a retry.
         // One anchor is enough: the operator who mistyped only the delivery
         // branch must not restate a correct --branch-target. `--branch-source`
         // is the deprecated alias of `--branch-work`: both write one field, and
         // the current name wins when both are supplied.
         const work = input.branchWork ?? input.branchSource;
-        if (work === undefined && input.branchBase === undefined && input.branchTarget === undefined) {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "at least one delivery anchor is required; name the anchor being recorded, and an anchor you do not name keeps its registered value." });
-        }
-        if (input.reason === undefined || input.reason.trim() === "") {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "a non-empty reason is required: state why the delivery anchors are being corrected, so the repair is auditable." });
+        const reason = input.reason ?? "";
+        const missing = [
+          ...(work === undefined && input.branchBase === undefined && input.branchTarget === undefined
+            ? ["at least one delivery anchor is required; name the anchor being recorded, and an anchor you do not name keeps its registered value."]
+            : []),
+          ...(reason.trim() === "" ? ["a non-empty reason is required: state why the delivery anchors are being corrected, so the repair is auditable."] : []),
+        ];
+        if (missing.length > 0) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: missing.join(" ") });
         }
         if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active anchor repair requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
         const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
@@ -515,7 +522,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             ...(work === undefined ? {} : { work }),
             ...(input.branchTarget === undefined ? {} : { target: input.branchTarget }),
           },
-          reason: input.reason,
+          reason,
         };
         return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
           workflowId: input.workflow,
