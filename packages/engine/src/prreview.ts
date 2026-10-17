@@ -341,6 +341,48 @@ export type MstarReviewV1 = {
  * derived score — must/should/nit/unverified, no fourth class). */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
 
+/** True when `fact` is a readable `incomplete` fact: a non-empty `reason`
+ * plus a list of non-empty `unscanned` entries (an empty list states nothing
+ * was left unscanned). */
+function isIncompleteFact(fact: unknown): fact is PrIncomplete {
+  if (!isPlainObject(fact)) return false;
+  const { reason, unscanned } = fact;
+  return typeof reason === "string" && reason.trim() !== "" &&
+    Array.isArray(unscanned) && unscanned.every((entry: unknown) => typeof entry === "string" && entry.trim() !== "");
+}
+
+/**
+ * Report every reason `fact` is not a readable `incomplete` fact
+ * (`review.incomplete-malformed`), naming each invalid field so one refusal
+ * carries all of them. `label` names the level that carried the fact
+ * (`incomplete` for the envelope's top-level fact, `tally.incomplete` for the
+ * echo inside a provided tally).
+ */
+function checkIncompleteShape(fact: unknown, label: string, violations: ValidationResult[]): void {
+  if (isIncompleteFact(fact)) return;
+  if (!isPlainObject(fact)) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-malformed",
+      `${label} must be an object with a non-empty reason string and an unscanned array of non-empty strings`,
+    ));
+    return;
+  }
+  if (typeof fact.reason !== "string" || fact.reason.trim() === "") {
+    violations.push(violation("high", "review.incomplete-malformed", `${label}.reason must be a non-empty string`));
+  }
+  if (
+    !Array.isArray(fact.unscanned) ||
+    !fact.unscanned.every((entry: unknown) => typeof entry === "string" && entry.trim() !== "")
+  ) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-malformed",
+      `${label}.unscanned must be an array of non-empty strings (an empty array states nothing was left unscanned)`,
+    ));
+  }
+}
+
 /**
  * Shape-check an envelope-provided `tally` against the `PrTallyResult`
  * shape {@link computePrTally} produces (Greptile P1 on PR #159): the
@@ -349,9 +391,13 @@ const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
  * PR_VERDICTS, `scorePct` an integer in [0, 100], all four class counts
  * non-negative integers, `chatHeader` a string, and the optional `band`
  * must be a valid token when present (absent = legacy-valid envelope).
+ * The tally's own `incomplete` echo obeys the same presence rule as the
+ * envelope's top-level fact — required by the `incomplete` verdict, absent
+ * for every other one, and shape-checked by {@link checkIncompleteShape}.
  * Shape only — no arithmetic consistency (the locked schedule and
  * `computePrTally` are untouched); the verdict-equality rule stays a
- * separate violation (`review.verdict-tally-mismatch`).
+ * separate violation (`review.verdict-tally-mismatch`), and agreement
+ * between the two `incomplete` levels is `review.incomplete-tally-mismatch`.
  */
 function checkProvidedTallyShape(tally: Record<string, unknown>, violations: ValidationResult[]): void {
   if (typeof tally.verdict !== "string" || !(PR_VERDICTS as readonly string[]).includes(tally.verdict)) {
@@ -410,6 +456,28 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
       `use one of: ${PR_SCORE_BANDS.join(" | ")}`,
     ));
   }
+  // The nested echo of the run's own fact is held to the top-level rule: a
+  // tally verdict of `incomplete` without it publishes a bare token, and any
+  // other tally verdict carrying one claims a stopped run it did not report.
+  if (tally.verdict === "incomplete") {
+    if (tally.incomplete === undefined) {
+      violations.push(violation(
+        "high",
+        "review.missing-incomplete",
+        'tally.verdict "incomplete" requires the matching tally.incomplete fact carrying the declared cause and the unscanned scope',
+        'add tally.incomplete: { reason: "<why the run stopped>", unscanned: ["<path>", ...] }',
+      ));
+    } else {
+      checkIncompleteShape(tally.incomplete, "tally.incomplete", violations);
+    }
+  } else if (tally.incomplete !== undefined) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-unexpected",
+      `tally.incomplete is carried only by the "incomplete" tally verdict - tally.verdict is "${String(tally.verdict)}"`,
+      'remove tally.incomplete, or set tally.verdict: incomplete',
+    ));
+  }
 }
 
 /**
@@ -427,8 +495,11 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
  * `verdict` is rejected with `review.verdict-tally-mismatch` (consistency
  * rule, architect-locked). The `incomplete` verdict must carry an
  * `incomplete` fact — a non-empty `reason` plus an `unscanned` string array
- * — and no other verdict may carry it (`review.missing-incomplete` /
- * `review.incomplete-malformed` / `review.incomplete-unexpected`).
+ * — and no other verdict may carry it, at the envelope level and inside a
+ * provided tally alike (`review.missing-incomplete` /
+ * `review.incomplete-malformed` / `review.incomplete-unexpected`); the two
+ * levels must agree when both are present
+ * (`review.incomplete-tally-mismatch`).
  */
 export function validateMstarReviewV1(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -540,29 +611,8 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
         'verdict "incomplete" requires an incomplete fact carrying the declared cause and the unscanned scope',
         'add incomplete: { reason: "<why the run stopped>", unscanned: ["<path>", ...] }',
       ));
-    } else if (!isPlainObject(doc.incomplete)) {
-      violations.push(violation(
-        "high",
-        "review.incomplete-malformed",
-        "incomplete must be an object with a non-empty reason string and an unscanned array of non-empty strings",
-      ));
     } else {
-      const incomplete = doc.incomplete;
-      const reason = incomplete.reason;
-      const unscanned = incomplete.unscanned;
-      if (typeof reason !== "string" || reason.trim() === "") {
-        violations.push(violation("high", "review.incomplete-malformed", "incomplete.reason must be a non-empty string"));
-      }
-      if (
-        !Array.isArray(unscanned) ||
-        !unscanned.every((entry: unknown) => typeof entry === "string" && entry.trim() !== "")
-      ) {
-        violations.push(violation(
-          "high",
-          "review.incomplete-malformed",
-          "incomplete.unscanned must be an array of non-empty strings (an empty array states nothing was left unscanned)",
-        ));
-      }
+      checkIncompleteShape(doc.incomplete, "incomplete", violations);
     }
   } else if (doc.incomplete !== undefined) {
     violations.push(violation(
@@ -586,6 +636,24 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
           "high",
           "review.verdict-tally-mismatch",
           `tally.verdict "${String(doc.tally.verdict)}" does not equal the top-level verdict "${String(doc.verdict)}" - the envelope verdict and tally must agree (consistency rule)`,
+        ));
+      }
+      // The envelope's fact and its nested echo are one declaration; a pair of
+      // readable facts that differ means one level was doctored, so refusing
+      // beats silently preferring the top-level copy. Malformed facts are
+      // already refused by the shape rules above and are not compared.
+      const topIncomplete = doc.incomplete;
+      const tallyIncomplete = doc.tally.incomplete;
+      if (
+        isIncompleteFact(topIncomplete) && isIncompleteFact(tallyIncomplete) &&
+        (topIncomplete.reason !== tallyIncomplete.reason ||
+          topIncomplete.unscanned.length !== tallyIncomplete.unscanned.length ||
+          topIncomplete.unscanned.some((entry, index) => entry !== tallyIncomplete.unscanned[index]))
+      ) {
+        violations.push(violation(
+          "high",
+          "review.incomplete-tally-mismatch",
+          `tally.incomplete does not match the top-level incomplete fact - the cause and the unscanned scope must be identical (tally ${JSON.stringify(tallyIncomplete)}, envelope ${JSON.stringify(topIncomplete)})`,
         ));
       }
     }

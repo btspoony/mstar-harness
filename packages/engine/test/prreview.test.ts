@@ -1641,7 +1641,7 @@ describe("validateMstarReviewV1 — incomplete verdict facts", () => {
     return reviewDoc({
       verdict: "incomplete",
       findings: [{ mergeClass: "must-fix", title: "Unbounded retry", body: "the retry loop has no cap" }],
-      tally: INCOMPLETE_TALLY,
+      tally: { ...INCOMPLETE_TALLY },
       incomplete: INCOMPLETE,
       ...overrides,
     });
@@ -1694,7 +1694,11 @@ describe("validateMstarReviewV1 — incomplete verdict facts", () => {
   });
 
   test("an empty unscanned array is a legal fact (nothing was left unscanned)", () => {
-    const gate = validateMstarReviewV1(incompleteDoc({ incomplete: { reason: "operator cancelled the run", unscanned: [] } }));
+    const cancelled = { reason: "operator cancelled the run", unscanned: [] };
+    const gate = validateMstarReviewV1(incompleteDoc({
+      incomplete: cancelled,
+      tally: computePrTally({ findings: [{ mergeClass: "must-fix" }], incomplete: cancelled }),
+    }));
     expect(gate.ok).toBe(true);
   });
 
@@ -1710,6 +1714,41 @@ describe("validateMstarReviewV1 — incomplete verdict facts", () => {
     const gate = validateMstarReviewV1(doc);
     expect(gate.ok).toBe(false);
     expect(codes(gate)).toContain("review.verdict-tally-mismatch");
+  });
+
+  test("a provided tally carries the incomplete echo under the same presence rule", () => {
+    // A settled tally with a nested fact claims a stopped run it never reported.
+    const settled = reviewDoc();
+    (settled.tally as Record<string, unknown>).incomplete = INCOMPLETE;
+    expect(codes(validateMstarReviewV1(settled))).toContain("review.incomplete-unexpected");
+
+    // An incomplete tally without its echo publishes the bare token.
+    const bare = incompleteDoc();
+    delete (bare.tally as Record<string, unknown>).incomplete;
+    expect(codes(validateMstarReviewV1(bare))).toContain("review.missing-incomplete");
+
+    // The echo is shape-checked where it lives.
+    for (const broken of [{ reason: "   ", unscanned: ["src/auth.ts"] }, { reason: "budget spent", unscanned: "src/auth.ts" }]) {
+      const doc = incompleteDoc();
+      (doc.tally as Record<string, unknown>).incomplete = broken;
+      expect(codes(validateMstarReviewV1(doc)), JSON.stringify(broken)).toContain("review.incomplete-malformed");
+    }
+
+    // A settled tally that never carried the echo stays valid.
+    expect(validateMstarReviewV1(reviewDoc()).ok).toBe(true);
+  });
+
+  test("tally.incomplete and the top-level incomplete fact must agree", () => {
+    const driftedCause = incompleteDoc();
+    (driftedCause.tally as Record<string, unknown>).incomplete = { reason: "budget spent", unscanned: [...INCOMPLETE.unscanned] };
+    expect(codes(validateMstarReviewV1(driftedCause))).toContain("review.incomplete-tally-mismatch");
+
+    const driftedScope = incompleteDoc();
+    (driftedScope.tally as Record<string, unknown>).incomplete = { reason: INCOMPLETE.reason, unscanned: [...INCOMPLETE.unscanned, "packages/engine"] };
+    expect(codes(validateMstarReviewV1(driftedScope))).toContain("review.incomplete-tally-mismatch");
+
+    // The agreeing pair (the synthesized product) stays valid.
+    expect(validateMstarReviewV1(incompleteDoc()).ok).toBe(true);
   });
 });
 
