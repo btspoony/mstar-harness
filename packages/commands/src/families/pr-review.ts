@@ -8,7 +8,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
-import { refusalEnvelope } from "../envelope.js";
+import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -51,7 +51,7 @@ const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, comman
  */
 export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }) });
   const { code, details, recovery } = engineErrorFacts(error);
   if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
   return refusalEnvelope({
@@ -60,7 +60,11 @@ export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
     recovery: recovery ?? "Correct the reported review input or source condition, then rerun the command.",
   });
 };
-class UsageError extends Error {}
+/** A caller-correctable input error; `diagnostics` carries one entry per
+ * invalid field so a refusal can report all of them at once. */
+class UsageError extends Error {
+  constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[]) { super(message); }
+}
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };
 function parseTarget(raw: string): PrReportTarget {
@@ -113,17 +117,28 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const count = (raw: string | undefined, label: string) => { if (raw === undefined) return 0; if (!/^\d+$/.test(raw) || Number(raw) > 50) throw new UsageError(`${label} must be a non-negative integer no greater than 50`); return Number(raw); };
  // A marked-incomplete run is all-or-nothing: the token without its cause
  // and unscanned scope is unreadable, so the two flags travel together.
-      if ((input.incompleteReason === undefined) !== (input.unscanned === undefined)) throw new UsageError("--incomplete-reason and --unscanned go together");
  // The cause renders on one header line (`cause: <reason>`) and the scope
  // entries join the single `unscanned:` line, so a blank or multi-line value
  // in either flag is a caller error refused here as usage (exit 2) rather
- // than surfacing as the engine guard's internal failure (exit 1).
+ // than surfacing as the engine guard's internal failure (exit 1). Both flags
+ // are checked before the refusal is raised, so one call reports every
+ // invalid field instead of costing the caller a second rerun
+ // (packages/cli/AGENTS.md § Aggregated validation).
+      const flagDiagnostics: RefusalDiagnostic[] = [];
+      if ((input.incompleteReason === undefined) !== (input.unscanned === undefined)) {
+        flagDiagnostics.push({
+          path: input.incompleteReason === undefined ? "incompleteReason" : "unscanned",
+          code: "required",
+          message: "--incomplete-reason and --unscanned go together",
+        });
+      }
       if (input.incompleteReason !== undefined && (input.incompleteReason.trim() === "" || /[\r\n]/.test(input.incompleteReason))) {
-        throw new UsageError("--incomplete-reason must be a single line of non-blank text");
+        flagDiagnostics.push({ path: "incompleteReason", code: "invalid", message: "--incomplete-reason must be a single line of non-blank text" });
       }
       if (input.unscanned !== undefined && input.unscanned.split(",").some((entry) => entry.trim() === "" || /[\r\n]/.test(entry))) {
-        throw new UsageError("--unscanned must be a comma-separated list of single-line non-blank entries");
+        flagDiagnostics.push({ path: "unscanned", code: "invalid", message: "--unscanned must be a comma-separated list of single-line non-blank entries" });
       }
+      if (flagDiagnostics.length > 0) throw new UsageError(flagDiagnostics[0]!.message, flagDiagnostics);
       const incomplete = input.incompleteReason === undefined ? undefined : {
         reason: need(input.incompleteReason, "--incomplete-reason"),
         unscanned: (input.unscanned ?? "").split(",").map((entry) => entry.trim()),

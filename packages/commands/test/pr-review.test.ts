@@ -278,6 +278,31 @@ describe("pr-review command family", () => {
     }
   });
 
+  test("both invalid incomplete flags are reported in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const flags = { findings, incompleteReason: " ", unscanned: "src/auth.ts,,packages/engine" };
+
+    // One call reports every invalid field: the blank cause no longer hides the
+    // blank scope entry behind a second rerun (packages/cli/AGENTS.md
+    // § Aggregated validation). The direct execute route and the admitted one
+    // agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "both incomplete flags")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+        expect.objectContaining({ path: "unscanned", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(text).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+    }
+  });
+
   test("unknown outcome after posting does not claim success or retry", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");
