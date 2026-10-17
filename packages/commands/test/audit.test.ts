@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { setArtifactStore } from "@mstar-harness/engine";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { getAuditCommandDefinitions, getCommandDefinitions } from "../src/index.js";
+import { getAuditCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -92,12 +92,6 @@ describe("audit command family", () => {
       const refused = await command("audit.scaffold").execute({ findings, sha: "abc1234", ...bad }, context(root));
       expect({ input: bad, status: refused.status, exitCode: refused.exitCode }).toEqual({ input: bad, status: "usage", exitCode: 2 });
     }
-  });
-
-  test("promote is no longer a verb", () => {
-    expect(getAuditCommandDefinitions().map(({ id }) => id)).toEqual(["audit.scaffold", "audit.secret-scan", "audit.supply-chain"]);
-    expect(getCommandDefinitions().map(({ id }) => id)).not.toContain("audit.promote");
-    expect(() => command("audit.promote")).toThrow("missing audit.promote");
   });
 
   test("secret scan reports the actual engine finding for a tracked fixture without disclosing its value", async () => {

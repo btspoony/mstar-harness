@@ -564,6 +564,30 @@ describe("prReviewReportPath — report escalation inside one run dir (§ 2)", (
     );
   });
 
+  test("stage evidence refuses a directory or symlink at its name (never followed out of the run dir)", () => {
+    dir = join(tmp, "stage-occupied");
+    mkdirSync(dir, { recursive: true });
+    const runDir = join(dir, "2026-08-30-pr12");
+    mkdirSync(runDir, { recursive: true });
+    // A directory at the name would make the caller's write fail with EISDIR.
+    mkdirSync(join(runDir, "stage1-api-seat.md"));
+    expect(
+      () => prReviewReportPath({ reviewsDir: dir, date: "2026-08-30", target: { kind: "pr", n: 12 }, stage: 1, slug: "api-seat" }),
+    ).toThrow(/not a regular file/);
+    // A symlink would let the write escape the run dir.
+    const outside = join(dir, "outside-evidence.md");
+    writeFileSync(outside, "outside\n");
+    symlinkSync(outside, join(runDir, "stage2-api-seat.md"));
+    expect(
+      () => prReviewReportPath({ reviewsDir: dir, date: "2026-08-30", target: { kind: "pr", n: 12 }, stage: 2, slug: "api-seat" }),
+    ).toThrow(/not a regular file/);
+    // A regular file is the seat's own prior evidence: re-running reuses it.
+    writeFileSync(join(runDir, "stage1-web-seat.md"), "prior\n");
+    expect(
+      prReviewReportPath({ reviewsDir: dir, date: "2026-08-30", target: { kind: "pr", n: 12 }, stage: 1, slug: "web-seat" }),
+    ).toBe(join(runDir, "stage1-web-seat.md"));
+  });
+
   test("same-day re-review never returns an already-existing path ( contract item 6)", () => {
     const runDir = join(dir, "2026-08-27-branch-topic-a");
     mkdirSync(runDir, { recursive: true });

@@ -22,7 +22,7 @@
  * 🟠 should-fix · 🔵 nit · ❓ unverified (escaped as \u{...} per
  * lint:ascii-literals — bun misdecodes raw UTF-8 in the CLI bundle).
  */
-import { readdirSync, type Dirent } from "node:fs";
+import { lstatSync, readdirSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { resolveReviewRunDir } from "./path.js";
@@ -611,6 +611,28 @@ function nextReportName(runDir: string): string {
 }
 
 /**
+ * The seat-evidence path inside `runDir`. A regular file there is the same
+ * seat's prior evidence — re-running the seat overwrites it by design (one
+ * stable file per seat). A directory would make the caller's write fail
+ * (EISDIR) and a symlink would let it escape the run dir, so both are
+ * refused rather than followed.
+ */
+function requireWritableEvidencePath(runDir: string, name: string): string {
+  const target = join(runDir, name);
+  let entry: Stats;
+  try {
+    entry = lstatSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return target;
+    throw error;
+  }
+  if (entry.isFile()) return target;
+  throw new Error(
+    `prReviewReportPath: ${name} already exists in ${runDir} and is not a regular file - refusing to write through it`,
+  );
+}
+
+/**
  * Resolve the local-report (or evidence-file) path for a reviewed target
  * (pr-review.md § Local report archive — naming rules, pure read, never
  * writes and never overwrites):
@@ -650,7 +672,7 @@ export function prReviewReportPath(opts: {
   }
 
   const runDir = resolveReviewRunDir({ reviewsDir: opts.reviewsDir, date, spec: opts.target });
-  if (hasStage) return join(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
+  if (hasStage) return requireWritableEvidencePath(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
   return join(runDir, nextReportName(runDir));
 }
 

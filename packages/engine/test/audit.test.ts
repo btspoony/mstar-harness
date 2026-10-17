@@ -415,6 +415,18 @@ describe("scaffoldAuditReport", () => {
     expect(readReport(reviews, "2026-08-10")).not.toContain("Rotate leaked AWS keys");
   });
 
+  test("repeated auto-allocated runs take their own round — a run never overwrites another", () => {
+    const reviews = join(tmp, "reviews-alloc");
+    mkdirSync(reviews, { recursive: true });
+    const first = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" });
+    const second = scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-19" });
+    expect([first.round, second.round]).toEqual([1, 2]);
+    expect(readdirSync(reviews).sort()).toEqual([
+      "2026-08-19-codebase-standard-1",
+      "2026-08-19-codebase-standard-2",
+    ]);
+  });
+
   test("dir overrides the whole run dir (the CLI --dir path)", () => {
     const reviews = join(tmp, "reviews-dir-override");
     mkdirSync(reviews, { recursive: true });

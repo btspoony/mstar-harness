@@ -1261,15 +1261,35 @@ export function scaffoldAuditReport(
     const first = gate.violations[0];
     throw new TypeError(`invalid audit findings \u2014 ${first.code}: ${first.message}`);
   }
-  const spec: ReviewRunRequest = { kind: "codebase", level, round: options.round };
-  const outDir =
-    options.dir !== undefined
-      ? resolve(options.dir)
-      : resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec });
+  let outDir: string;
+  if (options.dir !== undefined) {
+    outDir = resolve(options.dir);
+    mkdirSync(outDir, { recursive: true });
+  } else if (options.round !== undefined) {
+    outDir = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level, round: options.round } });
+    mkdirSync(outDir, { recursive: true });
+  } else {
+    // Auto-allocated rounds reserve their directory atomically: a plain
+    // listing + `mkdir -p` lets two concurrent runs read the same listing
+    // and both take the same round, so the later write destroys the earlier
+    // report. A non-recursive `mkdir` fails with EEXIST for the loser, which
+    // then takes the next round. An explicit round / dir is the caller's
+    // deliberate reuse and keeps its directory.
+    mkdirSync(options.reviewsDir, { recursive: true });
+    for (;;) {
+      const candidate = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level } });
+      try {
+        mkdirSync(candidate);
+        outDir = candidate;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
+  }
  // An explicit dir names its own round; an allocated one is echoed as the
  // run-dir name's trailing segment (§ 2 SSOT).
   const round = options.round ?? (options.dir !== undefined ? 1 : Number(basename(outDir).split("-").pop()));
-  mkdirSync(outDir, { recursive: true });
   const file = join(outDir, "README.md");
   const carried = existsSync(file)
     ? extractSecurityDispositionSections(readFileSync(file, "utf8"))

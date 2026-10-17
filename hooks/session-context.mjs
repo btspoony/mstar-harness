@@ -492,17 +492,17 @@ import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:f
 import { basename as basename13, isAbsolute as isAbsolute10, join as join21, resolve as resolve17, sep as sep9 } from "node:path";
 import { existsSync as existsSync17 } from "node:fs";
 import { join as join22 } from "node:path";
-import { readdirSync as readdirSync12 } from "node:fs";
+import { lstatSync as lstatSync9, readdirSync as readdirSync12 } from "node:fs";
 import { isAbsolute as isAbsolute11, join as join23 } from "node:path";
 import { existsSync as existsSync18, readdirSync as readdirSync13, unlinkSync as unlinkSync4 } from "node:fs";
 import { basename as basename14, isAbsolute as isAbsolute12, join as join24, resolve as resolve18, sep as sep10 } from "node:path";
 import { existsSync as existsSync19, readFileSync as readFileSync18 } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join25, resolve as resolve19 } from "node:path";
-import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync10, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
+import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync20, readdirSync as readdirSync15 } from "node:fs";
 import { dirname as dirname16, isAbsolute as isAbsolute14, join as join27, relative as relative9, resolve as resolve20, sep as sep11 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
 import { createHash as createHash13 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync9, openSync as openSync3, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
+import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync3, readFileSync as readFileSync19, readdirSync as readdirSync14 } from "node:fs";
 import { dirname as dirname15, join as join26 } from "node:path";
 import { dirname as dirname17, isAbsolute as isAbsolute15 } from "node:path";
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
@@ -514,14 +514,14 @@ import { existsSync as existsSync21, readFileSync as readFileSync22, statSync as
 import { dirname as dirname18, isAbsolute as isAbsolute16, join as join29 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
 import { createHash as createHash19 } from "node:crypto";
-import { existsSync as existsSync22, lstatSync as lstatSync11, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
+import { existsSync as existsSync22, lstatSync as lstatSync12, readFileSync as readFileSync23, readdirSync as readdirSync16 } from "node:fs";
 import { join as join30, resolve as resolve21 } from "node:path";
 import {
   closeSync as closeSync5,
   constants as fsConstants,
   fstatSync as fstatSync5,
   fsyncSync as fsyncSync2,
-  lstatSync as lstatSync12,
+  lstatSync as lstatSync13,
   mkdirSync as mkdirSync8,
   openSync as openSync5,
   writeSync
@@ -9548,10 +9548,28 @@ function scaffoldAuditReport(findings, options) {
     const first = gate.violations[0];
     throw new TypeError(`invalid audit findings — ${first.code}: ${first.message}`);
   }
-  const spec = { kind: "codebase", level, round: options.round };
-  const outDir = options.dir !== undefined ? resolve5(options.dir) : resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec });
+  let outDir;
+  if (options.dir !== undefined) {
+    outDir = resolve5(options.dir);
+    mkdirSync2(outDir, { recursive: true });
+  } else if (options.round !== undefined) {
+    outDir = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level, round: options.round } });
+    mkdirSync2(outDir, { recursive: true });
+  } else {
+    mkdirSync2(options.reviewsDir, { recursive: true });
+    for (;; ) {
+      const candidate = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level } });
+      try {
+        mkdirSync2(candidate);
+        outDir = candidate;
+        break;
+      } catch (error) {
+        if (error.code !== "EEXIST")
+          throw error;
+      }
+    }
+  }
   const round = options.round ?? (options.dir !== undefined ? 1 : Number(basename3(outDir).split("-").pop()));
-  mkdirSync2(outDir, { recursive: true });
   const file = join7(outDir, "README.md");
   const carried = existsSync6(file) ? extractSecurityDispositionSections(readFileSync6(file, "utf8")) : { needsVerification: [], hardeningChecked: [] };
   const redacted = findings.map(redactFinding);
@@ -21953,6 +21971,20 @@ function nextReportName(runDir) {
   }
   return maxRevision === 0 ? "report.md" : `report-r${maxRevision + 1}.md`;
 }
+function requireWritableEvidencePath(runDir, name) {
+  const target = join23(runDir, name);
+  let entry;
+  try {
+    entry = lstatSync9(target);
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return target;
+    throw error;
+  }
+  if (entry.isFile())
+    return target;
+  throw new Error(`prReviewReportPath: ${name} already exists in ${runDir} and is not a regular file - refusing to write through it`);
+}
 function prReviewReportPath(opts) {
   const date = opts.date ?? todayString();
   if (!DATE_RE7.test(date)) {
@@ -21968,7 +22000,7 @@ function prReviewReportPath(opts) {
   }
   const runDir = resolveReviewRunDir({ reviewsDir: opts.reviewsDir, date, spec: opts.target });
   if (hasStage)
-    return join23(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
+    return requireWritableEvidencePath(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
   return join23(runDir, nextReportName(runDir));
 }
 function violation15(severity, code2, message, fix) {
@@ -23359,7 +23391,7 @@ function readBytes(path2) {
   }
 }
 function readInside(parent, child) {
-  const st = lstatSync9(parent);
+  const st = lstatSync10(parent);
   if (st.isSymbolicLink() || !st.isDirectory())
     throw new Error(`unsafe ancestor directory: ${parent}`);
   return readBytes(join26(parent, child));
@@ -23372,7 +23404,7 @@ function evaluate(context, now2) {
   const refusals = [];
   const dirs = join26(root, "workflows");
   try {
-    const rootInfo = lstatSync9(dirs);
+    const rootInfo = lstatSync10(dirs);
     if (rootInfo.isSymbolicLink())
       refusals.push({
         selector: "dsh-workflows",
@@ -23455,7 +23487,7 @@ function evaluate(context, now2) {
         const historyDir = join26(dir, HISTORY);
         let historyEnumerated = false;
         try {
-          const hs = lstatSync9(historyDir);
+          const hs = lstatSync10(historyDir);
           if (hs.isSymbolicLink() || !hs.isDirectory()) {
             historySafe = false;
             throw new Error("history path is not a real directory");
@@ -23872,7 +23904,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
   const registeredUnderRoot = registeredExecution.filter(({ dir }) => dir !== workflowsDir && dir.startsWith(workflowsPrefix));
   let info;
   try {
-    info = lstatSync10(workflowsDir);
+    info = lstatSync11(workflowsDir);
   } catch (error) {
     if (error.code === "ENOENT")
       return { enumerable: false, refusedRegisteredIds: new Set };
@@ -23882,7 +23914,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     const refusedRegisteredIds = new Set;
     for (const entry of registeredExecution) {
       try {
-        const entryInfo = lstatSync10(entry.dir);
+        const entryInfo = lstatSync11(entry.dir);
         if (entryInfo.isSymbolicLink() || !entryInfo.isDirectory())
           refusedRegisteredIds.add(entry.id);
       } catch {}
@@ -23933,7 +23965,7 @@ function binding(value) {
 function readSourceBytes(path2, label) {
   let info;
   try {
-    info = lstatSync10(path2);
+    info = lstatSync11(path2);
   } catch {
     conflict2(`${label} is missing at ${path2}; restore the file or remove its registration, then rerun store upgrade.`);
   }
@@ -24194,7 +24226,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     }
     const info = refusedRegistered && !isRealWorkflowTree ? null : (() => {
       try {
-        return lstatSync10(dir);
+        return lstatSync11(dir);
       } catch {
         return null;
       }
@@ -24227,7 +24259,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       const rawInventory = legacySnapshotInventory(snapshotValue);
       const snapshot = projectLegacySnapshot(snapshotValue);
       if (existsSync20(sessionsDir)) {
-        const sessionsInfo = lstatSync10(sessionsDir);
+        const sessionsInfo = lstatSync11(sessionsDir);
         if (sessionsInfo.isSymbolicLink() || !sessionsInfo.isDirectory())
           throw new UnsafeSourceError(`workflow ${entry.id} sessions path is not a real directory.`);
         for (const sessionEntry of readdirSync15(sessionsDir, { withFileTypes: true })) {
@@ -28077,7 +28109,7 @@ function registerSources(context) {
     const registerPath = join30(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
-      info = lstatSync11(registerPath);
+      info = lstatSync12(registerPath);
     } catch {
       continue;
     }
@@ -28701,7 +28733,7 @@ function fsyncDirectory(dir) {
 function assertLedgerPathIdentity(path2, opened, phase) {
   let current;
   try {
-    current = lstatSync12(path2);
+    current = lstatSync13(path2);
   } catch {
     throw new ExecutionLedgerError("execution-ledgers.target-replaced", `${path2} changed ${phase}; no success receipt was issued.`);
   }
@@ -28744,7 +28776,7 @@ function commitLedgerFrame(path2, frame) {
 function assertRealDirectory(path2, what) {
   let info = null;
   try {
-    info = lstatSync12(path2);
+    info = lstatSync13(path2);
   } catch (error) {
     if (error.code !== "ENOENT")
       throw error;
@@ -28759,7 +28791,7 @@ function assertRealDirectory(path2, what) {
 function prepareWorkflowBodyDir(context, session, dir) {
   let info = null;
   try {
-    info = lstatSync12(dir);
+    info = lstatSync13(dir);
   } catch (error) {
     if (error.code !== "ENOENT")
       throw error;
