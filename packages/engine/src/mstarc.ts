@@ -55,6 +55,8 @@ export const MSTARC_SPECS_DIR_KEY = "specs_dir";
 export const MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
 /** `[config]` key declaring `{PROJECT_DIR}` (v3 project roadmap/register). */
 export const MSTARC_PROJECT_DIR_KEY = "project_dir";
+/** `[config]` key declaring `{REVIEW_DIR}` (codebase-audit / PR-review run reports). */
+export const MSTARC_REVIEW_DIR_KEY = "review_dir";
 /** `[config]` key declaring the repo hard-gate policy (`hard` / `soft`). */
 export const MSTARC_ENFORCEMENT_KEY = "enforcement";
 
@@ -76,6 +78,8 @@ export type MstarcConfig = {
   workflowDir?: string;
   /** Declared `{PROJECT_DIR}` (v3 project roadmap + register live under it). */
   projectDir?: string;
+  /** Declared `{REVIEW_DIR}` (review run reports live under it). */
+  reviewDir?: string;
   /** Declared hard-gate policy — `hard` or `soft` (anything else ignored). */
   enforcement?: "hard" | "soft";
   /** Raw Jev mode; interpretation belongs to the judgment runtime. */
@@ -94,6 +98,7 @@ const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
   [MSTARC_SPECS_DIR_KEY]: "specsDir",
   [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
   [MSTARC_PROJECT_DIR_KEY]: "projectDir",
+  [MSTARC_REVIEW_DIR_KEY]: "reviewDir",
   [MSTARC_ENFORCEMENT_KEY]: "enforcement",
   jev_mode: "jevMode",
   jev_transport: "jevTransport",

@@ -18,6 +18,7 @@
 |---|---|---|
 | `buildCatalogSources` | `buildCatalogPayload` | `src/gates/catalog.ts` |
 | `catalogSourcesFor` | `catalogPayloadFor`（模块内部函数，不导出） | `src/gates/catalog.ts` |
+| `isAuditPlanTarget` | `isAuditReviewTarget`（作用域从 `plans/audit-*` 移到 `{REVIEW_DIR}` 下的 markdown） | `src/gates/seams.ts` |
 
 ### 0.2 顶层模块（`src/`）与职责
 

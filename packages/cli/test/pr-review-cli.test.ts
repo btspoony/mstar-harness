@@ -1,8 +1,8 @@
 /**
  * CLI `mstar pr-review` — thin engine-backed wrappers over the Task 1/3
  * engine APIs (`computePrTally` / `prReviewReportPath` /
- * `validatePrReviewReport`, pr-review.md § Tally / § Local report archive /
- * § Output shape).
+ * `validatePrReviewReport`, pr-review.md § Tally / § Output shape and the
+ * {REVIEW_DIR} run-directory layout).
  *
  * Exit codes: 0 = success, 1 = execution failures / report violations,
  * 2 = invalid input or usage.
@@ -11,7 +11,7 @@
  * asserts the exit code + printed output.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine";
@@ -24,7 +24,7 @@ const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
+    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH" || key === "MSTAR_CLI_PROJECT_ROOT" || key === "INIT_CWD") {
       continue;
     }
     if (value !== undefined) env[key] = value;
@@ -69,9 +69,9 @@ function violationCodes(result: RunResult): string[] {
 }
 
 /** Run the real CLI entry as a subprocess. */
-function runCli(args: string[]): RunResult {
+function runCli(args: string[], opts: { cwd?: string } = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
+    cwd: opts.cwd ?? CLI_ROOT,
     env: cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
@@ -188,40 +188,52 @@ describe("mstar pr-review tally", () => {
 });
 
 describe("mstar pr-review report-path", () => {
-  test("pr target resolves <date>-pr<N>.md and escalates to -r2 on collision", () => {
+  test("--reviews-dir defaults to {REVIEW_DIR} under the discovered harness dir", () => {
     withTempDir((dir) => {
-      const reportsDir = join(dir, "reports");
-      mkdirSync(reportsDir);
-      writeFileSync(join(reportsDir, "2026-08-24-pr134.md"), "prior report — never overwritten");
-      const first = runCli(["pr-review", "report-path", "--reports-dir", reportsDir, "--target", "pr:134", "--date", "2026-08-24"]);
-      expect(first.exitCode).toBe(0);
-      expect(data(first).path).toBe(join(reportsDir, "2026-08-24-pr134-r2.md"));
+      mkdirSync(join(dir, ".mstar"), { recursive: true });
+      // cwd = a harness root → {REVIEW_DIR} = <cwd>/.mstar/reviews
+      const result = runCli(["pr-review", "report-path", "--target", "pr:134", "--date", "2026-08-24"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      // macOS resolves /var to /private/var: the CLI path derives from the realpath'd cwd.
+      expect(data(result).path).toBe(join(realpathSync(dir), ".mstar", "reviews", "2026-08-24-pr134", "report.md"));
+    });
+  });
+
+  test("pr target resolves <date>-pr<N>/report.md and escalates to report-r2.md on collision", () => {
+    withTempDir((dir) => {
+      const reviewsDir = join(dir, "reviews");
+      mkdirSync(join(reviewsDir, "2026-08-24-pr134"), { recursive: true });
+      writeFileSync(join(reviewsDir, "2026-08-24-pr134", "report.md"), "prior report — never overwritten");
+      const result = runCli(["pr-review", "report-path", "--reviews-dir", reviewsDir, "--target", "pr:134", "--date", "2026-08-24"]);
+      expect(result.exitCode).toBe(0);
+      expect(data(result).path).toBe(join(reviewsDir, "2026-08-24-pr134", "report-r2.md"));
+      // resolution never writes or reserves: the prior report is untouched
+      expect(readFileSync(join(reviewsDir, "2026-08-24-pr134", "report.md"), "utf8")).toBe("prior report — never overwritten");
     });
   });
 
   test("fresh directory yields the plain stem (never overwrites)", () => {
     withTempDir((dir) => {
-      const reportsDir = join(dir, "empty");
-      const result = runCli(["pr-review", "report-path", "--reports-dir", reportsDir, "--target", "pr:9", "--date", "2026-08-24"]);
+      const reviewsDir = join(dir, "empty");
+      const result = runCli(["pr-review", "report-path", "--reviews-dir", reviewsDir, "--target", "pr:9", "--date", "2026-08-24"]);
       expect(result.exitCode).toBe(0);
-      expect(data(result).path).toBe(join(reportsDir, "2026-08-24-pr9.md"));
+      expect(data(result).path).toBe(join(reviewsDir, "2026-08-24-pr9", "report.md"));
+      expect(existsSync(join(reviewsDir, "2026-08-24-pr9"))).toBe(false);
     });
   });
 
-  test("branch / diff-sha / bare diff targets resolve per SSOT Filename bullet", () => {
+  test("branch / diff-sha / bare diff targets resolve per SSOT run-directory bullet", () => {
     withTempDir((dir) => {
-      const reportsDir = join(dir, "reports");
-      mkdirSync(reportsDir);
+      const reviewsDir = join(dir, "reviews");
+      mkdirSync(reviewsDir);
       for (const [target, expected] of [
-        ["branch:feat-x", "2026-08-24-feat-x.md"],
-        ["diff:abc1234def5678", "2026-08-24-diff-abc1234.md"],
-        ["diff", "2026-08-24-diff.md"], // empty dir → no -rN escalation; never fabricates a SHA segment
+        ["branch:feat-x", join("2026-08-24-branch-feat-x", "report.md")],
+        ["diff:abc1234def5678", join("2026-08-24-diff-abc1234", "report.md")],
+        ["diff", join("2026-08-24-diff", "report.md")], // no head sha → no fabricated SHA segment
       ] as const) {
-        const fresh = join(dir, `reports-${target.replace(/[^a-z0-9]+/gi, "-")}`);
-        mkdirSync(fresh);
-        const result = runCli(["pr-review", "report-path", "--reports-dir", fresh, "--target", target, "--date", "2026-08-24"]);
-        expect(result.exitCode).toBe(0);
-        expect(data(result).path).toBe(join(fresh, expected));
+        const result = runCli(["pr-review", "report-path", "--reviews-dir", reviewsDir, "--target", target, "--date", "2026-08-24"]);
+        expect({ target, exitCode: result.exitCode }).toEqual({ target, exitCode: 0 });
+        expect(data(result).path).toBe(join(reviewsDir, expected));
       }
     });
   });
@@ -231,7 +243,7 @@ describe("mstar pr-review report-path", () => {
       const result = runCli([
         "pr-review",
         "report-path",
-        "--reports-dir",
+        "--reviews-dir",
         join(dir, "r"),
         "--target",
         "pr:7",
@@ -243,14 +255,14 @@ describe("mstar pr-review report-path", () => {
     });
   });
 
-  test("--stage with --slug composes the evidence-file stem", () => {
+  test("--stage with --slug composes the evidence-file stem inside the run dir", () => {
     withTempDir((dir) => {
-      const reportsDir = join(dir, "evidence");
+      const reviewsDir = join(dir, "evidence");
       const result = runCli([
         "pr-review",
         "report-path",
-        "--reports-dir",
-        reportsDir,
+        "--reviews-dir",
+        reviewsDir,
         "--target",
         "pr:7",
         "--date",
@@ -261,13 +273,13 @@ describe("mstar pr-review report-path", () => {
         "backend-qc1",
       ]);
       expect(result.exitCode).toBe(0);
-      expect(data(result).path).toBe(join(reportsDir, "2026-08-24-pr7-stage2-backend-qc1.md"));
+      expect(data(result).path).toBe(join(reviewsDir, "2026-08-24-pr7", "stage2-backend-qc1.md"));
     });
   });
 
   test("unknown target kind exits 2", () => {
     withTempDir((dir) => {
-      const result = runCli(["pr-review", "report-path", "--reports-dir", join(dir, "r"), "--target", "sha:deadbeef"]);
+      const result = runCli(["pr-review", "report-path", "--reviews-dir", join(dir, "r"), "--target", "sha:deadbeef"]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("pr:<n> | branch:<slug> | diff:<sha> | diff");
     });

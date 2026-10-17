@@ -22,7 +22,7 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 - Close rereads current authoritative state under its transaction, validates identity/shape, returns valid terminal no-op or requires all rows Done and no dangling workflow integration exclusion, then writes completed + ended_at. The terminal state and the DB root unregister commit in the same transaction and a failed transition rolls back whole. Per-row execution leases are removed.
 - dangling lease / 非 `Done` 行 / 缺失或身份不符则拒绝；不提交失败 transition。
 - **`type: plan` 交付证据 consult**：completed close 与只读 Phase-6 gate 共享 `consultDeliveryEvidence`；development 缺 compound disposition / PR 身份 / verified merge，或 report-only 缺完成策略履行，均以 `PHASE6_DELIVERY_*` 拒绝，当前权威保持 running + registered。补齐只经 `mstar workflow evidence`（session reference + scope token + operation id；flags 见 help），不手写状态。PR 身份一次写入，compound / merge 可覆写；failed / stopped 不要求 successful-delivery 证据。
-- **delivery kind 在注册期显式声明**：由创建路线的 `mstar workflow register`（以及 `migrate` / `audit promote` 对 ACTIVE plan 的 lift）声明，不发明补 kind 通道。注册与声明的完整约束 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`，命令形状见 help。
+- **delivery kind 在注册期显式声明**：由创建路线的 `mstar workflow register`（以及 `migrate` 对 ACTIVE plan 的 lift）声明，不发明补 kind 通道。注册与声明的完整约束 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`，命令形状见 help。
 - **禁止**为通过 close 释放 lease 或伪造 Done —— close 从不释放（甚至 caller 自己的）；close 只组合当前权威已记录证据所蕴含的合法 bookkeeping，不夺取外来所有权；exclusion 的释放由 direct complete 在其已验证尝试中完成。
 - close 记录其自身时间戳（引擎不接受自身时钟读数）；带 `--ended-at` 是 usage 拒绝
 

@@ -80,8 +80,8 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Validate the role mapping and load-order corpus | `mstar roles validate` | `mstar-roles` |
 | Validate a knowledge doc's frontmatter and scope; the knowledge index-row assert is retired (refuses `compound.index.retired` → catalog completeness) | `mstar compound validate` | `mstar-compound` |
 | Validate DESIGN.md tokens and parity | `mstar design-md validate` | `mstar-design-md` |
-| Scaffold or promote audit plans; run static security checks | `mstar audit scaffold`, `mstar audit promote`, `mstar audit secret-scan`, `mstar audit supply-chain` | `mstar-audit` |
-| PR-review arithmetic, report path, saved-report validation, worktree setup | `mstar pr-review tally`, `mstar pr-review report-path`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup` | `mstar-audit` (pr variant) |
+| Scaffold the audit review report; run static security checks | `mstar audit scaffold`, `mstar audit secret-scan`, `mstar audit supply-chain` | `mstar-audit` |
+| PR-review arithmetic, report path (`--reviews-dir`, default the resolved `{REVIEW_DIR}`), saved-report validation, worktree setup | `mstar pr-review tally`, `mstar pr-review report-path`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup` | `mstar-audit` (pr variant) |
 | Bootstrap a harness directory | `mstar harness scaffold` | `mstar-conventions` |
 | Recover a workspace holding recognized v1/v2 execution sources; standalone file-staging `migrate` is retired | `mstar store upgrade` | `mstar-artifacts`, `mstar-conventions`; original source bytes remain untouched |
 | Discover one command or payload contract | `mstar schema` | `mstar-use-cli`; bounded schema/help is the input-shape authority |

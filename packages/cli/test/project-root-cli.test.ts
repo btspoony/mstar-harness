@@ -102,7 +102,7 @@ describe("project-root path resolution — all six dev commands with relative ar
 `;
 
   const AUDIT_FINDINGS = [
-    { title: "Fix N+1 query", priority: "P1", effort: "M", risk: "HIGH", category: "perf", dependsOn: "002", description: "Queries explode on the dashboard." },
+    { title: "Fix N+1 query", priority: "P1", effort: "M", risk: "HIGH", category: "perf", description: "Queries explode on the dashboard." },
   ];
 
   // Every documented dev command that resolves a relative path arg through
@@ -204,10 +204,9 @@ describe("project-root path resolution — all six dev commands with relative ar
         expect(result.exitCode).toBe(0);
         expect(cliEnvelope(result, "ok", "audit.scaffold.ok").data).toMatchObject({
           outDir: join(dir, "out"),
-          files: ["001-fix-n-1-query.md"],
+          file: join(dir, "out", "README.md"),
         });
         // --dir "out" resolved against the project root, not the nested cwd.
-        expect(existsSync(join(dir, "out", "001-fix-n-1-query.md"))).toBe(true);
         expect(existsSync(join(dir, "out", "README.md"))).toBe(true);
       },
     },

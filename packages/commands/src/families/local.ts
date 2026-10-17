@@ -9,6 +9,7 @@ import {
   hasHarnessRootDeclaration,
   resolveHarnessDir,
   resolveProjectDir,
+  resolveReviewDir,
   resolveScaffoldDirs,
   resolveSkillRoot,
   resolveSpecsDir,
@@ -402,7 +403,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["path", "resolve"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
       input: z.object({ path: z.string().min(1).optional() }),
       effects: ["read"],
-      description: "Resolve harness, specs, workflow, and project directories from a start directory.",
+      description: "Resolve harness, specs, workflow, project, and review directories from a start directory.",
       async execute(input, context) {
         const startDir = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
         // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
@@ -412,7 +413,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const harnessDir = resolveHarnessDir(startDir);
         if (harnessDir === null) {
           return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}`, details: {
-            startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null,
+            startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null,
           } , recovery: "Set the starting path to a directory inside an existing harness. Run mstar path resolve."});
         }
         return ok("path.resolve", {
@@ -421,6 +422,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           specsDir: resolveSpecsDir(harnessDir, { create: false }),
           workflowDir: resolveWorkflowDir(startDir),
           projectDir: resolveProjectDir(startDir),
+          reviewDir: resolveReviewDir(startDir),
         });
       },
     }),

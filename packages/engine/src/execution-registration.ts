@@ -48,7 +48,6 @@ import {
   resolveCatalogExecutionPlan,
   workflowEntryOf,
   writeBinding,
-  CatalogRegistrationError,
   type CatalogExecutionCatalogDelta,
   type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
@@ -72,7 +71,6 @@ import {
 } from "./execution-store.js";
 import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
 import { createHash } from "node:crypto";
-import { promotedAuditPlanRows } from "./audit.js";
 import { derivePlanRegistration, stableJson } from "./workflow.js";
 
 /** §3.1: the operation kind this verb hashes its request under. */
@@ -291,10 +289,9 @@ export async function commitExecutionRegistration(
 }
 
 /**
- * Derive the catalog delta from the ACTIVE workflow intent: plan and iteration
- * entities follow their workflow options; audit entities follow selected plan
- * documents, whose bodies supply the titles. The binding follows the workflow's
- * primary association.
+ * Derive the catalog delta from the ACTIVE workflow intent: a plan entity
+ * follows its workflow options, an iteration entity its workflow id. The
+ * binding follows the workflow's primary association.
  */
 function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCatalogDelta {
   if (workflow.kind === "plan") {
@@ -317,29 +314,9 @@ function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCa
       binding: { catalogKind: "plan", catalogId: selected.plan.id },
     };
   }
-  if (workflow.kind === "iteration") {
-    return {
-      entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
-      binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
-    };
-  }
-  const rows = promotedAuditPlanRows(workflow.outDir, workflow.selected);
-  if (rows.length === 0) {
-    throw new CatalogRegistrationError(
-      "catalog.registration-invalid",
-      "an audit promotion selects no plan rows; there is no catalog delta to register",
-    );
-  }
-  const entities: CatalogExecutionCatalogDelta["entities"] = [];
-  for (const row of rows) {
-    if (typeof row.id !== "string" || typeof row.title !== "string" || typeof row.file !== "string") {
-      throw new CatalogRegistrationError("catalog.registration-invalid", "an audit plan row is missing its catalog identity or path");
-    }
-    entities.push({ kind: "plan", id: row.id, title: row.title, rootKind: "plans", relativePath: row.file });
-  }
   return {
-    entities,
-    binding: { catalogKind: "plan", catalogId: entities[0]!.id },
+    entities: [{ kind: "iteration", id: workflow.workflowId, title: workflow.workflowId, rootKind: "iterations", relativePath: workflow.workflowId }],
+    binding: { catalogKind: "iteration", catalogId: workflow.workflowId },
   };
 }
 /**

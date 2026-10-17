@@ -40,12 +40,16 @@ import {
   resolveKnowledgeDir,
   resolvePlanDir,
   resolveProjectDir,
+  resolveReviewDir,
+  resolveReviewRunDir,
   resolveSddDir,
   resolveSpecsDir,
   resolveWorkflowDir,
+  reviewRunDirName,
   scaffoldHarness,
   validateGitignore,
 } from "../src/path.js";
+import type { ReviewRunLevel } from "../src/path.js";
 import { readJson } from "../src/core.js";
 import { initializeStore, openStore } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
@@ -689,6 +693,115 @@ describe("resolveWorkflowDir / resolveProjectDir (v3 workflow lifecycle layout)"
   });
 });
 
+describe("resolveReviewDir / review-run dir names ({REVIEW_DIR}, review-report contract §1/§2)", () => {
+  test("defaults to {HARNESS_DIR}/reviews; a .mstarc review_dir wins (relative and absolute)", () => {
+    const root = tmpRoot("path-review-dir-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      expect(resolveReviewDir(root)).toBe(join(root, ".mstar", "reviews"));
+
+      writeFileSync(join(root, ".mstarc"), "[config]\nreview_dir=process/reviews\n");
+      expect(resolveReviewDir(root)).toBe(join(root, "process", "reviews"));
+
+      const absolute = join(root, "elsewhere", "reviews");
+      writeFileSync(join(root, ".mstarc"), `[config]\nreview_dir=${absolute}\n`);
+      expect(resolveReviewDir(root)).toBe(absolute);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no harness dir → throws (fail closed, no silent default)", () => {
+    const root = tmpRoot("path-review-none-");
+    try {
+      expect(() => resolveReviewDir(root)).toThrow(/harness dir not found/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reviewRunDirName shapes every variant (date, level, round, slug, short sha)", () => {
+    expect(reviewRunDirName("2026-08-24", { kind: "codebase", level: "standard", round: 2 })).toBe(
+      "2026-08-24-codebase-standard-2",
+    );
+    expect(reviewRunDirName("2026-08-24", { kind: "pr", n: 134 })).toBe("2026-08-24-pr134");
+    expect(reviewRunDirName("2026-08-24", { kind: "branch", slug: "feat-x" })).toBe("2026-08-24-branch-feat-x");
+    expect(reviewRunDirName("2026-08-24", { kind: "diff", headSha: "abc1234def5678" })).toBe("2026-08-24-diff-abc1234");
+ // Absent OR empty headSha => the bare `-diff` name; never fabricated.
+    expect(reviewRunDirName("2026-08-24", { kind: "diff" })).toBe("2026-08-24-diff");
+    expect(reviewRunDirName("2026-08-24", { kind: "diff", headSha: "" })).toBe("2026-08-24-diff");
+  });
+
+  test("reviewRunDirName rejects an invalid date, level, round, pr n and unsafe slug", () => {
+    for (const date of ["20260824", "2026-8-24", ""]) {
+      expect(() => reviewRunDirName(date, { kind: "pr", n: 1 })).toThrow(/YYYY-MM-DD/);
+    }
+    expect(() =>
+      reviewRunDirName("2026-08-24", { kind: "codebase", level: "shallow" as unknown as ReviewRunLevel, round: 1 }),
+    ).toThrow(/quick \| standard \| deep/);
+    for (const round of [0, -1, 1.5]) {
+      expect(() => reviewRunDirName("2026-08-24", { kind: "codebase", level: "quick", round })).toThrow(/positive integer/);
+    }
+    for (const n of [0, -2, 1.5]) {
+      expect(() => reviewRunDirName("2026-08-24", { kind: "pr", n })).toThrow(/positive integer/);
+    }
+    for (const slug of ["", "..", "a/b", "a\\b"]) {
+      expect(() => reviewRunDirName("2026-08-24", { kind: "branch", slug })).toThrow(/single safe path component/);
+    }
+  });
+
+  test("resolveReviewRunDir allocates the next codebase round and never creates anything", () => {
+    const root = tmpRoot("path-review-run-");
+    try {
+      const reviews = join(root, "reviews");
+ // No reviews dir yet: round 1 — and no listing read creates it.
+      expect(
+        resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "codebase", level: "standard" } }),
+      ).toBe(join(reviews, "2026-08-24-codebase-standard-1"));
+      expect(existsSync(reviews)).toBe(false);
+
+      mkdirSync(join(reviews, "2026-08-24-codebase-standard-1"), { recursive: true });
+      mkdirSync(join(reviews, "2026-08-24-codebase-standard-3"), { recursive: true });
+ // A gap is never filled: the highest round present + 1.
+      expect(
+        resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "codebase", level: "standard" } }),
+      ).toBe(join(reviews, "2026-08-24-codebase-standard-4"));
+ // An explicit round is that exact directory (a session reusing its own run).
+      expect(
+        resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "codebase", level: "standard", round: 2 } }),
+      ).toBe(join(reviews, "2026-08-24-codebase-standard-2"));
+ // Levels allocate on their own ladder.
+      expect(
+        resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "codebase", level: "deep" } }),
+      ).toBe(join(reviews, "2026-08-24-codebase-deep-1"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveReviewRunDir is deterministic + idempotent for pr/branch/diff, and defaults the date locally", () => {
+    const root = tmpRoot("path-review-deterministic-");
+    try {
+      const reviews = join(root, "reviews");
+      expect(resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "pr", n: 7 } })).toBe(
+        join(reviews, "2026-08-24-pr7"),
+      );
+      expect(resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "branch", slug: "topic" } })).toBe(
+        join(reviews, "2026-08-24-branch-topic"),
+      );
+      expect(resolveReviewRunDir({ reviewsDir: reviews, date: "2026-08-24", spec: { kind: "diff", headSha: "deadbee1234" } })).toBe(
+        join(reviews, "2026-08-24-diff-deadbee"),
+      );
+
+      const today = new Date();
+      const local = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      expect(resolveReviewRunDir({ reviewsDir: reviews, spec: { kind: "pr", n: 1 } })).toBe(join(reviews, `${local}-pr1`));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
   test("first non-empty candidate wins: {HARNESS_DIR}/specs", () => {
     const root = tmpRoot("path-specs-first-");
@@ -822,7 +935,7 @@ describe("scaffoldHarness", () => {
       const harnessDir = await scaffoldHarness(root);
       expect(harnessDir).toBe(resolve(root, ".mstar"));
       expect(readdirSync(harnessDir).sort()).toEqual([
-        "iterations", "knowledge", "plans", "projects", "sdd", "specs",
+        "iterations", "knowledge", "plans", "projects", "reviews", "sdd", "specs",
       ]);
       expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
     } finally {
