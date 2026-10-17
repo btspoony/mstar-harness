@@ -59,6 +59,8 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Milestones
 
+This table tracks **iteration delivery nodes**, not store `project_milestones` records. Project milestone reads/writes follow **`mstar-project-governance`**; neither mechanism substitutes for the other.
+
 | Milestone | Target date | Status |
 |-----------|-------------|--------|
 | Spec freeze | YYYY-MM-DD | pending |

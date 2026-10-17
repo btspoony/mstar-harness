@@ -20,13 +20,20 @@
  * the `mstar-roles` hub bootstrap, which declares its identity→preset
  * decision matrix (identity-first, `Skill presets:` none/standard arms,
  * role-owned methods, unknown-preset refusal) and conditional core
- * conflict-authority pointer. Both exceptions are keyed on exact names.
+ * conflict-authority pointer. All exemptions are keyed on exact names.
+ * - `mstar-engine-legacy` SKILL.md § Decision Rules (inbound-only) — the
+ * engine-absent condition archive never names another `mstar-*` topic:
+ * runtime skills may point at the archive, the archive never points at
+ * them (`roles.loadorder.legacy.archive.reference`). Callers cover its whole
+ * text face by merging its `references/*.md` through
+ * `mergeLegacyArchiveReferences` (or `collectLegacyArchiveReferenceTexts`
+ * for a skills root).
  *
  * The parameter tables live here as machine data (roadmap §4.3:
  * "parameter tables → data"); `validateRoleMapping` checks the tables'
  * integrity against the on-disk skill layout and the parameter contract.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
@@ -324,6 +331,61 @@ function extractLoadOrderSection(text: string): string | null {
 }
 
 /**
+ * The engine-absent archive skill id: exempt from core-first by exact name and
+ * inbound-only over its whole text face.
+ */
+export const LEGACY_ARCHIVE_SKILL = "mstar-engine-legacy";
+
+/**
+ * Merge the engine-absent archive's reference texts into `skillTexts` so the
+ * inbound-only rule covers `SKILL.md` **and** `references/*.md` (the archive
+ * carries contract prose in both). Unconditional in the archive's favor:
+ * whenever reference texts exist the `mstar-engine-legacy` key is present and
+ * linted even when its `SKILL.md` was not collected; with no references the
+ * input is copied unchanged (no key is invented). Pure — the caller's map is
+ * left alone for its own reporting.
+ */
+export function mergeLegacyArchiveReferences(
+  skillTexts: Record<string, string>,
+  referenceTexts: readonly string[],
+): Record<string, string> {
+  if (referenceTexts.length === 0) return { ...skillTexts };
+  const skill = skillTexts[LEGACY_ARCHIVE_SKILL];
+  return {
+    ...skillTexts,
+    [LEGACY_ARCHIVE_SKILL]: (skill === undefined ? [...referenceTexts] : [skill, ...referenceTexts]).join("\n"),
+  };
+}
+
+/**
+ * Best-effort read of `mstar-engine-legacy/references/*.md` under
+ * `skillsRoot` (deterministic file-name order). A missing or unreadable
+ * directory yields `[]` and an unreadable file is skipped, so callers may
+ * pass a partial skills root without guarding — the same best-effort shape as
+ * the sibling `SKILL.md` reads, because this lint must never take a gate down.
+ */
+export function collectLegacyArchiveReferenceTexts(skillsRoot: string): string[] {
+  const dir = join(skillsRoot, LEGACY_ARCHIVE_SKILL, "references");
+  let names: string[];
+  try {
+    names = readdirSync(dir)
+      .filter((name) => name.endsWith(".md"))
+      .sort();
+  } catch {
+    return [];
+  }
+  const texts: string[] = [];
+  for (const name of names) {
+    try {
+      texts.push(readFileSync(join(dir, name), "utf8"));
+    } catch {
+      // skip unreadable reference — best-effort read
+    }
+  }
+  return texts;
+}
+
+/**
  * Lint load-order declarations across skill texts (mstar-harness-core
  * § 与其它 `mstar-*` skill 的加载契约 + mstar-roles § Load Order; Spec A2 —
  * single load-selection authority).
@@ -333,6 +395,12 @@ function extractLoadOrderSection(text: string): string | null {
  *
  * - `mstar-coding-behavior` is independently usable and exempt from
  * mandatory Load Order and core-first declarations by exact name only.
+ * - `mstar-engine-legacy` is exempt from core-first by exact name only
+ * (the engine-absent condition archive declares its own conditional-load
+ * boundary) and is inbound-only: its text must not contain any other
+ * `mstar-*` name present in the linted corpus (the candidate names are the
+ * corpus keys, so `@mstar-harness/engine` package prose and `mstar` CLI
+ * examples never match).
  * - Every other `mstar-*` topic skill (reached by direct invocation) must
  * have a Load Order / First action section naming `mstar-harness-core`
  * as its first dependency (mentions in later sections do not count).
@@ -347,19 +415,40 @@ function extractLoadOrderSection(text: string): string | null {
  * declaration, or hub section without the core conflict-authority pointer
  * - `roles.loadorder.hub.bootstrap.missing` — hub section missing the
  * identity→none/standard/methods/unknown-preset decision matrix
+ * - `roles.loadorder.legacy.archive.reference` — the archive names another
+ * corpus skill instead of describing the runtime behavior
  */
 export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
   const violations: ValidationResult[] = [];
   for (const [name, text] of Object.entries(skillTexts)) {
     if (!name.startsWith("mstar-") || name === "mstar-harness-core") continue;
     if (name === "mstar-coding-behavior") continue;
+    if (name === "mstar-engine-legacy") {
+      // Inbound-only archive: core-first-exempt by exact name, and its text
+      // must never name another mstar-* skill of the linted corpus.
+      // Candidates are the corpus keys (exact names), so the
+      // `@mstar-harness/engine` package name and `mstar` CLI examples in
+      // the historical prose never match.
+      for (const referenced of Object.keys(skillTexts)) {
+        if (referenced === name || !referenced.startsWith("mstar-") || !text.includes(referenced)) continue;
+        violations.push(
+          violation(
+            "medium",
+            "roles.loadorder.legacy.archive.reference",
+            `skill "${name}" names the runtime skill "${referenced}" \u2014 the engine-absent archive is inbound-only: runtime skills may point at it, it never names another topic (mstar-harness-core load contract)`,
+            `describe the behavior instead of naming the skill (e.g. "the runtime dispatch rules", "the current field reference", "the host references")`,
+          ),
+        );
+      }
+      continue;
+    }
     const section = extractLoadOrderSection(text);
     if (section === null) {
       violations.push(
         violation(
           "medium",
           "roles.loadorder.section.missing",
-          `skill "${name}" has no Load Order / First action section \u2014 mstar-* topics require a load declaration except exact mstar-coding-behavior (mstar-harness-core load contract; mstar-roles \u00a7 Load Order)`,
+          `skill "${name}" has no Load Order / First action section \u2014 mstar-* topics require a load declaration except the exact-name exemptions mstar-coding-behavior and mstar-engine-legacy (mstar-harness-core load contract; mstar-roles \u00a7 Load Order)`,
           `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`,
         ),
       );
@@ -403,7 +492,7 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
         violation(
           "medium",
           "roles.loadorder.core.missing",
-          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap and exact standalone mstar-coding-behavior)`,
+          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap, exact standalone mstar-coding-behavior, and the inbound-only mstar-engine-legacy archive)`,
           "name mstar-harness-core first in the Load Order section",
         ),
       );

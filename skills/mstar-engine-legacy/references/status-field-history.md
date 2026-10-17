@@ -1,6 +1,6 @@
 # Status v1→v2 field history (archived contract prose)
 
-> Engine-absent archive: the full field tables displaced from `mstar-artifacts` when engine validators took over the same contract. Engine-present hosts read `mstar-artifacts/references/status-and-residuals.md` instead; this file is the historical full text — field history only, never an execution route (engine-absent hosts track execution state in conversation).
+> Engine-absent archive: the full field tables displaced from the runtime field reference when engine validators took over the same contract. Engine-present hosts read the runtime field and authority reference instead; this file is the historical full text — field history only, never an execution route (engine-absent hosts track execution state in conversation).
 
 ## v1 `{HARNESS_DIR}/status.json` — full shape (historical)
 
@@ -69,7 +69,7 @@ Closed residual entries added: `lifecycle`, `closed_at`, `closure_note`; optiona
 | `working_branch` | string | Implementation branch; aligns with Assignment `Working branch` (SSOT). |
 | `spec_integration_branch` | string | (Multi-plan same Spec) integration branch; created from root `metadata.iteration_base_branch`. |
 | `merge_target` | string | Next merge target; final PR target is root `metadata.target_branch`. |
-| `branch_policy` | string | One-line policy per `mstar-harness-core`. |
+| `branch_policy` | string | One-line policy per the runtime core's branch-policy rule. |
 | `phase` / `priority` / `description` / `scope` | string | Program label; `high\|medium\|low`; one-line scope (pick one key per repo). |
 | `gates` | object | Gate summary (`qc`, `qa`, `typecheck`, `tests`, `lint`, …). |
 | `blocked_since` / `blocked_reason` / `blocked_by_plan_id` / `dependency` / `next_action` | string | Block bookkeeping + deps + next step. |
@@ -79,7 +79,7 @@ Closed residual entries added: `lifecycle`, `closed_at`, `closure_note`; optiona
 
 ### Removed historical per-row execution exclusion
 
-Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS (engine-present mechanics → `mstar-artifacts`). Historical fields never authorize takeover or require recreating a claim.
+Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS (engine-present mechanics → the runtime field reference). Historical fields never authorize takeover or require recreating a claim.
 
 ## v1 root `metadata` standard optional fields
 
@@ -150,7 +150,7 @@ Legacy read paths (root `residual_findings` / `metadata.residual_findings` / `ar
 
 ## v2 file-transport destinations (historical — superseded by the ACTIVE store.db authority)
 
-The v2 file transport itself is retired: these facts now live in `{HARNESS_DIR}/store.db` (`execution_*`), and the file surfaces below are migration sources only. Engine-present field and authority details → `mstar-artifacts`. The mapping is retained as field history.
+The v2 file transport itself is retired: these facts now live in `{HARNESS_DIR}/store.db` (`execution_*`), and the file surfaces below are migration sources only. Engine-present field and authority details → the runtime field reference. The mapping is retained as field history.
 
 | v1 surface | v2 home |
 | --- | --- |

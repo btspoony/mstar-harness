@@ -146,10 +146,13 @@ Body only.
  * @param options.missing - reference file basenames to omit (mapping break).
  * @param options.loadOrderOk - false → the sibling declares a Load Order
  * section without naming mstar-harness-core.
+ * @param options.legacyReference - when set, seeds the engine-absent archive
+ * skill (`mstar-engine-legacy/SKILL.md` + one reference file with this body)
+ * so the inbound-only rule has a reference-file text face to lint.
  */
 async function seedRolesDir(
   root: string,
-  options: { missing?: string[]; loadOrderOk?: boolean } = {},
+  options: { missing?: string[]; loadOrderOk?: boolean; legacyReference?: string } = {},
 ): Promise<void> {
   const roles = join(root, 'mstar-roles')
   const references = join(roles, 'references')
@@ -190,6 +193,15 @@ description: Fixture role hub.
       ? '## Load Order\n\n1. Nothing here.\n'
       : '## Load Order\n\n1. Read `mstar-harness-core` first.\n'
   await writeFile(join(sibling, 'SKILL.md'), `---\nname: mstar-compound\ndescription: Fixture sibling skill.\n---\n\n${loadOrder}`)
+  if (options.legacyReference !== undefined) {
+    const archive = join(root, 'mstar-engine-legacy')
+    await mkdir(join(archive, 'references'), { recursive: true })
+    await writeFile(
+      join(archive, 'SKILL.md'),
+      `---\nname: mstar-engine-legacy\ndescription: Fixture engine-absent archive.\n---\n\n## Load Order\n\nFollow the host-selected lifecycle authority first.\n`,
+    )
+    await writeFile(join(archive, 'references', 'field-history.md'), options.legacyReference)
+  }
 }
 
 /** Review report path under the boot `{REVIEW_DIR}` (`<harness>/reviews`). */
@@ -274,6 +286,14 @@ describe('lint*Write — known-doc branch (warn gate; hard veto)', () => {
     const gate = lintRolesWrite('ignored', { target: join(root, 'mstar-roles', 'SKILL.md'), hard: false })
     expect(gate.ok).toBe(false)
     expect(gate.violations.map((v) => v.code)).toContain('roles.loadorder.core.missing')
+  })
+
+  it('roles: archive reference-file cross-reference joins the verdict (roles.loadorder.legacy.archive.reference)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-roles-'))
+    await seedRolesDir(root, { legacyReference: 'Engine-present fields → `mstar-compound`.\n' })
+    const gate = lintRolesWrite('ignored', { target: join(root, 'mstar-roles', 'SKILL.md'), hard: false })
+    expect(gate.ok).toBe(false)
+    expect(gate.violations.map((v) => v.code)).toContain('roles.loadorder.legacy.archive.reference')
   })
 })
 

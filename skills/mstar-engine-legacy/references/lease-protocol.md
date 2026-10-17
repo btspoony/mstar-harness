@@ -1,6 +1,6 @@
 # Concurrent-write safety (engine-absent guidance)
 
-Read `mstar-harness-core` first. This reference supplies safety guidance only when engine capabilities are absent; it does not recreate removed plan-session admission or authorize raw edits to protected execution state. Engine-absent hosts have no file execution route — execution state is conversation tracking (no-plan mode).
+Follow the host-selected lifecycle authority first. This reference supplies safety guidance only when engine capabilities are absent; it does not recreate removed plan-session admission or authorize raw edits to protected execution state. Engine-absent hosts have no file execution route — execution state is conversation tracking (no-plan mode).
 
 ## Workflow
 
@@ -18,11 +18,11 @@ Read `mstar-harness-core` first. This reference supplies safety guidance only wh
 - On an in-flight/conflicted merge, resolve or explicitly abort Git in that checkout; never perform a second merge after a successful one. Retained base/source/result SHAs are the merge evidence.
 - Never force worktree cleanup or terminal-close eligibility by clearing coordination state; retained source metadata and real merge evidence govern deletion.
 - Never steal a foreign claim or exclusion by age, idle status, labels or TTL; complete only the exclusion that applies to your verified attempt.
-- Engine-present hosts own the row/DB mechanics — atomic coordinator writes (transactions/CAS/receipts), integration merge exclusion, direct complete and receipt replay → `mstar-artifacts` / `mstar-use-cli`. This archive never presents them as the engine-absent workflow.
+- Engine-present hosts own the row/DB mechanics — atomic coordinator writes (transactions/CAS/receipts), integration merge exclusion, direct complete and receipt replay → the runtime field reference and the runtime CLI reference. This archive never presents them as the engine-absent workflow.
 
 ## References
 
-- `mstar-iteration/references/phase-2-worktree-lease.md` — direct primary coordinator execution checklist (engine-present runtime)
-- `mstar-artifacts/references/status-and-residuals.md` — current fields and authority
-- `mstar-artifacts/references/plan-workflow-lifecycle-contract.md` — three distinct completion/outer-delivery routes
-- `mstar-use-cli/references/plan-and-workflow.md` — supported operation parameters and recovery
+- The runtime worktree-lease checklist — direct primary coordinator execution (engine-present runtime).
+- The current field and authority reference (engine-present runtime).
+- The frozen plan-workflow lifecycle contract — three distinct completion/outer-delivery routes.
+- The supported operation parameters and recovery reference (engine-present runtime).

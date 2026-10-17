@@ -2,6 +2,10 @@
 
 > Loaded by `mstar-iteration` SKILL.md on the **start** route（启动新迭代 / 重开方向锁定）。**Read `mstar-harness-core` first.** Per-plan gates → **`mstar-phase-gates`**；dispatch 机制 → **`mstar-dispatch-gates`**。Phase 1 在 PM lock 前不算完成（§1.6）。
 
+## Load Order
+
+After `mstar-harness-core`, read **`mstar-project-governance`** as the sole owner of project roadmap/milestone read/write rules; this reference only defines when Phase 1 consumes them.
+
 PM 在新迭代启动时执行。
 
 ## 1.1 收集上下文
@@ -9,7 +13,7 @@ PM 在新迭代启动时执行。
 1. 查 catalog 了解历史迭代：`mstar catalog list`（按 kind 过滤，见 help；`{ITERATION_DIR}/README.md` 若存在只是散文导览，**不**是登记表；store 未初始化/未激活时查询拒绝 —— `store.not-initialized` / `store.not-active`，**不**读作「没有迭代」）
 2. 读 `STRATEGY.md`（若存在），对齐战略方向（见 `mstar-strategy`）
 3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
-4. 如果有未完成的 roadmap 残余（上一迭代标记为 `next` 的 plan），纳入本次迭代范围候选
+4. 确定所选 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` 读取 `{HARNESS_DIR}/store.db` roadmap 域的未完成路线范围（含上一迭代 `next`），纳入本次迭代范围候选；另用 `mstar milestone list --project <id>` 读取结构化目标。已知项目缺少 roadmap 记录或 milestone 时明确记录 absence；legacy Markdown 仅 transport/history，绝不从项目文件、README 索引行或 catalog 路径回退读取路线内容。读写规则 → **`mstar-project-governance`**。
 
 **Direct skill entry** uses interactive direction lock by default; explicit caller opt-in may select autonomous mode without a command. Command-only helpers are not runtime dependencies.
 
@@ -25,7 +29,7 @@ PM 在新迭代启动时执行。
 | **里程碑** | 关键节点与日期 |
 | **验收标准** | 迭代级别的 Done 定义 |
 | **非目标** | 明确排除在本次迭代外的事项 |
-| **Roadmap 上下文** | 本迭代在整体 roadmap 中的位置（current iteration / next iteration） |
+| **Roadmap 上下文** | 从 store envelope 的 Direction + project milestones 确定 current / next iteration 位置，引用 milestone ID + 关联 issue 证据；缺失明确记录。compass `## Milestones` 是迭代交付节点，区别于 store 的项目 `project_milestones`，互不替代。 |
 | **Delivery branch policy** | `iteration_base_branch`（integration 分支从何处分出）、`spec_integration_branch`、`target_branch`（最终 PR 目标） |
 | **Scale budget**（可选） | 仅当 caller **显式**给出或选用 **autonomous** 时适用：`S` = 1 **业务** plan；`M` = 2–3；`L` = 3–4（上限 4）；`XL` = **>4**（5+）。**只计实际业务交付 plan**，不计 harness 流程性工作（Review 链 / QC / QA / compound / close / PR 等）。**interactive 默认不强制** S/M/L/XL。计数细则 → **`references/autonomous-direction-lock.md`** § Scale budget |
 

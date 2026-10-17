@@ -1,6 +1,6 @@
 # QC seat N restatements (per-host, archived)
 
-> Engine-absent fallback: the per-host N=3/N=1 restatements that runtime host references (`mstar-host/references/*`) consolidate. Engine-present hosts read `mstar-host` → `parallel-dispatch.md` + `executionModeToN` instead; this file is the consolidated full restatement text.
+> Engine-absent fallback: the per-host N=3/N=1 restatements that the runtime host references consolidate. Engine-present hosts read the host references' parallel-dispatch guidance plus `executionModeToN` instead; this file is the consolidated full restatement text.
 
 ## Canonical N mapping (any host)
 
@@ -10,7 +10,7 @@
 | `inline` (hotfix) / explicit `QC mode: single` override | `qc-specialist` ×1 | **N=1** |
 | Targeted re-review (`QC re-review: targeted — reviewers: <ids>`) | the listed seats only | N = listed count (1–3) |
 
-Rules that never change: tri seats dispatch **in one message** with a branch review-package path (`{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md`); post-dispatch verify three distinct agent ids; `Execution mode: inline` with `QC mode: full tri-review` still launches the three seats; SDD independent ready tasks run concurrently after isolation (`mstar-sdd` § Ready-task scheduling); tri seat count never grants full review scope; each invoke must carry the role-binding field set to `Execute as` even at N=1.
+Rules that never change: tri seats dispatch **in one message** with a branch review-package path (`{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md`); post-dispatch verify three distinct agent ids; `Execution mode: inline` with `QC mode: full tri-review` still launches the three seats; SDD independent ready tasks run concurrently after isolation (the runtime SDD rules § Ready-task scheduling); tri seat count never grants full review scope; each invoke must carry the role-binding field set to `Execute as` even at N=1.
 
 ## Per-host restatements (full text)
 
@@ -31,7 +31,7 @@ Rules that never change: tri seats dispatch **in one message** with a branch rev
 
 - **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
-- SDD implement/reviewer: ready-task scheduling per `mstar-sdd` — implementer Task per task id with `subagent_type` matching the implementer role when listed; task reviewer = new Task with `subagent_type: "code-reviewer"` (Cursor L2; not qc-specialist*) when listed, else generic fallback per C5 — no `resume` for reviewers.
+- SDD implement/reviewer: ready-task scheduling per the runtime SDD rules — implementer Task per task id with `subagent_type` matching the implementer role when listed; task reviewer = new Task with `subagent_type: "code-reviewer"` (Cursor L2; not qc-specialist*) when listed, else generic fallback per C5 — no `resume` for reviewers.
 
 ### codex (custom-agent / multi-agent tools only)
 

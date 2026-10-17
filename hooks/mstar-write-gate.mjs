@@ -57,7 +57,7 @@ import { basename as basename11, dirname as dirname13, join as join19, relative 
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
-import { readFileSync as readFileSync21 } from "node:fs";
+import { readFileSync as readFileSync22 } from "node:fs";
 import { join as join28 } from "node:path";
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
@@ -16889,7 +16889,7 @@ class ProjectionError extends Error {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync21(spec.absolutePath, "utf8");
+    content3 = readFileSync22(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {

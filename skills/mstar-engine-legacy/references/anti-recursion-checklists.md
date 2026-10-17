@@ -1,6 +1,6 @@
 # Anti-recursion full checklists (archived)
 
-> Engine-absent fallback: the complete anti-recursion checklists. Engine-present hosts read `mstar-dispatch-gates` (red lines) + `mstar-roles/references/` role NEVER rules; this file is the consolidated full checklist text.
+> Engine-absent fallback: the complete anti-recursion checklists. Engine-present hosts read the runtime dispatch rules (red lines) plus the role references' NEVER rules; this file is the consolidated full checklist text.
 
 ## 1. Leaf executor dispatch checklist (full)
 
