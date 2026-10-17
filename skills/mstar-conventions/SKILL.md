@@ -29,7 +29,7 @@ description: Morning Star (晨星) harness 计划目录约定 —— `{HARNESS_D
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认；`.mstarc` `knowledge_dir` 声明时用声明值） |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
-| `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies and the plain append-only `notes.jsonl` log; `snapshot.json` is read-only import/history, never execution authority |
+| `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies and the plain append-only `notes.jsonl` log, plus the workflow's own `reports/` artifacts (e.g. the `mstar-e2e` verification report `<workflow-id>/reports/e2e.md`); `snapshot.json` is read-only import/history, never execution authority |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
 | `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/roadmap/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
