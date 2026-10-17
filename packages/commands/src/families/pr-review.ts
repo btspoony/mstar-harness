@@ -8,7 +8,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
-import { refusalEnvelope } from "../envelope.js";
+import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -16,7 +16,7 @@ import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../t
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
 type Verb = (typeof verbs)[number];
 type Input = {
-  findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string;
+  findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string; incompleteReason?: string; unscanned?: string;
   reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
   pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
   base?: string; head?: string; largestFileTotal?: string;
@@ -24,13 +24,14 @@ type Input = {
 };
 const inputSchema = z.object({
   findings: z.string().optional(), unverified: z.string().optional(), unmetAcUnsafe: z.string().optional(), unmetAcSafe: z.string().optional(),
+  incompleteReason: z.string().optional(), unscanned: z.string().optional(),
   reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
   pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; all counts default to zero and are limited to 0–50." },
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }, { key: "incompleteReason", flags: "--incomplete-reason <text>", required: false, help: "Declares the run incomplete with this cause; requires --unscanned." }, { key: "unscanned", flags: "--unscanned <csv>", required: false, help: "Comma-separated scope the run never scanned; requires --incomplete-reason." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; all counts default to zero and are limited to 0–50." },
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
@@ -50,7 +51,7 @@ const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, comman
  */
 export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }) });
   const { code, details, recovery } = engineErrorFacts(error);
   if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
   return refusalEnvelope({
@@ -59,7 +60,11 @@ export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
     recovery: recovery ?? "Correct the reported review input or source condition, then rerun the command.",
   });
 };
-class UsageError extends Error {}
+/** A caller-correctable input error; `diagnostics` carries one entry per
+ * invalid field so a refusal can report all of them at once. */
+class UsageError extends Error {
+  constructor(message: string, readonly diagnostics?: readonly RefusalDiagnostic[]) { super(message); }
+}
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };
 function parseTarget(raw: string): PrReportTarget {
@@ -110,7 +115,40 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         return { mergeClass: mergeClass as MergeClass };
       });
       const count = (raw: string | undefined, label: string) => { if (raw === undefined) return 0; if (!/^\d+$/.test(raw) || Number(raw) > 50) throw new UsageError(`${label} must be a non-negative integer no greater than 50`); return Number(raw); };
-      const result = computePrTally({ findings, unverifiedCount: count(input.unverified, "--unverified"), unmetAc: [...Array.from({ length: count(input.unmetAcUnsafe, "--unmet-ac-unsafe") }, () => ({ unsafeToShip: true })), ...Array.from({ length: count(input.unmetAcSafe, "--unmet-ac-safe") }, () => ({ unsafeToShip: false }))] });
+ // A marked-incomplete run is all-or-nothing: the token without its cause
+ // and unscanned scope is unreadable, so the two flags travel together.
+ // The cause renders on one header line (`cause: <reason>`) and the scope
+ // entries join the single `unscanned:` line, so a blank or multi-line value
+ // in either flag is a caller error refused here as usage (exit 2) rather
+ // than surfacing as the engine guard's internal failure (exit 1). Both flags
+ // are checked before the refusal is raised, so one call reports every
+ // invalid field instead of costing the caller a second rerun
+ // (packages/cli/AGENTS.md § Aggregated validation).
+      const flagDiagnostics: RefusalDiagnostic[] = [];
+      if ((input.incompleteReason === undefined) !== (input.unscanned === undefined)) {
+        flagDiagnostics.push({
+          path: input.incompleteReason === undefined ? "incompleteReason" : "unscanned",
+          code: "required",
+          message: "--incomplete-reason and --unscanned go together",
+        });
+      }
+      if (input.incompleteReason !== undefined && (input.incompleteReason.trim() === "" || /[\r\n]/.test(input.incompleteReason))) {
+        flagDiagnostics.push({ path: "incompleteReason", code: "invalid", message: "--incomplete-reason must be a single line of non-blank text" });
+      }
+      if (input.unscanned !== undefined && input.unscanned.split(",").some((entry) => entry.trim() === "" || /[\r\n]/.test(entry))) {
+        flagDiagnostics.push({ path: "unscanned", code: "invalid", message: "--unscanned must be a comma-separated list of single-line non-blank entries" });
+      }
+      if (flagDiagnostics.length > 0) throw new UsageError(flagDiagnostics[0]!.message, flagDiagnostics);
+      const incomplete = input.incompleteReason === undefined ? undefined : {
+        reason: need(input.incompleteReason, "--incomplete-reason"),
+        unscanned: (input.unscanned ?? "").split(",").map((entry) => entry.trim()),
+      };
+      const result = computePrTally({
+        findings,
+        unverifiedCount: count(input.unverified, "--unverified"),
+        unmetAc: [...Array.from({ length: count(input.unmetAcUnsafe, "--unmet-ac-unsafe") }, () => ({ unsafeToShip: true })), ...Array.from({ length: count(input.unmetAcSafe, "--unmet-ac-safe") }, () => ({ unsafeToShip: false }))],
+        ...(incomplete === undefined ? {} : { incomplete }),
+      });
       return ok(id, result);
     }
     if (verb === "report-path") {
@@ -232,6 +270,10 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
     const requirements = (["cli", "mcp"] as const).flatMap((route) => [
       ...contract.args.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
       ...contract.options.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
+      ...(verb === "tally" ? [
+        { name: "incompleteReason", ownership: "caller" as const, route, required: true, condition: { field: "unscanned", present: true }, constraint: "incompleteReason and unscanned must be supplied together" },
+        { name: "unscanned", ownership: "caller" as const, route, required: true, condition: { field: "incompleteReason", present: true }, constraint: "incompleteReason and unscanned must be supplied together" },
+      ] : []),
       ...(verb === "report-path" ? [
         { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },
         { name: "stage", ownership: "caller" as const, route, required: true, condition: { field: "slug", present: true }, constraint: "stage and slug must be supplied together" },

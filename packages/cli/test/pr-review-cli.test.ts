@@ -185,6 +185,74 @@ describe("mstar pr-review tally", () => {
       expect(message(result)).toContain("must be a non-negative integer no greater than 50");
     });
   });
+
+  test.each([" ", "budget spent\nsecurity domain still unopened"])(
+    "a blank or multi-line --incomplete-reason (%p) is refused as usage (exit 2), not an engine failure",
+    (reason) => {
+      withTempDir((dir) => {
+        const findings = join(dir, "findings.json");
+        writeFileSync(findings, "[]");
+        const result = runCli([
+          "pr-review",
+          "tally",
+          "--findings",
+          findings,
+          "--incomplete-reason",
+          reason,
+          "--unscanned",
+          "src/auth.ts",
+        ]);
+        expect(result.exitCode).toBe(2);
+        expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+        expect(message(result)).toContain("single line");
+      });
+    },
+  );
+
+  test.each(["src/auth.ts\npackages/engine", "src/auth.ts,,packages/engine"])(
+    "a blank or multi-line --unscanned entry (%p) is refused as usage (exit 2), not an engine failure",
+    (scope) => {
+      withTempDir((dir) => {
+        const findings = join(dir, "findings.json");
+        writeFileSync(findings, "[]");
+        const result = runCli([
+          "pr-review",
+          "tally",
+          "--findings",
+          findings,
+          "--incomplete-reason",
+          "budget spent before the security domain",
+          "--unscanned",
+          scope,
+        ]);
+        expect(result.exitCode).toBe(2);
+        expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+        expect(message(result)).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+      });
+    },
+  );
+
+  test("both invalid incomplete flags are refused in one response (aggregated validation)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--incomplete-reason",
+        " ",
+        "--unscanned",
+        "src/a.ts,,src/b.ts",
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const body = message(result);
+      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+    });
+  });
 });
 
 describe("mstar pr-review report-path", () => {

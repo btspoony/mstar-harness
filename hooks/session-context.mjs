@@ -21838,6 +21838,14 @@ function computePrTally(input) {
   if (input.unverifiedCount !== undefined && (!Number.isInteger(input.unverifiedCount) || input.unverifiedCount < 0)) {
     throw new TypeError(`computePrTally: unverifiedCount must be a non-negative integer - got ${String(input.unverifiedCount)}`);
   }
+  if (input.incomplete !== undefined) {
+    if (typeof input.incomplete.reason !== "string" || input.incomplete.reason.trim() === "" || /[\r\n]/.test(input.incomplete.reason)) {
+      throw new TypeError(`computePrTally: incomplete.reason must be a non-empty single-line string - got ${JSON.stringify(input.incomplete.reason)}`);
+    }
+    if (!Array.isArray(input.incomplete.unscanned) || !input.incomplete.unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "" && !/[\r\n]/.test(entry))) {
+      throw new TypeError("computePrTally: incomplete.unscanned must be an array of single-line non-empty strings - " + `got ${JSON.stringify(input.incomplete.unscanned)}`);
+    }
+  }
   let mustFix = 0;
   let shouldFix = 0;
   let nit = 0;
@@ -21858,14 +21866,45 @@ function computePrTally(input) {
   const unverified = input.unverifiedCount ?? 0;
   const tally = { mustFix, shouldFix, nit, unverified };
   const scorePct = Math.max(0, 100 - prScoreDeduction(tally));
-  const verdict = mustFix >= 1 ? "blocked" : shouldFix >= 1 ? "needs fixes" : "ship it";
+  const verdict = input.incomplete !== undefined ? "incomplete" : mustFix >= 1 ? "blocked" : shouldFix >= 1 ? "needs fixes" : "ship it";
   const band = scoreBand(scorePct);
-  const chatHeader = `${verdict} · ${scorePct}% (${band})
-` + `must-fix=${mustFix} should-fix=${shouldFix} nit=${nit} unverified=${unverified}`;
-  return { verdict, scorePct, band, tally, chatHeader };
+  const tallyLine = `must-fix=${mustFix} should-fix=${shouldFix} nit=${nit} unverified=${unverified}`;
+  const chatHeader = input.incomplete === undefined ? `${verdict} · ${scorePct}% (${band})
+${tallyLine}` : `${verdict} · ${scorePct}% (${band}, partial)
+` + `${tallyLine}
+` + `cause: ${input.incomplete.reason}
+` + `unscanned: ${input.incomplete.unscanned.length === 0 ? "none" : input.incomplete.unscanned.join(", ")}`;
+  return {
+    verdict,
+    scorePct,
+    band,
+    tally,
+    chatHeader,
+    ...input.incomplete === undefined ? {} : { incomplete: input.incomplete }
+  };
 }
 function isPlainObject9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isIncompleteFact(fact) {
+  if (!isPlainObject9(fact))
+    return false;
+  const { reason, unscanned } = fact;
+  return typeof reason === "string" && reason.trim() !== "" && Array.isArray(unscanned) && unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "");
+}
+function checkIncompleteShape(fact, label, violations) {
+  if (isIncompleteFact(fact))
+    return;
+  if (!isPlainObject9(fact)) {
+    violations.push(violation15("high", "review.incomplete-malformed", `${label} must be an object with a non-empty reason string and an unscanned array of non-empty strings`));
+    return;
+  }
+  if (typeof fact.reason !== "string" || fact.reason.trim() === "") {
+    violations.push(violation15("high", "review.incomplete-malformed", `${label}.reason must be a non-empty string`));
+  }
+  if (!Array.isArray(fact.unscanned) || !fact.unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "")) {
+    violations.push(violation15("high", "review.incomplete-malformed", `${label}.unscanned must be an array of non-empty strings (an empty array states nothing was left unscanned)`));
+  }
 }
 function checkProvidedTallyShape(tally, violations) {
   if (typeof tally.verdict !== "string" || !PR_VERDICTS.includes(tally.verdict)) {
@@ -21889,6 +21928,15 @@ function checkProvidedTallyShape(tally, violations) {
   }
   if (tally.band !== undefined && (typeof tally.band !== "string" || !PR_SCORE_BANDS.includes(tally.band))) {
     violations.push(violation15("high", "review.tally-malformed", `tally.band "${String(tally.band)}" is not one of ${JSON.stringify(PR_SCORE_BANDS)} - omit the key (legacy-valid) or use a valid band token`, `use one of: ${PR_SCORE_BANDS.join(" | ")}`));
+  }
+  if (tally.verdict === "incomplete") {
+    if (tally.incomplete === undefined) {
+      violations.push(violation15("high", "review.missing-incomplete", 'tally.verdict "incomplete" requires the matching tally.incomplete fact carrying the declared cause and the unscanned scope', 'add tally.incomplete: { reason: "<why the run stopped>", unscanned: ["<path>", ...] }'));
+    } else {
+      checkIncompleteShape(tally.incomplete, "tally.incomplete", violations);
+    }
+  } else if (tally.incomplete !== undefined) {
+    violations.push(violation15("high", "review.incomplete-unexpected", `tally.incomplete is carried only by the "incomplete" tally verdict - tally.verdict is "${String(tally.verdict)}"`, "remove tally.incomplete, or set tally.verdict: incomplete"));
   }
 }
 function validateMstarReviewV1(doc) {
@@ -21959,6 +22007,15 @@ function validateMstarReviewV1(doc) {
       }
     });
   }
+  if (doc.verdict === "incomplete") {
+    if (doc.incomplete === undefined) {
+      violations.push(violation15("high", "review.missing-incomplete", 'verdict "incomplete" requires an incomplete fact carrying the declared cause and the unscanned scope', 'add incomplete: { reason: "<why the run stopped>", unscanned: ["<path>", ...] }'));
+    } else {
+      checkIncompleteShape(doc.incomplete, "incomplete", violations);
+    }
+  } else if (doc.incomplete !== undefined) {
+    violations.push(violation15("high", "review.incomplete-unexpected", `incomplete is carried only by the "incomplete" verdict - verdict is "${String(doc.verdict)}"`, "remove incomplete, or set verdict: incomplete"));
+  }
   if (doc.tally !== undefined) {
     if (!isPlainObject9(doc.tally)) {
       violations.push(violation15("high", "review.invalid-tally", "tally must be a PrTallyResult object"));
@@ -21966,6 +22023,11 @@ function validateMstarReviewV1(doc) {
       checkProvidedTallyShape(doc.tally, violations);
       if (doc.tally.verdict !== doc.verdict) {
         violations.push(violation15("high", "review.verdict-tally-mismatch", `tally.verdict "${String(doc.tally.verdict)}" does not equal the top-level verdict "${String(doc.verdict)}" - the envelope verdict and tally must agree (consistency rule)`));
+      }
+      const topIncomplete = doc.incomplete;
+      const tallyIncomplete = doc.tally.incomplete;
+      if (isIncompleteFact(topIncomplete) && isIncompleteFact(tallyIncomplete) && (topIncomplete.reason !== tallyIncomplete.reason || topIncomplete.unscanned.length !== tallyIncomplete.unscanned.length || topIncomplete.unscanned.some((entry, index2) => entry !== tallyIncomplete.unscanned[index2]))) {
+        violations.push(violation15("high", "review.incomplete-tally-mismatch", `tally.incomplete does not match the top-level incomplete fact - the cause and the unscanned scope must be identical (tally ${JSON.stringify(tallyIncomplete)}, envelope ${JSON.stringify(topIncomplete)})`));
       }
     }
   }
@@ -21990,11 +22052,15 @@ function validateMstarReviewV1(doc) {
   return { ok: violations.length === 0, violations };
 }
 function defaultReviewSummary(tally, findings) {
+  const incomplete = tally.incomplete;
   const lines = [
-    `## Verdict: ${tally.verdict} · ${tally.scorePct}% (${tally.band})`,
+    `## Verdict: ${tally.verdict} · ${tally.scorePct}% (${tally.band}${incomplete === undefined ? "" : ", partial"})`,
     "",
     `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`
   ];
+  if (incomplete !== undefined) {
+    lines.push(`cause: ${incomplete.reason}`, `unscanned: ${incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ")}`);
+  }
   if (findings.length > 0) {
     lines.push("");
     for (const finding of findings) {
@@ -22008,7 +22074,8 @@ function synthesizeReview(input) {
   const tally = computePrTally({
     findings: input.findings,
     unverifiedCount: input.unverifiedCount,
-    unmetAc: input.unmetAc
+    unmetAc: input.unmetAc,
+    ...input.incomplete === undefined ? {} : { incomplete: input.incomplete }
   });
   return {
     schema: "mstar.review/v1",
@@ -22016,6 +22083,7 @@ function synthesizeReview(input) {
     summary_md: input.summary_md ?? defaultReviewSummary(tally, input.findings),
     tally,
     findings: input.findings,
+    ...input.incomplete === undefined ? {} : { incomplete: input.incomplete },
     ...input.target !== undefined ? { target: input.target } : {}
   };
 }
@@ -22175,6 +22243,20 @@ function validatePrReviewReport(text4) {
   if (doc.verdict !== undefined && !PR_VERDICTS.includes(doc.verdict)) {
     violations.push(violation15("medium", "prreview.report.invalid-verdict", `verdict "${doc.verdict}" is not one of ${JSON.stringify(PR_VERDICTS)}`, `use one of: ${PR_VERDICTS.join(" | ")}`));
   }
+  if (doc.verdict === "incomplete") {
+    if (doc.incomplete_reason === undefined) {
+      violations.push(violation15("medium", "prreview.report.missing-incomplete_reason", "missing required frontmatter field for verdict: incomplete - incomplete_reason"));
+    } else if (doc.incomplete_reason.trim() === "") {
+      violations.push(violation15("medium", "prreview.report.invalid-incomplete-reason", "incomplete_reason must state the non-empty cause the run stopped for"));
+    }
+    if (doc.unscanned === undefined) {
+      violations.push(violation15("medium", "prreview.report.missing-unscanned", "missing required frontmatter field for verdict: incomplete - unscanned"));
+    } else if (doc.unscanned.split(",").some((entry) => entry.trim() === "")) {
+      violations.push(violation15("medium", "prreview.report.invalid-unscanned", `unscanned ${JSON.stringify(doc.unscanned)} must be a comma-separated list of non-empty values`, "list the unscanned scope, or write unscanned: none when the run left none"));
+    }
+  } else if (doc.incomplete_reason !== undefined || doc.unscanned !== undefined) {
+    violations.push(violation15("medium", "prreview.report.incomplete-unexpected", `incomplete_reason / unscanned are carried only by verdict: incomplete - verdict is "${String(doc.verdict)}"`, "remove both keys, or set verdict: incomplete"));
+  }
   let scoreOk = false;
   if (doc.score_pct !== undefined) {
     const rawScore = doc.score_pct.trim();
@@ -22198,7 +22280,7 @@ function validatePrReviewReport(text4) {
         violations.push(violation15("high", "prreview.report.score-mismatch", `score_pct ${declared} does not match the recompute from tally (${recompute.scorePct})`, `recompute via computePrTally: ${PR_SCORE_SCHEDULE_HINT}`));
       }
     }
-    if (doc.verdict !== undefined && PR_VERDICTS.includes(doc.verdict) && doc.verdict !== recompute.verdict) {
+    if (doc.verdict !== undefined && PR_VERDICTS.includes(doc.verdict) && doc.verdict !== "incomplete" && doc.verdict !== recompute.verdict) {
       violations.push(violation15("high", "prreview.report.verdict-mismatch", `verdict "${doc.verdict}" does not follow from the tally (expected "${recompute.verdict}") - the verdict is derived from the tally, never chosen (§ Verdict synthesis)`));
     }
   }
@@ -34658,7 +34740,8 @@ var init_engine = __esm(() => {
       summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
       findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
       tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated; optional band: mergeable | good | pass | fail (absent = legacy-valid)." },
-      target: { required: false, type: "object", description: "Optional target identity." }
+      target: { required: false, type: "object", description: "Optional target identity." },
+      incomplete: { required: false, type: "object", description: 'Declared cause + unscanned scope of a bounded/stopped run — { reason: string; unscanned: string[] }; required exactly when verdict is "incomplete" and rejected for every other verdict.' }
     };
   });
   init_coordination = __esm2(() => {
@@ -35150,7 +35233,7 @@ var init_engine = __esm(() => {
   init_path();
   init_audit();
   MERGE_CLASSES = ["must-fix", "should-fix", "nit"];
-  PR_VERDICTS = ["ship it", "needs fixes", "blocked"];
+  PR_VERDICTS = ["ship it", "needs fixes", "blocked", "incomplete"];
   PR_SCORE_BANDS = ["mergeable", "good", "pass", "fail"];
   REVIEW_EMOJI = {
     "must-fix": "\uD83D\uDD34",
