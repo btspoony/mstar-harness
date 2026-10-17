@@ -1161,7 +1161,7 @@ export async function mutateExecutionWorkflow(
         applied: [amendmentComponentOf(operation) ?? `${operation.kind} on workflow ${workflowId}`],
         commitState: "committed",
         resolvedFrom: [{ path: workflowOperationField(operation), source: "intent.request" }],
-        warnings,
+        warnings: [...warnings, ...applied.warnings],
       }),
     };
   });
@@ -1187,7 +1187,12 @@ export async function mutateExecutionWorkflow(
  * integration claim here, and the terminal decision then judges exactly the
  * ownership this transaction leaves behind.
  */
-type AppliedWorkflowOperation = { receipt: ExecutionRead<ExecutionState>; membershipLost: boolean };
+type AppliedWorkflowOperation = {
+  receipt: ExecutionRead<ExecutionState>;
+  membershipLost: boolean;
+  /** Scoped advisories this transition recorded, carried by the result's `recovery.warnings`. */
+  warnings: readonly ResolutionWarning[];
+};
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
   witness: ExecutionWorkflowWitness;
@@ -1231,6 +1236,7 @@ function applyWorkflowOperation(input: {
   const rows = effective.view.plans.map((plan) => plan.plan as unknown as PlanRow);
   const header = { ...(effective.view.state as unknown as Record<string, unknown>) };
   let membershipLost = false;
+  let warnings: readonly ResolutionWarning[] = [];
   switch (operation.kind) {
     case "phase":
       applyPhaseTransition({ header, rows, workflowId, operation, evidence });
@@ -1268,6 +1274,9 @@ function applyWorkflowOperation(input: {
         ...(isNonEmptyString(operation.branch.work) ? { work: operation.branch.work } : {}),
         ...(isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}),
       };
+      // §4d the merged anchors are the RESULT this write stores; the warning is
+      // decided on them, never on a snapshot read before this transaction.
+      warnings = deliveryAnchorWarnings(workflowId, header);
       break;
     }
   }
@@ -1275,7 +1284,52 @@ function applyWorkflowOperation(input: {
   assertHeaderValid(workflowId, header);
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
-  return { receipt: readExecutionStateGraph(tx), membershipLost };
+  return { receipt: readExecutionStateGraph(tx), membershipLost, warnings };
+}
+
+/**
+ * §4d the advisory a delivery-anchor repair carries when the anchors it
+ * just stored no longer name the PR identity the SAME header already records.
+ *
+ * That identity is frozen at its first `workflow evidence` record and the close
+ * consultation requires `delivery.pr.head` / `delivery.pr.target` to BE the
+ * registered anchors, so a header that disagrees can never reach a `completed`
+ * close. The repair still applies - an anchor stays revisable for as long as the
+ * lifecycle runs - and the warning names the recorded identity, the anchors it
+ * stored and the ONE call that puts them back into agreement.
+ *
+ * Exactly one of the two comparisons can fail, and only for the anchor THIS
+ * operation names: `branch.work` (resolved through `deliveryBranchOf`) when
+ * `--branch-work` moved it, `branch.target` when `--branch-target` did. An
+ * anchor the operation does NOT name keeps the value the recorded identity was
+ * already checked against, so its comparison cannot fail here. `pr.repo` has no
+ * anchor to compare with, and `branch.base` is not a PR member.
+ *
+ * A terminal header never reaches this code: the amend guard at the top of
+ * `applyWorkflowOperation` refuses every repair on a closed lifecycle, so the
+ * recovery named here is always executable.
+ */
+function deliveryAnchorWarnings(workflowId: string, header: Record<string, unknown>): ResolutionWarning[] {
+  const delivery = isPlainObject(header.delivery) ? header.delivery : undefined;
+  const pr = delivery === undefined ? undefined : delivery.pr;
+  // A stored PR identity always carries both members (deliveryEvidenceViolations
+  // requires non-empty strings), so the recovery below names real values.
+  if (!isPlainObject(pr) || !isNonEmptyString(pr.head) || !isNonEmptyString(pr.target)) return [];
+  const branch = isPlainObject(header.branch) ? header.branch : {};
+  const work = deliveryBranchOf(branch) ?? null;
+  const target = isNonEmptyString(branch.target) ? branch.target : null;
+  if (pr.head === work && pr.target === target) return [];
+  return [
+    {
+      code: "workflow.delivery-anchors.pr-identity",
+      message:
+        `the repair stored branch.work ${JSON.stringify(work)} / branch.target ${JSON.stringify(target)}, which no longer name the ` +
+        `recorded PR identity (delivery.pr.head ${JSON.stringify(pr.head)}, delivery.pr.target ${JSON.stringify(pr.target)}): that ` +
+        `identity is frozen at its first record, so a \`completed\` close refuses this workflow until the two agree again (\u00A74d). ` +
+        `Restore agreement with \`mstar workflow delivery-anchors --workflow ${workflowId} --branch-work ${pr.head} ` +
+        `--branch-target ${pr.target} --reason "<why the anchors are restored>"\`.`,
+    },
+  ];
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */

@@ -27572,7 +27572,7 @@ async function mutateExecutionWorkflow(context, request) {
         applied: [amendmentComponentOf(operation) ?? `${operation.kind} on workflow ${workflowId}`],
         commitState: "committed",
         resolvedFrom: [{ path: workflowOperationField(operation), source: "intent.request" }],
-        warnings
+        warnings: [...warnings, ...applied.warnings]
       })
     };
   });
@@ -27591,6 +27591,7 @@ function applyWorkflowOperation(input) {
   const rows = effective.view.plans.map((plan) => plan.plan);
   const header = { ...effective.view.state };
   let membershipLost = false;
+  let warnings = [];
   switch (operation.kind) {
     case "phase":
       applyPhaseTransition({ header, rows, workflowId, operation, evidence });
@@ -27617,6 +27618,7 @@ function applyWorkflowOperation(input) {
         ...isNonEmptyString(operation.branch.work) ? { work: operation.branch.work } : {},
         ...isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}
       };
+      warnings = deliveryAnchorWarnings(workflowId, header);
       break;
     }
   }
@@ -27625,7 +27627,24 @@ function applyWorkflowOperation(input) {
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost)
     recordRootMembershipLoss(tx, { workflowId, now: at });
-  return { receipt: readExecutionStateGraph(tx), membershipLost };
+  return { receipt: readExecutionStateGraph(tx), membershipLost, warnings };
+}
+function deliveryAnchorWarnings(workflowId, header) {
+  const delivery = isPlainObject(header.delivery) ? header.delivery : undefined;
+  const pr = delivery === undefined ? undefined : delivery.pr;
+  if (!isPlainObject(pr) || !isNonEmptyString(pr.head) || !isNonEmptyString(pr.target))
+    return [];
+  const branch = isPlainObject(header.branch) ? header.branch : {};
+  const work = deliveryBranchOf(branch) ?? null;
+  const target = isNonEmptyString(branch.target) ? branch.target : null;
+  if (pr.head === work && pr.target === target)
+    return [];
+  return [
+    {
+      code: "workflow.delivery-anchors.pr-identity",
+      message: `the repair stored branch.work ${JSON.stringify(work)} / branch.target ${JSON.stringify(target)}, which no longer name the recorded PR identity (delivery.pr.head ${JSON.stringify(pr.head)}, delivery.pr.target ${JSON.stringify(pr.target)}): that ` + `identity is frozen at its first record, so a \`completed\` close refuses this workflow until the two agree again (§4d). ` + `Restore agreement with \`mstar workflow delivery-anchors --workflow ${workflowId} --branch-work ${pr.head} --branch-target ${pr.target} --reason "<why the anchors are restored>"\`.`
+    }
+  ];
 }
 function requireCompassEvidence(evidence) {
   if (evidence.compass === undefined) {

@@ -245,6 +245,28 @@ function registerReportOnlyWorkflow(fixture: Fixture, identity: ExecutionIdentit
   );
 }
 
+/**
+ * Plant one plan row Done through the store the engine's own readers use: the
+ * fixture's only route to a close (the CLI completes a row through its QC/QA
+ * proof route, which is not a fixture concern).
+ */
+async function plantDoneRow(fixture: Fixture, status = "Done"): Promise<void> {
+  const handle = await openStore(fixture.context, "write");
+  try {
+    const row = handle.db
+      .prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(WORKFLOW_ID, PLAN_ID) as { state_json?: unknown } | undefined;
+    if (typeof row?.state_json !== "string") throw new Error(`the fixture has no plan row ${PLAN_ID}`);
+    const state = JSON.parse(row.state_json) as { status?: unknown };
+    state.status = status;
+    handle.db
+      .prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
+      .run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+  } finally {
+    handle.close();
+  }
+}
+
 /** Bind one workflow's coordinator through the documented active form. */
 function bindCoordinator(
   fixture: Fixture,
@@ -850,6 +872,120 @@ describe("mstar workflow \u2014 documented invocation", () => {
     );
     expect(aliased.exitCode).toBe(0);
     expect((await storedHeader(fixture)).branch).toEqual({ base: "main", work: "fix/aliased", target: "main" });
+  });
+
+  test("a repair that leaves an already-recorded PR identity behind warns in the ok envelope and still succeeds", async () => {
+    const fixture = await activeFixture("mstar-workflow-anchors-pr");
+    const identity = coordinatorIdentity();
+    expect(registerPlanWorkflow(fixture, identity, await rootTokenOf(fixture)).exitCode).toBe(0);
+    const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
+
+    // The delivery tail, recorded while the anchors still name the PR identity.
+    const deliveryPath = join(fixture.root, "delivery-pr-identity.json");
+    writeJson(deliveryPath, {
+      compound: { outcome: "created" },
+      pr: { repo: "o/r", head: "feature/exec-workflow", target: "main" },
+      merge: { provider: "github", evidence: "PR #501 merged" },
+    });
+    const recorded = runCli(
+      workflowVerbArgs("evidence", fixture, bound, await workflowTokenOf(fixture), "delivery-pr-identity", ["--file", deliveryPath]),
+      fixture,
+      identity,
+    );
+    expect(recorded.exitCode).toBe(0);
+    expect((await storedHeader(fixture)).delivery).toMatchObject({ pr: { head: "feature/exec-workflow", target: "main" } });
+
+    // The repair moves the delivery target. It SUCCEEDS - an advisory never
+    // blocks - and `data.warnings` names the recorded identity, the anchors the
+    // repair stored and the ONE call that puts them back into agreement.
+    const retargeted = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-pr-mismatch", [
+        "--branch-target",
+        "release",
+        "--reason",
+        "the delivery PR was retargeted",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(retargeted.exitCode).toBe(0);
+    expect(jsonOf(retargeted)).toMatchObject({ status: "ok", code: "workflow.delivery-anchors.ok", exitCode: 0 });
+    expect(dataOf(retargeted).replayed).toBe(false);
+    const warnings = dataOf(retargeted).warnings;
+    expect(Array.isArray(warnings)).toBe(true);
+    const advisories = warnings as string[];
+    expect(advisories).toHaveLength(1);
+    expect(advisories[0]).toContain(`branch.work ${JSON.stringify("feature/exec-workflow")}`);
+    expect(advisories[0]).toContain(`branch.target ${JSON.stringify("release")}`);
+    expect(advisories[0]).toContain(`delivery.pr.head ${JSON.stringify("feature/exec-workflow")}`);
+    expect(advisories[0]).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
+    expect(advisories[0]).toContain(
+      "mstar workflow delivery-anchors --workflow wf-exec-workflow --branch-work feature/exec-workflow --branch-target main --reason",
+    );
+    // The repair stored exactly what it named.
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "release" });
+
+    // The consequence: the close this header can no longer pass refuses, naming
+    // the member that disagrees. The row is planted Done through the store the
+    // engine's own readers use, the fixture's only route to a close.
+    await plantDoneRow(fixture);
+    const refused = runCli(
+      workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "close-pr-mismatch", [
+        "--status",
+        "completed",
+        "--reason",
+        "the delivery was verified",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("coordination.invalid-transition");
+    expect(JSON.stringify(jsonOf(refused).details)).toContain("delivery.pr.target");
+
+    // The invocation the advisory named, run with exactly those flags and
+    // values: agreement is restored in ONE call, the advisory is gone, and the
+    // close then passes.
+    const restored = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-pr-restore", [
+        "--branch-work",
+        "feature/exec-workflow",
+        "--branch-target",
+        "main",
+        "--reason",
+        "restore the recorded PR identity's delivery anchors",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(restored.exitCode).toBe(0);
+    expect(dataOf(restored).warnings).toBeUndefined();
+    const closed = runCli(
+      workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "close-pr-restored", [
+        "--status",
+        "completed",
+        "--reason",
+        "the delivery was verified",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(closed.exitCode).toBe(0);
+    expect(jsonOf(closed).status).toBe("ok");
+    // The close IS the terminal write: witnessed at the store boundary the
+    // engine's own readers use, because every execution-adapter read is
+    // registry-filtered.
+    const handle = await openStore(fixture.context, "read");
+    try {
+      const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as
+        | { state_json?: unknown }
+        | undefined;
+      if (typeof row?.state_json !== "string") throw new Error("the closed workflow row is gone from execution_workflows");
+      const stored = JSON.parse(row.state_json) as { status?: unknown };
+      expect(stored.status).toBe("completed");
+    } finally {
+      handle.close();
+    }
   });
 
   test("the documented registration form answers through the ACTIVE authority; no file-route bytes", async () => {

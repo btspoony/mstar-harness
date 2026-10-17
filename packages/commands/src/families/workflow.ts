@@ -527,13 +527,21 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           },
           reason,
         };
-        return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+        const applied = await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
           workflowId: input.workflow,
           ...(ref === undefined ? {} : { session: ref }),
           ...(input.expect === undefined ? {} : { expected: input.expect as never }),
           operationId: input.operation ?? randomUUID(),
           operation,
-        }));
+        });
+        // The ok envelope's advisory payload, in the shape `workflow register`
+        // already uses: an advisory rides `data.warnings` and never fails the
+        // operation. The engine decides it on the anchors THIS transaction
+        // stored (the result's `recovery.warnings`), so a repair that leaves the
+        // header disagreeing with an already-recorded PR identity still
+        // succeeds and says so here.
+        const warnings = (applied.recovery?.warnings ?? []).map((warning) => warning.message);
+        return ok(id, warnings.length === 0 ? applied : { ...applied, warnings });
       } catch (error) { return engineRefusal(id, error); }
     }, [{ key: "sessionId", context: "sessionId" }], {
       branchWork: "The delivery branch to record, as branch.work: the branch the delivery PR comes from, normally the plan's own feature branch. Omit it to keep the registered branch.work.",

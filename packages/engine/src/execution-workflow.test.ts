@@ -2850,6 +2850,75 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     expect(JSON.parse(String(stored!.branch))).toEqual({ source: SOURCE_BRANCH, target: "main" });
   });
 
+  test("a repair that leaves the anchors disagreeing with the recorded PR identity warns, and stays silent when it does not", async () => {
+    // The recorded identity is `workflow evidence`'s own frozen fact. It was
+    // checked against the anchors registered at record time, and the close
+    // consultation requires the two to keep agreeing - so a repair that moves one
+    // of them WARNS (it never refuses): the running lifecycle stays repairable,
+    // and the operator learns the one call that puts it back.
+    const fixture = await workflowFixture("delivery-anchors-pr-identity");
+    const recorded = await workflowMutation(fixture, "op-anchors-identity", { kind: "delivery", delivery: DELIVERY_TAIL });
+    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ pr: { head: SOURCE_BRANCH, target: "main" } });
+
+    // (1) the delivery BRANCH moves: `delivery.pr.head` against the resolved
+    // delivery branch is the comparison that fails. The `delivery.pr.target` one
+    // cannot: the anchor this operation does not name keeps the value the
+    // recorded identity was already checked against.
+    const reworked = await workflowMutation(fixture, "op-anchors-rework", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/elsewhere" },
+      reason: "the delivery branch moved after the PR was recorded",
+    });
+    expect(reworked.replayed).toBe(false);
+    expect(reworked.recovery?.outcome).toBe("applied");
+    const [headWarning] = reworked.recovery?.warnings ?? [];
+    expect(headWarning?.code).toBe("workflow.delivery-anchors.pr-identity");
+    expect(headWarning?.message).toContain(`branch.work ${JSON.stringify("fix/elsewhere")}`);
+    expect(headWarning?.message).toContain(`branch.target ${JSON.stringify("main")}`);
+    expect(headWarning?.message).toContain(`delivery.pr.head ${JSON.stringify(SOURCE_BRANCH)}`);
+    expect(headWarning?.message).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
+    expect(headWarning?.message).toContain(
+      `mstar workflow delivery-anchors --workflow ${WORKFLOW_ID} --branch-work ${SOURCE_BRANCH} --branch-target main --reason`,
+    );
+
+    // (2) the anchors agree again: the repair carries no advisory at all.
+    const agreed = await workflowMutation(fixture, "op-anchors-agreed", {
+      kind: "delivery-anchors",
+      branch: { work: SOURCE_BRANCH },
+      reason: "restore the recorded PR identity's delivery branch",
+    });
+    expect(agreed.recovery?.warnings).toEqual([]);
+
+    // (3) the delivery TARGET moves: now `delivery.pr.target` is the comparison
+    // that fails, and the header the repair STORED is the one it warns about.
+    const retargeted = await workflowMutation(fixture, "op-anchors-retarget", {
+      kind: "delivery-anchors",
+      branch: { target: "release" },
+      reason: "the PR was retargeted",
+    });
+    const [targetWarning] = retargeted.recovery?.warnings ?? [];
+    expect(targetWarning?.code).toBe("workflow.delivery-anchors.pr-identity");
+    expect(targetWarning?.message).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
+    expect(targetWarning?.message).toContain(`branch.target ${JSON.stringify("release")}`);
+    const state = retargeted.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    // The message describes the anchors THIS transaction stored, never a snapshot
+    // read before it.
+    expect(state.branch).toMatchObject({ target: "release" });
+  });
+
+  test("a repair on a workflow with no recorded PR identity carries no advisory", async () => {
+    const fixture = await workflowFixture("delivery-anchors-no-pr");
+    const repair = await workflowMutation(fixture, "op-anchors-no-pr", {
+      kind: "delivery-anchors",
+      branch: { work: "fix/registered-by-mistake" },
+      reason: "the registered delivery branch was the delivery target",
+    });
+    // Nothing has been frozen yet, so there is no identity to disagree with.
+    expect(repair.recovery?.warnings).toEqual([]);
+    const state = repair.data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.branch).toMatchObject({ work: "fix/registered-by-mistake" });
+  });
+
   test("an iteration workflow's base and integration anchors survive a single-anchor correction", async () => {
     // The reachable input a wholesale pair replacement destroyed: an iteration
     // workflow registers its own `{base, integration, target}` anchors, and a
