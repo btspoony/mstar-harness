@@ -193,7 +193,7 @@ function registerPlanWorkflow(
       `plans/${PLAN_ID}.md`,
       "--delivery-kind",
       "development",
-      "--branch-source",
+      "--branch-work",
       "feature/exec-workflow",
       "--branch-target",
       "main",
@@ -243,6 +243,28 @@ function registerReportOnlyWorkflow(fixture: Fixture, identity: ExecutionIdentit
     fixture,
     identity,
   );
+}
+
+/**
+ * Plant one plan row Done through the store the engine's own readers use: the
+ * fixture's only route to a close (the CLI completes a row through its QC/QA
+ * proof route, which is not a fixture concern).
+ */
+async function plantDoneRow(fixture: Fixture, status = "Done"): Promise<void> {
+  const handle = await openStore(fixture.context, "write");
+  try {
+    const row = handle.db
+      .prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(WORKFLOW_ID, PLAN_ID) as { state_json?: unknown } | undefined;
+    if (typeof row?.state_json !== "string") throw new Error(`the fixture has no plan row ${PLAN_ID}`);
+    const state = JSON.parse(row.state_json) as { status?: unknown };
+    state.status = status;
+    handle.db
+      .prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
+      .run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+  } finally {
+    handle.close();
+  }
 }
 
 /** Bind one workflow's coordinator through the documented active form. */
@@ -569,6 +591,81 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(existsSync(strayCompass)).toBe(false);
   });
 
+  test("an iteration refuses an anchor its own type does not carry and records the ones it does", async () => {
+    const fixture = await activeFixture("mstar-workflow-anchor-type");
+    const identity = coordinatorIdentity(ITERATION_ID);
+    const registered = runCli(
+      [
+        "iteration",
+        "register",
+        "--workflow",
+        ITERATION_ID,
+        "--compass-ref",
+        `iterations/${ITERATION_ID}/delivery-compass.md`,
+        "--branch-base",
+        "main",
+        "--branch-integration",
+        INTEGRATION_BRANCH,
+        "--branch-target-iteration",
+        "main",
+        "--row",
+        JSON.stringify({ id: PLAN_ID, title: "Iteration row", file: `plans/${PLAN_ID}.md` }),
+        "--expect",
+        await rootTokenOf(fixture),
+        "--operation",
+        "register-iteration-anchor-type",
+        "--harness",
+        fixture.harnessDir,
+        "--session-id",
+        identity.sessionId,
+      ],
+      fixture,
+      identity,
+    );
+    if (registered.exitCode !== 0) throw new Error(`iteration registration failed: ${registered.stdout}${registered.stderr}`);
+    const bound = bindCoordinator(fixture, ITERATION_ID, await workflowTokenOf(fixture, ITERATION_ID), "bind-iteration-anchor-type");
+
+    // `branch.work` is a `type: plan` delivery anchor: the iteration refuses it
+    // and names its own members, so the caller corrects the call in one retry.
+    const refused = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "anchors-type-refused", [
+        "--branch-work",
+        "fix/wrong-type",
+        "--reason",
+        "the delivery branch of another lifecycle type",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(String(jsonOf(refused).code)).toBe("coordination.invalid-transition");
+    expect(String(jsonOf(refused).message)).toContain('type "iteration"');
+    expect(String(jsonOf(refused).message)).toContain("branch.work");
+    expect(String(jsonOf(refused).message)).toContain("branch.base | branch.target");
+    expect((await storedHeader(fixture, ITERATION_ID)).branch).toEqual({
+      base: "main",
+      target: "main",
+      integration: INTEGRATION_BRANCH,
+    });
+
+    // The anchors the type DOES carry stay revisable, and the header never gains
+    // the `work` key the refusal rejected.
+    const based = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "anchors-type-base", [
+        "--branch-base",
+        "release/root",
+        "--reason",
+        "the iteration's creation anchor was registered on the wrong branch",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(based.exitCode).toBe(0);
+    const recorded = (await storedHeader(fixture, ITERATION_ID)).branch as Record<string, unknown>;
+    expect(recorded).toEqual({ base: "release/root", target: "main", integration: INTEGRATION_BRANCH });
+    expect(Object.hasOwn(recorded, "work")).toBe(false);
+  });
+
   test("a stale token, a foreign identity and a mixed transport refuse without mutation", async () => {
     const fixture = await activeFixture("mstar-workflow-refusals");
     const identity = coordinatorIdentity();
@@ -714,6 +811,258 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(await storedHeader(fixture)).toEqual(headerBeforeDeclare);
   });
 
+  test("the delivery anchors of a running workflow are repairable, and a malformed repair is a usage error", async () => {
+    const fixture = await activeFixture("mstar-workflow-anchors");
+    const identity = coordinatorIdentity();
+    expect(registerPlanWorkflow(fixture, identity, await rootTokenOf(fixture)).exitCode).toBe(0);
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
+    const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
+
+    // A missing --reason is a usage error: the correction is auditable or it is
+    // not admitted.
+    const noReason = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-no-reason", [
+        "--branch-work",
+        "fix/corrected",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(noReason)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(String(jsonOf(noReason).message)).toContain("a non-empty reason is required");
+    expect(String(jsonOf(noReason).message)).not.toContain("at least one delivery anchor is required");
+    // The verb's own refusal — not a parser refusal of an unknown command.
+    expect((jsonOf(noReason).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+
+    // An empty anchor is refused with the same diagnostic.
+    const emptySource = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-empty", [
+        "--branch-work",
+        "",
+        "--reason",
+        "operator correction",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(emptySource)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+
+    // Neither anchor named is a usage error too: the verb always states what it
+    // records, so a call that corrects nothing is never admitted.
+    const noAnchor = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-no-anchor", [
+        "--reason",
+        "operator correction",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(noAnchor)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(noAnchor).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect(String(jsonOf(noAnchor).message)).toContain("at least one delivery anchor is required");
+    expect(String(jsonOf(noAnchor).message)).not.toContain("a non-empty reason is required");
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
+
+    // Neither an anchor nor a reason: BOTH are reported in one usage refusal, so
+    // a malformed call is not a repeated guessing loop (issue #499 review F2).
+    const neither = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-neither", []),
+      fixture,
+      identity,
+    );
+    expect(jsonOf(neither)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(neither).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect(String(jsonOf(neither).message)).toContain("at least one delivery anchor is required");
+    expect(String(jsonOf(neither).message)).toContain("a non-empty reason is required");
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
+
+    // No workflow, no anchor, no reason: all three are named in ONE refusal, so
+    // even the collapsed call is corrected on its first retry (issue #499
+    // review F4).
+    const bare = runCli(
+      ["workflow", "delivery-anchors", "--harness", fixture.harnessDir, "--session-id", identity.sessionId],
+      fixture,
+      identity,
+    );
+    expect(jsonOf(bare)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(bare).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    const bareMessage = String(jsonOf(bare).message);
+    expect(bareMessage).toContain("workflow is required");
+    expect(bareMessage).toContain("at least one delivery anchor is required");
+    expect(bareMessage).toContain("a non-empty reason is required");
+
+    // Absent workflow alone reports only the workflow: the aggregate names the
+    // requirements that are actually missing.
+    const noWorkflow = runCli(
+      [
+        "workflow",
+        "delivery-anchors",
+        "--branch-work",
+        "fix/named",
+        "--reason",
+        "operator correction",
+        "--harness",
+        fixture.harnessDir,
+        "--session-id",
+        identity.sessionId,
+      ],
+      fixture,
+      identity,
+    );
+    expect(jsonOf(noWorkflow)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(noWorkflow).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect(String(jsonOf(noWorkflow).message)).toContain("workflow is required");
+    expect(String(jsonOf(noWorkflow).message)).not.toContain("at least one delivery anchor is required");
+    expect(String(jsonOf(noWorkflow).message)).not.toContain("a non-empty reason is required");
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
+
+    // The verb reaches the engine: a single named anchor is recorded and the
+    // anchor it does not name keeps its registered value.
+    const corrected = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-1", [
+        "--branch-work",
+        "fix/corrected",
+        "--branch-base",
+        "main",
+        "--reason",
+        "the registered work branch was the delivery target",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(corrected.exitCode).toBe(0);
+    expect(dataOf(corrected).replayed).toBe(false);
+    expect((await storedHeader(fixture)).branch).toEqual({ base: "main", work: "fix/corrected", target: "main" });
+
+    // The deprecated --branch-source alias writes the same field as --branch-work.
+    const aliased = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-alias", [
+        "--branch-source",
+        "fix/aliased",
+        "--reason",
+        "operator correction through the deprecated alias",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(aliased.exitCode).toBe(0);
+    expect((await storedHeader(fixture)).branch).toEqual({ base: "main", work: "fix/aliased", target: "main" });
+  });
+
+  test("a repair that leaves an already-recorded PR identity behind warns in the ok envelope and still succeeds", async () => {
+    const fixture = await activeFixture("mstar-workflow-anchors-pr");
+    const identity = coordinatorIdentity();
+    expect(registerPlanWorkflow(fixture, identity, await rootTokenOf(fixture)).exitCode).toBe(0);
+    const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
+
+    // The delivery tail, recorded while the anchors still name the PR identity.
+    const deliveryPath = join(fixture.root, "delivery-pr-identity.json");
+    writeJson(deliveryPath, {
+      compound: { outcome: "created" },
+      pr: { repo: "o/r", head: "feature/exec-workflow", target: "main" },
+      merge: { provider: "github", evidence: "PR #501 merged" },
+    });
+    const recorded = runCli(
+      workflowVerbArgs("evidence", fixture, bound, await workflowTokenOf(fixture), "delivery-pr-identity", ["--file", deliveryPath]),
+      fixture,
+      identity,
+    );
+    expect(recorded.exitCode).toBe(0);
+    expect((await storedHeader(fixture)).delivery).toMatchObject({ pr: { head: "feature/exec-workflow", target: "main" } });
+
+    // The repair moves the delivery target. It SUCCEEDS - an advisory never
+    // blocks - and `data.warnings` names the recorded identity, the anchors the
+    // repair stored and the ONE call that puts them back into agreement.
+    const retargeted = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-pr-mismatch", [
+        "--branch-target",
+        "release",
+        "--reason",
+        "the delivery PR was retargeted",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(retargeted.exitCode).toBe(0);
+    expect(jsonOf(retargeted)).toMatchObject({ status: "ok", code: "workflow.delivery-anchors.ok", exitCode: 0 });
+    expect(dataOf(retargeted).replayed).toBe(false);
+    const warnings = dataOf(retargeted).warnings;
+    expect(Array.isArray(warnings)).toBe(true);
+    const advisories = warnings as string[];
+    expect(advisories).toHaveLength(1);
+    expect(advisories[0]).toContain(`branch.work ${JSON.stringify("feature/exec-workflow")}`);
+    expect(advisories[0]).toContain(`branch.target ${JSON.stringify("release")}`);
+    expect(advisories[0]).toContain(`delivery.pr.head ${JSON.stringify("feature/exec-workflow")}`);
+    expect(advisories[0]).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
+    expect(advisories[0]).toContain(
+      "mstar workflow delivery-anchors --workflow wf-exec-workflow --branch-work feature/exec-workflow --branch-target main --reason",
+    );
+    // The repair stored exactly what it named.
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "release" });
+
+    // The consequence: the close this header can no longer pass refuses, naming
+    // the member that disagrees. The row is planted Done through the store the
+    // engine's own readers use, the fixture's only route to a close.
+    await plantDoneRow(fixture);
+    const refused = runCli(
+      workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "close-pr-mismatch", [
+        "--status",
+        "completed",
+        "--reason",
+        "the delivery was verified",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("coordination.invalid-transition");
+    expect(JSON.stringify(jsonOf(refused).details)).toContain("delivery.pr.target");
+
+    // The invocation the advisory named, run with exactly those flags and
+    // values: agreement is restored in ONE call, the advisory is gone, and the
+    // close then passes.
+    const restored = runCli(
+      workflowVerbArgs("delivery-anchors", fixture, bound, await workflowTokenOf(fixture), "anchors-pr-restore", [
+        "--branch-work",
+        "feature/exec-workflow",
+        "--branch-target",
+        "main",
+        "--reason",
+        "restore the recorded PR identity's delivery anchors",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(restored.exitCode).toBe(0);
+    expect(dataOf(restored).warnings).toBeUndefined();
+    const closed = runCli(
+      workflowVerbArgs("lifecycle", fixture, bound, await workflowTokenOf(fixture), "close-pr-restored", [
+        "--status",
+        "completed",
+        "--reason",
+        "the delivery was verified",
+      ]),
+      fixture,
+      identity,
+    );
+    expect(closed.exitCode).toBe(0);
+    expect(jsonOf(closed).status).toBe("ok");
+    // The close IS the terminal write: witnessed at the store boundary the
+    // engine's own readers use, because every execution-adapter read is
+    // registry-filtered.
+    const handle = await openStore(fixture.context, "read");
+    try {
+      const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as
+        | { state_json?: unknown }
+        | undefined;
+      if (typeof row?.state_json !== "string") throw new Error("the closed workflow row is gone from execution_workflows");
+      const stored = JSON.parse(row.state_json) as { status?: unknown };
+      expect(stored.status).toBe("completed");
+    } finally {
+      handle.close();
+    }
+  });
+
   test("the documented registration form answers through the ACTIVE authority; no file-route bytes", async () => {
     // ACTIVE disposition: the pre-activation `workflow register` file route is
     // retired — the same documented flags register through the authority's
@@ -735,7 +1084,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
         `plans/${PLAN_ID}.md`,
         "--delivery-kind",
         "development",
-        "--branch-source",
+        "--branch-work",
         "feature/x",
         "--branch-target",
         "main",

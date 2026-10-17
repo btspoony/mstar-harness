@@ -187,6 +187,7 @@ __export(exports_engine, {
   createLocalExecutionIdentity: () => createLocalExecutionIdentity,
   currentAuthorityHandle: () => currentAuthorityHandle,
   decodeExecutionSessionRef: () => decodeExecutionSessionRef,
+  deliveryBranchOf: () => deliveryBranchOf,
   deliveryEvidenceViolations: () => deliveryEvidenceViolations,
   deriveLifecyclePhase: () => deriveLifecyclePhase,
   derivePlanRegistration: () => derivePlanRegistration,
@@ -15028,6 +15029,13 @@ function resolveRegisteredPlanFile(input) {
   }
   return { planPath: expected, planDir, declaredPlanId };
 }
+function deliveryBranchOf(branch) {
+  if (!isPlainObject(branch))
+    return;
+  if (nonEmptyString(branch.work))
+    return branch.work;
+  return nonEmptyString(branch.source) ? branch.source : undefined;
+}
 function deriveLifecyclePhase(snapshot) {
   const facts = [`type=${snapshot.type}`, `status=${snapshot.status}`];
   if (snapshot.type !== "iteration" || snapshot.status !== "running") {
@@ -15238,7 +15246,7 @@ function validateWorkflowSnapshot(doc) {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation7("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "source", "integration", "target"]) {
+      for (const key of ["base", "work", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation7("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -15340,13 +15348,13 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 function assertDeliveryRegistrationCoherence(kind, evidence, what) {
-  if (kind === "development" && (!nonEmptyString(evidence.branchSource) || !nonEmptyString(evidence.branchTarget))) {
-    throw new Error(`${what}: a development workflow requires its delivery source and target branches (--branch-source/--branch-target) — missing branch fields are incomplete registration, not an exempt workflow (contract §1/§4a)`);
+  if (kind === "development" && (!nonEmptyString(evidence.branchWork) || !nonEmptyString(evidence.branchTarget))) {
+    throw new Error(`${what}: a development workflow requires its delivery branch and its target branch (--branch-work/--branch-target) — missing branch fields are incomplete registration, not an exempt workflow (contract §1/§4a)`);
   }
   if (kind === "verification/report-only" && !nonEmptyString(evidence.completionPolicy)) {
     throw new Error(`${what}: a verification/report-only workflow requires the completion policy (--completion-policy) naming the evidence that completes it (contract §1)`);
   }
-  for (const [field, value] of Object.entries({ branchSource: evidence.branchSource, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
+  for (const [field, value] of Object.entries({ branchWork: evidence.branchWork, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
     if (value !== undefined && !nonEmptyString(value)) {
       throw new Error(`${what}: ${field} must be a non-empty string when given`);
     }
@@ -15366,10 +15374,11 @@ function consultDeliveryEvidence(snapshot) {
   }
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;
   const delivery = isPlainObject(snapshot.delivery) ? snapshot.delivery : undefined;
+  const deliveryBranch = deliveryBranchOf(branch);
   const missing = [];
   if (kind === "development") {
-    if (!nonEmptyString(branch?.source))
-      missing.push("branch.source");
+    if (!nonEmptyString(deliveryBranch))
+      missing.push("branch.work");
     if (!nonEmptyString(branch?.target))
       missing.push("branch.target");
     if (!isPlainObject(delivery?.compound))
@@ -15378,8 +15387,8 @@ function consultDeliveryEvidence(snapshot) {
     if (pr === undefined) {
       missing.push("delivery.pr (PR repo/head/target identity, §4d)");
     } else {
-      if (nonEmptyString(branch?.source) && pr.head !== branch.source) {
-        missing.push(`delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered branch.source ${JSON.stringify(branch.source)} — §4d: the recorded PR identity must be the registered delivery)`);
+      if (nonEmptyString(deliveryBranch) && pr.head !== deliveryBranch) {
+        missing.push(`delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered delivery branch ${JSON.stringify(deliveryBranch)} — §4d: the recorded PR identity must be the registered delivery)`);
       }
       if (nonEmptyString(branch?.target) && pr.target !== branch.target) {
         missing.push(`delivery.pr.target (recorded ${JSON.stringify(pr.target)}, registered branch.target ${JSON.stringify(branch.target)} — §4d: the recorded PR identity must be the registered delivery)`);
@@ -15453,9 +15462,10 @@ function planWorkflowSnapshot(workflowId, options, startedAt) {
     snapshot.project = options.project;
   if (options.completionPolicy !== undefined)
     snapshot.completion_policy = options.completionPolicy;
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
+  if (options.branchBase !== undefined || options.branchWork !== undefined || options.branchTarget !== undefined) {
     snapshot.branch = {
-      ...options.branchSource !== undefined ? { source: options.branchSource } : {},
+      ...options.branchBase !== undefined ? { base: options.branchBase } : {},
+      ...options.branchWork !== undefined ? { work: options.branchWork } : {},
       ...options.branchTarget !== undefined ? { target: options.branchTarget } : {}
     };
   }
@@ -15658,10 +15668,10 @@ function integrationAnchors(snapshot, planId) {
 function standaloneDeliveryAnchors(snapshot, planId) {
   const row = snapshot.plans.find((candidate) => candidate.id === planId);
   const worktreePath = isPlainObject(row?.metadata) ? row.metadata.worktree_path : undefined;
-  const sourceBranch = snapshot.branch?.source;
+  const sourceBranch = deliveryBranchOf(snapshot.branch);
   const targetBranch = snapshot.branch?.target;
   if (!isNonEmptyString(sourceBranch) || !isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
-    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered source/target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, source_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
+    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered delivery and target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, delivery_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
   }
   return { sourceBranch, targetBranch, worktreePath };
 }
@@ -16282,15 +16292,18 @@ function probeStatus(worktreePath, opts) {
     return { error: error.message ?? "git status probe failed" };
   }
 }
+function anchorRecovery(workflowId, key) {
+  const flag = deliveryAnchorFlags[key];
+  return flag === null || flag === undefined ? `Integration is recorded only at iteration registration, so no running-workflow repair admits it. Close it with mstar workflow lifecycle --workflow ${workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `Record the missing branch.${key} with mstar workflow delivery-anchors --workflow ${workflowId} ${flag} <branch> --reason "<why branch.${key} is absent>", then rerun mstar worktree check --workflow ${workflowId} --entry.`;
+}
 function workflowEntryPreDispatchCheck(input, opts = {}) {
   const violations = [];
-  const { base = "", source = "", target = "", integration = "" } = input.branch;
+  const { base = "", target = "", integration = "" } = input.branch;
   const iteration = input.workflowType === "iteration";
-  const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["source", source], ["target", target]];
+  const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]];
   for (const [key, value] of anchors) {
     if (value.trim() === "") {
-      const recovery = iteration ? `The active iteration cannot gain branch anchors through standalone registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `The active standalone plan cannot gain branch anchors through re-registration. Close it with mstar workflow lifecycle --workflow ${input.workflowId} --status failed --reason "<blocker>", then register a replacement standalone plan with --branch-source <branch> and --branch-target <branch>; rerun mstar worktree check --workflow <new-id> --entry.`;
-      violations.push(violation8("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, recovery));
+      violations.push(violation8("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, anchorRecovery(input.workflowId, key)));
     }
   }
   const expected = (iteration ? base : target).trim();
@@ -16298,7 +16311,7 @@ function workflowEntryPreDispatchCheck(input, opts = {}) {
     violations.push(violation8("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
   } else {
     if (expected === "")
-      violations.push(violation8("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, `Record a supported branch anchor when registering a replacement ${iteration ? "iteration" : "standalone plan"}, then rerun mstar worktree check --workflow <new-id> --entry.`));
+      violations.push(violation8("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, anchorRecovery(input.workflowId, iteration ? "base" : "target")));
     else
       violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
     const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree.branch && entry.branch !== expected);
@@ -20368,7 +20381,7 @@ function applyDeliveryLiftDeclaration(snapshot, declaration) {
   snapshot.delivery_kind = declaration.deliveryKind;
   if (declaration.branchSource !== undefined || declaration.branchTarget !== undefined) {
     snapshot.branch = {
-      ...declaration.branchSource !== undefined ? { source: declaration.branchSource } : {},
+      ...declaration.branchSource !== undefined ? { work: declaration.branchSource } : {},
       ...declaration.branchTarget !== undefined ? { target: declaration.branchTarget } : {}
     };
   }
@@ -20388,7 +20401,7 @@ function applyDeliveryDeclarations(snapshots, declarations) {
       throw new DeliveryDeclarationError(`deliveryKind for ${JSON.stringify(declaration.workflow)} must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(declaration.deliveryKind)}; ${retry([...declared].sort(compareIds))}`);
     }
     try {
-      assertDeliveryRegistrationCoherence(declaration.deliveryKind, declaration, `delivery declaration for ${declaration.workflow}`);
+      assertDeliveryRegistrationCoherence(declaration.deliveryKind, { branchWork: declaration.branchSource, branchTarget: declaration.branchTarget, completionPolicy: declaration.completionPolicy }, `delivery declaration for ${declaration.workflow}`);
     } catch (error) {
       throw new DeliveryDeclarationError(`${error.message}; ${retry([...declared].sort(compareIds))}`);
     }
@@ -21412,8 +21425,14 @@ function planQualityBar(planText) {
   const findings = [];
   const violations = [];
   const lines = planText.split(/\r?\n/);
+  let start = 0;
+  if (lines[0]?.trim() === "---") {
+    const close = lines.findIndex((line, index2) => index2 > 0 && line.trim() === "---");
+    if (close !== -1)
+      start = close + 1;
+  }
   let inFence = false;
-  for (let i = 0;i < lines.length; i++) {
+  for (let i = start;i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) {
       inFence = !inFence;
@@ -25004,7 +25023,7 @@ async function captureExecutionProjectionSources(context) {
         endedAt: text4(projectionState.ended_at),
         updatedAt: text4(projectionState.updated_at),
         branchBase: text4(branch.base),
-        branchSource: text4(branch.source),
+        branchSource: text4(deliveryBranchOf(branch)),
         branchIntegration: text4(branch.integration),
         branchTarget: text4(branch.target),
         activeRegistration: registryIds.has(item.workflow_id)
@@ -26863,7 +26882,7 @@ async function captureCompletionWitnesses(context, read, operation) {
   if (route === "development") {
     const anchors2 = standaloneDeliveryAnchors(snapshot, read.planId);
     if (scope.workingBranch !== anchors2.sourceBranch) {
-      throw new CoordinationError("coordination.scope-mismatch", "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.", { plan_id: read.planId, expected: anchors2.sourceBranch, actual: scope.workingBranch });
+      throw new CoordinationError("coordination.scope-mismatch", "The plan's recorded working branch must match the workflow's registered delivery source. This refusal's details name the two values as expected and actual. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.", { plan_id: read.planId, expected: anchors2.sourceBranch, actual: scope.workingBranch });
     }
     assertSourceReviewProof(scope.worktreePath, evidence, anchors2.sourceBranch, read.planId);
     return { git: [captureGitProofWitness(scope.worktreePath)], planAreas, evidenceRefs };
@@ -26914,7 +26933,7 @@ function completeInTransaction(witness, tx, at, read, operation, witnesses) {
   } else if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, planId);
     if (scope.workingBranch !== anchors.sourceBranch) {
-      throw new CoordinationError("coordination.scope-mismatch", "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.", { plan_id: planId, expected: anchors.sourceBranch, actual: scope.workingBranch });
+      throw new CoordinationError("coordination.scope-mismatch", "The plan's recorded working branch must match the workflow's registered delivery source. This refusal's details name the two values as expected and actual. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.", { plan_id: planId, expected: anchors.sourceBranch, actual: scope.workingBranch });
     }
     const proven = assertSourceReviewProof(scope.worktreePath, evidence, anchors.sourceBranch, planId);
     record.source_sha = proven.source_sha;
@@ -27073,6 +27092,30 @@ function assertWorkflowOperationShape(operation) {
       }
       return;
     }
+    case "delivery-anchors": {
+      assertExactKeys(op, ["kind", "branch", "reason"], "a delivery-anchors operation");
+      if (!isPlainObject(op.branch)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a branch object naming the anchor(s) to record; retry through mstar workflow delivery-anchors.");
+      }
+      assertExactKeys(op.branch, ["base", "work", "target"], "a delivery-anchors branch");
+      const { base, work, target } = op.branch;
+      if (base === undefined && work === undefined && target === undefined) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide at least one anchor (branch.base, branch.work or branch.target); retry through mstar workflow delivery-anchors.");
+      }
+      if (base !== undefined && !isNonEmptyString(base)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.base must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (work !== undefined && !isNonEmptyString(work)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.work must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (target !== undefined && !isNonEmptyString(target)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: branch.target must be a non-empty string; retry through mstar workflow delivery-anchors.");
+      }
+      if (!isNonEmptyString(op.reason)) {
+        throw invalidWorkflowInput("Invalid delivery-anchors operation: provide a non-empty reason; retry through mstar workflow delivery-anchors.");
+      }
+      return;
+    }
     default:
       throw new CoordinationError("coordination.unknown-operation", "Unknown workflow operation kind; inspect the operation contract with mstar schema.", {
         operation: op.kind
@@ -27106,6 +27149,8 @@ function workflowOperationField(operation) {
       return "operation.path";
     case "delivery":
       return "operation.delivery";
+    case "delivery-anchors":
+      return "operation.branch";
   }
 }
 function storedOperationValue(state, operation) {
@@ -27120,6 +27165,8 @@ function storedOperationValue(state, operation) {
       return state.integration_worktree_path;
     case "delivery":
       return state.delivery;
+    case "delivery-anchors":
+      return state.branch;
   }
 }
 function requestedOperationValue(operation) {
@@ -27134,6 +27181,8 @@ function requestedOperationValue(operation) {
       return canonicalTarget(operation.path);
     case "delivery":
       return operation.delivery;
+    case "delivery-anchors":
+      return operation.branch;
   }
 }
 function workflowOperationRequestHash(caller, workflowId, operation) {
@@ -27523,7 +27572,7 @@ async function mutateExecutionWorkflow(context, request) {
         applied: [amendmentComponentOf(operation) ?? `${operation.kind} on workflow ${workflowId}`],
         commitState: "committed",
         resolvedFrom: [{ path: workflowOperationField(operation), source: "intent.request" }],
-        warnings
+        warnings: [...warnings, ...applied.warnings]
       })
     };
   });
@@ -27542,6 +27591,7 @@ function applyWorkflowOperation(input) {
   const rows = effective.view.plans.map((plan) => plan.plan);
   const header = { ...effective.view.state };
   let membershipLost = false;
+  let warnings = [];
   switch (operation.kind) {
     case "phase":
       applyPhaseTransition({ header, rows, workflowId, operation, evidence });
@@ -27558,13 +27608,48 @@ function applyWorkflowOperation(input) {
     case "delivery":
       header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
       break;
+    case "delivery-anchors": {
+      const allowed = header.type === "iteration" ? ["base", "target"] : ["base", "work", "target"];
+      const refused2 = ["base", "work", "target"].filter((member) => isNonEmptyString(operation.branch[member]) && !allowed.includes(member));
+      if (refused2.length > 0) {
+        throw invalidWorkflowTransition(`workflow ${workflowId} records type ${JSON.stringify(header.type)}, whose delivery anchors are ${allowed.map((member) => `branch.${member}`).join(" | ")}: this repair names ${refused2.map((member) => `branch.${member}`).join(", ")}, which that type does not carry. Retry workflow delivery-anchors --workflow <workflow-id> --branch-base <branch> --reason <why>. Every member the addressed type carries stays revisable.`, { workflow_id: workflowId, type: header.type, refused_members: refused2, allowed_members: allowed });
+      }
+      const registered = isPlainObject(header.branch) ? { ...header.branch } : {};
+      if (isNonEmptyString(operation.branch.work))
+        delete registered.source;
+      header.branch = {
+        ...registered,
+        ...isNonEmptyString(operation.branch.base) ? { base: operation.branch.base } : {},
+        ...isNonEmptyString(operation.branch.work) ? { work: operation.branch.work } : {},
+        ...isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}
+      };
+      warnings = deliveryAnchorWarnings(workflowId, header);
+      break;
+    }
   }
   header.updated_at = at;
   assertHeaderValid(workflowId, header);
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost)
     recordRootMembershipLoss(tx, { workflowId, now: at });
-  return { receipt: readExecutionStateGraph(tx), membershipLost };
+  return { receipt: readExecutionStateGraph(tx), membershipLost, warnings };
+}
+function deliveryAnchorWarnings(workflowId, header) {
+  const delivery = isPlainObject(header.delivery) ? header.delivery : undefined;
+  const pr = delivery === undefined ? undefined : delivery.pr;
+  if (!isPlainObject(pr) || !isNonEmptyString(pr.head) || !isNonEmptyString(pr.target))
+    return [];
+  const branch = isPlainObject(header.branch) ? header.branch : {};
+  const work = deliveryBranchOf(branch) ?? null;
+  const target = isNonEmptyString(branch.target) ? branch.target : null;
+  if (pr.head === work && pr.target === target)
+    return [];
+  return [
+    {
+      code: "workflow.delivery-anchors.pr-identity",
+      message: `the repair stored branch.work ${JSON.stringify(work)} / branch.target ${JSON.stringify(target)}, which no longer name the recorded PR identity (delivery.pr.head ${JSON.stringify(pr.head)}, delivery.pr.target ${JSON.stringify(pr.target)}): that ` + `identity is frozen at its first record, so a \`completed\` close refuses this workflow until the two agree again (§4d). ` + `Restore agreement with \`mstar workflow delivery-anchors --workflow ${workflowId} --branch-work ${pr.head} --branch-target ${pr.target} --reason "<why the anchors are restored>"\`.`
+    }
+  ];
 }
 function requireCompassEvidence(evidence) {
   if (evidence.compass === undefined) {
@@ -27698,9 +27783,10 @@ function applyDeliveryEvidence(input) {
     });
   }
   const branch = isPlainObject(header.branch) ? header.branch : {};
+  const registeredWork = deliveryBranchOf(branch);
   if (incomingPr !== undefined) {
-    if (isNonEmptyString(branch.source) && incomingPr.head !== branch.source) {
-      throw invalidWorkflowTransition(`workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery source is ${JSON.stringify(branch.source)} (§4d: the recorded PR identity must be the registered delivery)`, { workflow_id: workflowId });
+    if (isNonEmptyString(registeredWork) && incomingPr.head !== registeredWork) {
+      throw invalidWorkflowTransition(`workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery branch is ${JSON.stringify(registeredWork)} (§4d: the recorded PR identity must be the registered delivery)`, { workflow_id: workflowId });
     }
     if (isNonEmptyString(branch.target) && incomingPr.target !== branch.target) {
       throw invalidWorkflowTransition(`workflow ${workflowId} records delivery.pr.target ${JSON.stringify(incomingPr.target)}, but the registered delivery target is ${JSON.stringify(branch.target)} (§4d)`, { workflow_id: workflowId });
@@ -29895,7 +29981,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -33995,7 +34081,8 @@ var init_engine = __esm(() => {
       lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
       "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
       "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
-      delivery: ["workflowId", "operation.kind", "operation.delivery"]
+      delivery: ["workflowId", "operation.kind", "operation.delivery"],
+      "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
     };
   });
   init_catalog_import = __esm2(() => {
@@ -34496,6 +34583,12 @@ var init_engine = __esm(() => {
   });
   init_worktree = __esm2(() => {
     init_workflow();
+    deliveryAnchorFlags = {
+      base: "--branch-base",
+      work: "--branch-work",
+      target: "--branch-target",
+      integration: null
+    };
     QC_ALIGNMENT_FIELDS = [
       { key: "planId", label: "plan_id" },
       { key: "reviewRange", label: "Review range" },

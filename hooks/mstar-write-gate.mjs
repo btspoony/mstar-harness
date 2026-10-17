@@ -10888,7 +10888,8 @@ var init_recovery_intent = __esm(() => {
     lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
     "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
     "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
-    delivery: ["workflowId", "operation.kind", "operation.delivery"]
+    delivery: ["workflowId", "operation.kind", "operation.delivery"],
+    "delivery-anchors": ["workflowId", "operation.kind", "operation.branch", "operation.reason"]
   };
 });
 function resolveRelativePath(raw, label) {
@@ -14531,6 +14532,13 @@ var init_plan_path = __esm(() => {
     "working branch": true
   };
 });
+function deliveryBranchOf(branch) {
+  if (!isPlainObject(branch))
+    return;
+  if (nonEmptyString(branch.work))
+    return branch.work;
+  return nonEmptyString(branch.source) ? branch.source : undefined;
+}
 function validateIntegrationMergeLease(lease) {
   const violations = [];
   if (!isPlainObject(lease)) {
@@ -14714,7 +14722,7 @@ function validateWorkflowSnapshot(doc) {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation7("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "source", "integration", "target"]) {
+      for (const key of ["base", "work", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation7("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -14767,6 +14775,9 @@ function validateWorkflowSnapshot(doc) {
 }
 function isTerminalSnapshot(doc) {
   return WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
+}
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
 }
 var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
 var WORKFLOW_LIFECYCLE_STATUSES;
@@ -14940,9 +14951,16 @@ function readMainWorktree(cwd) {
   }
 }
 var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var deliveryAnchorFlags;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
   init_workflow();
+  deliveryAnchorFlags = {
+    base: "--branch-base",
+    work: "--branch-work",
+    target: "--branch-target",
+    integration: null
+  };
   QC_ALIGNMENT_FIELDS = [
     { key: "planId", label: "plan_id" },
     { key: "reviewRange", label: "Review range" },
@@ -17110,7 +17128,7 @@ async function captureExecutionProjectionSources(context) {
         endedAt: text4(projectionState.ended_at),
         updatedAt: text4(projectionState.updated_at),
         branchBase: text4(branch.base),
-        branchSource: text4(branch.source),
+        branchSource: text4(deliveryBranchOf(branch)),
         branchIntegration: text4(branch.integration),
         branchTarget: text4(branch.target),
         activeRegistration: registryIds.has(item.workflow_id)

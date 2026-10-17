@@ -173,7 +173,7 @@ function planRequest(options: {
         harnessDir: options.context.harnessDir,
         plan: { id: planId, title, file: `plans/${relativePath}` },
         deliveryKind: "development",
-        branchSource: `feature/${workflowId}`,
+        branchWork: `feature/${workflowId}`,
         branchTarget: "main",
         project: "_default",
         ...(options.omitStartedAt === true ? {} : { startedAt: TS }),

@@ -211,7 +211,7 @@ function schema() {
   return z.object({
     workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), planId: z.string().min(1).optional(),
     planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS).optional(),
-    project: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
+    project: z.string().min(1).optional(), branchWork: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
     completionPolicy: z.string().min(1).optional(), startedAt: z.string().min(1).optional(), expect: z.string().min(1).optional(),
     operation: z.string().min(1).optional(), file: z.string().min(1).optional(),
     sessionRef: z.string().min(1).optional(), sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(),
@@ -389,8 +389,25 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
   z.object({ ...deliveryEvidenceFields, completion: completionEvidenceSchema }).strict(),
 ]);
 
+/**
+ * Non-blocking advisory for a `development` registration whose delivery
+ * branch and target name the same branch: such a pair cannot describe a
+ * delivery PR. The registration still succeeds - the warning rides in the ok
+ * envelope's `data.warnings` and never refuses.
+ */
+function deliveryAnchorWarnings(deliveryKind: string, work: string | undefined, target: string | undefined): string[] {
+  if (deliveryKind !== "development") return [];
+  if (work === undefined || target === undefined || work !== target) return [];
+  return [
+    `--branch-work/--branch-target: both were recorded as ${JSON.stringify(work)}, so branch.work === branch.target and the anchors name no delivery PR. ` +
+    "--branch-work is the branch the delivery PR comes from, normally the plan's own feature branch; " +
+    "`mstar plan complete` compares it with the plan row's recorded working branch. " +
+    "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
+  ];
+}
+
 export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
-  const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
+  const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchBase", "branchWork", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
   const defs: CommandDefinition[] = [
     makeDefinition("workflow.register", "Register a standalone plan workflow on the ACTIVE execution authority.", "write", commonRegister, async (input, context) => {
       try {
@@ -399,14 +416,18 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(input.deliveryKind!)) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: `deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` });
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
         if (harnessDir === null) return refusalEnvelope({ command: "workflow.register", status: "usage", code: "command.invalid-input", exitCode: 2, message: "harness dir not found; supply harness" });
-        const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
+        // `--branch-source` is the deprecated alias of `--branch-work`: the two
+        // flags write the one delivery branch, and the current name wins when
+        // both are supplied.
+        const branchWork = input.branchWork ?? input.branchSource;
+        const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchBase === undefined ? {} : { branchBase: input.branchBase }), ...(branchWork === undefined ? {} : { branchWork }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
         const identity: ExecutionIdentity = context.executionIdentity ?? {
           source: context.host === undefined ? "local" : "host",
           sessionId: context.sessionId ?? "",
           workflowId: input.workflow!,
           role: "coordinator",
         };
-        return ok("workflow.register", await registerShippedCatalogExecution(
+        const result = await registerShippedCatalogExecution(
           executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }),
           {
             actor: "mcp:workflow-register",
@@ -414,13 +435,19 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             ...(input.expect === undefined ? {} : { expected: input.expect as never }),
             ...(input.operation === undefined ? {} : { operationId: input.operation }),
           },
-        ));
+        );
+        const warnings = deliveryAnchorWarnings(input.deliveryKind!, branchWork, input.branchTarget);
+        return ok("workflow.register", warnings.length === 0 ? result : { ...result, warnings });
       } catch (error) {
         return engineRefusal("workflow.register", error);
       }
     }, [{ key: "sessionId", context: "sessionId" }], {
       expect: `Optional checked CAS constraint: ${TOKEN_SUPPLIES.root}`,
       planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
+      branchWork: "The delivery branch recorded as branch.work: the branch the delivery PR comes from, normally the plan's own feature branch. `mstar plan complete` compares it with the plan row's recorded working branch, so a default/protected branch name here is normally wrong — and a wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
+      branchBase: "The branch this workflow was created from, recorded as branch.base: the protected merge anchor. It is not the delivery branch.",
+      branchSource: "Deprecated alias of --branch-work: it records the same delivery branch (branch.work).",
+      branchTarget: "The delivery target anchor recorded as branch.target: the branch the delivery merges into. A wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
     }),
     makeDefinition("workflow.evidence", "Record delivery evidence through the ACTIVE coordinator operation. `--file` is a pathname (never inline JSON): it must be absolute and name a UTF-8 JSON file containing a non-empty object with at least one member. For `development`, members are any subset of compound {outcome: created|updated|skipped, reason?: non-empty string; reason is required for skipped}, pr {repo, head, target: non-empty strings}, and merge {provider, evidence: non-empty strings}; for `verification/report-only`, the only member is completion {policy, evidence: non-empty strings}. Omit untouched members; supplied members are complete blocks, not sub-field patches. `completion.policy` must match the registered `completion_policy` for lifecycle completion; a mismatched report may be recorded and corrected by another evidence update before close. A matching non-empty completion on a Done row is frozen; edit its referenced document in place, or use a separate workflow for a different completed intent. Done alone does not freeze other evidence. PR identity is immutable once recorded: keep its registered repo/head/target for that delivery, or use a separate workflow for a different PR. The registered delivery kind selects permitted members. `--expect` and `--operation` optionally constrain this ACTIVE write.", "write", ["workflow", "file", "sessionRef", "expect", "operation", "harness"], async (input, context) => {
       try {
@@ -454,6 +481,78 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
       file: "Path-only wire: absolute path to a UTF-8 JSON file; inline JSON text is not accepted.",
     }, { delivery: deliveryEvidenceSchema }),
+    makeDefinition("workflow.delivery-anchors", "Repair a RUNNING workflow's delivery anchors (`branch.base` / `branch.work` / `branch.target`) under the workflow CAS token. Name the anchor(s) to record with `--branch-base`, `--branch-work` and/or `--branch-target`: an anchor you do not name keeps the value the workflow already registers, and the named values are written in one transaction. Each anchor you do name must be a non-empty branch name. `--reason` is required, and the correction is revisable and repeatable for as long as the workflow keeps running. A closed lifecycle is refused by the pre-existing workflow-wide amend guard.", "write", ["workflow", "branchBase", "branchWork", "branchSource", "branchTarget", "reason", "sessionRef", "expect", "operation", "harness"], async (input, context) => {
+      const id = "workflow.delivery-anchors";
+      try {
+        // Every flag this verb requires is reported in ONE usage refusal: an
+        // agent that omitted two of them must not have to guess its way to the
+        // second on a retry.
+        // One anchor is enough: the operator who mistyped only the delivery
+        // branch must not restate a correct --branch-target. `--branch-source`
+        // is the deprecated alias of `--branch-work`: both write one field, and
+        // the current name wins when both are supplied.
+        const work = input.branchWork ?? input.branchSource;
+        const reason = input.reason ?? "";
+        const missing = [
+          ...(input.workflow === undefined ? ["workflow is required; inspect registered workflows with mstar status validate."] : []),
+          ...(work === undefined && input.branchBase === undefined && input.branchTarget === undefined
+            ? ["at least one delivery anchor is required; name the anchor being recorded, and an anchor you do not name keeps its registered value."]
+            : []),
+          ...(reason.trim() === "" ? ["a non-empty reason is required: state why the delivery anchors are being corrected, so the repair is auditable."] : []),
+        ];
+        // The row address is re-tested in the condition because a reported
+        // workflow sentence does not narrow `input.workflow` for the checks
+        // below; `missing` already carries it, so the two disjuncts agree.
+        if (input.workflow === undefined || missing.length > 0) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: missing.join(" ") });
+        }
+        if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active anchor repair requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
+        const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+        const acquired = context.executionIdentity;
+        if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator")) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
+        }
+        if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
+        }
+        const root = resolveProcessHarnessDir(context.cwd, input.harness);
+        if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
+        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
+        const operation: WorkflowExecutionOperation = {
+          kind: "delivery-anchors",
+          branch: {
+            ...(input.branchBase === undefined ? {} : { base: input.branchBase }),
+            ...(work === undefined ? {} : { work }),
+            ...(input.branchTarget === undefined ? {} : { target: input.branchTarget }),
+          },
+          reason,
+        };
+        const applied = await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+          workflowId: input.workflow,
+          ...(ref === undefined ? {} : { session: ref }),
+          ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+          operationId: input.operation ?? randomUUID(),
+          operation,
+        });
+        // The ok envelope's advisory payload, in the shape `workflow register`
+        // already uses: an advisory rides `data.warnings` and never fails the
+        // operation. The engine decides it on the anchors THIS transaction
+        // stored (the result's `recovery.warnings`), so a repair that leaves the
+        // header disagreeing with an already-recorded PR identity still
+        // succeeds and says so here.
+        const warnings = (applied.recovery?.warnings ?? []).map((warning) => warning.message);
+        return ok(id, warnings.length === 0 ? applied : { ...applied, warnings });
+      } catch (error) { return engineRefusal(id, error); }
+    }, [{ key: "sessionId", context: "sessionId" }], {
+      branchWork: "The delivery branch to record, as branch.work: the branch the delivery PR comes from, normally the plan's own feature branch. Omit it to keep the registered branch.work.",
+      branchBase: "The creation/merge anchor to record, as branch.base: the branch the workflow was created from. Omit it to keep the registered branch.base.",
+      branchSource: "Deprecated alias of --branch-work: it records the same delivery branch (branch.work).",
+      branchTarget: "The delivery target anchor to record, as branch.target: the branch the delivery merges into. Omit it to keep the registered branch.target.",
+      reason: "Required. Why the registered delivery anchors are being corrected; recorded with the operation so the repair is auditable.",
+      expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
+      sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
+      harness: "Control harness root whose store owns the addressed workflow.",
+    }),
     makeDefinition(
       "workflow.adopt-terminal",
       "Adopt a header that has no ACTIVE registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. A header that never closed is terminalized to stopped in the same transaction as its adoption record, so the committed state never carries an adoption on a still-running header; an already-terminal header keeps its recorded status and ended_at. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",

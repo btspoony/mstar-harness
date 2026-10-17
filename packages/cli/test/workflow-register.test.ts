@@ -62,6 +62,18 @@ function commandMessage(result: RunResult): string {
   return message;
 }
 
+/** The ok envelope's advisory payload, or undefined when the CLI emitted none. */
+function commandWarnings(result: RunResult): string[] | undefined {
+  const { data } = commandOutput(result);
+  if (data === null || typeof data !== "object" || !("warnings" in data)) return undefined;
+  const { warnings } = data;
+  if (!Array.isArray(warnings)) throw new Error(`envelope data.warnings is not an array: ${result.stdout}`);
+  return warnings.map((warning) => {
+    if (typeof warning !== "string") throw new Error(`envelope data.warnings carries a non-string entry: ${result.stdout}`);
+    return warning;
+  });
+}
+
 function registerArgs(harness: string, extra: string[] = []): string[] {
   return [
     "workflow",
@@ -78,8 +90,10 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
     "development",
     "--project",
     "engine",
-    "--branch-source",
+    "--branch-work",
     "feature/20260916-plan-cli-example",
+    "--branch-base",
+    "main",
     "--branch-target",
     "main",
     "--started-at",
@@ -127,7 +141,7 @@ async function expectDevelopmentRegistration(harnessDir: string): Promise<void> 
   expect(workflow.state).toMatchObject({
     delivery_kind: "development",
     project: "engine",
-    branch: { source: "feature/20260916-plan-cli-example", target: "main" },
+    branch: { base: "main", work: "feature/20260916-plan-cli-example", target: "main" },
   });
 }
 
@@ -135,16 +149,55 @@ describe("mstar workflow register", () => {
   test("registers a standalone development plan through the ACTIVE shipped route without explicit CAS inputs", async () => {
     await setupHarness(async (harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));
-      expect(commandOutput(result)).toMatchObject({
+      const envelope = commandOutput(result);
+      expect(envelope).toMatchObject({
         status: "ok",
         code: "workflow.register.ok",
         exitCode: 0,
         data: { workflowId: WORKFLOW_ID },
       });
+      // A feature source against a different target is a coherent delivery
+      // pair, so the advisory stays silent.
+      expect(commandWarnings(result)).toBeUndefined();
       expect(result.exitCode).toBe(0);
       expect(existsSync(root)).toBe(false);
       expect(existsSync(snapshot)).toBe(false);
 
+      await expectDevelopmentRegistration(harness);
+    });
+  });
+
+  test("development registration whose anchors name one branch warns and still succeeds", async () => {
+    await setupHarness(async (harness) => {
+      const args = registerArgs(harness);
+      args[args.indexOf("--branch-work") + 1] = "main";
+      const result = runCli(args);
+      expect(result.exitCode).toBe(0);
+      expect(commandOutput(result)).toMatchObject({
+        status: "ok",
+        code: "workflow.register.ok",
+        exitCode: 0,
+      });
+      const warnings = commandWarnings(result) ?? [];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("--branch-work/--branch-target");
+      expect(warnings[0]).toContain('"main"');
+      expect(warnings[0]).toContain("mstar workflow delivery-anchors");
+      // The advisory never blocks: the suspicious pair is what got registered.
+      const workflows = await readWorkflows(harness);
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0]!.state.branch).toEqual({ base: "main", work: "main", target: "main" });
+    });
+  });
+
+  test("the deprecated --branch-source alias records the same delivery branch as --branch-work", async () => {
+    await setupHarness(async (harness) => {
+      const args = registerArgs(harness);
+      args[args.indexOf("--branch-work")] = "--branch-source";
+      const result = runCli(args);
+      expect(result.exitCode).toBe(0);
+      expect(commandWarnings(result)).toBeUndefined();
+      // The alias fills the same field, so the registered shape is unchanged.
       await expectDevelopmentRegistration(harness);
     });
   });
@@ -235,7 +288,7 @@ describe("mstar workflow register", () => {
       const args = registerArgs(harness);
       const noBranches: string[] = [];
       for (let i = 0; i < args.length; i++) {
-        if (args[i] === "--branch-source" || args[i] === "--branch-target") i++;
+        if (["--branch-work", "--branch-base", "--branch-target"].includes(args[i]!)) i++;
         else noBranches.push(args[i]!);
       }
       const result = runCli(noBranches);
@@ -262,7 +315,10 @@ describe("mstar workflow register", () => {
         "acceptance report at plans/20260916-plan-verify/report.md", "--harness", harness,
       ]);
       expect(result.exitCode).toBe(0);
-      expect(commandOutput(result)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+      const envelope = commandOutput(result);
+      expect(envelope).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+      // The advisory belongs to the development delivery kind only.
+      expect(commandWarnings(result)).toBeUndefined();
       const workflow = (await readWorkflows(harness))[0]!;
       expect(workflow.plans.map((view) => view.plan.id)).toEqual(["20260916-plan-verify"]);
       expect(workflow.state).toMatchObject({

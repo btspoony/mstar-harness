@@ -63,7 +63,12 @@ function executionContext(input: ExecutionInput, invocation: InvocationContext, 
   const root = resolveProcessHarnessDir(invocation.cwd, harness);
   if (root === null) throw new SddScriptError(`${verb}: no target harness was resolved; pass --harness <absolute-path>`, 2);
   if (invocation.controlRoot !== null && path.resolve(root) === path.resolve(invocation.controlRoot)) {
-    throw new SddScriptError(`${verb}: the control-root store is not an admitted execution target`, 2);
+    throw new SddScriptError(
+      `${verb}: the resolved target ${path.resolve(root)} is this invocation's control root, and a control root is not an admitted execution target. `
+      + "Pass --harness <absolute-path> naming a harness other than this control root, or invoke from a checkout where no control root is discovered. "
+      + "To back up or move a control root's own store, use mstar store backup.",
+      2,
+    );
   }
   return { harnessDir: root };
 }

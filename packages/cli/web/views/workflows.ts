@@ -82,6 +82,22 @@ export function workflowDetailState(envelope: Envelope<WorkflowDTO | null>): Wor
 }
 
 /**
+ * The projected branch anchors as the detail page paints them, each paired with
+ * the anchor its value carries. The DTO's `branch.source` field is the legacy
+ * name of the DELIVERY branch (`branch.work`), so it is labelled by what the
+ * value means — a "branch source" label would present the delivery branch as the
+ * branch the workflow was created from, which is what `branch.base` now is.
+ */
+export function workflowBranchFields(branch: WorkflowDTO["branch"]): Array<[string, string | null]> {
+  return [
+    ["Projected branch base", branch.base],
+    ["Projected branch work", branch.source],
+    ["Projected branch integration", branch.integration],
+    ["Projected branch target", branch.target],
+  ];
+}
+
+/**
  * One plan execution row: the projected status/phase/progress/lease values
  * under projected labels, the catalog identity under catalog labels, and the
  * prepared pin the execution row froze. A missing pin is disclosed as missing.
@@ -262,12 +278,7 @@ export function WorkflowDetailView(props: { id: string }) {
   const workflow = state.workflow;
   const disclosure = state.disclosure;
   const catalog = workflow.catalog;
-  const branches: Array<[string, string | null]> = [
-    ["Projected branch base", workflow.branch.base],
-    ["Projected branch source", workflow.branch.source],
-    ["Projected branch integration", workflow.branch.integration],
-    ["Projected branch target", workflow.branch.target],
-  ];
+  const branches = workflowBranchFields(workflow.branch);
 
   return html`<p class="back-link"><a href="#workflows">Back to Workflows</a></p>
     <${LiveRegion} message=${`Workflow ${workflow.id} loaded.`} />

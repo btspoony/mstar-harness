@@ -30,7 +30,7 @@ import type {
 } from "@mstar-harness/engine";
 
 import type { Envelope, LoadState } from "./components";
-import { dataBadgeText, disclosureLines, pinState, pinText, projectionDisclosure } from "./components";
+import { dataBadgeText, disclosureLines, Field, pinState, pinText, projectionDisclosure, textOrAbsent } from "./components";
 import { UNKNOWN_DATE, evidenceText, externalLinkHref, formatDate, migrationNote } from "./format";
 import {
   DEFAULT_ISSUE_FILTERS,
@@ -61,7 +61,7 @@ import {
   roadmapState,
   unassignedIssuesLine,
 } from "./views/roadmap";
-import { workflowDetailState, workflowListState } from "./views/workflows";
+import { workflowBranchFields, workflowDetailState, workflowListState } from "./views/workflows";
 
 type IssueOccurrence = IssueDetail["occurrences"][number];
 type IssueTransition = IssueDetail["transitions"][number];
@@ -755,6 +755,27 @@ describe("catalog and projection authority", () => {
     const loaded = workflowDetailState(envelope(workflow()));
     expect(loaded.kind === "loaded" ? loaded.workflow.id : null).toBe("20260918-dashboard");
     expect(loaded.disclosure).toBeNull();
+  });
+
+  // Issue #499 review F3: the projection DTO's `branch.source` field carries the
+  // DELIVERY branch (`branch.work`). Next to the new `branch.base` anchor, a
+  // "branch source" label would present the delivery branch as the branch the
+  // workflow was created from — the exact ambiguity the anchor rename removes.
+  test("the workflow detail labels the projected delivery branch as the work branch", () => {
+    const painted = workflowBranchFields({
+      base: "main",
+      source: "feature/delivery",
+      integration: "integration/iter",
+      target: "release",
+    })
+      .map(([label, value]) => Field({ label, children: textOrAbsent(value) }))
+      .map((field) => renderedText(field).join("\n"));
+    expect(painted).toEqual([
+      "Projected branch base\nmain",
+      "Projected branch work\nfeature/delivery",
+      "Projected branch integration\nintegration/iter",
+      "Projected branch target\nrelease",
+    ]);
   });
 
   test("the compass is projected content: no valid generation means unknown, never absent", () => {

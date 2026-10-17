@@ -1743,7 +1743,9 @@ async function captureCompletionWitnesses(
     if (scope.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.",
+        // Literal by contract (Rule #341 class 4): a message advertising a command cannot interpolate values.
+        "The plan's recorded working branch must match the workflow's registered delivery source. This refusal's details name the two values as expected and actual. " +
+        "Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.",
         { plan_id: read.planId, expected: anchors.sourceBranch, actual: scope.workingBranch },
       );
     }
@@ -1818,7 +1820,9 @@ function completeInTransaction(
     if (scope!.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        "Complete requires the recorded working branch to match the registered delivery source; inspect the plan with mstar plan show.",
+        // Literal by contract (Rule #341 class 4): a message advertising a command cannot interpolate values.
+        "The plan's recorded working branch must match the workflow's registered delivery source. This refusal's details name the two values as expected and actual. " +
+        "Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare. Inspect the plan with mstar plan show.",
         { plan_id: planId, expected: anchors.sourceBranch, actual: scope!.workingBranch },
       );
     }

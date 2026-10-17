@@ -2541,7 +2541,7 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
       type: "plan",
       status: "paused",
       delivery_kind: "development",
-      branch: { source: "feature/v1-standalone", target: "main" },
+      branch: { work: "feature/v1-standalone", target: "main" },
     });
     const standaloneRow = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("v1-standalone", "v1-standalone") as { state_json: string };
     expect(JSON.parse(standaloneRow.state_json)).toMatchObject({ id: "v1-standalone", status: "Todo" });
@@ -2637,7 +2637,7 @@ test("an active standalone v1 plan without a declared delivery kind refuses befo
   try {
     const header = JSON.parse((retriedStore.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string }).state_json) as Record<string, unknown>;
     const row = JSON.parse((retriedStore.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("v1-standalone", "v1-standalone") as { state_json: string }).state_json) as Record<string, unknown>;
-    expect(header).toMatchObject({ delivery_kind: "development", branch: { source: "feature/v1-standalone", target: "main" } });
+    expect(header).toMatchObject({ delivery_kind: "development", branch: { work: "feature/v1-standalone", target: "main" } });
     expect(row).toMatchObject({ id: "v1-standalone", status: "Todo" });
     expect(consultDeliveryEvidence({ ...header, plans: [{ id: "p" }] } as never).map((entry) => entry.code))
       .not.toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
@@ -2676,7 +2676,7 @@ test("each active standalone v1 lift declares its own delivery kind and anchors"
       return JSON.parse(row.state_json) as Record<string, unknown>;
     };
     expect(header("v1-inprogress")).toMatchObject({
-      status: "running", delivery_kind: "development", branch: { source: "feature/v1-inprogress", target: "main" },
+      status: "running", delivery_kind: "development", branch: { work: "feature/v1-inprogress", target: "main" },
     });
     expect(header("v1-blocked")).toMatchObject({
       status: "paused", delivery_kind: "verification/report-only", completion_policy: "report at reports/v1-blocked.md",
@@ -2732,7 +2732,7 @@ test("an incoherent delivery declaration is refused by the shared registration r
     deliveryDeclarations: [{ workflow: "v1-standalone", deliveryKind: "development" }],
   }).then(() => { throw new Error("a development declaration without anchors unexpectedly imported"); }, (error: Error & { code?: string }) => error);
   expect(missingAnchors.code).toBe("execution.delivery-declaration-required");
-  expect(missingAnchors.message).toContain("requires its delivery source and target branches");
+  expect(missingAnchors.message).toContain("requires its delivery branch and its target branch");
   const missingPolicy = await upgradeStoreMinimal({
     context, operator: "operator", operationId: "op-v1-missing-policy",
     deliveryDeclarations: [{ workflow: "v1-standalone", deliveryKind: "verification/report-only" }],
@@ -3820,7 +3820,7 @@ test("a changed --delivery declaration over unchanged bytes refuses instead of d
   try {
     const header = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("v1-standalone") as { state_json: string };
     expect(JSON.parse(header.state_json)).toMatchObject({
-      delivery_kind: "development", branch: { source: "feature/v1-standalone", target: "main" },
+      delivery_kind: "development", branch: { work: "feature/v1-standalone", target: "main" },
     });
   } finally { store.close(); }
 });

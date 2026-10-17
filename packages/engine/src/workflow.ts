@@ -112,24 +112,38 @@ export type WorkflowExecutionPolicy = {
   push_policy?: unknown;
 };
 
-/** Iteration branch anchors ( - from root metadata anchors). */
+/**
+ * The branch anchors of one lifecycle (`type: plan` and `type: iteration`).
+ *
+ * A plan workflow records `base` / `work` / `target` (the branch it was created
+ * from, its delivery branch, its PR target); an iteration records `base` /
+ * `integration` / `target`. `base` is the protected start anchor in both shapes:
+ * cleanup Rule 2 never deletes it and L1 uses it as the explicit main-worktree
+ * residency fallback - it is NEVER a feature branch.
+ */
 export type WorkflowBranchAnchors = {
-  /**
-   * Protected base anchor: the branch the lifecycle starts from (iteration
-   * `iteration_base_branch`). Cleanup Rule 2 never deletes it and L1 uses it
-   * as the explicit main-worktree residency fallback - it is NEVER a feature
-   * branch; a plan's delivery branch is recorded under `source`.
-   */
+  /** Protected base anchor: the branch the lifecycle starts from (iteration `iteration_base_branch`, a plan's creation/merge anchor). Cleanup Rule 2 never deletes it and L1 uses it as the explicit main-worktree residency fallback - it is NEVER a feature branch. */
   base?: string;
-  /**
-   * Source branch of a standalone `type: plan` delivery, recorded at
-   * registration (`--branch-source`). Semantically a delivery branch, not a
-   * protected base anchor: cleanup/L1 consumers keep reading `base`.
-   */
+  /** Delivery branch of a `type: plan` workflow (`work` is current, `source` the pre-rename spelling): the PR head and the plan row's working branch. */
+  work?: string;
+  /** The pre-rename spelling of `work`, still carried by rows registered before the rename. READ-COMPAT ONLY - never write it, and never read it outside `deliveryBranchOf`. */
   source?: string;
   integration?: string;
   target?: string;
 };
+
+/**
+ * The delivery branch a `branch` object records, resolved through the ONE rule
+ * that knows both spellings: `work` is the current key and `source` the key
+ * rows registered before the rename carry. Every reader goes through here - a
+ * second place reading either key would be a second source of truth for the
+ * same field.
+ */
+export function deliveryBranchOf(branch: unknown): string | undefined {
+  if (!isPlainObject(branch)) return undefined;
+  if (nonEmptyString(branch.work)) return branch.work;
+  return nonEmptyString(branch.source) ? branch.source : undefined;
+}
 
 /**
  * v3 workflow snapshot (`workflows/<id>/snapshot.json`). Plan rows carry
@@ -634,7 +648,11 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
     if (!isPlainObject(doc.branch)) {
       violations.push(violation("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
-      for (const key of ["base", "source", "integration", "target"] as const) {
+      // `work` is the delivery branch a plan workflow records; `source` is the
+      // pre-rename spelling old rows still carry, and `integration` the
+      // iteration's delivery line. Both spellings stay legal so a row
+      // registered before the rename keeps validating unchanged.
+      for (const key of ["base", "work", "source", "integration", "target"] as const) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
           violations.push(violation("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
@@ -870,7 +888,7 @@ function nonEmptyString(value: unknown): value is string {
 
 /** Delivery-registration inputs every producer declares (contract §1/§4a). */
 export type DeliveryRegistrationEvidence = {
-  branchSource?: string;
+  branchWork?: string;
   branchTarget?: string;
   completionPolicy?: string;
 };
@@ -888,9 +906,9 @@ export function assertDeliveryRegistrationCoherence(
   evidence: DeliveryRegistrationEvidence,
   what: string,
 ): void {
-  if (kind === "development" && (!nonEmptyString(evidence.branchSource) || !nonEmptyString(evidence.branchTarget))) {
+  if (kind === "development" && (!nonEmptyString(evidence.branchWork) || !nonEmptyString(evidence.branchTarget))) {
     throw new Error(
-      `${what}: a development workflow requires its delivery source and target branches (--branch-source/--branch-target) \u2014 missing branch fields are incomplete registration, not an exempt workflow (contract \u00a71/\u00a74a)`,
+      `${what}: a development workflow requires its delivery branch and its target branch (--branch-work/--branch-target) \u2014 missing branch fields are incomplete registration, not an exempt workflow (contract \u00a71/\u00a74a)`,
     );
   }
   if (kind === "verification/report-only" && !nonEmptyString(evidence.completionPolicy)) {
@@ -898,7 +916,7 @@ export function assertDeliveryRegistrationCoherence(
       `${what}: a verification/report-only workflow requires the completion policy (--completion-policy) naming the evidence that completes it (contract \u00a71)`,
     );
   }
-  for (const [field, value] of Object.entries({ branchSource: evidence.branchSource, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
+  for (const [field, value] of Object.entries({ branchWork: evidence.branchWork, branchTarget: evidence.branchTarget, completionPolicy: evidence.completionPolicy })) {
     if (value !== undefined && !nonEmptyString(value)) {
       throw new Error(`${what}: ${field} must be a non-empty string when given`);
     }
@@ -917,7 +935,9 @@ export function assertDeliveryRegistrationCoherence(
  * - no registered `delivery_kind` while the lifecycle can still act on it →
  *   `PHASE6_DELIVERY_KIND_UNREGISTERED`; on a TERMINAL header the condition is
  *   accepted history and emits nothing — see the note below;
- * - `development` → registered `branch.source`/`branch.target` plus compound
+ * - `development` → registered `branch.work`/`branch.target` (the delivery
+ *   branch resolves through `deliveryBranchOf`, so a pre-rename `branch.source`
+ *   row closes the same way) plus compound
  *   disposition, PR identity and the PM's verified-merge record;
  * - `verification/report-only` → registered `completion_policy` plus a
  *   fulfilment record naming that same policy.
@@ -948,22 +968,26 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
   }
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;
   const delivery = isPlainObject(snapshot.delivery) ? snapshot.delivery : undefined;
+  // The delivery branch resolves through the one helper that knows both
+  // spellings, so a row registered before the rename closes exactly like one
+  // registered after it.
+  const deliveryBranch = deliveryBranchOf(branch);
   const missing: string[] = [];
   if (kind === "development") {
-    if (!nonEmptyString(branch?.source)) missing.push("branch.source");
+    if (!nonEmptyString(deliveryBranch)) missing.push("branch.work");
     if (!nonEmptyString(branch?.target)) missing.push("branch.target");
-    if (!isPlainObject(delivery?.compound)) missing.push("delivery.compound (compound disposition, \u00a74c)");
+    if (!isPlainObject(delivery?.compound)) missing.push("delivery.compound (compound disposition, \u00A74c)");
     const pr = isPlainObject(delivery?.pr) ? delivery.pr : undefined;
     if (pr === undefined) {
-      missing.push("delivery.pr (PR repo/head/target identity, \u00a74d)");
+      missing.push("delivery.pr (PR repo/head/target identity, \u00A74d)");
     } else {
       // §4d: the identity recorded at submission IS the delivery the workflow
       // was registered for. Presence alone let a contradictory pair (a PR for
       // a different head/target) satisfy the close; `repo` is required but its
       // value is the recorder's own (no canonical repo to compare against).
-      if (nonEmptyString(branch?.source) && pr.head !== branch.source) {
+      if (nonEmptyString(deliveryBranch) && pr.head !== deliveryBranch) {
         missing.push(
-          `delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered branch.source ${JSON.stringify(branch.source)} \u2014 \u00a74d: the recorded PR identity must be the registered delivery)`,
+          `delivery.pr.head (recorded ${JSON.stringify(pr.head)}, registered delivery branch ${JSON.stringify(deliveryBranch)} \u2014 \u00A74d: the recorded PR identity must be the registered delivery)`,
         );
       }
       if (nonEmptyString(branch?.target) && pr.target !== branch.target) {
@@ -1121,9 +1145,11 @@ export type RegisterPlanWorkflowOptions = {
   deliveryKind: WorkflowDeliveryKind;
   /** Project register id recorded on the snapshot (contract §3 register row). */
   project?: string;
-  /** Source branch of the delivery, recorded as `branch.source`. Required together with `branchTarget` for `development`. */
-  branchSource?: string;
-  /** Target branch. Required together with `branchSource` for `development`. */
+  /** The branch the workflow was created from, recorded as `branch.base` (the merge anchor; also L1's explicit main-worktree residency fallback). Optional. */
+  branchBase?: string;
+  /** The delivery branch of the plan, recorded as `branch.work`: the PR head, normally the plan's own feature branch. Required together with `branchTarget` for `development`. */
+  branchWork?: string;
+  /** Target branch. Required together with `branchWork` for `development`. */
   branchTarget?: string;
   /**
    * Completion policy for `verification/report-only` workflows (contract §1):
@@ -1167,14 +1193,15 @@ export function planWorkflowSnapshot(
   };
   if (options.project !== undefined) snapshot.project = options.project;
   if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
-  if (options.branchSource !== undefined || options.branchTarget !== undefined) {
-    // `branchSource` is the plan's DELIVERY branch (`branch.source`) - never
-    // `branch.base`, whose consumers (cleanup Rule 2 protected refs, L1
-    // main-residency fallback) treat it as a protected base anchor: writing a
-    // feature branch there made the ref undeletable and pointed L1's
-    // residency expectation at the feature branch.
+  if (options.branchBase !== undefined || options.branchWork !== undefined || options.branchTarget !== undefined) {
+    // `branchBase` is the branch the plan was created from (`branch.base`) -
+    // the protected anchor cleanup Rule 2 keeps and L1 reads as its explicit
+    // main-worktree residency fallback. `branchWork` is the DELIVERY branch
+    // (`branch.work`): writing it into `base` made the feature ref undeletable
+    // and pointed L1's residency expectation at the feature branch.
     snapshot.branch = {
-      ...(options.branchSource !== undefined ? { source: options.branchSource } : {}),
+      ...(options.branchBase !== undefined ? { base: options.branchBase } : {}),
+      ...(options.branchWork !== undefined ? { work: options.branchWork } : {}),
       ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
     };
   }
