@@ -779,6 +779,46 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(String(jsonOf(neither).message)).toContain("a non-empty reason is required");
     expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
 
+    // No workflow, no anchor, no reason: all three are named in ONE refusal, so
+    // even the collapsed call is corrected on its first retry (issue #499
+    // review F4).
+    const bare = runCli(
+      ["workflow", "delivery-anchors", "--harness", fixture.harnessDir, "--session-id", identity.sessionId],
+      fixture,
+      identity,
+    );
+    expect(jsonOf(bare)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(bare).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    const bareMessage = String(jsonOf(bare).message);
+    expect(bareMessage).toContain("workflow is required");
+    expect(bareMessage).toContain("at least one delivery anchor is required");
+    expect(bareMessage).toContain("a non-empty reason is required");
+
+    // Absent workflow alone reports only the workflow: the aggregate names the
+    // requirements that are actually missing.
+    const noWorkflow = runCli(
+      [
+        "workflow",
+        "delivery-anchors",
+        "--branch-work",
+        "fix/named",
+        "--reason",
+        "operator correction",
+        "--harness",
+        fixture.harnessDir,
+        "--session-id",
+        identity.sessionId,
+      ],
+      fixture,
+      identity,
+    );
+    expect(jsonOf(noWorkflow)).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect((jsonOf(noWorkflow).details as { diagnostics?: unknown } | null)?.diagnostics).toBeUndefined();
+    expect(String(jsonOf(noWorkflow).message)).toContain("workflow is required");
+    expect(String(jsonOf(noWorkflow).message)).not.toContain("at least one delivery anchor is required");
+    expect(String(jsonOf(noWorkflow).message)).not.toContain("a non-empty reason is required");
+    expect((await storedHeader(fixture)).branch).toEqual({ work: "feature/exec-workflow", target: "main" });
+
     // The verb reaches the engine: a single named anchor is recorded and the
     // anchor it does not name keeps its registered value.
     const corrected = runCli(

@@ -484,7 +484,6 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     makeDefinition("workflow.delivery-anchors", "Repair a RUNNING workflow's delivery anchors (`branch.base` / `branch.work` / `branch.target`) under the workflow CAS token. Name the anchor(s) to record with `--branch-base`, `--branch-work` and/or `--branch-target`: an anchor you do not name keeps the value the workflow already registers, and the named values are written in one transaction. Each anchor you do name must be a non-empty branch name. `--reason` is required, and the correction is revisable and repeatable for as long as the workflow keeps running. A closed lifecycle is refused by the pre-existing workflow-wide amend guard.", "write", ["workflow", "branchBase", "branchWork", "branchSource", "branchTarget", "reason", "sessionRef", "expect", "operation", "harness"], async (input, context) => {
       const id = "workflow.delivery-anchors";
       try {
-        if (input.workflow === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow is required; inspect registered workflows with mstar status validate." });
         // Every flag this verb requires is reported in ONE usage refusal: an
         // agent that omitted two of them must not have to guess its way to the
         // second on a retry.
@@ -495,12 +494,16 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const work = input.branchWork ?? input.branchSource;
         const reason = input.reason ?? "";
         const missing = [
+          ...(input.workflow === undefined ? ["workflow is required; inspect registered workflows with mstar status validate."] : []),
           ...(work === undefined && input.branchBase === undefined && input.branchTarget === undefined
             ? ["at least one delivery anchor is required; name the anchor being recorded, and an anchor you do not name keeps its registered value."]
             : []),
           ...(reason.trim() === "" ? ["a non-empty reason is required: state why the delivery anchors are being corrected, so the repair is auditable."] : []),
         ];
-        if (missing.length > 0) {
+        // The row address is re-tested in the condition because a reported
+        // workflow sentence does not narrow `input.workflow` for the checks
+        // below; `missing` already carries it, so the two disjuncts agree.
+        if (input.workflow === undefined || missing.length > 0) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: missing.join(" ") });
         }
         if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active anchor repair requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
