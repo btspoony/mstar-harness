@@ -1,7 +1,6 @@
 /**
  * CLI audit subcommands — thin engine-backed wrappers:
- *   mstar audit scaffold <findings-file> [--dir <out-dir>],
- *   mstar audit promote <audit-dir> --plans <ids>,
+ *   mstar audit scaffold <findings-file> [--level] [--round] [--reviews-dir] [--dir],
  *   mstar audit secret-scan [path], mstar audit supply-chain [path].
  * Moved from slice4-cli.test.ts during the command-owner test split.
  *
@@ -12,75 +11,84 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { initializeStore, readExecutionState, readJson, scaffoldAuditPlan, validateAuditStatusBlocks } from "@mstar-harness/engine";
 import { runCli, withTempDir } from "./harness";
-import { cliEnvelope, expectUsageDiagnostic } from "./support/cli-assertions";
+import { cliEnvelope } from "./support/cli-assertions";
 
 // ---------------------------------------------------------------------------
 // mstar audit scaffold
 // ---------------------------------------------------------------------------
 
-describe("mstar audit scaffold — plan directory from findings JSON", () => {
+describe("mstar audit scaffold — review run dir from findings JSON", () => {
   const FINDINGS = [
-    { title: "Fix N+1 query", priority: "P1", effort: "M", risk: "HIGH", category: "perf", dependsOn: "002", description: "Queries explode on the dashboard." },
+    { title: "Fix N+1 query", priority: "P1", effort: "M", risk: "HIGH", category: "perf", description: "Queries explode on the dashboard." },
     { title: "Add index", priority: "P2", effort: "XS", risk: "LOW", category: "tech-debt", description: "Index the audit table." },
   ];
 
-  test("valid findings → plan files + README created, exit 0", () => {
+  test("valid findings → one run report (README.md), exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
-      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "audit.scaffold.ok").data).toMatchObject({
-        outDir,
-        files: ["001-fix-n-1-query.md", "002-add-index.md"],
-        nextNumber: 3,
+      const envelope = cliEnvelope(result, "ok", "audit.scaffold.ok");
+      expect(envelope.data).toMatchObject({ outDir, file: join(outDir, "README.md"), date: "2026-08-08", level: "standard", round: 1 });
+      // The report index is the run's only artifact — no per-finding plan files.
+      expect(readdirSync(outDir)).toEqual(["README.md"]);
+      const report = readFileSync(join(outDir, "README.md"), "utf8");
+      expect(report).toContain("Fix N+1 query");
+      expect(report).toContain("Add index");
+      expect(report).toContain("Queries explode on the dashboard.");
+    });
+  });
+
+  test("run dir defaults to {REVIEW_DIR}/<date>-codebase-<level>-<round>", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      // cwd = the repo root of a harness → {REVIEW_DIR} = <cwd>/.mstar/reviews
+      mkdirSync(join(dir, ".mstar"), { recursive: true });
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      // macOS resolves /var to /private/var: the CLI path derives from the realpath'd cwd.
+      const reviewsDir = join(realpathSync(dir), ".mstar", "reviews");
+      const base = ["audit", "scaffold", findingsFile, "--date", "2026-08-08", "--sha", "deadbee"];
+
+      const first = runCli(base, { cwd: dir });
+      expect(first.exitCode).toBe(0);
+      expect(cliEnvelope(first, "ok", "audit.scaffold.ok").data).toMatchObject({
+        outDir: join(reviewsDir, "2026-08-08-codebase-standard-1"),
+        file: join(reviewsDir, "2026-08-08-codebase-standard-1", "README.md"),
+        date: "2026-08-08", level: "standard", round: 1,
       });
-      expect(existsSync(join(outDir, "001-fix-n-1-query.md"))).toBe(true);
-      expect(existsSync(join(outDir, "002-add-index.md"))).toBe(true);
-      expect(existsSync(join(outDir, "README.md"))).toBe(true);
-      // Status block carries the mapped fields (description → Impact section).
-      const plan = readFileSync(join(outDir, "001-fix-n-1-query.md"), "utf8");
-      expect(plan).toContain("## Impact");
-      expect(plan).toContain("Queries explode on the dashboard.");
-      expect(plan).toContain("- **Priority**: P1");
-      // dependsOn "002" (scaffolded numbering scheme) renders as the
-      // documented plans/NNN-*.md form — no dangling Evidence heading either.
-      expect(plan).toContain("- **Depends on**: plans/002-*.md");
-      expect(plan).not.toContain("## Evidence");
+      // Another level takes its own run dir; an explicit round reuses that exact one.
+      expect(cliEnvelope(runCli([...base, "--level", "deep"], { cwd: dir }), "ok", "audit.scaffold.ok").data).toMatchObject({
+        outDir: join(reviewsDir, "2026-08-08-codebase-deep-1"), level: "deep", round: 1,
+      });
+      expect(cliEnvelope(runCli([...base, "--round", "2"], { cwd: dir }), "ok", "audit.scaffold.ok").data).toMatchObject({
+        outDir: join(reviewsDir, "2026-08-08-codebase-standard-2"), round: 2,
+      });
+      // --reviews-dir overrides the root; --level input stays validated.
+      expect(cliEnvelope(runCli([...base, "--reviews-dir", join(dir, "elsewhere")], { cwd: dir }), "ok", "audit.scaffold.ok").data).toMatchObject({
+        outDir: join(dir, "elsewhere", "2026-08-08-codebase-standard-1"),
+      });
+      const badLevel = runCli([...base, "--level", "thorough"], { cwd: dir });
+      expect(badLevel.exitCode).toBe(2);
+      expect(cliEnvelope(badLevel, "usage", "command.invalid-input").message).toContain("--level must be one of");
     });
   });
 
-  test("scaffolded plans round-trip through the engine's validateAuditStatusBlocks", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const findingsFile = join(dir, "findings.json");
-      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      const outDir = join(dir, "audit-2026-08-08");
-      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
-      expect(result.exitCode).toBe(0);
-      for (const file of ["001-fix-n-1-query.md", "002-add-index.md"]) {
-        const gate = validateAuditStatusBlocks(readFileSync(join(outDir, file), "utf8"));
-        expect({ file, ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ file, ok: true, violations: [] });
-      }
-    });
-  });
-
-  test("Planned at carries the repo short SHA resolved at scaffold time", () => {
+  test("the report records the repo short SHA resolved at scaffold time", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
       // cwd = this repo checkout → git rev-parse --short HEAD resolves
-      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
-      const plan = readFileSync(join(outDir, "001-fix-n-1-query.md"), "utf8");
-      const plannedAt = /- \*\*Planned at\*\*: commit `([0-9a-f]{7,40})`, \d{4}-\d{2}-\d{2}/.exec(plan);
-      expect(plannedAt).not.toBeNull();
-      expect(plannedAt![1]).not.toBe("unknown");
+      const report = readFileSync(join(outDir, "README.md"), "utf8");
+      expect(report).toMatch(/@ [0-9a-f]{7,40} \(2026-08-08\)/);
+      expect(report).not.toContain("@ unknown ");
     });
   });
 
@@ -89,37 +97,24 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
       const outDir = join(dir, "audit-2026-08-08");
-      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee"]);
+      const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
-      expect(readFileSync(join(outDir, "001-fix-n-1-query.md"), "utf8")).toContain("- **Planned at**: commit `deadbee`,");
+      expect(readFileSync(join(outDir, "README.md"), "utf8")).toContain("@ deadbee (2026-08-08)");
     });
     withTempDir("mstar-slice4-cli-", (dir) => {
+      mkdirSync(join(dir, ".mstar"), { recursive: true });
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      // cwd = a temp dir outside any git repo → documented "unknown" fallback
-      // (--date pinned: without it the audit-<date> dir derives from "today", a calendar flake)
+      // cwd = a temp dir outside any git repo; --date pinned so the run dir is not a calendar flake
       const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], { cwd: dir });
       expect(result.exitCode).toBe(0);
-      expect(existsSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"))).toBe(true);
-      const plan = readFileSync(join(dir, "audit-2026-08-08", "001-fix-n-1-query.md"), "utf8");
-      expect(plan).toContain("- **Planned at**: commit `unknown`,");
-      // the "unknown" fallback still round-trips through the validator
-      expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+      const report = join(dir, ".mstar", "reviews", "2026-08-08-codebase-standard-1", "README.md");
+      expect(existsSync(report)).toBe(true);
+      expect(readFileSync(report, "utf8")).toContain("@ unknown (2026-08-08)");
     });
   });
 
-  test("--date derives the audit-<date> directory name when --dir is omitted", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const findingsFile = join(dir, "findings.json");
-      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-07-01"], { cwd: dir });
-      expect(result.exitCode).toBe(0);
-      expect(existsSync(join(dir, "audit-2026-07-01", "README.md"))).toBe(true);
-      expect(existsSync(join(dir, "audit-2026-07-01", "001-fix-n-1-query.md"))).toBe(true);
-    });
-  });
-
-  test("supplied confidence + evidence + fixSketch + verification reach the plan and index (fidelity regression)", () => {
+  test("supplied confidence + evidence reach the report index (fidelity regression)", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(
@@ -139,84 +134,31 @@ describe("mstar audit scaffold — plan directory from findings JSON", () => {
           },
         ]),
       );
-      // Date/SHA pinned: the audit-<date> dir name and Planned-at line are calendar/SHA flake-proof.
+      // Date/SHA pinned: the run report title is calendar/SHA flake-proof.
       const outDir = join(dir, "audit-2026-08-08");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
-      const plan = readFileSync(join(outDir, "001-unparameterized-sink-in-export-path.md"), "utf8");
-      // Explicit HIGH confidence is persisted in the Status block...
-      expect(plan).toContain("- **Confidence**: HIGH");
-      // ...all string evidence entries reach the plan (not just the first)...
-      expect(plan).toContain("## Evidence");
-      expect(plan).toContain("- src/export.ts:88 — f-string builds the query");
-      expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
-      // Leading/trailing whitespace in a supplied entry is preserved as-is —
-      // trimming is only used for the non-empty validation check.
-      expect(plan).toContain("-   padded entry — rendered exactly as supplied  ");
-      // ...and fixSketch/verification render too.
-      expect(plan).toContain("## Fix sketch");
-      expect(plan).toContain("Parameterize both call sites.");
-      expect(plan).toContain("## Verification");
-      expect(plan).toContain("bun test packages/api/test/export.test.ts");
-      // Index row: HIGH confidence + first-evidence preview (not "—"/empty).
-      const readme = readFileSync(join(outDir, "README.md"), "utf8");
-      expect(readme).toContain("| 001 | Unparameterized sink in export path | security |");
-      expect(readme).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
-      // still round-trips through the engine validator
-      expect(validateAuditStatusBlocks(plan).ok).toBe(true);
+      const report = readFileSync(join(outDir, "README.md"), "utf8");
+      // Explicit HIGH confidence is persisted, with the first evidence preview in the row.
+      expect(report).toContain("| HIGH | src/export.ts:88 — f-string builds the query |");
+      expect(report).toContain("| 001 | Unparameterized sink in export path | security |");
     });
   });
 
-  test("absent confidence/evidence defaults to MED/[] — legacy plan/index byte-identical with pinned date/SHA", () => {
+  test("absent confidence/evidence defaults to MED/[] and the report has no plan sections", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify([{ title: "Add index", priority: "P2", effort: "XS", risk: "LOW", category: "tech-debt", description: "Index the audit table." }]));
       const outDir = join(dir, "audit-2026-08-08");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
-      const plan = readFileSync(join(outDir, "001-add-index.md"), "utf8");
-      // Focused legacy-shape assertions.
-      expect(plan).not.toContain("**Confidence**");
-      expect(plan).not.toContain("## Evidence");
-      // Full byte-identical baseline: with date/SHA pinned, the legacy
-      // (no-confidence, no-evidence) document must not drift at all.
-      const expectedPlan = `# Add index
-
-## Status
-- **Priority**: P2
-- **Effort**: XS
-- **Risk**: LOW
-- **Depends on**: none
-- **Category**: tech-debt
-- **Planned at**: commit \`deadbee\`, 2026-08-08
-
-## Impact
-Index the audit table.
-`;
-      expect(plan).toBe(expectedPlan);
-      const readme = readFileSync(join(outDir, "README.md"), "utf8");
+      const report = readFileSync(join(outDir, "README.md"), "utf8");
       // The row's trailing "| MED |  |" (empty Evidence cell, two spaces) is
       // part of the pinned bytes — a legacy-shape regression fails here.
-      expect(readme).toContain("| 001 | Add index | tech-debt | Index the audit table. | XS | LOW | MED |  |");
-      const expectedReadme = `# Audit Report — repo @ deadbee (2026-08-08)
-
-## Findings
-
-| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |
-|---|---------|----------|--------|--------|------|------------|----------|
-| 001 | Add index | tech-debt | Index the audit table. | XS | LOW | MED |  |
-
-## Execution order & status
-
-| Plan | Title | Priority | Effort | Depends on | Status |
-|------|-------|----------|--------|------------|--------|
-| 001 | Add index | P2 | XS | none | TODO |
-
-## Red-team dispositions
-
-- <finding>: <survived / refuted / hallucination-dropped / uncovered-kept>, <one-line reason>
-`;
-      expect(readme).toBe(expectedReadme);
+      expect(report).toContain("| 001 | Add index | tech-debt | Index the audit table. | XS | LOW | MED |  |");
+      // Plan-only sections are gone from the review surface.
+      expect(report).not.toContain("## Execution order & status");
+      expect(report).not.toContain("- **Planned at**:");
     });
   });
 
@@ -239,16 +181,6 @@ Index the audit table.
         expect(result.stderr).not.toContain("src/a.ts:1");
       });
     }
-  });
-
-  test("invalid dependsOn → usage, exit 2", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const findingsFile = join(dir, "findings.json");
-      writeFileSync(findingsFile, JSON.stringify([{ title: "X", priority: "P1", effort: "M", risk: "LOW", category: "perf", dependsOn: "plan-002.md", description: "d" }]));
-      const result = runCli(["audit", "scaffold", findingsFile, "--dir", join(dir, "out")]);
-      expect(result.exitCode).toBe(2);
-      expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("dependsOn must be");
-    });
   });
 
   test("malformed JSON → usage, exit 2", () => {
@@ -396,21 +328,12 @@ Index the audit table.
       const outDir = join(dir, "audit-2026-08-08");
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir, "--sha", "deadbee", "--date", "2026-08-08"]);
       expect(result.exitCode).toBe(0);
-      const plan = readFileSync(join(outDir, "002-unparameterized-sink-in-export-path.md"), "utf8");
-      expect(plan).toContain("- **Fingerprint**: sql-export-sink");
-      expect(plan).toContain("- **Likelihood**: high");
-      expect(plan).toContain("- **Severity impact**: high");
-      expect(plan).toContain("- **Severity**: medium");
-      // enriched MED confidence is persisted (§8)
-      expect(plan).toContain("- **Confidence**: MED");
-      expect(plan).toContain("- src/export.ts:120 — same sink in the retry path");
-      expect(plan).toContain("| entrypoint | src/routes/export.ts:10 | GET /export — query param reaches the exporter |");
-      expect(plan).toContain("## Impact"); // prose impact retained alongside structured severity
-      expect(validateAuditStatusBlocks(plan).ok).toBe(true);
-      const readme = readFileSync(join(outDir, "README.md"), "utf8");
-      expect(readme).toContain("Evidence | Fingerprint | Likelihood | Severity impact | Severity |");
-      expect(readme).toContain("| 001 | Legacy row | tests | Legacy finding. | S | LOW | MED |  | — | — | — | — |");
-      expect(readme).toContain("| sql-export-sink | high | high | medium |");
+      const report = readFileSync(join(outDir, "README.md"), "utf8");
+      expect(report).toContain("Evidence | Fingerprint | Likelihood | Severity impact | Severity |");
+      expect(report).toContain("| 001 | Legacy row | tests | Legacy finding. | S | LOW | MED |  | — | — | — | — |");
+      expect(report).toContain("| sql-export-sink | high | high | medium |");
+      // object evidence renders its file:line and description
+      expect(report).toContain("src/export.ts:120 — same sink in the retry path");
     });
   });
 
@@ -501,13 +424,10 @@ Index the audit table.
       const result = runCli(["audit", "scaffold", findingsFile, "--dir", outDir]);
       expect(result.exitCode).toBe(2);
       expect(readFileSync(readme, "utf8")).toBe("# pre-existing index\n");
-      expect(existsSync(join(outDir, "001-x.md"))).toBe(false);
+      expect(readdirSync(outDir)).toEqual(["README.md"]);
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// mstar audit promote
 
 // ---------------------------------------------------------------------------
 // mstar audit secret-scan / supply-chain — deterministic static checks
@@ -658,81 +578,20 @@ describe("mstar audit supply-chain — lockfile + workflow checks", () => {
 });
 
 // ---------------------------------------------------------------------------
+// mstar audit — retired verbs
+// ---------------------------------------------------------------------------
 
-describe("mstar audit promote — ACTIVE workflow registration for selected plans", () => {
-  async function scaffoldFixture(dir: string): Promise<{ harnessDir: string; outDir: string; token: string }> {
-    const harnessDir = join(dir, "harness");
-    const outDir = join(harnessDir, "plans", "audit-2026-08-08");
-    mkdirSync(harnessDir, { recursive: true });
-    scaffoldAuditPlan(outDir, [
-      { title: "Fix N+1 query in order list", category: "perf", impact: "Every order-list render issues 1+N queries.", effort: "M", risk: "MED", confidence: "HIGH", evidence: ["src/orders.ts:42"], priority: "P1" },
-      { title: "Rotate leaked AWS keys", category: "security", impact: "Credentials in git history.", effort: "S", risk: "HIGH", confidence: "HIGH", evidence: ["src/config.ts:3"], priority: "P1" },
-    ], { date: "2026-08-08" });
-    const store = await initializeStore({ harnessDir });
-    store.close();
-    const token = (await readExecutionState({ harnessDir })).token;
-    return { harnessDir, outDir, token };
-  }
-
-  test("selected plan registers one Todo row in ACTIVE state", async () => {
-    await withTempDir("mstar-slice4-cli-", async (dir) => {
-      const { harnessDir, outDir, token } = await scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir, "--delivery-kind", "development", "--branch-work", "feature/audit-plans", "--branch-base", "main", "--branch-target", "main"]);
-      expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "audit.promote.ok").data?.workflowId).toBe("audit-2026-08-08");
-      const active = await readExecutionState({ harnessDir });
-      expect(active.token).not.toBe(token);
-      const workflow = active.data.workflows.find(({ state }) => state.id === "audit-2026-08-08");
-      expect(workflow?.state).toMatchObject({ type: "plan", branch: { base: "main", work: "feature/audit-plans", target: "main" } });
-      expect(workflow?.plans).toHaveLength(1);
-      expect(workflow?.plans[0]?.plan).toMatchObject({ id: "001-fix-n-1-query-in-order-list", title: "Fix N+1 query in order list", status: "Todo" });
-    });
-  });
-
-  test("missing <audit-dir> or --plans → argument error", async () => {
-    const noDir = runCli(["audit", "promote", "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
-    expect(noDir.exitCode).toBe(2);
-    expectUsageDiagnostic(noDir, "path");
-    await withTempDir("mstar-slice4-cli-", async (dir) => {
-      const { outDir } = await scaffoldFixture(dir);
-      const noPlans = runCli(["audit", "promote", outDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
-      expect(noPlans.exitCode).toBe(2);
-      expectUsageDiagnostic(noPlans, "--plans");
-    });
-  });
-
-  test("missing harness → exit 1 with the --harness / MSTAR_HARNESS_DIR message", async () => {
-    await withTempDir("mstar-slice4-cli-", async (dir) => {
-      const { outDir } = await scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"], { cwd: dir });
-      expect(result.exitCode).toBe(1);
-      expect(cliEnvelope(result, "refused").message).toContain("harness");
-    });
-  });
-
-  test("--workflow override sets the workflow id in ACTIVE state", async () => {
-    await withTempDir("mstar-slice4-cli-", async (dir) => {
-      const { harnessDir, outDir } = await scaffoldFixture(dir);
-      const result = runCli(["audit", "promote", outDir, "--plans", "001", "--workflow", "audit-2026-08-08-custom", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
-      expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "audit.promote.ok").data?.workflowId).toBe("audit-2026-08-08-custom");
-      const active = await readExecutionState({ harnessDir });
-      expect(active.data.workflows.some(({ state }) => state.id === "audit-2026-08-08-custom")).toBe(true);
-    });
-  });
-
-  test("re-promote of a registered workflow id refuses without replacing its ACTIVE registration", async () => {
-    await withTempDir("mstar-slice4-cli-", async (dir) => {
-      const { harnessDir, outDir } = await scaffoldFixture(dir);
-      const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
-      expect(first.exitCode).toBe(0);
-      const before = await readExecutionState({ harnessDir });
-      const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir, "--delivery-kind", "development", "--branch-source", "feature/audit-plans", "--branch-target", "main"]);
-      expect(second.exitCode).toBe(1);
-      cliEnvelope(second, "refused", "execution.not-empty");
-      const after = await readExecutionState({ harnessDir });
-      expect(after.data.workflows.map(({ state }) => state.id)).toEqual(before.data.workflows.map(({ state }) => state.id));
-      expect(after.data.workflows[0]?.plans.map(({ plan }) => plan.id)).toEqual(["001-fix-n-1-query-in-order-list"]);
-    });
+describe("mstar audit verbs", () => {
+  test("the retired promote verb is absent from CLI help and no longer resolves", () => {
+    const help = runCli(["audit", "--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).not.toContain("promote");
+    expect(help.stdout).not.toContain("--delivery-kind");
+    for (const verb of ["scaffold", "secret-scan", "supply-chain"]) {
+      expect(help.stdout).toContain(verb);
+    }
+    // Not a command any more: an unknown verb is a usage error.
+    expect(runCli(["audit", "promote", "some-dir", "--delivery-kind", "development"]).exitCode).toBe(2);
   });
 });
+

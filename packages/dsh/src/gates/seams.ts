@@ -21,7 +21,7 @@ import {
   assertLightDarkParity,
   lintLoadOrder,
   referenceExists,
-  validateAuditStatusBlocks,
+  resolveReviewDir,
   validateDesignTokenFrontmatter,
   validateRoleMapping,
   validateSchemaYaml,
@@ -82,10 +82,10 @@ export interface SeamLintAdvisory {
   /** True when the gate errored internally and degraded to allow (error-containment envelope). */
   degraded?: boolean
 }
-/** `index.md` / `README.md` are index files, not lintable documents
- * (audit-<date>/ index, knowledge/README.md index) — excluded from every
- * Seam scope so index writes never false-positive a Status-block /
- * frontmatter lint. */
+/** `index.md` / `README.md` are knowledge index files, not lintable documents
+ * — excluded from the compound scope so an index write never false-positives
+ * its frontmatter lint. The audit seam does NOT exclude them: a review run's
+ * `README.md` IS the audit report and stays in scope. */
 function isIndexFile(path: string): boolean {
   const base = basename(path)
   return base === 'README.md' || base === 'index.md'
@@ -96,18 +96,19 @@ function isMarkdownDoc(path: string): boolean {
   return path.endsWith('.md') && !isIndexFile(path)
 }
 
-/** Audit seam scope: `.md` plan files under a `plans/audit-*` directory
- * (mstar-audit SKILL.md § Plan output (all variants) `{PLAN_DIR}/audit-<date>/`
- * layout; `{PLAN_DIR}` resolves under any `plans` segment). */
-function isAuditPlanTarget(path: string): boolean {
-  if (!isMarkdownDoc(path)) return false
-  const segments = resolve(path).split(sep)
-  for (let i = 0; i < segments.length; i++) {
-    if (segments[i] !== 'plans') continue
-    const next = segments[i + 1]
-    if (next !== undefined && next.startsWith('audit-')) return true
+/** Audit seam scope: markdown files under `{REVIEW_DIR}` — the review run
+ * tree (audit report + PR review report; a run's `README.md` is the report
+ * index and stays in scope). Matched against the `{REVIEW_DIR}` resolved
+ * from the plugin's harness dir (`.mstarc` `review_dir` aware — the same
+ * explicit-harnessDir call shape the status seam uses); without a harness
+ * dir there is nothing to anchor that resolution on, so the `reviews` path
+ * segment is the fallback signal. */
+function isAuditReviewTarget(path: string, harnessDir: string | null): boolean {
+  if (!path.endsWith('.md')) return false
+  if (harnessDir !== null) {
+    return path.startsWith(resolve(resolveReviewDir(harnessDir, { harnessDir })) + sep)
   }
-  return false
+  return resolve(path).split(sep).includes('reviews')
 }
 
 /** Roles seam scope: `mstar-roles/SKILL.md` or any `.md` under
@@ -135,7 +136,7 @@ function rolesDirOf(path: string): string {
 
 /** Whether a target is in the seam's artifact scope. Design-md matches by
  * basename (the artifact is the file itself, wherever the design lives);
- * audit matches the `plans/audit-*` layout; compound matches
+ * audit matches the `{REVIEW_DIR}` review-run tree; compound matches
  * `{HARNESS_DIR}/knowledge/**` (inert without a harness dir); roles
  * matches the mstar-roles skill layout. */
 function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget): boolean {
@@ -146,7 +147,7 @@ function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget)
       return base === 'DESIGN.md' || base === 'DESIGN.dark.md'
     }
     case 'audit':
-      return isAuditPlanTarget(path)
+      return isAuditReviewTarget(path, harnessDir)
     case 'compound': {
       if (harnessDir === null) return false
       return path.startsWith(resolve(join(harnessDir, 'knowledge')) + sep) && isMarkdownDoc(path)
@@ -163,7 +164,7 @@ function auditSecretsViolations(findings: readonly { line: number; type: string 
     ok: false,
     severity: 'high' as const,
     code: 'audit.secrets.found',
-    message: `credential pattern "${f.type}" found on line ${f.line} in ${file} — audit plan files must never reproduce secret values (mstar-audit Hard Rule 4)`,
+    message: `credential pattern "${f.type}" found on line ${f.line} in ${file} — review reports must never reproduce secret values (mstar-audit Hard Rule 4)`,
     fix: 'redact the value; reference the file:line and credential type only',
   }))
 }
@@ -188,15 +189,15 @@ export function validateDesignDoc(doc: string, path: string): GateResult {
 }
 
 /**
- * Validate an audit plan document: Status-block contract + secret scan.
- * The findings summary (line + type only — mstar-audit Hard Rule 4 never
- * reproduces secret values) rides along for the validate tool's `secrets`
+ * Validate a review report document: the credential scan (mstar-audit Hard
+ * Rule 4) — a review report carries no plan Status block, so the scan is the
+ * seam's whole contract. The findings summary (line + type only — secret
+ * values are never reproduced) rides along for the validate tool's `secrets`
  * output field; the gate path reads only `ok`/`violations`.
  */
 export function validateAuditDoc(doc: string, path: string): GateResult & { findings: SecretFinding[] } {
   const redacted = redactSecrets(doc, path)
-  const violations = [...validateAuditStatusBlocks(doc).violations]
-  violations.push(...auditSecretsViolations(redacted.findings, path))
+  const violations = auditSecretsViolations(redacted.findings, path)
   return { ok: violations.length === 0, violations, findings: redacted.findings }
 }
 

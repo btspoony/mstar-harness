@@ -7,19 +7,14 @@ import {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
-  executionContextFor,
   SddScriptError,
-  listAuditPlanIds,
-  registerShippedCatalogExecution,
-  resolveProcessHarnessDir,
+  resolveReviewDir,
   scanSecrets,
-  scaffoldAuditPlan,
+  scaffoldAuditReport,
   supplyChainChecks,
-  WORKFLOW_DELIVERY_KINDS,
   type AuditFinding,
-  type ExecutionIdentity,
+  type ReviewRunLevel,
 } from "@mstar-harness/engine";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
@@ -28,32 +23,27 @@ import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
-const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
+const verbs = ["scaffold", "secret-scan", "supply-chain"] as const;
 type Verb = (typeof verbs)[number];
+const auditLevels = ["quick", "standard", "deep"] as const satisfies readonly ReviewRunLevel[];
 type Input = {
-  findings?: string; dir?: string; sha?: string; date?: string; repo?: string;
-  plans?: string; workflow?: string; deliveryKind?: string; branchBase?: string; branchWork?: string; branchSource?: string; branchTarget?: string; completionPolicy?: string; harness?: string;
+  findings?: string; dir?: string; level?: string; round?: string; reviewsDir?: string; sha?: string; date?: string; repo?: string;
   path?: string;
 };
 const inputSchema = z.object({
-  findings: z.string().optional(), dir: z.string().optional(), sha: z.string().optional(), date: z.string().optional(), repo: z.string().optional(),
-  plans: z.string().optional(), workflow: z.string().optional(), deliveryKind: z.string().optional(), branchBase: z.string().optional(), branchWork: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), harness: z.string().optional(),
+  findings: z.string().optional(), dir: z.string().optional(), level: z.string().optional(), round: z.string().optional(), reviewsDir: z.string().optional(),
+  sha: z.string().optional(), date: z.string().optional(), repo: z.string().optional(),
   path: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown; context?: "sessionId" }[]; effects: readonly CommandEffect[]; description: string }> = {
   scaffold: { args: [{ key: "findings", required: true, variadic: false }], options: [
-    { key: "dir", flags: "--dir <out-dir>", required: false, help: "Defaults to audit-<date> under the current directory." }, { key: "sha", flags: "--sha <commit>", required: false, help: "Defaults to the current Git HEAD short SHA; uses unknown if Git cannot resolve it." },
-    { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to today's UTC date." }, { key: "repo", flags: "--repo <name>", required: false },
-  ], effects: ["read", "write"], description: "Scaffold audit plan artifacts from a JSON findings array or {findings:[...]}; each finding requires non-empty title and description plus valid priority, effort, risk and category. Confidence defaults to MED and evidence defaults to []." },
-  promote: { args: [{ key: "path", required: true, variadic: false }], options: [
-    { key: "plans", flags: "--plans <ids>", required: false, help: "May be inferred only when the audit directory contains one plan; when it contains multiple plans, select explicitly." }, { key: "workflow", flags: "--workflow <id>", required: false },
-    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: true, help: `One of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}.` },
-    { key: "branchBase", flags: "--branch-base <branch>", required: false, help: "The branch the workflow was created from, recorded as branch.base." },
-    { key: "branchWork", flags: "--branch-work <branch>", required: false, help: "The delivery branch recorded as branch.work: the branch the delivery PR comes from." },
-    { key: "branchSource", flags: "--branch-source <branch>", required: false, help: "Deprecated alias of --branch-work: it records the same delivery branch (branch.work)." },
-    { key: "branchTarget", flags: "--branch-target <branch>", required: false }, { key: "completionPolicy", flags: "--completion-policy <text>", required: false },
-    { key: "harness", flags: "--harness <dir>", required: false }, { key: "sessionId", flags: "--session-id <session-id>", required: false, context: "sessionId" },
-  ], effects: ["read", "write"], description: "Promote selected audit plans; development requires branchWork (or its deprecated --branch-source alias) and branchTarget, while verification/report-only requires completionPolicy." },
+    { key: "level", flags: "--level <quick|standard|deep>", required: false, help: "Audit effort level; defaults to standard." },
+    { key: "round", flags: "--round <n>", required: false, help: "Run round, an integer >= 1; omitted, one more than the highest round already recorded for the date and level." },
+    { key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." },
+    { key: "dir", flags: "--dir <out-dir>", required: false, help: "Whole run-dir override; --level, --round and --reviews-dir are then ignored." },
+    { key: "sha", flags: "--sha <commit>", required: false, help: "Defaults to the current Git HEAD short SHA; uses unknown if Git cannot resolve it." },
+    { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date." }, { key: "repo", flags: "--repo <name>", required: false },
+  ], effects: ["read", "write"], description: "Scaffold the audit review report for one run under {REVIEW_DIR} from a JSON findings array or {findings:[...]}; each finding requires non-empty title and description plus valid priority, effort, risk and category. Confidence defaults to MED and evidence defaults to []." },
   "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values; path defaults to the current directory." },
   "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root; path defaults to the current directory." },
 };
@@ -106,9 +96,6 @@ function parseFindings(text: string): { findings: AuditFinding[]; needsVerificat
       if (location.line !== undefined && (typeof location.line !== "number" || !Number.isSafeInteger(location.line) || location.line <= 0)) throw new SddScriptError(`findings[${index}].evidence[${itemIndex}].line must be a positive integer`, 2);
       return { file: location.file, ...(location.line !== undefined ? { line: location.line } : {}), description: location.description };
     });
-    const rawDependency = typeof row.dependsOn === "string" && row.dependsOn.trim() ? row.dependsOn.trim() : undefined;
-    if (rawDependency !== undefined && !/^(?:none|plans\/\d{3}-[\w.*-]+\.md|\d{3})$/i.test(rawDependency)) throw new SddScriptError(`findings[${index}].dependsOn must be "none", "plans/NNN-*.md", or a plan number NNN`, 2);
-    const dependsOn = rawDependency !== undefined && /^\d{3}$/.test(rawDependency) ? `plans/${rawDependency}-*.md` : rawDependency;
     const fingerprint = row.fingerprint;
     if (fingerprint !== undefined && (typeof fingerprint !== "string" || fingerprint === "")) throw new SddScriptError(`findings[${index}].fingerprint must be a non-empty string`, 2);
     const optionalText = (key: string): string | undefined => {
@@ -125,7 +112,6 @@ function parseFindings(text: string): { findings: AuditFinding[]; needsVerificat
     if (trace !== undefined && !Array.isArray(trace)) throw new SddScriptError(`findings[${index}].trace must be an array`, 2);
     return {
       title, impact, priority, effort, risk, category, confidence, evidence: normalizedEvidence as AuditFinding["evidence"],
-      ...(dependsOn !== undefined ? { dependsOn } : {}),
       ...(fingerprint !== undefined ? { fingerprint } : {}), ...(severity !== undefined ? { severity } : {}),
       ...(trace !== undefined ? { trace: trace as AuditFinding["trace"] } : {}),
       ...(optionalText("fixSketch") !== undefined ? { fixSketch: optionalText("fixSketch") } : {}),
@@ -160,7 +146,6 @@ function parseFindings(text: string): { findings: AuditFinding[]; needsVerificat
     ...(parsedHardening !== undefined ? { hardeningChecked: parsedHardening } : {}),
   };
 }
-function parseCsv(value: string): string[] { return value.split(",").map((part) => part.trim()).filter(Boolean); }
 async function execute(verb: Verb, input: Input, context: InvocationContext): Promise<CommandEnvelope> {
   const id = idFor(verb);
   try {
@@ -169,8 +154,18 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (!existsSync(findingsFile)) throw new Error(`findings file not found: ${findingsFile}`);
       if (input.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new SddScriptError("--date must be YYYY-MM-DD", 2);
       if (input.sha !== undefined && !/^[0-9a-f]{7,40}$/.test(input.sha)) throw new SddScriptError("--sha must be a 7-40 char hex commit SHA", 2);
-      const date = input.date ?? new Date().toISOString().slice(0, 10);
-      const outDir = resolvePath(context.cwd, input.dir ?? `audit-${date}`);
+      const dirOverride = input.dir === undefined ? undefined : resolvePath(context.cwd, input.dir);
+      // --dir pins the run dir outright: --level / --round are then ignored
+      // entirely (not even validated), and the harness review root is only
+      // resolved when the engine has to derive the run dir from it; otherwise
+      // its parent stands in as a root the engine never reads.
+      const derived = dirOverride === undefined;
+      const level = !derived || input.level === undefined ? undefined : auditLevels.find((candidate) => candidate === input.level);
+      if (derived && input.level !== undefined && level === undefined) throw new SddScriptError(`--level must be one of ${auditLevels.join(" | ")}`, 2);
+      if (derived && input.round !== undefined && !/^[1-9]\d*$/.test(input.round)) throw new SddScriptError("--round must be an integer >= 1", 2);
+      const reviewsDir = input.reviewsDir !== undefined
+        ? resolvePath(context.cwd, input.reviewsDir)
+        : derived ? resolveReviewDir(context.cwd) : path.dirname(dirOverride);
       const payload = parseFindings(readFileSync(findingsFile, "utf8"));
       let sha = input.sha;
       if (sha === undefined) {
@@ -181,76 +176,21 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       }
       let result;
       try {
-        result = scaffoldAuditPlan(outDir, payload.findings, { date, repoName: input.repo, repoShortSha: sha, needsVerification: payload.needsVerification, hardeningChecked: payload.hardeningChecked });
+        result = scaffoldAuditReport(payload.findings, {
+          reviewsDir,
+          ...(dirOverride !== undefined ? { dir: dirOverride } : {}),
+          ...(level !== undefined ? { level } : {}),
+          ...(derived && input.round !== undefined ? { round: Number(input.round) } : {}),
+          ...(input.date !== undefined ? { date: input.date } : {}),
+          ...(input.repo !== undefined ? { repoName: input.repo } : {}),
+          repoShortSha: sha,
+          ...(payload.needsVerification !== undefined ? { needsVerification: payload.needsVerification } : {}),
+          ...(payload.hardeningChecked !== undefined ? { hardeningChecked: payload.hardeningChecked } : {}),
+        });
       } catch (error) {
         if (error instanceof TypeError && error.message.includes("audit.finding.")) throw new SddScriptError(error.message, 2);
         throw error;
       }
-      return ok(id, result);
-    }
-    if (verb === "promote") {
-      const auditDir = resolvePath(context.cwd, required(input.path, "audit-dir"));
-      if (!existsSync(auditDir)) throw new Error(`audit dir not found: ${auditDir}`);
-      const selected = input.plans === undefined ? listAuditPlanIds(auditDir) : parseCsv(input.plans);
-      if (selected.length === 0) {
-        return refusalEnvelope({
-          command: id,
-          status: "usage",
-          code: "command.invalid-input",
-          exitCode: 2,
-          message: "Invalid input.",
-          diagnostics: [{
-            path: "--plans",
-            code: "required",
-            message: input.plans === undefined ? "select an audit plan with --plans" : "--plans must select at least one plan",
-          }],
-        });
-      }
-      if (input.plans === undefined && selected.length > 1) {
-        return refusalEnvelope({
-          command: id,
-          status: "usage",
-          code: "command.invalid-input",
-          exitCode: 2,
-          message: "Invalid input.",
-          diagnostics: [{
-            path: "--plans",
-            code: "required",
-            message: `--plans is required because ${selected.length} audit plans are available`,
-          }],
-        });
-      }
-      const deliveryKind = required(input.deliveryKind, "--delivery-kind");
-      if (!(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(deliveryKind)) throw new SddScriptError(`--delivery-kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}`, 2);
-      const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
-      if (harnessDir === null) throw new Error(`harness dir not found from ${context.cwd} — pass --harness`);
-      const workflowId = input.workflow ?? context.executionIdentity?.workflowId ?? path.basename(auditDir);
-      const identity: ExecutionIdentity = context.executionIdentity ?? {
-        source: context.host === undefined ? "local" : "host",
-        sessionId: context.sessionId ?? "",
-        workflowId,
-        role: "coordinator",
-      };
-      // `--branch-source` is the deprecated alias of `--branch-work`: the two
-      // flags write the one delivery branch, and the current name wins when
-      // both are supplied.
-      const branchWork = input.branchWork ?? input.branchSource;
-      const result = await registerShippedCatalogExecution(executionContextFor(
-        { harnessDir },
-        identity,
-        { allowUnsetSessionId: true },
-      ), {
-        operationId: randomUUID(),
-        actor: "mcp:audit-promote",
-        workflow: { kind: "audit", outDir: auditDir, selected, options: {
-          harnessDir, deliveryKind: deliveryKind as (typeof WORKFLOW_DELIVERY_KINDS)[number],
-          workflowId,
-          ...(input.branchBase !== undefined ? { branchBase: input.branchBase } : {}),
-          ...(branchWork !== undefined ? { branchWork } : {}),
-          ...(input.branchTarget !== undefined ? { branchTarget: input.branchTarget } : {}),
-          ...(input.completionPolicy !== undefined ? { completionPolicy: input.completionPolicy } : {}),
-        } },
-      });
       return ok(id, result);
     }
     const root = resolvePath(context.cwd, input.path ?? ".");
@@ -283,20 +223,12 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
   const requirements = routes.flatMap((route) => {
     if (verb === "scaffold") return [
       { name: "findings", ownership: "caller" as const, route, required: true, constraint: "JSON array or object with findings array; each finding needs title, description, priority, effort, risk and category; confidence defaults to MED and evidence to []" },
-      { name: "date", ownership: "derivable" as const, route, required: false, constraint: "defaults to today's UTC date" },
-      { name: "dir", ownership: "derivable" as const, route, required: false, constraint: "defaults to audit-<date> under cwd" },
+      { name: "date", ownership: "derivable" as const, route, required: false, constraint: "defaults to the local calendar date" },
+      { name: "level", ownership: "derivable" as const, route, required: false, constraint: "one of quick | standard | deep; defaults to standard" },
+      { name: "round", ownership: "derivable" as const, route, required: false, constraint: "integer >= 1; omitted, one more than the highest round already present for the date and level" },
+      { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },
+      { name: "dir", ownership: "derivable" as const, route, required: false, constraint: "whole run-dir override; --level, --round and --reviews-dir are then ignored" },
       { name: "sha", ownership: "derivable" as const, route, required: false, constraint: "defaults to current Git HEAD short SHA or unknown if unavailable" },
-    ];
-    if (verb === "promote") return [
-      { name: "path", ownership: "caller" as const, route, required: true, constraint: "audit output directory" },
-      { name: "deliveryKind", ownership: "caller" as const, route, required: true, constraint: `one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
-      { name: "plans", ownership: "caller" as const, route, required: false, constraint: "inferred only for exactly one plan; explicit selection required when multiple plans exist" },
-      { name: "branchBase", ownership: "caller" as const, route, required: false, constraint: "the branch the workflow was created from, recorded as branch.base" },
-      { name: "branchWork", ownership: "caller" as const, route, required: false, condition: { field: "deliveryKind", equals: "development" }, alternatives: { cardinality: "at-least-one" as const, members: [{ name: "branchWork" }, { name: "branchSource" }] }, constraint: "delivery branch for development delivery, recorded as branch.work; --branch-source is the deprecated alias of --branch-work" },
-      { name: "branchSource", ownership: "caller" as const, route, required: false, constraint: "deprecated alias of --branch-work; it records the same delivery branch (branch.work)" },
-      { name: "branchTarget", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "target branch for development delivery" },
-      { name: "completionPolicy", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "verification/report-only" }, constraint: "registered alternative-completion policy for report-only delivery" },
-      { name: "workflow", ownership: "derivable" as const, route, required: false, constraint: "if omitted, defaults to the basename of audit output directory" },
     ];
     return [{ name: "path", ownership: "derivable" as const, route, required: false, constraint: "defaults to current working directory" }];
   });

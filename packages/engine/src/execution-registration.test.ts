@@ -40,7 +40,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { promotedAuditPlanRows } from "./audit.js";
 import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogLinkInput } from "./catalog.js";
 import {
   listPendingCatalogRegistrations,
@@ -76,10 +75,6 @@ const PLAN_ID = "20260920-registration-plan";
 const SIDE_PLAN_ID = "20260920-registration-side-plan";
 const PLAN_TITLE = "Consumer surfaces catalog plan";
 const COORDINATOR_ID = "host-registration-coordinator";
-/** An audit promotion: the workflow id is the outDir basename, the row title the plan doc body. */
-const AUDIT_WORKFLOW_ID = "audit-2026-09-21-promotion";
-const AUDIT_PLAN_ID = "001-audit-finding";
-const AUDIT_PLAN_TITLE = "Retire the legacy registration journal";
 
 /* ------------------------------------------------------------------------ *
  * Fixtures
@@ -657,134 +652,6 @@ describe("execution-registration", () => {
 
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
-  });
-
-  test("execution-registration-registers-an-audit-promotion-under-its-derived-workflow-id", async () => {
-    const fixture = await activeFixture("audit-promotion");
-    // A real audit output directory: the promotion's plan rows and their titles
-    // come from these documents, and the workflow id is the directory's basename
-    // because the producer options name none.
-    const outDir = join(fixture.workspace, "audits", AUDIT_WORKFLOW_ID);
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, `${AUDIT_PLAN_ID}.md`), `# ${AUDIT_PLAN_TITLE}\n\nFindings body.\n`);
-    const rows = promotedAuditPlanRows(outDir, [AUDIT_PLAN_ID]).map((row) => ({
-      kind: "plan" as const,
-      id: String(row.id),
-      title: String(row.title),
-      rootKind: "plans" as const,
-      relativePath: String(row.file),
-    }));
-    const before = await footprint(fixture.context);
-
-    const request: CatalogExecutionRequest = {
-      operationId: "op-audit",
-      actor: "project-manager",
-      expectedCatalogRevision: 0,
-      workflow: {
-        kind: "audit",
-        outDir,
-        selected: [AUDIT_PLAN_ID],
-        options: {
-          harnessDir: fixture.context.harnessDir,
-          deliveryKind: "development",
-          branchWork: `feature/${AUDIT_WORKFLOW_ID}`,
-          branchTarget: "main",
-        },
-      },
-      delta: {
-        entities: rows,
-        binding: { catalogKind: "plan", catalogId: rows[0]!.id },
-      },
-    };
-
-    const receipt = await commitExecutionRegistration(
-      { ...fixture.context, caller: { ...fixture.caller, workflowId: AUDIT_WORKFLOW_ID } },
-      { ...request, expected: fixture.rootToken },
-    );
-    expect(receipt).toEqual({
-      operationId: "op-audit",
-      workflowId: AUDIT_WORKFLOW_ID,
-      catalogRevision: 1,
-      recovered: false,
-    });
-
-    // The execution half: the derived id, the audit-derived promoted snapshot
-    // (type plan, the declared delivery kind and branches) and its plan row,
-    // whose TITLE is the audit document's own `# ` heading.
-    const header = await one<{ state_json: string }>(
-      fixture.context,
-      "select state_json from execution_workflows where workflow_id = ?",
-      AUDIT_WORKFLOW_ID,
-    );
-    expect(JSON.parse(String(header?.state_json))).toMatchObject({
-      id: AUDIT_WORKFLOW_ID,
-      type: "plan",
-      delivery_kind: "development",
-      branch: { work: `feature/${AUDIT_WORKFLOW_ID}`, target: "main" },
-    });
-    const planRow = await one<{ revision: number; state_json: string }>(
-      fixture.context,
-      "select revision, state_json from execution_plans where workflow_id = ? and plan_id = ?",
-      AUDIT_WORKFLOW_ID,
-      AUDIT_PLAN_ID,
-    );
-    expect(planRow?.revision).toBe(1);
-    expect(JSON.parse(String(planRow?.state_json))).toMatchObject({
-      id: AUDIT_PLAN_ID,
-      title: AUDIT_PLAN_TITLE,
-      file: `${AUDIT_PLAN_ID}.md`,
-      status: "Todo",
-    });
-
-    // The catalog half: the promoted plan entities and this workflow's binding.
-    const entity = (await getCatalog(fixture.context, { kind: "plan", id: AUDIT_PLAN_ID })).entity;
-    expect(entity).toMatchObject({ title: AUDIT_PLAN_TITLE, rootKind: "plans", relativePath: `${AUDIT_PLAN_ID}.md` });
-    expect(await bindingOf(fixture.context, AUDIT_WORKFLOW_ID)).toMatchObject({
-      catalog_kind: "plan",
-      catalog_id: AUDIT_PLAN_ID,
-      catalog_revision: 1,
-    });
-
-    // One store revision for the whole audit registration, one catalog revision
-    // for its published row — and no JSON registration byte: the active route
-    // promoted no snapshot file.
-    const accepted = await footprint(fixture.context);
-    expect(accepted).toEqual({
-      ...before,
-      root_revision: (before.root_revision as number) + 1,
-      store_revision: (before.store_revision as number) + 1,
-      catalog_revision: (before.catalog_revision as number) + 1,
-      workflows: 1,
-      registry: 1,
-      plans: 1,
-      inputs: 1,
-      operations: 1,
-      entities: 1,
-      bindings: 1,
-    });
-    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
-
-    // The exact retry is the recorded receipt and writes nothing.
-    expect(
-      await commitExecutionRegistration(
-        { ...fixture.context, caller: { ...fixture.caller, workflowId: AUDIT_WORKFLOW_ID } },
-        { ...request, expected: fixture.rootToken },
-      ),
-    ).toEqual(receipt);
-    expect(await footprint(fixture.context)).toEqual(accepted);
-
-    // A second, DIFFERENT registration of the same promoted lifecycle is refused:
-    // an audit promotion registers one create-only lifecycle, exactly as the
-    // other two kinds do.
-    const rootToken = (await readExecutionState(fixture.context)).token;
-    const refusal = await refusalOf(() =>
-      commitExecutionRegistration(
-        { ...fixture.context, caller: { ...fixture.caller, workflowId: AUDIT_WORKFLOW_ID } },
-        { ...request, operationId: "op-audit-again", expectedCatalogRevision: 1, expected: rootToken },
-      ),
-    );
-    expect(refusal.code).toBe("execution.not-empty");
-    expect(await footprint(fixture.context)).toEqual(accepted);
   });
 
   test("execution-registration-rolls-back-both-halves-when-the-catalog-publish-refuses", async () => {

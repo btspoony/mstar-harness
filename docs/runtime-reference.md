@@ -76,7 +76,7 @@ Topic skills, grouped by what they own:
 
 ## Storage and persistence
 
-Consumer repositories keep harness state under `{HARNESS_DIR}`, which defaults to `.mstar/` and can be relocated through a repo-local `.mstarc` file. Directory symbols and discovery order are owned by `mstar-conventions`; the defaults are `{PLAN_DIR}` = `plans/`, `{SDD_DIR}` = `sdd/<plan-id>/`, `{ITERATION_DIR}` = `iterations/`, `{WORKFLOW_DIR}` = `workflows/`, `{PROJECT_DIR}` = `projects/`, and `{KNOWLEDGE_DIR}` = `knowledge/`. `{SPECS_DIR}` resolves to the first non-empty of `.mstar/specs/`, `docs/specs/`, or repository-root `specs/`, and defaults to `{HARNESS_DIR}/specs/` when all candidates are absent.
+Consumer repositories keep harness state under `{HARNESS_DIR}`, which defaults to `.mstar/` and can be relocated through a repo-local `.mstarc` file. Directory symbols and discovery order are owned by `mstar-conventions`; the defaults are `{PLAN_DIR}` = `plans/`, `{SDD_DIR}` = `sdd/<plan-id>/`, `{ITERATION_DIR}` = `iterations/`, `{WORKFLOW_DIR}` = `workflows/`, `{PROJECT_DIR}` = `projects/`, `{REVIEW_DIR}` = `reviews/`, and `{KNOWLEDGE_DIR}` = `knowledge/`. `{SPECS_DIR}` resolves to the first non-empty of `.mstar/specs/`, `docs/specs/`, or repository-root `specs/`, and defaults to `{HARNESS_DIR}/specs/` when all candidates are absent.
 
 Two persistence domains back that layout:
 

@@ -12,8 +12,9 @@
  * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks and
  * ephemeral/provenance citation discovery,
  * `design-md` validates DESIGN.md token frontmatter + light/dark parity +
- * completeness levels, `audit` validates audit Status blocks, redacts
- * secrets and scaffolds audit-<date>/ plan dirs, and `compound` validates
+ * completeness levels, `audit` redacts secrets, scans credentials, runs
+ * supply-chain checks and writes the codebase-audit review report into its
+ * `{REVIEW_DIR}` run directory, and `compound` validates
  * knowledge-doc schema, reference existence, index rows and the
  * compound-refresh scope. `roles` validates the role reference mapping +
  * parameter tables and the load-order contract, `prreview` implements the
@@ -63,12 +64,16 @@ export type {
   HarnessKind,
   ResolveHarnessDirOptions,
   ResolveSpecsDirOptions,
+  ReviewRunLevel,
+  ReviewRunRequest,
+  ReviewRunSpec,
 } from "./path.js";
 export type { MstarcConfig } from "./mstarc.js";
 export {
   MSTARC_FILE,
   MSTARC_HARNESS_DIR_KEY,
   MSTARC_PROJECT_DIR_KEY,
+  MSTARC_REVIEW_DIR_KEY,
   MSTARC_SECTION,
   MSTARC_WORKFLOW_DIR_KEY,
   findMstarc,
@@ -85,10 +90,13 @@ export {
   resolveKnowledgeDir,
   resolvePlanDir,
   resolveProjectDir,
+  resolveReviewDir,
+  resolveReviewRunDir,
   resolveScaffoldDirs,
   resolveSddDir,
   resolveSpecsDir,
   resolveWorkflowDir,
+  reviewRunDirName,
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
@@ -363,8 +371,8 @@ export type {
   AuditTraceKind,
   AuditTraceStep,
   RedactResult,
-  ScaffoldAuditPlanOptions,
-  ScaffoldAuditPlanResult,
+  ScaffoldAuditReportOptions,
+  ScaffoldAuditReportResult,
   ScannedSecret,
   SecretFinding,
   SupplyChainFinding,
@@ -377,12 +385,10 @@ export {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
-  listAuditPlanIds,
-  scaffoldAuditPlan,
+  scaffoldAuditReport,
   scanSecrets,
   supplyChainChecks,
   validateAuditFindingGates,
-  validateAuditStatusBlocks,
 } from "./audit.js";
 export {
   KNOWLEDGE_BUG_PROBLEM_TYPES,

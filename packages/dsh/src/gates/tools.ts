@@ -345,14 +345,13 @@ export function registerSeamTools(ctx: Context, resolver: HarnessResolver): void
     toolsCtx.tools.register(defineTool({
       name: 'mstar_audit_validate',
       description:
-        'Validate an audit plan file: Status-block contract (validateAuditStatusBlocks) plus the ' +
-        'credential scan of mstar-audit Hard Rule 4 (redactSecrets) — no CLI equivalent, the validator ' +
-        'behind `mstar audit scaffold`.',
+        'Validate a review report under {REVIEW_DIR}: the credential scan of mstar-audit Hard ' +
+        'Rule 4 (redactSecrets) — no CLI equivalent, the validator behind `mstar audit scaffold`.',
       parameters: {
-        plan_path: {
+        report_path: {
           type: 'string',
           required: true,
-          description: 'Audit plan file (plans/audit-<date>/NNN-*.md).',
+          description: 'Review report file under `{REVIEW_DIR}`.',
         },
       },
       output: {
@@ -380,17 +379,17 @@ export function registerSeamTools(ctx: Context, resolver: HarnessResolver): void
           { type: 'text', text: `audit validate: ${value.ok ? 'PASS' : 'FAIL'} (${value.secrets.length} secret finding${value.secrets.length === 1 ? '' : 's'})` },
         ],
       },
-      presentCall: args => ({ card: 'generic', title: 'Validate audit plan', kind: 'other', rawInput: args.plan_path }),
+      presentCall: args => ({ card: 'generic', title: 'Validate review report', kind: 'other', rawInput: args.report_path }),
       // Read-only evaluation — exclusive anyway (registry default).
       isConcurrencySafe: () => false,
       async execute(args) {
-        const abs = resolve(args.plan_path)
-        if (!existsSync(abs)) throw new Error(`plan file not found: ${abs}`)
+        const abs = resolve(args.report_path)
+        if (!existsSync(abs)) throw new Error(`report file not found: ${abs}`)
         const text = readFileSync(abs, 'utf8')
         // Shared gate validator (validateSeamDoc → gateSeamIntent path):
-        // Status-block contract + secret scan. The tool layers the findings
-        // summary (line + type only — secret values are never reproduced,
-        // mstar-audit Hard Rule 4) on top.
+        // the credential scan. The tool layers the findings summary (line +
+        // type only — secret values are never reproduced, mstar-audit Hard
+        // Rule 4) on top.
         const result = validateAuditDoc(text, abs)
         return { ok: result.ok, violations: result.violations.map(iterationViolationView), secrets: result.findings }
       },

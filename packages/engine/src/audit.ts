@@ -1,35 +1,34 @@
 /**
- * Engine audit module — audit Status-block validation, secret redaction, and
- * audit-<date>/ plan scaffolding.
+ * Engine audit module — secret redaction, credential / CI-leak scanning,
+ * supply-chain checks and the codebase-audit review report renderer.
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
  * - mstar-audit SKILL.md Hard Rules (read-only; never reproduce secret
- * values — reference file:line + credential type only).
- * - mstar-audit SKILL.md § Plan output (all variants): plan-file output
- * layout (`{PLAN_DIR}/audit-<YYYY-MM-DD>/` README index + numbered plan
- * files) and Status block fields. The full-audit variant adds the
- * reconcile rule (keep numbering monotonic across re-runs) and the audit
- * index format → mstar-audit references/codebase-audit.md (Phase 4 /
- * Output format).
+ *   values — reference file:line + credential type only).
+ * - mstar-audit SKILL.md § Output format + references/codebase-audit.md
+ *   § Output format: the review report is
+ *   `{REVIEW_DIR}/<date>-codebase-<level>-<round>/README.md` — one report
+ *   index (Findings / Direction / Needs verification / Hardening & checked
+ *   notes / Findings considered and rejected / Red-team dispositions), no
+ *   per-finding plan files.
  * - mstar-audit/references/finding-format.md: category codes, evidence
- * requirements.
+ *   requirements.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
-import type { WorkflowDeliveryKind, WorkflowSnapshot } from "./workflow.js";
-import type { PlanRow } from "./status.js";
+import { resolveReviewRunDir, type ReviewRunLevel, type ReviewRunRequest } from "./path.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
 }
 
 // ---------------------------------------------------------------------------
-// Status block validation — mstar-audit SKILL.md § Plan output (all variants) Status block
+// Finding enums — mstar-audit/references/finding-format.md
 // ---------------------------------------------------------------------------
 
-/** Priority values (mstar-audit SKILL.md § Plan output (all variants) Status block). */
+/** Priority values (references/finding-format.md § Finding template). */
 export const AUDIT_PRIORITIES = ["P1", "P2", "P3"] as const;
 export type AuditPriority = (typeof AUDIT_PRIORITIES)[number];
 
@@ -47,7 +46,7 @@ export type AuditRisk = (typeof AUDIT_RISKS)[number];
 export const AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"] as const;
 export type AuditConfidence = (typeof AUDIT_CONFIDENCES)[number];
 
-/** Category codes (finding-format.md § Category codes + mstar-audit SKILL.md § Plan output (all variants) Status block). */
+/** Category codes (finding-format.md § Category codes). */
 export const AUDIT_CATEGORIES = [
   "bug",
   "security",
@@ -60,110 +59,6 @@ export const AUDIT_CATEGORIES = [
   "direction",
 ] as const;
 export type AuditCategory = (typeof AUDIT_CATEGORIES)[number];
-
-/** Required Status block fields for an audit plan file. */
-const AUDIT_STATUS_FIELDS = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"] as const;
-
-/** One `## Status` block with its parsed `- **Field**: value` entries. */
-type StatusBlock = { fields: Map<string, string> };
-
-/** Parse every `## Status` block in a plan document. A block ends at the
- * next `#` heading of any level. Shared with `scaffoldAuditPlan` for
- * rebuilding the index from existing plan files. */
-function parseStatusBlocks(planText: string): StatusBlock[] {
-  const blocks: StatusBlock[] = [];
-  let current: Map<string, string> | null = null;
-  for (const line of planText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed === "## Status") {
-      current = new Map<string, string>();
-      blocks.push({ fields: current });
-      continue;
-    }
-    if (current === null) continue;
-    if (trimmed.startsWith("#")) {
-      current = null;
-      continue;
-    }
-    const match = /^-\s*\*\*([^*]+)\*\*:\s*(.*)$/.exec(trimmed);
-    if (match !== null) current.set(match[1].trim(), match[2].trim());
-  }
-  return blocks;
-}
-
-/**
- * Validate the audit Status block(s) of a plan file against the field
- * contract (mstar-audit SKILL.md § Plan output (all variants) Status block):
- * - `Priority`: P1 | P2 | P3
- * - `Effort`: XS | S | M | L | XL
- * - `Risk`: LOW | MED | HIGH
- * - `Depends on`: `none` or `plans/NNN-*.md` (the `*` is a literal
- * wildcard form — the documented scaffolded scheme; concrete
- * `plans/NNN-<slug>.md` paths are accepted too)
- * - `Category`: bug | security | perf | tests | tech-debt | migration |
- * dx | docs | direction
- * - `Planned at`: `commit <short SHA>, <YYYY-MM-DD>` — `commit unknown`
- * is accepted as the documented fallback (`scaffoldAuditPlan` default
- * when the CLI runs outside a git repo)
- *
- * Every `## Status` block in the document is checked; a document without
- * any block gets `audit.status.missing-block`. Violation codes:
- * `audit.status.missing-block`, `audit.status.missing-field`,
- * `audit.status.invalid-priority|effort|risk|depends-on|category|planned-at`.
- */
-export function validateAuditStatusBlocks(planText: string): GateResult {
-  const violations: ValidationResult[] = [];
-  const blocks = parseStatusBlocks(planText);
-  if (blocks.length === 0) {
-    violations.push(
-      violation(
-        "medium",
-        "audit.status.missing-block",
-        "no `## Status` block found \u2014 audit plan files carry the Status block fields (mstar-audit SKILL.md \u00a7 Plan output)",
-        "add a `## Status` block with Priority, Effort, Risk, Depends on, Category, Planned at",
-      ),
-    );
-    return { ok: false, violations };
-  }
-
-  blocks.forEach((block, index) => {
-    const label = blocks.length > 1 ? ` #${index + 1}` : "";
-    for (const field of AUDIT_STATUS_FIELDS) {
-      if (!block.fields.has(field)) {
-        violations.push(
-          violation(
-            "medium",
-            "audit.status.missing-field",
-            `Status block${label} missing required field "${field}" (mstar-audit SKILL.md \u00a7 Plan output)`,
-            `add \`- **${field}**: <value>\` to the Status block`,
-          ),
-        );
-      }
-    }
-    const check = (field: string, pattern: RegExp, code: string, expected: string) => {
-      const value = block.fields.get(field);
-      if (value === undefined) return;
-      if (!pattern.test(value)) {
-        violations.push(
-          violation(
-            "medium",
-            code,
-            `Status block${label} "${field}" = "${value}" \u2014 expected ${expected} (mstar-audit SKILL.md \u00a7 Plan output)`,
-            `fix \`- **${field}**:\` to one of: ${expected}`,
-          ),
-        );
-      }
-    };
-    check("Priority", /^P[123]$/, "audit.status.invalid-priority", "P1 | P2 | P3");
-    check("Effort", /^(?:XS|S|M|L|XL)$/, "audit.status.invalid-effort", "XS | S | M | L | XL");
-    check("Risk", /^(?:LOW|MED|HIGH)$/, "audit.status.invalid-risk", "LOW | MED | HIGH");
-    check("Category", /^(?:bug|security|perf|tests|tech-debt|migration|dx|docs|direction)$/, "audit.status.invalid-category", "bug | security | perf | tests | tech-debt | migration | dx | docs | direction");
-    check("Depends on", /^(?:none|plans\/\d{3}-[\w.*-]+\.md)$/i, "audit.status.invalid-depends-on", "none or plans/NNN-*.md");
-    check("Planned at", /^commit \`?(?:[0-9a-f]{7,40}|unknown)\`?, \d{4}-\d{2}-\d{2}$/, "audit.status.invalid-planned-at", "commit <short SHA>, <YYYY-MM-DD> (or `commit unknown` outside a git repo)");
-  });
-
-  return { ok: violations.length === 0, violations };
-}
 
 // ---------------------------------------------------------------------------
 // Secret redaction — mstar-audit Hard Rule 4
@@ -823,7 +718,8 @@ export function supplyChainChecks(repoRoot: string): SupplyChainResult {
 }
 
 // ---------------------------------------------------------------------------
-// Plan scaffolding — mstar-audit SKILL.md § Plan output (audit-<date>/ layout)
+// Report scaffolding — mstar-audit SKILL.md § Output format
+// ({REVIEW_DIR}/<date>-codebase-<level>-<round>/README.md)
 // ---------------------------------------------------------------------------
 
 /** One audit finding, shaped after finding-format.md. */
@@ -840,7 +736,6 @@ export type AuditFinding = {
   priority: AuditPriority;
   fixSketch?: string;
   verification?: string;
-  dependsOn?: string;
   /** Source-derived root-cause identity (audit-finding-contract.md §4).
    * Optional; never invented by the engine. */
   fingerprint?: string;
@@ -868,51 +763,48 @@ export type AuditSeverityRank = "informational" | "low" | "medium" | "high" | "c
 
 export type AuditSeverity = { likelihood: AuditSeverityRank; impact: AuditSeverityRank; overall: AuditSeverityRank };
 
-/** Options for `scaffoldAuditPlan`. `plannedAt` defaults to the
- * `repoShortSha` + `date`; `date` defaults to today (YYYY-MM-DD). */
-export type ScaffoldAuditPlanOptions = {
+/**
+ * Options for `scaffoldAuditReport`. `date` defaults to the local calendar
+ * date, `level` to `standard`; `round` is allocated when omitted. `dir` is
+ * the exact-run-dir override (the CLI's `--dir`).
+ */
+export type ScaffoldAuditReportOptions = {
+  /** `{REVIEW_DIR}` root the run dir is composed under. */
+  reviewsDir: string;
+  /** Exact run dir: when present it IS the output dir and nothing is derived
+   * from its name (`level` / `round` / `reviewsDir` then only seed the
+   * returned metadata). */
+  dir?: string;
+  /** Audit effort level (default `standard`). */
+  level?: ReviewRunLevel;
+  /** Run round; omit to allocate the next free round for `date` + `level`. */
+  round?: number;
   date?: string;
   repoName?: string;
   repoShortSha?: string;
-  plannedAt?: { commit: string; date: string };
   rejected?: readonly { title: string; reason: string }[];
   needsVerification?: readonly { lead: string; how: string; evidence?: string }[];
   hardeningChecked?: readonly { kind: "Hardening" | "Checked and clean"; text: string }[];
 };
 
-/** Result of `scaffoldAuditPlan`. `nextNumber` is the next free plan number
- * (monotonic continuation vs. any pre-existing `NNN-*.md` files). */
-export type ScaffoldAuditPlanResult = {
+/** Result of `scaffoldAuditReport`: the run dir and its report index. */
+export type ScaffoldAuditReportResult = {
   outDir: string;
+  file: string;
   date: string;
-  files: string[];
-  nextNumber: number;
+  level: ReviewRunLevel;
+  round: number;
 };
-
-/** Lowercase-hyphen slug from a finding title (`Fix N+1 query` →
- * `fix-n-1-query`). */
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 const escapeCell = (value: string) => value.replace(/\|/g, "\\|");
 const truncate = (value: string, max: number) => (value.length > max ? `${value.slice(0, max)}\u2026` : value);
-/** Line-break collapse shared by the Status Evidence line and index rows
- * (table-safe single-line text). */
+/** Line-break collapse for index rows (table-safe single-line text). */
 const collapseEvidenceWs = (value: string): string => value.replace(/\s*[\r\n]\s*/g, " ");
 /** Render one evidence item: strings byte-for-byte; structured locations as
  * `file:line — description`, or `file — description` when the line is
  * omitted (never invented). */
 const evidenceText = (item: string | AuditEvidence): string =>
   typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} \u2014 ${item.description}`;
-/** New metadata (§8): any optional field beyond the legacy shape. Its
- * presence upgrades MED confidence to a persisted Status line. */
-const hasEnrichedMetadata = (finding: AuditFinding): boolean =>
-  finding.fingerprint !== undefined || finding.trace !== undefined || finding.severity !== undefined ||
-  finding.evidence.some((item) => typeof item !== "string");
 
 // ---------------------------------------------------------------------------
 // Finding gates — audit-finding-contract.md §§3–6 (deterministic only)
@@ -921,7 +813,7 @@ const hasEnrichedMetadata = (finding: AuditFinding): boolean =>
 /** Fingerprint grammar (§4): source-derived identity token. The trailing
  * `(?![\s\S])` is JS's true end-of-input assertion (\z): a bare `$` would
  * also match before a final CR/LS/PS, letting a value like "valid-id\r"
- * slip through into plan metadata. */
+ * slip through into finding metadata. */
 const AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
 /** Rank ordinal for the §6 ceiling (`overall ≤ impact`). No numeric product. */
 const AUDIT_SEVERITY_ORDER: Record<AuditSeverityRank, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
@@ -1017,8 +909,8 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
 
  // §4 fingerprint: grammar, credential rejection, exact uniqueness,
  // strict ASCII ordering of the supplied subsequence (absent ones skipped;
- // out-of-order input is rejected, never sorted — positions control plan
- // numbers and dependsOn).
+ // out-of-order input is rejected, never sorted — positions control the
+ // report row order).
     // Omission (absent key) is the only benign case: a supplied `null` or
     // any wrong type must enter this block and fail the grammar/shape check
     // as a usage error (`!= null` would silently treat `null` as omitted).
@@ -1133,64 +1025,11 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
   return { ok: violations.length === 0, violations };
 }
 
-/** Render one numbered plan file from a finding (self-contained; no
- * placeholder tokens, per plan-quality-bar). The `## Evidence` section is
- * rendered only when the finding carries evidence — an empty evidence list
- * must not leave a dangling heading behind. */
-function renderPlanFile(finding: AuditFinding, plannedAt: { commit: string; date: string }): string {
-  const sections = [
-    `# ${finding.title}`,
-    "",
-    "## Status",
-    `- **Priority**: ${finding.priority}`,
-    `- **Effort**: ${finding.effort}`,
-    `- **Risk**: ${finding.risk}`,
- // §8: MED confidence is persisted only when enriched metadata is present;
- // legacy MED/string-evidence findings stay byte-identical.
-    ...(finding.confidence !== "MED" || hasEnrichedMetadata(finding) ? [`- **Confidence**: ${finding.confidence}`] : []),
-    ...(finding.fingerprint !== undefined ? [`- **Fingerprint**: ${finding.fingerprint}`] : []),
-    ...(finding.severity !== undefined
-      ? [`- **Likelihood**: ${finding.severity.likelihood}`, `- **Severity impact**: ${finding.severity.impact}`, `- **Severity**: ${finding.severity.overall}`]
-      : []),
-    `- **Depends on**: ${finding.dependsOn ?? "none"}`,
-    `- **Category**: ${finding.category}`,
-    ...(finding.evidence.length > 0 ? [`- **Evidence**: ${collapseEvidenceWs(evidenceText(finding.evidence[0]))}`] : []),
-    `- **Planned at**: commit \`${plannedAt.commit}\`, ${plannedAt.date}`,
-    "",
-    "## Impact",
-    finding.impact,
-  ];
-  if (finding.evidence.length > 0) {
-    sections.push("", "## Evidence", ...finding.evidence.map((item) => `- ${evidenceText(item)}`));
-  }
-  if (finding.trace !== undefined) {
- // §8: optional trace table; cells escape pipes and encode line breaks
- // (\\n) so no extra table rows can be created.
-    sections.push(
-      "",
-      "## Trace",
-      "",
-      "| Kind | Location | Scope / Description |",
-      "|------|----------|---------------------|",
-      ...finding.trace.map(
-        (step) =>
-          `| ${escapeCell(step.kind)} | ${escapeCell(`${step.file}:${step.line}`)} | ${escapeCell(`${step.scope} \u2014 ${step.description}`).replace(/\r\n|\r|\n/g, "\\n")} |`,
-      ),
-    );
-  }
-  if (finding.fixSketch !== undefined) {
-    sections.push("", "## Fix sketch", finding.fixSketch);
-  }
-  if (finding.verification !== undefined) {
-    sections.push("", "## Verification", finding.verification);
-  }
-  return `${sections.join("\n")}\n`;
-}
-
 /**
  * One redaction wrapper for every free-text scaffold channel: finding
- * fields (via {@link redactFinding}) AND the non-finding README channels
- * (rejected findings, `needsVerification`, `hardeningChecked` —).
+ * fields (via {@link redactFinding}) AND the non-finding report channels
+ * (rejected findings, `needsVerification`, `hardeningChecked` —
+ *).
  * All user-supplied strings pass through this before any rendering, so no
  * channel can reach an artifact with raw credential material.
  */
@@ -1201,10 +1040,10 @@ function redactText(text: string): string {
 /**
  * Redact credential patterns from a finding's free-text fields (title /
  * impact / evidence / fixSketch / verification) before rendering, making
- * the codebase-audit.md Engine-check promise literal: scaffolded plan files
- * and the README index never carry raw credential values (mstar-audit Hard
- * Rule 4). Enum fields (category/effort/risk/priority/confidence/
- * dependsOn) are machine-checked enums and pass through untouched.
+ * the codebase-audit.md Engine-check promise literal: the review report
+ * README never carries raw credential values (mstar-audit Hard
+ * Rule 4). Enum fields (category/effort/risk/priority/confidence) are
+ * machine-checked enums and pass through untouched.
  */
 function redactFinding(finding: AuditFinding): AuditFinding {
   return {
@@ -1225,15 +1064,6 @@ function redactFinding(finding: AuditFinding): AuditFinding {
   };
 }
 
-
-/** Title + Status fields of an existing plan file, for index rebuilding. */
-function readPlanFileSummary(filePath: string): { title: string; fields: Map<string, string> } {
-  const text = readFileSync(filePath, "utf8");
-  const title = (text.match(/^# (.+)$/m) ?? [])[1] ?? filePath;
-  const blocks = parseStatusBlocks(text);
-
-  return { title: title.trim(), fields: blocks.length > 0 ? blocks[0].fields : new Map() };
-}
 
 /** Security-disposition carry-over: re-runs rebuild README.md from scratch,
  * so "Needs verification" / "Hardening & checked notes" entries rendered by
@@ -1258,11 +1088,55 @@ function extractSecurityDispositionSections(text: string): { needsVerification: 
   };
   return { needsVerification: grab("Needs verification"), hardeningChecked: grab("Hardening & checked notes") };
 }
-/** Render the audit-<date>/README.md index (mstar-audit references/codebase-audit.md § Output
- * format · Audit index). `rows` covers every plan file in the directory (existing + new).
+/** Render one finding's detail block — assessment fields, Impact, the full
+ * Evidence list, the Trace table, Fix sketch and Verification. Prose and
+ * multi-line text stay verbatim (only the heading is collapsed to one line).
+ * Carries no plan concepts (no Status block, no depends-on, no planned-at):
+ * the run's README is its only artifact and must hold each finding in full. */
+function renderFindingDetail(num: string, finding: AuditFinding): string {
+  const sections = [
+    `### ${num}. ${collapseEvidenceWs(finding.title)}`,
+    "",
+    `- **Priority**: ${finding.priority}`,
+    `- **Effort**: ${finding.effort}`,
+    `- **Risk**: ${finding.risk}`,
+    `- **Confidence**: ${finding.confidence}`,
+    ...(finding.fingerprint !== undefined ? [`- **Fingerprint**: ${finding.fingerprint}`] : []),
+    ...(finding.severity !== undefined
+      ? [`- **Likelihood**: ${finding.severity.likelihood}`, `- **Severity impact**: ${finding.severity.impact}`, `- **Severity**: ${finding.severity.overall}`]
+      : []),
+    "",
+    "**Impact**",
+    "",
+    finding.impact,
+  ];
+  if (finding.evidence.length > 0) {
+    sections.push("", "**Evidence**", "", ...finding.evidence.map((item) => `- ${evidenceText(item)}`));
+  }
+  if (finding.trace !== undefined) {
+    sections.push(
+      "",
+      "**Trace**",
+      "",
+      "| Kind | Location | Scope / Description |",
+      "|------|----------|---------------------|",
+      ...finding.trace.map(
+        (step) =>
+          `| ${escapeCell(step.kind)} | ${escapeCell(`${step.file}:${step.line}`)} | ${escapeCell(`${step.scope} \u2014 ${step.description}`).replace(/\r\n|\r|\n/g, "\\n")} |`,
+      ),
+    );
+  }
+  if (finding.fixSketch !== undefined) sections.push("", "**Fix sketch**", "", finding.fixSketch);
+  if (finding.verification !== undefined) sections.push("", "**Verification**", "", finding.verification);
+  return sections.join("\n");
+}
+
+/** Render the run's report index (`README.md`) — mstar-audit
+ * references/codebase-audit.md § Output format · Audit index. `rows` is the
+ * batch of findings this run reports, numbered in order; `details` carries one
+ * rendered detail block per row (the `## Finding detail` section).
  * `needsVerification` / `hardeningChecked` carry the security-disposition entry
- * lines documented by `references/security-review.md`; empty arrays omit the section.
- * Status values: TODO | IN PROGRESS | DONE | BLOCKED | REJECTED. */
+ * lines documented by `references/security-review.md`; empty arrays omit the section. */
 function renderIndex(params: {
   date: string;
   repoName: string;
@@ -1276,18 +1150,17 @@ function renderIndex(params: {
     risk: string;
     confidence: string;
     evidence: string;
-    priority: string;
-    dependsOn: string;
     fingerprint?: string;
     likelihood?: string;
     severityImpact?: string;
     severity?: string;
   }[];
+  details: readonly string[];
   rejected: readonly { title: string; reason: string }[];
   needsVerification: readonly string[];
   hardeningChecked: readonly string[];
 }): string {
-  const { date, repoName, repoShortSha, rows, rejected, needsVerification, hardeningChecked } = params;
+  const { date, repoName, repoShortSha, rows, details, rejected, needsVerification, hardeningChecked } = params;
  // §8: the Fingerprint column appears if any displayed row carries one; the
  // severity columns are appended after (retained prose) Impact when any row
  // has severity. Unrated rows show `—`; legacy-only batches keep the old
@@ -1308,9 +1181,6 @@ function renderIndex(params: {
     .filter((r) => r.category === "direction")
     .map((r) => `- ${escapeCell(r.title)} \u2014 ${escapeCell(truncate(r.impact, 120))}`)
     .join("\n");
-  const executionRows = rows
-    .map((r) => `| ${r.num} | ${escapeCell(r.title)} | ${r.priority} | ${r.effort} | ${r.dependsOn} | TODO |`)
-    .join("\n");
   const rejectedRows = rejected.map((r) => `- ${escapeCell(r.title)}: ${escapeCell(r.reason)}`).join("\n");
 
   const sections = [
@@ -1328,6 +1198,11 @@ function renderIndex(params: {
       "|",
     findingsRows,
   ];
+  if (details.length > 0) {
+    // The table above is the overview; the detail blocks carry each finding
+    // in full (evidence list, trace, fix sketch, verification).
+    sections.push("", "## Finding detail", "", details.join("\n\n"));
+  }
   if (directionRows !== "") {
     sections.push("", "## Direction", "", directionRows);
   }
@@ -1337,14 +1212,6 @@ function renderIndex(params: {
   if (hardeningChecked.length > 0) {
     sections.push("", "## Hardening & checked notes", "", ...hardeningChecked);
   }
-  sections.push(
-    "",
-    "## Execution order & status",
-    "",
-    "| Plan | Title | Priority | Effort | Depends on | Status |",
-    "|------|-------|----------|--------|------------|--------|",
-    executionRows,
-  );
   if (rejectedRows !== "") {
     sections.push("", "## Findings considered and rejected", "", rejectedRows);
   }
@@ -1357,27 +1224,35 @@ function renderIndex(params: {
   return `${sections.join("\n")}\n`;
 }
 
+/** Local calendar date `YYYY-MM-DD` — the run dir / report date, never UTC. */
+function localToday(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 /**
- * Scaffold an audit plan directory (`{PLAN_DIR}/audit-<date>/` layout,
- * mstar-audit SKILL.md § Plan output (all variants)): numbered `NNN-<slug>.md` plan files from
- * findings plus a README.md index. Numbering is monotonic — when the
- * directory already contains `NNN-*.md` files (same-date re-run), the new
- * batch continues after the highest existing number instead of restarting
- * at 001, and the rebuilt index includes the pre-existing plans. Rejected
- * findings render in the "considered and rejected" section. Security
- * dispositions (`needsVerification` / `hardeningChecked`) render in their
- * documented index sections. Policy: a SUPPLIED option is the authoritative
- * current set and replaces the section (resolved leads can be removed,
- * revised entries updated); an OMITTED option carries the previous section
- * over from the existing README so hand-added entries survive the rebuild.
+ * Write the run's review report
+ * (`{REVIEW_DIR}/<date>-codebase-<level>-<round>/README.md`, mstar-audit
+ * SKILL.md § Output format · references/codebase-audit.md § Output format):
+ * ONE report index rendered from the supplied findings — no per-finding
+ * plan files, no Status blocks. The run dir is the SSOT (§ 2); an omitted
+ * `round` allocates the next free round for `date` + `level` unless
+ * `options.dir` names the directory outright. Rejected findings render in
+ * the "considered and rejected" section. Security dispositions
+ * (`needsVerification` / `hardeningChecked`) render in their documented
+ * sections. Policy: a SUPPLIED option is the authoritative current set and
+ * replaces the section (resolved leads can be removed, revised entries
+ * updated); an OMITTED option carries the previous section over from the
+ * existing README so hand-added entries survive the rebuild.
  */
-export function scaffoldAuditPlan(
-  outDir: string,
+export function scaffoldAuditReport(
   findings: readonly AuditFinding[],
-  options: ScaffoldAuditPlanOptions = {},
-): ScaffoldAuditPlanResult {
-  const date = options.date ?? new Date().toISOString().slice(0, 10);
-  const plannedAt = options.plannedAt ?? { commit: options.repoShortSha ?? "unknown", date };
+  options: ScaffoldAuditReportOptions,
+): ScaffoldAuditReportResult {
+  const date = options.date ?? localToday();
+  const level = options.level ?? "standard";
  // Contract §3 integration: the deterministic gates run BEFORE the first
  // mkdirSync/write — a rejected batch causes zero new files and leaves any
  // existing README untouched. Direct engine callers get the same gate.
@@ -1386,92 +1261,58 @@ export function scaffoldAuditPlan(
     const first = gate.violations[0];
     throw new TypeError(`invalid audit findings \u2014 ${first.code}: ${first.message}`);
   }
-  mkdirSync(outDir, { recursive: true });
-  const existingReadme = join(outDir, "README.md");
-  const carried = existsSync(existingReadme)
-    ? extractSecurityDispositionSections(readFileSync(existingReadme, "utf8"))
+  let outDir: string;
+  if (options.dir !== undefined) {
+    outDir = resolve(options.dir);
+    mkdirSync(outDir, { recursive: true });
+  } else if (options.round !== undefined) {
+    outDir = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level, round: options.round } });
+    mkdirSync(outDir, { recursive: true });
+  } else {
+    // Auto-allocated rounds reserve their directory atomically: a plain
+    // listing + `mkdir -p` lets two concurrent runs read the same listing
+    // and both take the same round, so the later write destroys the earlier
+    // report. A non-recursive `mkdir` fails with EEXIST for the loser, which
+    // then takes the next round. An explicit round / dir is the caller's
+    // deliberate reuse and keeps its directory.
+    mkdirSync(options.reviewsDir, { recursive: true });
+    for (;;) {
+      const candidate = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level } });
+      try {
+        mkdirSync(candidate);
+        outDir = candidate;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
+  }
+ // An explicit dir names its own round; an allocated one is echoed as the
+ // run-dir name's trailing segment (§ 2 SSOT).
+  const round = options.round ?? (options.dir !== undefined ? 1 : Number(basename(outDir).split("-").pop()));
+  const file = join(outDir, "README.md");
+  const carried = existsSync(file)
+    ? extractSecurityDispositionSections(readFileSync(file, "utf8"))
     : { needsVerification: [] as string[], hardeningChecked: [] as string[] };
 
-  const existing = readdirSync(outDir).filter((f) => /^\d{3}-.*\.md$/.test(f));
-  let next = existing.reduce((max, f) => Math.max(max, Number(f.slice(0, 3))), 0) + 1;
-
- // D-1 +: redact ONCE up front — plan files and index rows share
- // these redacted copies instead of calling redactFinding twice per input.
-  const redactedFindings = findings.map(redactFinding);
-
-  const written: string[] = [];
- // Slug collision guard: two findings whose titles slugify identically
- // (e.g. "Fix N+1 query" / "Fix N+1 query!") get a `-2`/`-3` suffix instead
-   // of silently overwriting the earlier plan file.
-  const usedSlugs = new Set<string>();
-  for (const finding of redactedFindings) {
-    const num = String(next).padStart(3, "0");
-    let slug = slugify(finding.title);
-    if (usedSlugs.has(slug)) {
-      let n = 2;
-      while (usedSlugs.has(`${slug}-${n}`)) n++;
-      slug = `${slug}-${n}`;
-    }
-    usedSlugs.add(slug);
-    const file = `${num}-${slug}.md`;
-    writeFileSync(join(outDir, file), renderPlanFile(finding, plannedAt));
-    written.push(file);
-    next++;
-  }
-
-  const all = [...existing, ...written].sort();
-  const rows = all.map((file) => {
-    const summary = readPlanFileSummary(join(outDir, file));
-    const fields = summary.fields;
-    return {
-      num: file.slice(0, 3),
-      title: summary.title,
-      category: fields.get("Category") ?? "\u2014",
-      impact: "see plan file",
-      effort: fields.get("Effort") ?? "\u2014",
-      risk: fields.get("Risk") ?? "\u2014",
-      confidence: fields.get("Confidence") ?? "\u2014",
-      evidence: fields.get("Evidence") ?? "\u2014",
-      priority: fields.get("Priority") ?? "\u2014",
-      dependsOn: fields.get("Depends on") ?? "\u2014",
- // §8 rebuild: stored metadata survives a no-new-findings rerun; legacy
- // rows without the lines keep their undefined fallback (`—` only when a
- // metadata column exists at all).
-      fingerprint: fields.get("Fingerprint"),
-      likelihood: fields.get("Likelihood"),
-      severityImpact: fields.get("Severity impact"),
-      severity: fields.get("Severity"),
-    };
-  });
-
- // New findings carry full detail; existing rows keep their parsed fields.
-  const byNum = new Map(rows.map((r) => [r.num, r]));
-  written.forEach((file, i) => {
-    const finding = redactedFindings[i];
-    if (finding === undefined) return;
-    const row = byNum.get(file.slice(0, 3));
-    if (row !== undefined) {
-      row.category = finding.category;
-      row.impact = finding.impact;
-      row.effort = finding.effort;
-      row.risk = finding.risk;
-      row.confidence = finding.confidence;
-      row.evidence = finding.evidence.length > 0 ? collapseEvidenceWs(evidenceText(finding.evidence[0])) : "";
- // priority/dependsOn are finding-authoritative too (regression from
- // the D-1 redaction wave: these two were dropped from the override,
- // leaving the row dependent on re-parsing the just-written Status
- // block instead of the redacted finding).
-      row.priority = finding.priority;
-      row.dependsOn = finding.dependsOn ?? "none";
- // New findings carry their metadata into the index (finding-authoritative,
- // same as priority/dependsOn above); rows without it keep the parsed
- // fallbacks.
-      row.fingerprint = finding.fingerprint;
-      row.likelihood = finding.severity?.likelihood;
-      row.severityImpact = finding.severity?.impact;
-      row.severity = finding.severity?.overall;
-    }
-  });
+ // Redact ONCE up front — every rendered row shares these redacted copies
+ // instead of calling redactFinding again per column.
+  const redacted = findings.map(redactFinding);
+  const details = redacted.map((finding, index) => renderFindingDetail(String(index + 1).padStart(3, "0"), finding));
+  const rows = redacted.map((finding, index) => ({
+    num: String(index + 1).padStart(3, "0"),
+    title: finding.title,
+    category: finding.category,
+    impact: finding.impact,
+    effort: finding.effort,
+    risk: finding.risk,
+    confidence: finding.confidence,
+    evidence: finding.evidence.length > 0 ? collapseEvidenceWs(evidenceText(finding.evidence[0])) : "",
+    fingerprint: finding.fingerprint,
+    likelihood: finding.severity?.likelihood,
+    severityImpact: finding.severity?.impact,
+    severity: finding.severity?.overall,
+  }));
 
  // Disposition policy: an option that IS supplied is the caller's
  // authoritative current set — it REPLACES the section, so resolved leads
@@ -1495,156 +1336,18 @@ export function scaffoldAuditPlan(
       : carried.hardeningChecked;
 
   writeFileSync(
-    join(outDir, "README.md"),
+    file,
     renderIndex({
       date,
       repoName: options.repoName ?? "repo",
       repoShortSha: options.repoShortSha ?? "unknown",
       rows,
+      details,
       rejected: (options.rejected ?? []).map((r) => ({ title: redactText(r.title), reason: redactText(r.reason) })),
       needsVerification: needsVerificationLines,
       hardeningChecked: hardeningCheckedLines,
     }),
   );
 
-  return { outDir: resolve(outDir), date, files: written, nextNumber: next };
-}
-
-// ---------------------------------------------------------------------------
-// Audit-plan registration derivation — consumed by the ACTIVE execution seam
-// ---------------------------------------------------------------------------
-
-/** Input fields used to derive an ACTIVE audit workflow snapshot. */
-export type AuditWorkflowOptions = {
-  /** Harness directory used to derive the workflow identity. */
-  harnessDir: string;
-  /** Defaults to the basename of outDir. */
-  workflowId?: string;
-  /** Delivery kind declared by the caller; never inferred or defaulted. */
-  deliveryKind: WorkflowDeliveryKind;
-  /** The branch the promoted workflow was created from, recorded as `branch.base`. Optional. */
-  branchBase?: string;
-  /** The promoted plan's delivery branch, recorded as `branch.work`. Required together with `branchTarget` for `development`. */
-  branchWork?: string;
-  branchTarget?: string;
-  completionPolicy?: string;
-};
-
-/**
- * The `Todo` plan rows derived from the selected `NNN-*.md` documents. Identity,
- * title and location come from each document rather than the report README.
- * The ACTIVE execution composer uses these same rows for its snapshot and
- * catalog delta.
- */
-export function promotedAuditPlanRows(outDir: string, selected: readonly string[]): PlanRow[] {
-  const planFiles = resolveSelectedPlanFiles(outDir, selected);
-  return planFiles.map((planFile) => {
-    const stem = planFile.replace(/\.md$/, "");
-    return {
-      id: stem,
-      title: readPlanFileSummary(join(outDir, planFile)).title,
-      file: planFileRel(outDir, planFile),
-      status: "Todo",
-    };
-  });
-}
-
-/**
- * The in-memory `type: plan` snapshot committed by `registerShippedCatalogExecution`.
- * This shares its selected rows with the catalog delta and has no file writer.
- */
-export function promotedAuditSnapshot(
-  workflowId: string,
-  outDir: string,
-  selected: readonly string[],
-  options: AuditWorkflowOptions,
-  startedAt: string,
-): WorkflowSnapshot {
-  const snapshot: WorkflowSnapshot = {
-    schema_version: 1,
-    id: workflowId,
-    type: "plan",
-    status: "running",
-    started_at: startedAt,
-    updated_at: startedAt.slice(0, 10),
-    plans: promotedAuditPlanRows(outDir, selected),
-    delivery_kind: options.deliveryKind,
-  };
-  if (options.branchBase !== undefined || options.branchWork !== undefined || options.branchTarget !== undefined) {
-    snapshot.branch = {
-      ...(options.branchBase !== undefined ? { base: options.branchBase } : {}),
-      ...(options.branchWork !== undefined ? { work: options.branchWork } : {}),
-      ...(options.branchTarget !== undefined ? { target: options.branchTarget } : {}),
-    };
-  }
-  if (options.completionPolicy !== undefined) snapshot.completion_policy = options.completionPolicy;
-  return snapshot;
-}
-
-
-/**
- * Resolve every selected id (`001`, `001-slug`, or `001-slug.md`) to its
- * plan file in `outDir`. A selected id with no matching `NNN-*.md` file is
- * a usage error — do not silently promote a subset.
- */
-function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): string[] {
- // readdirSync order is filesystem-dependent — sort so a
- // duplicate numeric prefix (e.g. manual `001-foo.md` + `001-bar.md`) is
- // resolved deterministically: the FIRST (lowest) filename wins for a bare
- // numeric prefix (`001`), instead of by directory order. Exact-stem
- // lookups (`001-foo`) still resolve to their own file via byStem.
-  const files = readdirSync(outDir)
-    .filter((f) => /^\d{3}-.*\.md$/.test(f))
-    .sort();
-  const byNum = new Map<string, string>();
-  const byStem = new Map<string, string>();
-  for (const file of files) {
-    const stem = file.replace(/\.md$/, "");
- // Keep the first (lowest) file per numeric prefix — a later `set` would
- // overwrite it and resolve `001` to the highest duplicate instead.
-    if (!byNum.has(stem.slice(0, 3))) {
-      byNum.set(stem.slice(0, 3), file);
-    }
-    byStem.set(stem, file);
-  }
-  const resolved: string[] = [];
-  const seen = new Set<string>();
-  for (const id of selected) {
-    const file = byNum.get(id) ?? byStem.get(id) ?? byStem.get(id.replace(/\.md$/, ""));
-    if (file === undefined) {
-      throw new Error(
-        `audit registration: selected plan ${JSON.stringify(id)} does not match any NNN-*.md file in ${resolve(outDir)}`,
-      );
-    }
-    if (!seen.has(file)) {
-      seen.add(file);
-      resolved.push(file);
-    }
-  }
-  return resolved;
-}
-
-/** Discover the numeric selectors available in one audit artifact directory. */
-export function listAuditPlanIds(outDir: string): string[] {
-  return [...new Set(
-    readdirSync(outDir)
-      .filter((file) => /^\d{3}-.*\.md$/.test(file))
-      .map((file) => file.slice(0, 3)),
-  )].sort();
-}
-
-/**
- * The plan row `file` value: `{PLAN_DIR}`-relative when `outDir` sits under
- * a `plans/` directory (e.g. `audit-2026-08-22/001-slug.md`), otherwise the
- * basename. `outDir` may be reached through a `plans/` segment anywhere in
- * the path (e.g. `.mstar/plans/audit-...`).
- */
-function planFileRel(outDir: string, planFile: string): string {
-  const resolved = resolve(outDir);
-  const parts = resolved.split(sep);
-  const plansIdx = parts.lastIndexOf("plans");
-  if (plansIdx >= 0) {
-    return `${parts.slice(plansIdx + 1).join(sep)}${sep}${planFile}`;
-  }
-  return planFile;
+  return { outDir, file, date, level, round };
 }

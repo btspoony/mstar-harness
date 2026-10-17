@@ -49,7 +49,7 @@ PM-owned activation; the omission / `none` / named-preset / resume / unknown-pre
 | `qa-engineer` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (closing R#); `mstar-design-md` when verifying visual output; `mstar-use-cli` when the round runs or interprets CLI commands. Role-owned (never gated): `references/qa-engineer/acceptance-gate.md` |
 | `architect` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance); `mstar-use-cli` when the round runs or interprets CLI commands |
 | `product-manager` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-strategy` (STRATEGY.md creation/maintenance) |
-| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-conventions` (paths); `mstar-artifacts` (plan-quality-bar for audit plans); `mstar-use-cli` when the round runs or interprets CLI commands |
+| `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-conventions` (paths); `mstar-use-cli` when the round runs or interprets CLI commands |
 | `ops-engineer` | `mstar-coding-behavior`, `mstar-branch-worktree`; `mstar-use-cli` when the round runs or interprets CLI commands |
 | `prompt-engineer` | All topic skills when editing harness text; `mstar-use-cli` when the round runs or interprets CLI commands |
 
