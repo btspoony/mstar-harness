@@ -20,7 +20,8 @@ import {
 import { getCommandDefinitions, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { registerCliCommands } from "../src/command-adapter";
-import { resolveContext } from "../src/mcp/stdio";
+import { createMcpServer } from "../src/mcp/server";
+import { createContextResolver, resolveContext } from "../src/mcp/stdio";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -81,14 +82,22 @@ async function registeredMcpCall(
   payload: Record<string, unknown>,
   baseContext: InvocationContext,
   resolver: ResolveContext = () => baseContext,
+  /**
+   * `server` drives the production assembly (`createMcpServer` wrapping the
+   * resolver). `register` binds the resolver straight to `registerMcpCommands`,
+   * which bypasses that wrapper and is therefore only a unit seam.
+   */
+  assembly: "register" | "server" = "register",
 ): Promise<CommandEnvelope> {
   const definition = getCommandDefinitions().find((entry) => entry.id === commandId);
   if (definition === undefined) throw new Error(`missing command: ${commandId}`);
-  const server = new McpServer({ name: "identity-test-server", version: "1.0.0" });
+  const server = assembly === "server"
+    ? createMcpServer(resolver, [definition])
+    : new McpServer({ name: "identity-test-server", version: "1.0.0" });
   const client = new Client({ name: "identity-test-client", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
   try {
-    registerMcpCommands(server, [definition], resolver);
+    if (assembly === "register") registerMcpCommands(server, [definition], resolver);
     await server.connect(serverEnd);
     await client.connect(clientEnd);
     const { tools } = await client.listTools();
@@ -195,6 +204,131 @@ describe("MCP session identity", () => {
     } finally {
       if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
       else process.env.MSTAR_HOST_SESSION_ID = previous;
+    }
+  });
+
+  /**
+   * The declared channel is the only environment identity the stdio resolver
+   * may read, and only when the launcher names it. Each case restores the
+   * variable it touched so the default "ignore ambient identity" cases stay
+   * independent of the host's environment.
+   */
+  const DECLARED_IDENTITY = "MSTAR_TEST_DECLARED_IDENTITY";
+  test("a declared environment channel supplies the default session identity", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  /**
+   * The declared default has to survive the production assembly, not only a
+   * direct `registerMcpCommands` binding: `createMcpServer` wraps the resolver
+   * in its own request-context function, so this is the path the real
+   * `mstar mcp` process installs and the only one that proves a required
+   * session selector is satisfied by `--identity-env`.
+   */
+  test("the production server admits a required sessionId from the declared channel", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        "server",
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  test("without --identity-env the same environment variable is still ignored", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
+        resolveContext,
+      );
+      expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(result.details?.helpRoute).toBe("mstar session recover --help");
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  test("a per-call sessionId overrides a malformed declared identity", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "../declared-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
+        context(fixture.root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  test("a malformed declared identity fails loudly at the shared safe-id guard", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "../declared-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-session-id" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  test("a blank declared identity means no identity at all", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "  \t";
+    try {
+      const root = fixtureRoot();
+      const result = await registeredMcpCall(
+        "session.recover",
+        recoveryInput(writeAttestation(root)),
+        context(root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+      );
+      expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(result.details?.helpRoute).toBe("mstar session recover --help");
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
     }
   });
 

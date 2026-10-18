@@ -13,7 +13,7 @@ import {
   type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
 } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
-import { decodePayloadInputs, mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
+import { decodePayloadInputs, mapParserError, registerCliCommands, renderCommandContract, resolveCliSessionIdentity } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 
@@ -91,6 +91,100 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("Usage: mstar mcp");
   expect(result.stdout).toContain("Run the Morning Star MCP server over stdio");
+  expect(result.stdout).toContain("--identity-env <NAME>");
+  expect(result.stdout).toContain("--harness <path>");
+});
+
+/**
+ * The native dsh shell injects `DSH_SESSION_ID` per execution, so the resolver
+ * must rank it below the launcher-minted tuple and above the legacy ambient
+ * host value. Each case starts from a scrubbed identity environment and
+ * restores every source it touched, matching the suite's isolation pattern.
+ */
+describe("CLI session identity — native DSH source", () => {
+  const sources = ["MSTAR_EXECUTION_IDENTITY", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID"] as const;
+  function scrubbed(): () => void {
+    const saved = sources.map((key) => [key, process.env[key]] as const);
+    for (const key of sources) delete process.env[key];
+    return () => {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
+  }
+
+  test("DSH_SESSION_ID alone resolves as the environment source without an execution tuple", () => {
+    const restore = scrubbed();
+    try {
+      process.env.DSH_SESSION_ID = "dsh-presentation-session";
+      expect(resolveCliSessionIdentity(undefined)).toEqual({
+        sessionId: "dsh-presentation-session",
+        sessionIdSource: "env",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  test("an explicit --session-id outranks the native DSH source", () => {
+    const restore = scrubbed();
+    try {
+      process.env.DSH_SESSION_ID = "dsh-presentation-session";
+      expect(resolveCliSessionIdentity("flag-session")).toEqual({
+        sessionId: "flag-session",
+        sessionIdSource: "flag",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  test("the launcher-minted identity outranks the native DSH source", () => {
+    const restore = scrubbed();
+    try {
+      const identity: ExecutionIdentity = { source: "local", sessionId: "minted-dsh", workflowId: "wf-dsh", role: "coordinator" };
+      process.env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+      process.env.DSH_SESSION_ID = "dsh-presentation-session";
+      expect(resolveCliSessionIdentity(undefined)).toEqual({
+        sessionId: identity.sessionId,
+        sessionIdSource: "env",
+        executionIdentity: identity,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  test("the native DSH source outranks the ambient host session", () => {
+    const restore = scrubbed();
+    try {
+      process.env.DSH_SESSION_ID = "dsh-presentation-session";
+      process.env.MSTAR_HOST_SESSION_ID = "ambient-host-session";
+      expect(resolveCliSessionIdentity(undefined)).toEqual({
+        sessionId: "dsh-presentation-session",
+        sessionIdSource: "env",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  test("blank and whitespace native DSH values fall through to the ambient host session", () => {
+    const restore = scrubbed();
+    try {
+      process.env.MSTAR_HOST_SESSION_ID = "ambient-host-session";
+      for (const blank of ["", "   ", "\t\n"]) {
+        process.env.DSH_SESSION_ID = blank;
+        expect(resolveCliSessionIdentity(undefined)).toEqual({
+          sessionId: "ambient-host-session",
+          sessionIdSource: "env",
+        });
+      }
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe("generated CLI adapter", () => {
@@ -147,12 +241,16 @@ describe("generated CLI adapter", () => {
     (await openStore({ harnessDir }, "read")).close();
     const priorHost = process.env.MSTAR_HOST_SESSION_ID;
     const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
+    const priorDsh = process.env.DSH_SESSION_ID;
     const ledgerPath = path.join(harnessDir, "workflows", workflow, "notes.jsonl");
     const append = (id: string, flags: string[] = []) => run([
       "workflow-note", "append", "--workflow", workflow, "--session-ref", sessionRef,
       "--id", id, "--text", id, "--harness", harnessDir, ...flags,
     ]);
     try {
+      // The native dsh channel outranks the legacy host value, so this case
+      // isolates it to exercise the ambient fallback it names.
+      delete process.env.DSH_SESSION_ID;
       delete process.env.MSTAR_EXECUTION_IDENTITY;
       process.env.MSTAR_HOST_SESSION_ID = coordinator;
       const ambient = await append("ambient-note");
@@ -181,6 +279,8 @@ describe("generated CLI adapter", () => {
       else process.env.MSTAR_HOST_SESSION_ID = priorHost;
       if (priorMinted === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY;
       else process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
+      if (priorDsh === undefined) delete process.env.DSH_SESSION_ID;
+      else process.env.DSH_SESSION_ID = priorDsh;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -443,8 +543,10 @@ describe("generated CLI adapter", () => {
 
     const priorIdentity = process.env.MSTAR_HOST_SESSION_ID;
     const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
+    const priorDsh = process.env.DSH_SESSION_ID;
     delete process.env.MSTAR_HOST_SESSION_ID;
     delete process.env.MSTAR_EXECUTION_IDENTITY;
+    delete process.env.DSH_SESSION_ID;
     try {
       const withoutRuntimeIdentity = await run(args);
       const usageEnvelope = JSON.parse(withoutRuntimeIdentity.stdout);
@@ -453,6 +555,7 @@ describe("generated CLI adapter", () => {
     } finally {
       if (priorIdentity !== undefined) process.env.MSTAR_HOST_SESSION_ID = priorIdentity;
       if (priorMinted !== undefined) process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
+      if (priorDsh !== undefined) process.env.DSH_SESSION_ID = priorDsh;
     }
   });
 

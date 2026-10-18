@@ -296,7 +296,7 @@ export function renderCommandContract(
 ): string {
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
-    lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
+    lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY, then DSH_SESSION_ID, then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset. For token-authorized writes it is transport-resolved attribution, not authorization: the acquired coordinator session/binding authorizes the write, and an explicit session reference is a checked constraint.");
   }
   if (route === "mcp") {
     // The CLI route prints this same syntax as commander's Usage line, built
@@ -579,14 +579,16 @@ function parseMintedExecutionIdentity(serialized: string): ExecutionIdentity {
 /**
  * Resolve one invocation's caller session identity with the launcher-minted
  * identity as a real transport. Precedence is explicit override, then the
- * launched session's minted local identity, then the ambient host environment.
+ * launched session's minted local identity, then the native `DSH_SESSION_ID`
+ * the dsh shell injects per execution, then the ambient `MSTAR_HOST_SESSION_ID`.
  *
  * `MSTAR_EXECUTION_IDENTITY` is the channel `session.run` (and the managed host
  * gates) write, so a launched child actually carries its identity instead of
  * only the ambient host one. It is an **environment** channel, exactly like
- * `MSTAR_HOST_SESSION_ID`, so it resolves to `sessionIdSource: "env"`. The parsed
- * tuple rides along as `executionIdentity` so the active route can check its
- * declared scope.
+ * `DSH_SESSION_ID` and `MSTAR_HOST_SESSION_ID`, so it resolves to
+ * `sessionIdSource: "env"`. The parsed tuple rides along as `executionIdentity`
+ * so the active route can check its declared scope; the plain session-id
+ * channels carry no tuple.
  *
  * The minted value is validated through the engine's own identity rules; a
  * malformed one refuses (throws) rather than silently falling back to another
@@ -600,6 +602,10 @@ export function resolveCliSessionIdentity(
   if (typeof minted === "string" && minted.trim() !== "") {
     const executionIdentity = parseMintedExecutionIdentity(minted);
     return { sessionId: executionIdentity.sessionId, sessionIdSource: "env", executionIdentity };
+  }
+  const nativeSessionId = process.env.DSH_SESSION_ID;
+  if (typeof nativeSessionId === "string" && nativeSessionId.trim() !== "") {
+    return { sessionId: nativeSessionId, sessionIdSource: "env" };
   }
   const environmentSessionId = process.env.MSTAR_HOST_SESSION_ID;
   return typeof environmentSessionId === "string" && environmentSessionId.trim() !== ""

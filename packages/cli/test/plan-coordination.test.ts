@@ -32,7 +32,8 @@ async function fixture(): Promise<Fixture> {
 }
 function cli(args: string[], f: Fixture, caller?: ExecutionIdentity): Result {
   const env: Record<string, string | undefined> = { ...process.env, MSTAR_HARNESS_DIR: f.harness };
-  delete env.MSTAR_EXECUTION_IDENTITY; if (caller) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(caller);
+  delete env.MSTAR_EXECUTION_IDENTITY; delete env.DSH_SESSION_ID;
+  if (caller) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(caller);
   const proc = Bun.spawnSync([process.execPath, "run", ENTRY, ...args], { cwd: f.root, env, stdout: "pipe", stderr: "pipe" });
   const stdout = proc.stdout.toString(); let json: Record<string, any> = {};
   try { json = JSON.parse(stdout) as Record<string, any>; } catch {}

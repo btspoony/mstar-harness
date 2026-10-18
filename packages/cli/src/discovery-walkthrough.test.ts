@@ -33,6 +33,7 @@ function runCli(args: readonly string[], cwd: string, keepHostSession = false): 
   delete env.MSTAR_HARNESS_DIR;
   delete env.MSTAR_CONTROL_ROOT;
   delete env.MSTAR_EXECUTION_IDENTITY;
+  delete env.DSH_SESSION_ID;
   delete env.SDD_DIR;
   if (!keepHostSession) delete env.MSTAR_HOST_SESSION_ID;
   try {

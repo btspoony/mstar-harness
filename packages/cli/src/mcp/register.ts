@@ -10,14 +10,30 @@ import { validateCommandOutcome } from "./outcome.js";
  * immutable primitive session selector admission already validated — never the
  * handler value — so a resolver cannot reach or replace what the handler will
  * observe.
+ *
+ * `defaultSessionId` is the identity a launcher declared for every call (the
+ * stdio server's `--identity-env` channel). It is read at admission so a
+ * required session selector is satisfied by that declared default; the per-call
+ * selector still wins, and an invalid default reaches the same safe-id guard as
+ * any other identity because the resolver never repairs it.
+ *
+ * `defaultHarness` is the root a launcher pinned for every call (the stdio
+ * server's `--harness` channel). Commands that resolve their own root from an
+ * `input.harness` field never read `controlRoot`, so admission fills that
+ * field from this default when the call left it unset or blank; an explicit
+ * non-blank per-call value still wins.
  */
-export type ResolveContext = (
-  definition: CommandDefinition,
-  sessionId: string | undefined,
-  signal: AbortSignal,
-  services: Array<{ close(): Promise<void> }>,
-  effects: McpEffects,
-) => InvocationContext | Promise<InvocationContext>;
+export type ResolveContext = {
+  (
+    definition: CommandDefinition,
+    sessionId: string | undefined,
+    signal: AbortSignal,
+    services: Array<{ close(): Promise<void> }>,
+    effects: McpEffects,
+  ): InvocationContext | Promise<InvocationContext>;
+  readonly defaultSessionId?: string;
+  readonly defaultHarness?: string;
+};
 
 export function mcpToolName(commandId: string): string {
   return `mstar_${commandId.replace(/[.-]/g, "_")}`;
@@ -82,13 +98,46 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
   };
 }
 
-function handlerInput(definition: CommandDefinition, input: unknown): unknown {
+/**
+ * A launcher-pinned root is only a default for a field the tool publishes: an
+ * unset `input.harness` is filled from `defaultHarness` when the tool's declared
+ * input schema advertises `harness`, and an explicit per-call value is never
+ * overridden. A blank or whitespace-only value is not an override: the engine's
+ * own root resolution treats it as absent, so treating it as explicit here
+ * would silently fall back to the cwd probe. A tool that names no such field
+ * receives nothing.
+ */
+function declaresHarness(contract: { jsonSchema: Record<string, unknown> }): boolean {
+  const properties = contract.jsonSchema.properties;
+  return properties !== null && typeof properties === "object" && Object.hasOwn(properties, "harness");
+}
+
+function handlerInput(definition: CommandDefinition, input: unknown, defaultHarness: string | undefined): unknown {
   if (input === null || typeof input !== "object") return input;
   const record = input as Record<string, unknown>;
   const contextKeys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
   const normalized = { ...record };
   for (const key of contextKeys) delete normalized[key];
+  const explicit = typeof normalized.harness === "string" && normalized.harness.trim() !== "";
+  if (defaultHarness !== undefined && !explicit) normalized.harness = defaultHarness;
   return normalized;
+}
+
+/**
+ * Normalize a blank `harness` BEFORE the tool schema runs. `handlerInput` fills
+ * an absent value after admission has already parsed the input, so a `min(1)`
+ * harness schema would refuse `""` as a usage error while a bare optional-string
+ * schema would accept it — the same call judged differently by two families
+ * that resolve the same root. Writing the pinned default over a blank value at
+ * the earliest seam makes both uniform, and an explicit non-blank value is
+ * untouched. The caller's object is never mutated: a shallow copy carries the
+ * normalized field.
+ */
+function normalizedBlankHarness(input: unknown, defaultHarness: string | undefined): unknown {
+  if (defaultHarness === undefined || input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const record = input as Record<string, unknown>;
+  if (typeof record.harness !== "string" || record.harness.trim() !== "") return input;
+  return { ...record, harness: defaultHarness };
 }
 
 export function registerMcpCommands(
@@ -113,6 +162,7 @@ export function registerMcpCommands(
   for (const { definition, name } of tools) {
     const descriptor = getCommandSchemas([definition])[0]!;
     const contract = mcpInputContract(definition, descriptor);
+    const harnessDefault = declaresHarness(contract);
     // The SDK owns its isError/text rejection protocol. One Standard Schema
     // issue carries the complete safe refusal, not a lossy generic Zod message.
     // Successful validation hands the admitted value to the executor: no
@@ -123,7 +173,16 @@ export function registerMcpCommands(
         vendor: "mstar-harness",
         jsonSchema: { input: () => contract.jsonSchema, output: () => contract.jsonSchema },
         validate(input) {
-          const admitted = admitCommandInput(definition, input, descriptor, contract.schema, (data) => handlerInput(definition, data));
+          const defaultSessionId = resolveContext.defaultSessionId;
+          const defaultHarness = harnessDefault ? resolveContext.defaultHarness : undefined;
+          const admitted = admitCommandInput(
+            definition,
+            normalizedBlankHarness(input, defaultHarness),
+            descriptor,
+            contract.schema,
+            (data) => handlerInput(definition, data, defaultHarness),
+            defaultSessionId === undefined ? undefined : { sessionId: defaultSessionId },
+          );
           return admitted.success ? { value: admitted } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },
       },
