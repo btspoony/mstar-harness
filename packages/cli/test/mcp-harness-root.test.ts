@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -48,6 +48,32 @@ async function competingCwdHarness(): Promise<{ harness: string; cwd: string }> 
   mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
   (await initializeStore({ harnessDir: harness })).close();
   return { harness, cwd };
+}
+
+/**
+ * Two roots that a persist verb can distinguish: each owns the SAME review key
+ * (`sdd/_reviews/<key>.json`) with a different payload. The pinned root and the
+ * cwd's own `.mstar` are both complete so only root selection decides which
+ * document a call reads or deletes — never a missing backing directory.
+ */
+const PERSIST_PROBE_KEY = "root-probe";
+
+async function competingPersistRoots(): Promise<{ pinned: string; cwd: string; cwdRoot: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const pinned = path.join(root, "control", ".mstar");
+  const cwd = path.join(root, "workspace");
+  const cwdRoot = path.join(cwd, ".mstar");
+  for (const [harness, origin] of [[pinned, "pinned"], [cwdRoot, "cwd"]] as const) {
+    mkdirSync(path.join(harness, "sdd", "_reviews"), { recursive: true });
+    writeFileSync(path.join(harness, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`), JSON.stringify({ origin }));
+  }
+  return { pinned, cwd, cwdRoot };
+}
+
+/** The fixture's own discriminator, read from a successful persist envelope. */
+function persistOrigin(envelope: CommandEnvelope): unknown {
+  return (envelope.data as { payload?: { origin?: string } } | null | undefined)?.payload?.origin;
 }
 
 /** Drive one real command call through the production registration path. */
@@ -141,6 +167,74 @@ describe("MCP harness root", () => {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("the persist family defaults to the pinned root and an explicit per-call harness overrides it", async () => {
+    const fixture = await competingPersistRoots();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    const previousStore = process.env.MSTAR_STORE_MODULE;
+    delete process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_STORE_MODULE;
+    process.chdir(fixture.cwd);
+    const selected = ["persist.get", "persist.delete"].map((id) => {
+      const found = getCommandDefinitions().find((entry) => entry.id === id);
+      if (found === undefined) throw new Error(`missing command: ${id}`);
+      return found;
+    });
+    const server = createMcpServer(createContextResolver({ harnessRoot: fixture.pinned }), selected);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    const call = async (name: string, args: Record<string, unknown>): Promise<CommandEnvelope> => {
+      const result = await client.callTool({ name, arguments: args });
+      if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
+      const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
+      const start = text.indexOf('{"version":1,');
+      if (start < 0) throw new Error(`no command envelope in the tool result: ${text}`);
+      return JSON.parse(text.slice(start)) as CommandEnvelope;
+    };
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      // The published schema is what makes the launcher default reach the
+      // family at all: registration fills `harness` only for a tool that
+      // declares it.
+      const { tools } = await client.listTools();
+      const persist = tools.find((entry) => entry.name === "mstar_persist_get")!;
+      expect(persist.inputSchema.properties).toHaveProperty("harness");
+
+      // No per-call harness: the connection pin (A) wins over the cwd probe (B).
+      const pinned = await call("mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY });
+      expect(pinned).toMatchObject({ status: "ok" });
+      expect(persistOrigin(pinned)).toBe("pinned");
+
+      // A blank value is not an override — the engine's own root resolution
+      // treats it as absent, so the pin must apply rather than the cwd probe.
+      const blank = await call("mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY, harness: "   " });
+      expect(persistOrigin(blank)).toBe("pinned");
+
+      // An explicit non-blank per-call harness still wins over the pin.
+      const explicit = await call("mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot });
+      expect(persistOrigin(explicit)).toBe("cwd");
+
+      // `persist.delete` shares that root resolution: without a per-call
+      // harness it removes the pinned root's document and leaves the cwd's.
+      const pinnedDocument = path.join(fixture.pinned, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
+      const cwdDocument = path.join(fixture.cwdRoot, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
+      const deleted = await call("mstar_persist_delete", { kind: "review", key: PERSIST_PROBE_KEY });
+      expect(deleted).toMatchObject({ status: "ok", data: { deleted: true } });
+      expect(existsSync(pinnedDocument)).toBe(false);
+      expect(existsSync(cwdDocument)).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+      if (previousStore === undefined) delete process.env.MSTAR_STORE_MODULE;
+      else process.env.MSTAR_STORE_MODULE = previousStore;
     }
   });
 

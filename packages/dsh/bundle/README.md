@@ -79,8 +79,9 @@ semantics, not a merge).
 The `mstar-mcp` row launches the host-neutral server with neutral defaults: no
 pinned root and no declared identity. A deployment that needs either overrides
 the row's `args` to launch `mstar mcp --harness <absolute path>` and/or
-`--identity-env <NAME>`. `--harness` pins the root for every registered
-command's root selection, not only the invocation context; `--identity-env`
+`--identity-env <NAME>`. The pinned root is the default for every registered
+command's root selection, not only the invocation context, and an explicit
+per-call `harness` overrides it; `--identity-env`
 declares a connection-wide default, so per-caller identity needs an explicit
 `sessionId` or its own scoped mount. Because a patch replaces the row's whole
 `config`, such an override restates the `command` too.

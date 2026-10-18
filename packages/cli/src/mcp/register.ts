@@ -20,8 +20,8 @@ import { validateCommandOutcome } from "./outcome.js";
  * `defaultHarness` is the root a launcher pinned for every call (the stdio
  * server's `--harness` channel). Commands that resolve their own root from an
  * `input.harness` field never read `controlRoot`, so admission fills that
- * field from this default when the call left it unset; an explicit per-call
- * value still wins.
+ * field from this default when the call left it unset or blank; an explicit
+ * non-blank per-call value still wins.
  */
 export type ResolveContext = {
   (
@@ -102,7 +102,10 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
  * A launcher-pinned root is only a default for a field the tool publishes: an
  * unset `input.harness` is filled from `defaultHarness` when the tool's declared
  * input schema advertises `harness`, and an explicit per-call value is never
- * overridden. A tool that names no such field receives nothing.
+ * overridden. A blank or whitespace-only value is not an override: the engine's
+ * own root resolution treats it as absent, so treating it as explicit here
+ * would silently fall back to the cwd probe. A tool that names no such field
+ * receives nothing.
  */
 function declaresHarness(contract: { jsonSchema: Record<string, unknown> }): boolean {
   const properties = contract.jsonSchema.properties;
@@ -115,7 +118,8 @@ function handlerInput(definition: CommandDefinition, input: unknown, defaultHarn
   const contextKeys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
   const normalized = { ...record };
   for (const key of contextKeys) delete normalized[key];
-  if (defaultHarness !== undefined && normalized.harness === undefined) normalized.harness = defaultHarness;
+  const explicit = typeof normalized.harness === "string" && normalized.harness.trim() !== "";
+  if (defaultHarness !== undefined && !explicit) normalized.harness = defaultHarness;
   return normalized;
 }
 
