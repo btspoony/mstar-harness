@@ -1108,7 +1108,19 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       code: 'workflow.selection.no-active',
       message: expect.stringContaining('no active lifecycle'),
     })
+    // D5: this message is SHARED by both authority routes, so it names the
+    // execution authority (never the retired root document) and carries one
+    // real recovery command for the operator.
+    const emptyMessage = emptyState?.selection.kind === 'error' ? emptyState.selection.message : ''
+    expect(emptyMessage).toContain('mstar workflow register')
+    expect(emptyMessage).not.toContain('status.json')
     expect(emptyState?.plans).toEqual([])
+    // The rendered model line carries that same message — the row is the only
+    // channel the model reads the verdict through.
+    const emptyText = textOf(catalogRowOf(await emptyApp.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))).row)
+    expect(emptyText).toContain('workflow selection: ERROR (workflow.selection.no-active)')
+    expect(emptyText).toContain('mstar workflow register')
+    expect(emptyText).not.toContain('status.json')
     await emptyApp.dispose()
 
     // Unbound multi-active set: the picker verdict, with its active ids.

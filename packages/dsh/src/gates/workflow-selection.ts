@@ -3,9 +3,10 @@
  * rule; D4 binding order — locked 2026-09-11).
  *
  * The ACTIVE-SET resolver (`resolveActiveWorkflow`) picks the lifecycle a
- * session writes under, from ONE registry (`status.json` `workflows[]`) by
- * the locked order: row scope (a plan row whose `metadata.worktree_path`
- * contains the hint's cwd) → cwd (a
+ * session writes under, from ONE registry (the ACTIVE execution authority's
+ * lifecycle registry; the pre-activation file route reads the root
+ * `status.json` `workflows[]`) by the locked order: row scope (a plan row
+ * whose `metadata.worktree_path` contains the hint's cwd) → cwd (a
  * `control_worktree_path` containing it) → the session's durable
  * `selectedWorkflowId` → the only active entry. Each automatic rung needs
  * EXACTLY ONE distinct match; zero or several fall through, and nothing
@@ -327,7 +328,7 @@ function activeEntriesOf(registry: readonly unknown[]): { entries: ActiveEntry[]
       error: {
         kind: 'error',
         code: 'workflow.selection.no-active',
-        message: 'no active lifecycle in status.json workflows[] — the agent-flow writer appends only to an active lifecycle',
+        message: 'no active lifecycle is registered \u2014 the agent-flow writer appends only to an active lifecycle; register one with "mstar workflow register" (plan) or "mstar iteration register"',
       },
     }
   }
@@ -356,7 +357,7 @@ function activeEntriesOf(registry: readonly unknown[]): { entries: ActiveEntry[]
         error: {
           kind: 'error',
           code: 'workflow.selection.invalid-registry',
-          message: `duplicate workflow id in status.json workflows[]: ${entry.id} — the registry must be keyed by unique active lifecycles`,
+          message: `duplicate workflow id in the active lifecycle registry: ${entry.id} \u2014 ids must be unique`,
         },
       }
     }
@@ -392,7 +393,7 @@ function selectActiveWorkflow(source: ActiveSetSource, hint?: SessionHint): Acti
   return {
     kind: 'error',
     code: 'workflow.selection.unbound-multi-active',
-    message: `${source.entries.length} active lifecycles in status.json workflows[] — this session has no lease, is not inside a workflow worktree and has no stored selection; pick one for this session (writes pause until then)`,
+    message: `${source.entries.length} active lifecycles are registered \u2014 this session has no lease, is not inside a workflow worktree and has no stored selection; pick one for this session (writes pause until then)`,
     activeWorkflowIds: source.entries.map((entry) => entry.id),
   }
 }
