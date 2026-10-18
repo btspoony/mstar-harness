@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-10-18
+
+### Changed
+
+- **`dsh-llm-fallbacks` pin bumped `0.6.5` → `0.6.6`**: the two hand-written literals move together — the `@mstar-harness/dsh` devDependency (`packages/dsh/package.json`) and the CLI install-spec constant (`packages/cli/package.json` → `mstar.dshLlmFallbacks`, read by `init` / `doctor --target dsh`) — and the lock re-resolves the row to `0.6.6`. `0.6.6` requires a `^0.2.1-rc.2` host, so the pin completes only on that cohort line: the lock still carries the older transitive `@deepseek-ai/dsh-client-ui-plugin-manager@0.2.0-rc.2` copy (with nested `dsh-timeout` / `dsh-typert-protocol` / `dsh-brand` at `0.2.0-rc.2`), because `packages/dsh` declares no direct peer for that name. Nothing upgrades an already-installed host: `doctor --target dsh` reports the older row `drifted` until `init --target dsh` re-adds the pinned spec. Workspace verification covers the direct pinned row and the peer/type gates: `tests/peer-deps.spec.ts` 7 pass, the `fallbacks-*` suites 53 pass, and both `typecheck` gates (`typecheck:src` and `typecheck:tests`) exit clean.
+
+- Version alignment with harness **4.0.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.2**.
+
 ## [4.0.1] - 2026-10-16
 
 ### Changed

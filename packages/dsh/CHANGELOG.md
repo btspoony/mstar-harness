@@ -6,6 +6,25 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-10-18
+
+### Changed
+
+- **`dsh-llm-fallbacks` pin bumped `0.6.5` → `0.6.6`**: the two hand-written literals move together — the `@mstar-harness/dsh` devDependency (`packages/dsh/package.json`) and the CLI install-spec constant (`packages/cli/package.json` → `mstar.dshLlmFallbacks`, read by `init` / `doctor --target dsh`) — and the lock re-resolves the row to `0.6.6`. `0.6.6` requires a `^0.2.1-rc.2` host, so the pin completes only on that cohort line: the lock still carries the older transitive `@deepseek-ai/dsh-client-ui-plugin-manager@0.2.0-rc.2` copy (with nested `dsh-timeout` / `dsh-typert-protocol` / `dsh-brand` at `0.2.0-rc.2`), because `packages/dsh` declares no direct peer for that name. Nothing upgrades an already-installed host: `doctor --target dsh` reports the older row `drifted` until `init --target dsh` re-adds the pinned spec. Workspace verification covers the direct pinned row and the peer/type gates: `tests/peer-deps.spec.ts` 7 pass, the `fallbacks-*` suites 53 pass, and both `typecheck` gates (`typecheck:src` and `typecheck:tests`) exit clean.
+- Upgraded the `@deepseek-ai/dsh-*` peer cohort to `^0.2.1-rc.1` (corridor `dsh-v0.2.0-rc.2` → `dsh-v0.2.1-rc.1`, rolling up alpha.1–alpha.5: custom plugin index, Agent-create-plugin entry, on-demand official bundles, experimental Mods/DevTools/COT-translation/worktrees, secret masking, Web DeepSeek login, `engines.dsh` compatibility preference, Slot `conversation.input.model.label`; dropped the peer on the removed `@deepseek-ai/dsh-invariants`, added `@deepseek-ai/dsh-agent-preset-registry`). Session format v4 unchanged.
+- **dsh plugin — role identity now rides agent presets**: dsh 0.2.1 removed `SubagentStartRequest.persona` and the `start`/`startContinuable` pair (`startActivation` is the one start surface; `tool-subagent` rejects a `persona` config and points at a preset). A role-matched delegation therefore SELECTS a deployed agent preset (`SubagentStartRequest.agentPreset`) — `Config.rolePersonas` (role → persona text) is replaced by `Config.rolePresets` (role → preset id), and the deployment declares one complete preset per role (mounting `@deepseek-ai/dsh-persona` for its identity) since a preset owns the child's whole composition. Selection is capability-gated (independent-selection providers only) and skipped, with one debug log, when the composition mounts no `agentPresets` registry; configured ids are validated once per apply.
+- The `@mstar-harness/dsh/invariant` companion stays a documented no-op: upstream removed the `invariants` service and the `./invariant` convention, so the entry is now a loadable no-op that requires no host service.
+- Upgraded the `@deepseek-ai/dsh-*` peer cohort to `^0.2.1-rc.2` (corridor `dsh-v0.2.1-rc.1` → `dsh-v0.2.1-rc.2`: DeepSeek Search/Fetch web-search settings UI; Flash-1017 temporary model-label badge package; cohort pin). Session format v4 unchanged.
+- Review output now lives in a dedicated **`{REVIEW_DIR}`** tree (default `{HARNESS_DIR}/reviews/`, `.mstarc` `review_dir` aware) with run-scoped directory names — `<date>-codebase-<level>-<round>`, `<date>-pr<N>`, `<date>-branch-<slug>`, `<date>-diff-<short-sha>`; `reviewRunDirName` / `resolveReviewRunDir` / `resolveReviewDir` are exported and `harness scaffold` creates `reviews/`.
+- **The codebase audit writes a review report, not plans**: `scaffoldAuditReport` writes `<reviewsDir>/<date>-codebase-<level>-<round>/README.md` (same finding gates; the README drops the plan execution-order block). `mstar audit scaffold` gains `--level` / `--round` / `--reviews-dir` / `--dir`, and the `promote` verb of the `mstar audit` family — with `scaffoldAuditPlan`, the plan-Status-block validators and the plan-list helper — is **removed**. The audit seam now scans markdown under `{REVIEW_DIR}` with the credential scan as its only validator.
+- **PR review reports and evidence move to `{REVIEW_DIR}/<date>-pr<N>/`**: `prReviewReportPath` takes `reviewsDir` instead of `reportsDir`, and `mstar pr-review report-path` takes an optional `--reviews-dir` defaulting to the resolved `{REVIEW_DIR}`; the dsh `mstar-pr-seats` `reportsDir` argument is that same review run directory.
+- Updated the audit/review skills, the slash commands, `docs/commands.md` + `docs/runtime-reference.md` and the plan-lifecycle references: no plan files, no promotion producer, no plan-quality-bar citation on the review surface.
+- `mstar path resolve` also reports `reviewDir`, and the conventions skill records that a directory key declared outside `{HARNESS_DIR}` (e.g. `review_dir=process/reviews`) is not covered by the canonical ignore snippet.
+
+- Version alignment with harness **4.0.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.2**.
+
 ## [4.0.1] - 2026-10-16
 
 ### Changed
