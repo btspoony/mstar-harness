@@ -1295,6 +1295,12 @@ export async function preStepCatalogListener(
     // so relabelling a retry with the retry's own turn would make the panel's
     // freshness footer and the session evidence disagree.
     const emittedTurn = changed || prior === undefined ? payload.turn : prior.emittedTurn
+    // The emission TIME has the same obligation: capture it when the row is
+    // appended, retain it on an unchanged step, and repeat it to a retried
+    // persist. The store write is a separate obligation that may land later, so
+    // stamping the write's own clock would report the retry as the freshness
+    // time even though the model saw the row earlier.
+    const emittedAt = changed || prior === undefined ? new Date().toISOString() : prior.emittedAt
     // The persist is a separate obligation: attempt it on a change AND on an
     // unchanged step whose last attempt degraded (a transient store failure
     // must not latch the panel stale until the payload changes again). The
@@ -1312,6 +1318,7 @@ export async function preStepCatalogListener(
         harnessDir,
         cwd,
         emittedTurn,
+        emittedAt,
         catalogPayload,
         payload.agent,
         authorityGenerationByPayload.get(catalogPayload),
@@ -1319,10 +1326,10 @@ export async function preStepCatalogListener(
       persistPending = persisted === 'degraded'
     }
     if (prior === undefined || changed) {
-      digests.set(digestKey, { text, panelKey, emittedTurn, persistPending })
+      digests.set(digestKey, { text, panelKey, emittedTurn, emittedAt, persistPending })
     } else {
       // Unchanged: only the retry latch moves, so the digest identity (and its
-      // original emission turn) stays.
+      // original emission turn and time) stays.
       prior.persistPending = persistPending
     }
     return { kind: 'enter', messages }
@@ -1359,9 +1366,10 @@ function sessionHintForCatalog(harnessDir: string | null, agent: unknown): Sessi
  * Per session+workspace emission digest: the rendered catalog text and the
  * panel-relevant payload projection ({@link panelDigestOf}) as of the last
  * emission. A digest keys its CHANGE decision on content, not on turns — a new
- * turn is not an emission trigger. It does retain {@link emittedTurn}, because
- * the persisted snapshot must keep the turn the row was actually emitted in,
- * even when a degraded persist is retried on a much later step.
+ * turn is not an emission trigger. It does retain {@link emittedTurn} and
+ * {@link emittedAt}, because the persisted snapshot must keep the turn and time
+ * the row was actually emitted at, even when a degraded persist is retried on a
+ * much later step.
  */
 export interface EmissionDigest {
   readonly text: string
@@ -1373,6 +1381,12 @@ export interface EmissionDigest {
    * of whichever step happened to retry the write.
    */
   readonly emittedTurn: number
+  /**
+   * The ISO time the row was EMITTED at (captured with the same first/changed
+   * decision as {@link emittedTurn}). A retried persist reuses it verbatim, so
+   * the stored snapshot's freshness time never moves to the retry's clock.
+   */
+  readonly emittedAt: string
   /**
    * The last persist attempt for this digest DEGRADED (a transient store
    * failure). The gate retries the persist on a later step while the payload
@@ -1419,6 +1433,8 @@ function agentDigestKey(agent: unknown, cwd: string | undefined): string {
  * @param harnessDir - the workspace's resolved `{HARNESS_DIR}` (null when none).
  * @param cwd - the session workspace the payload was resolved for.
  * @param turn - the agent turn the row was emitted for.
+ * @param emittedAt - the ISO time the row was emitted at (retained across a
+ *   retried persist, so the stored freshness time never moves to the retry).
  * @param catalogPayload - the exact payload object handed to the step messages.
  * @param agent - the stepping agent (the snapshot's session identity).
  */
@@ -1427,6 +1443,7 @@ function persistEngineStatusSnapshot(
   harnessDir: string | null,
   cwd: string | undefined,
   turn: number,
+  emittedAt: string,
   catalogPayload: MstarEngineStatusPayload,
   agent: unknown,
   selectedGeneration?: DshSelectedGeneration,
@@ -1443,6 +1460,7 @@ function persistEngineStatusSnapshot(
     cwd,
     turn,
     payload: catalogPayload,
+    emittedAt,
     ...(selectedGeneration === undefined ? {} : { selectedGeneration }),
   })
   if (result.kind === 'degraded') {

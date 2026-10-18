@@ -184,19 +184,29 @@ describe('engine-status emission — written at the real change-driven emission'
     const app = (booted = await bootApp())
     const inbox = [inboxMessage()]
     // (a) No ACTIVE store yet: the row IS emitted, and its persist degrades.
+    // The window brackets the FIRST emission, which is the only clock the
+    // stored row may name.
+    const firstStart = Date.now()
     const first = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_retry', app.root, inbox, 1, 1),
       defaultEnter(inbox),
     )
+    const firstEnd = Date.now()
     expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
     expect(readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
 
     // (b) The store becomes ACTIVE. The payload is unchanged, so no second row
     // is appended — but the pending persist is retried and lands. It carries
-    // the ORIGINAL emission turn: the row the model saw was emitted in turn 1,
-    // and a retried write must not relabel it with the retry's turn.
+    // the ORIGINAL emission turn and time: the row the model saw was emitted in
+    // turn 1, and a retried write must not relabel it with the retry's turn or
+    // stamp the retry's clock as the freshness time.
     await seedStore(app.harnessDir)
+    // The retry lands strictly after the first emission: a store-stamped row
+    // would carry a time outside the first step's window.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const retryStart = Date.now()
+    expect(retryStart).toBeGreaterThan(firstEnd)
     const second = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_retry', app.root, inbox, 2, 2),
@@ -207,10 +217,15 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(persisted.kind).toBe('ok')
     if (persisted.kind !== 'ok') throw new Error('unreachable')
     expect(persisted.entry.turn).toBe(1)
+    const persistedAt = Date.parse(persisted.entry.at)
+    expect(persistedAt).toBeGreaterThanOrEqual(firstStart)
+    expect(persistedAt).toBeLessThanOrEqual(firstEnd)
+    expect(persistedAt).toBeLessThan(retryStart)
 
     // (c) The successful retry clears the latch: a third unchanged step neither
     // appends the row nor touches the store at all (the execution token is
-    // unchanged, so no write happened) — the emission keeps turn 1.
+    // unchanged, so no write happened) — the emission keeps turn 1 and its
+    // original time.
     const tokenBefore = (await readExecutionState({ harnessDir: app.harnessDir })).token
     const third = await app.ctx.waterfall(
       'agent/pre-step',
@@ -220,6 +235,7 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(third.kind === 'enter' && third.messages.length).toBe(inbox.length)
     const unchanged = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retry', app.root)
     expect(unchanged.kind === 'ok' && unchanged.emission?.turn).toBe(1)
+    expect(unchanged.kind === 'ok' && unchanged.emission?.emittedAt).toBe(persisted.entry.at)
     expect((await readExecutionState({ harnessDir: app.harnessDir })).token).toBe(tokenBefore)
   })
 
