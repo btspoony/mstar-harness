@@ -4,7 +4,7 @@
  *
  * WHY a cache outside React: the panel is a browser bundle and the payload
  * lives on the HOST filesystem (the persisted catalog row is only the anchor —
- * its `source` is the frozen three-member first-party arm). The data therefore
+ * its `source` is the frozen producer-owned catalog source). The data therefore
  * arrives over the host's shared typert `/api` gateway, asynchronously and
  * repeatedly (every new anchor row asks again). Keeping that state in a small
  * observable store — rather than component state — gives one request per

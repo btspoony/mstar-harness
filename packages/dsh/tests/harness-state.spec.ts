@@ -72,7 +72,7 @@ describe('mstar-engine-status — open-issue facts come from the store', () => {
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
+    if (row?.source.kind !== 'mstar-engine') return
     const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toMatchObject({ residuals: [], residualFindings: null })
     expect(payload.state?.storeFacts?.kind).toBe('unavailable')
@@ -91,7 +91,7 @@ describe('mstar-engine-status — open-issue facts come from the store', () => {
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
+    if (row?.source.kind !== 'mstar-engine') return
     const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toMatchObject({ residualFindings: [], residuals: [] })
     expect(textOf(row)).toContain('residuals: none open')
@@ -182,7 +182,7 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
     if (decision.kind !== 'enter') return
     expect(decision.messages).toHaveLength(1)
     const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
+    if (row?.source.kind !== 'mstar-engine') return
     // The catalog payload is NOT persisted on the row's source — it is read
     // from the same builder the pre-step listener rendered the row from.
     const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
@@ -201,7 +201,7 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
     if (decision.kind !== 'enter') return
     expect(decision.messages).toHaveLength(1)
     const row = lastMessage(decision)
-    if (row?.source.kind !== 'plugin') return
+    if (row?.source.kind !== 'mstar-engine') return
     // No explicit `harnessDir` config and an agent-less payload → the
     // resolved `{HARNESS_DIR}` is null (the payload the listener built).
     const payload = buildCatalogPayload(booted!.ctx, null)

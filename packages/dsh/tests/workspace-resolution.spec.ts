@@ -234,9 +234,9 @@ describe('agent/pre-step — the watermark harness dir resolves from the session
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
     const catalog = lastMessage(decision)
-    // The PERSISTED source is the first-party plugin arm; the resolved
+    // The PERSISTED source is the producer-owned catalog source; the resolved
     // harness dir is payload data and is NOT persisted with it.
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(booted.ctx, join(ws, '.agents')).harnessDir).toBe(join(ws, '.agents'))
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).toContain(`harness dir: ${join(ws, '.agents')}`)
@@ -250,7 +250,7 @@ describe('agent/pre-step — the watermark harness dir resolves from the session
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
     const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(booted.ctx, null).harnessDir).toBeNull()
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
     expect(text).toContain('harness dir: none')
@@ -295,7 +295,7 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     const first = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws), defaultEnter([]))
     expect(first.kind).toBe('enter')
     if (first.kind !== 'enter') return
-    expect(lastMessage(first)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(lastMessage(first)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(booted.ctx, join(ws, '.agents')).enforcement).toEqual({ hard: false, source: 'none' })
 
     // Same turn + unchanged → the digest gate suppresses the identical row
@@ -315,7 +315,7 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     const third = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws2), defaultEnter([]))
     expect(third.kind).toBe('enter')
     if (third.kind !== 'enter') return
-    expect(lastMessage(third)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(lastMessage(third)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(booted.ctx, join(ws2, '.agents')).enforcement).toEqual({ hard: true, source: 'compass' })
   })
 })

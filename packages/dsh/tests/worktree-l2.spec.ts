@@ -229,7 +229,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // ONE unified catalog row: watermark + iteration-gate section + state section.
     const row = lastMessage(decision)
     expect(row?.role).toBe('user')
-    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(row?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     // The catalog payload is NOT persisted on the row's source — read it from
     // the same builder the pre-step listener rendered the row from.
     const payload = await buildCatalogPayloadWithStore(app.ctx, app.harnessDir)
@@ -274,7 +274,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     const row = lastMessage(decision)
-    expect(row?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(row?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     const payload = await buildCatalogPayloadWithStore(app.ctx, app.harnessDir)
     expect(payload.iteration!.gate).toMatchObject({ transition: 'phase-3-close', all_plans_done: true, ok: false })
     const codes = payload.iteration!.gate.violations.map((v) => v.code)
@@ -301,7 +301,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
 
     expect(decision.kind).toBe('enter')
     expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(replaced)
-    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(decision.kind === 'enter' && decision.messages.at(-1)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
   })
 
   it('aborted step → the delegated decision returns unchanged, no catalog rows (advisory never publishes on a blocked step)', async () => {
@@ -330,7 +330,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // Boot without an ACTIVE workflow → only the engine-status row.
     const before = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
     expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length + 1)
-    expect(lastMessage(before)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(lastMessage(before)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
 
     // Adding the ACTIVE workflow + compass mid-session does NOT re-watermark
     // within the catalog TTL: the cache is built at boot.
@@ -343,7 +343,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     })
     const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, 2), defaultEnter(inbox))
     expect(after.kind === 'enter' && after.messages.length).toBe(inbox.length + 1)
-    expect(lastMessage(after)?.source).toEqual({ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' })
+    expect(lastMessage(after)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
   })
 
   // Disposition — malformed status.json handling is a retired file-route assertion; ACTIVE execution authority reports store and workflow errors.

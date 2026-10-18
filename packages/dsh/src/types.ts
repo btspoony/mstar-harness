@@ -6,16 +6,11 @@
  * (model-visible ⟺ logged — dsh packages/AGENTS.md), plus the NON-persisted
  * payload that row is rendered from.
  *
- * The source is the first-party `plugin` arm and nothing else: dsh freezes
- * the source vocabulary per released session-format edge, so a custom `kind`
- * or any extra `source` member makes a released edge refuse the whole session
- * log. The structured facts live in
+ * The source is the plugin's PRODUCER-OWNED kind, not the retired
+ * `{ kind: 'plugin', plugin }` wrapper: dsh session-format V4 refuses that
+ * wrapper at message admission, and a source member outside the declared kind
+ * is refused by the released format edges. The structured facts live in
  * {@link MstarEngineStatusPayload} instead.
- *
- * `mstar-iteration-gate` is the sibling catalog row: the boot-cached
- * `evaluatePhaseGate` verdict (tool result shape) appended after the
- * engine-status row on the same
- * pre-step listener.
  *
  * @module @mstar-harness/dsh
  */
@@ -24,42 +19,41 @@ import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 
 /**
- * rc.2 moved the shared `plugin` arm out of `MessageSourceMap`: the map is
- * merge-extensible and each producer declares its own `kind` in its own
- * module (dsh-agent's `model-selection` is the shipped precedent). This
- * declares the arm the first-party rows below emit — the runtime shape is
- * unchanged from the previously shared declaration.
+ * `MessageSourceMap` is merge-extensible and each producer declares its own
+ * `kind` in its own module (dsh-agent's `model-selection` is the shipped
+ * precedent). This is the engine-status catalog producer's declaration; the
+ * `@persistenceAttribution` promise is that an unknown kind and its JSON
+ * metadata stay readable without the producer, and that the kind imposes no
+ * validation, replay, or authority requirement on other readers.
  */
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    plugin: {
-      kind: 'plugin'
-      plugin: string
-    } & ContextFormed
+    /** Engine-status catalog attribution; readers preserve the content without this producer.
+     * @persistenceAttribution
+     */
+    'mstar-engine': { kind: 'mstar-engine' } & ContextFormed
   }
 }
 
 /**
- * The ONE unified engine-status catalog row's `source`: the first-party
- * `plugin` arm with a CLOSED member set — exactly these three keys, never a
- * fourth.
+ * The ONE unified engine-status catalog row's `source`: the plugin's
+ * producer-owned kind with a CLOSED member set — exactly these two keys,
+ * never a third.
  *
- * `plugin` carries the plugin's identity and `form: 'catalog'` the row's
- * first-party presentation; both are opaque, already-admitted vocabulary at
- * every released session-format edge. Everything the row publishes about the
- * workspace lives in {@link MstarEngineStatusPayload}, which never rides
- * `source`.
+ * dsh session-format V4 refuses the retired `{ kind: 'plugin', plugin }`
+ * wrapper at message admission, so the kind itself identifies the producer
+ * and `form: 'catalog'` declares the row's context form. Everything the row
+ * publishes about the workspace lives in
+ * {@link MstarEngineStatusPayload}, which never rides `source`.
  *
- * The `plugin` union is the PERSISTED-LOG vocabulary, not a write-time
- * choice: the plugin emits `mstar-engine`, while rows emitted by shipped
- * builds before 2026-09-11 persist `mstar-engine-status` in already-written
- * session logs. Both are valid persisted rows; the panel's anchor reader
- * accepts both (data compat for persisted session logs, not a code-compat
- * layer).
+ * Read compatibility for PERSISTED logs (not a code-compat layer): rows
+ * written by released builds carry the old wrapper in their V3 session logs,
+ * and the V3→V4 migration lifts them to `{ kind: 'plugin:mstar-engine',
+ * form: 'catalog' }` (or `plugin:mstar-engine-status` for the pre-rename
+ * identity). The panel's anchor reader accepts both migrated kinds.
  */
 export interface MstarEngineStatusSource {
-  readonly kind: 'plugin'
-  readonly plugin: 'mstar-engine' | 'mstar-engine-status'
+  readonly kind: 'mstar-engine'
   readonly form: 'catalog'
 }
 
@@ -67,8 +61,9 @@ export interface MstarEngineStatusSource {
  * The engine-status payload the model-facing row is rendered from — the
  * facts the catalog publishes BESIDE the prose (a consumer presenting the row
  * must not re-parse the `<mstar_engine_status>` block, whose framing exists
- * for the model). Deliberately NOT persisted on the message `source`: no
- * released historical session-format edge admits extra `source` members.
+ * for the model). Deliberately NOT persisted on the message `source`: the
+ * source is the closed attribution tuple above, and a released session-format
+ * edge refuses extra `source` members.
  */
 export interface MstarEngineStatusPayload {
   /**
