@@ -30,6 +30,15 @@ export function createMcpServer(
     });
     return requestContext;
   };
+  // Admission reads the declared identity default from the resolver this
+  // function receives, so the wrapper must expose it too: registration sees
+  // only the wrapper. Forward the live getter instead of a construction
+  // snapshot so a declared channel stays authoritative for the whole
+  // connection.
+  Object.defineProperty(createRequestContext, "defaultSessionId", {
+    get: () => resolveContext.defaultSessionId,
+    enumerable: true,
+  });
   registerMcpCommands(server, definitions, createRequestContext, services, onToolsRegistered);
   return server;
 }

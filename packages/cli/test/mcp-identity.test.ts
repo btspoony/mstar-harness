@@ -20,6 +20,7 @@ import {
 import { getCommandDefinitions, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { registerCliCommands } from "../src/command-adapter";
+import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver, resolveContext } from "../src/mcp/stdio";
 
 const roots: string[] = [];
@@ -81,14 +82,22 @@ async function registeredMcpCall(
   payload: Record<string, unknown>,
   baseContext: InvocationContext,
   resolver: ResolveContext = () => baseContext,
+  /**
+   * `server` drives the production assembly (`createMcpServer` wrapping the
+   * resolver). `register` binds the resolver straight to `registerMcpCommands`,
+   * which bypasses that wrapper and is therefore only a unit seam.
+   */
+  assembly: "register" | "server" = "register",
 ): Promise<CommandEnvelope> {
   const definition = getCommandDefinitions().find((entry) => entry.id === commandId);
   if (definition === undefined) throw new Error(`missing command: ${commandId}`);
-  const server = new McpServer({ name: "identity-test-server", version: "1.0.0" });
+  const server = assembly === "server"
+    ? createMcpServer(resolver, [definition])
+    : new McpServer({ name: "identity-test-server", version: "1.0.0" });
   const client = new Client({ name: "identity-test-client", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
   try {
-    registerMcpCommands(server, [definition], resolver);
+    if (assembly === "register") registerMcpCommands(server, [definition], resolver);
     await server.connect(serverEnd);
     await client.connect(clientEnd);
     const { tools } = await client.listTools();
@@ -215,6 +224,32 @@ describe("MCP session identity", () => {
         { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
         context(fixture.root),
         createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  /**
+   * The declared default has to survive the production assembly, not only a
+   * direct `registerMcpCommands` binding: `createMcpServer` wraps the resolver
+   * in its own request-context function, so this is the path the real
+   * `mstar mcp` process installs and the only one that proves a required
+   * session selector is satisfied by `--identity-env`.
+   */
+  test("the production server admits a required sessionId from the declared channel", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        context(fixture.root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        "server",
       );
       expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
     } finally {
