@@ -94,8 +94,8 @@ export interface Config {
   bundledSkillDir?: string
   /**
    * Catalog refresh interval in milliseconds — how often the per-workspace
-   * pre-step catalog cache (engine-status watermark, iteration-gate row,
-   * harness-state row) re-reads status.json / the compass / the knowledge
+   * pre-step catalog cache (iteration-gate section, workspace-state digest)
+   * re-reads the execution authority / the compass / the knowledge
    * index. Default 60000: a mid-session plan/compass/residual change lands
    * within one TTL (the hot path stays a timestamp compare + cache hit
    * between refreshes; a bounded sync re-read per workspace at most once

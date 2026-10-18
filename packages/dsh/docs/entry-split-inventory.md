@@ -72,7 +72,7 @@ gates/* ──> gates/_shared.ts
 | 11 | **dispatch gate** | 1203–1728 | `isAssignmentShaped`、`resolveDispatchHard`、`denyReason`、`leaseViolation`、`assignmentHeaderValue`、`firstToken`、`assignmentHeaderValues`、`isNaValue`、`planIdOf`、`sessionIdOf`、`leaseGateViolations`（dsh 增量 lease 检查）、`worktreeViolation`、`worktreeL2Violations`、`worktreeL1Violations`、`dispatchGateCore`（engine 单一组合 + worktree 增量）、`gateDispatch`、`preExecuteListener`（deny 短路 / degrade 包络）、`assignmentTextFromFields` |
 | 12 | packaged dirs + skill-filesystem config | 1730–1794 | `packagedSkillsDir`、`packagedCommandsDir`（import.meta.url 包相对，非 cwd 锚定）、`skillLocalConfig`（provider `mstar`、`includeDefaultRoots: false`） |
 | 13 | **host adapter** | 1796–1956 | `DshHostAdapterOptions`、`DshHostAdapter extends Service implements HostAdapter`（`statusGate`/`dispatchGate` 共享核心 + `beforeStatusWrite`/`beforeDispatch`/`beforeMerge` hooks） |
-| 14 | **engine-status catalog**（pre-step） | 1958–2418 | `pluginVersion`、`engineStatusSource`、`CatalogCacheEntry`、`buildCatalogSources`、`catalogSourcesFor`（TTL）、`renderEngineStatusCatalog`、`harnessStateSource`、`knowledgeDigest`、`compassDirection`、`steeringCompassPath`、`iterationGateSource`、`preStepCatalogListener`（digest 门控重发）、`TurnDigest`、`agentDigestKey` |
+| 14 | **engine-status catalog**（pre-step） | 1958–2418 | `pluginVersion`、`engineStatusSource`、`CatalogCacheEntry`、`buildCatalogSources`、`catalogSourcesFor`（TTL）、`renderEngineStatusCatalog`、`harnessStateSource`、`knowledgeDigest`、`compassDirection`、`steeringCompassPath`、`iterationGateSource`、`preStepCatalogListener`（变更驱动发射 + `panelDigestOf`）、`EmissionDigest`、`agentDigestKey` |
 | 15 | 视图映射 + **工具注册** | 2420–2896 | `iterationViolationView`、`iterationGateView`、`ITERATION_VIOLATION_SCHEMA`、`registerSddIterationTools`（`mstar_sdd_workspace`/`mstar_sdd_task_brief`/`mstar_iteration_gate`）、`registerSeamTools`（`mstar_design_md_validate`/`mstar_audit_validate`/`mstar_compound_validate`/`mstar_roles_validate`）——均 `ctx.inject(['tools'], …)` 延迟注册 |
 | 16 | 命令注册 | 2898–2967 | `commandFrontmatterField`、`parseCommandMarkdown`、`registerMstarCommands`（`ctx.inject(['commands'], …)`，`source: { kind: 'user' }` steer） |
 | 17 | **HarnessResolver** + session 助手 | 2969–3031 | `HarnessResolver`（per-workspace 探测，explicit 优先，memoized）、`sessionCwdOf`、`actorAgentOf` |
@@ -136,7 +136,7 @@ gates/* ──> gates/_shared.ts
 | `gates/seams.ts` | §10 | 全部 seam 门禁（见 §1 表 §10 列）+ `SEAM_LOGGERS` | `SeamId`（type）、`SeamLintAdvisory`（type）、`SeamVetoError`、`lintSeamWrite`、`lintDesignMdWrite`、`lintAuditWrite`、`lintCompoundWrite`、`lintRolesWrite` | `seamWriteIntentListener`（entry）、`validateDesignDoc`/`validateAuditDoc`/`validateCompoundDoc`/`validateRolesState`（tools） |
 | `gates/dispatch.ts` | §11 | 全部 dispatch 门禁 + `DISPATCH_LOGGER`、`DEFAULT_DISPATCH_TOOLS`、`ASSIGNMENT_HEADING_RE`、`ASSIGNMENT_FIELD_RE` | `DispatchGateAdvisory`（type） | `preExecuteListener`（entry）、`dispatchGateCore`/`leaseGateViolations`/`assignmentTextFromFields`/`resolveDispatchHard`/`DISPATCH_LOGGER`（adapter + entry boot warn） |
 | `gates/adapter.ts` | §13 | `DshHostAdapterOptions`、`DshHostAdapter`（含 `statusGate`/`dispatchGate`/`beforeStatusWrite`/`beforeDispatch`/`beforeMerge`）+ `HOST_LOGGER` | `DshHostAdapterOptions`（type）、`DshHostAdapter` | — |
-| `gates/catalog.ts` | §14 + §15 视图映射 | catalog 全部函数 + `CATALOG_LOGGER`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`RESIDUAL_SEVERITIES` | — | `preStepCatalogListener`、`buildCatalogSources`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`createCatalogInvalidation`、type `CatalogCacheEntry`/`TurnDigest`/`CatalogInvalidation`（entry 接线） |
+| `gates/catalog.ts` | §14 + §15 视图映射 | catalog 全部函数 + `CATALOG_LOGGER`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`RESIDUAL_SEVERITIES` | — | `preStepCatalogListener`、`buildCatalogSources`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`createCatalogInvalidation`、type `CatalogCacheEntry`/`EmissionDigest`/`CatalogInvalidation`（entry 接线） |
 | `gates/tools.ts` | §15 注册 | `registerSddIterationTools`、`registerSeamTools`、`ITERATION_VIOLATION_SCHEMA` | — | `registerSddIterationTools`、`registerSeamTools`（entry） |
 | `gates/_shared.ts` | §4/5/7/12/17/15 | **插件契约**：`Config` interface + `Config` schema、`HarnessResolver` + `sessionCwdOf`/`actorAgentOf`；**共享助手**：`formatViolation`、`asRecord`、`resolveSeamHard`、`packagedSkillsDir`、`skillLocalConfig`、`iterationViolationView`/`iterationGateView`；**共享常量**：`STATUS_FILE` | `Config`（type + value）、`HarnessResolver`、`skillLocalConfig` | 全部（各 gate/entry 消费） |
 
@@ -173,7 +173,7 @@ status / skill-lint / seams / dispatch / catalog ──> _shared
 | `fs/write-intent` → `skillWriteIntentListener` | `skill-lint` | §9 |
 | `fs/write-intent` → `seamWriteIntentListener` ×4（`seams` 数组） | `seams` | §10 |
 | `tools/pre-execute` → `preExecuteListener` | `dispatch` | §11 |
-| `agent/pre-step` → `preStepCatalogListener` + cache（`buildCatalogSources`/`DEFAULT_CATALOG_TTL_MS`/`EXPLICIT_CACHE_KEY`/`CatalogCacheEntry`/`TurnDigest`） | `catalog` | §14 |
+| `agent/pre-step` → `preStepCatalogListener` + cache（`buildCatalogSources`/`DEFAULT_CATALOG_TTL_MS`/`EXPLICIT_CACHE_KEY`/`CatalogCacheEntry`/`EmissionDigest`） | `catalog` | §14 |
 | `registerSddIterationTools` / `registerSeamTools` | `tools` | §15 |
 | `registerMstarCommands` | entry（保留） | §16 |
 
