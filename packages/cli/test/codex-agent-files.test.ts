@@ -57,6 +57,10 @@ describe("Codex regular agent installation", () => {
       try {
         const dest = path.join(f.root, scope === "project" ? "project" : "", ".codex/agents");
         expect(run(f.root, scope).failure).toBeUndefined();
+        if (scope === "project") {
+          // init is a pure install: it creates no .gitignore in the project.
+          expect(fs.existsSync(path.join(f.root, "project", ".gitignore"))).toBe(false);
+        }
         for (const name of names) {
           const target = path.join(dest, name);
           expect(fs.lstatSync(target).isSymbolicLink()).toBe(false);
@@ -77,6 +81,14 @@ describe("Codex regular agent installation", () => {
         const update = run(f.root, scope);
         expect(update.notes.join(" ")).toContain("Backed up");
         expect(fs.readdirSync(dest).some((name) => name.endsWith(".bak") && fs.readFileSync(path.join(dest, name), "utf8") === "user customization")).toBe(true);
+        if (scope === "project") {
+          // A re-run on a project that already has a .gitignore leaves its bytes untouched.
+          const ignorePath = path.join(f.root, "project", ".gitignore");
+          const seeded = "# user rules\nnode_modules\n";
+          fs.writeFileSync(ignorePath, seeded);
+          expect(run(f.root, scope).failure).toBeUndefined();
+          expect(fs.readFileSync(ignorePath, "utf8")).toBe(seeded);
+        }
         fs.appendFileSync(path.join(f.source, "codex/agents", names[0]), "\n# source update\n");
         expect(run(f.root, scope, true).errors.join(" ")).toContain("stale");
         expect(run(f.root, scope).failure).toBeUndefined();
