@@ -92,7 +92,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [keywords]` | 只读盘点，产出按优先级排序、可直接执行的改进计划；按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）可缩小范围。 |
-| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：`ship it`、`needs fixes` 或 `blocked`。 |
+| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：settled（必需领域全部打开、pinned diff 可得）的 run 按 finding tally 给出 `ship it`、`needs fixes` 或 `blocked`；未能满足该前提时给出唯一声明的 `incomplete`。 |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | 对测试面做只读审计 → 产出删除、修复、合并或迁移测试的计划。 |
 | `/amazing-e2e-check [environment] [scenarios]` | 在独立 workflow 中运行你明确要求的浏览器、真机或安装部署场景。 |
 

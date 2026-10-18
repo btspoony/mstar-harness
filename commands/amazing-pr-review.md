@@ -1,13 +1,13 @@
 ---
 name: amazing-pr-review
-description: Deep, pre-merge review of a PR / branch / diff at three strengths — quick / default (default) / deep — one verdict plus a display-only score band, posted to GitHub when a PR number is given. Decides whether a change is safe to ship with evidence-backed findings, rather than a shallow "looks good" pass. Produces a `ship it` / `needs fixes` / `blocked` verdict. Do not use for self-checking a change you just authored.
+description: Deep, pre-merge review of a PR / branch / diff at three strengths — quick / default (default) / deep — one verdict plus a display-only score band, posted to GitHub when a PR number is given. Decides whether a change is safe to ship with evidence-backed findings, rather than a shallow "looks good" pass. Produces one of four verdicts — `ship it` / `needs fixes` / `blocked` computed from the finding tally on a settled run (every required domain opened, the pinned diff available), or the single declared override `incomplete` with its cause and unscanned scope when a required domain or the pinned diff was never opened. Do not use for self-checking a change you just authored.
 agent: project-manager
 input: "[pr|branch|scope] [quick|default|deep]"
 ---
 
 # Deep PR Review
 
-Run a read-only, evidence-first review of a PR / branch / diff and decide whether it is safe to ship. Output: one verdict — **computed from the finding tally**, never chosen（`score_pct` and its band `mergeable` / `good` / `pass` / `fail` are display-only annotations）— plus findings presented to the user, and the posted GitHub Review URL when a PR number exists（posting is **mandatory** then）. Never auto-approve, never REQUEST_CHANGES, never merge. **Read-only advisory** — does not enter the plan state machine.
+Run a read-only, evidence-first review of a PR / branch / diff and decide whether it is safe to ship. Output: one verdict — **computed from the finding tally**, never chosen（`score_pct` and its band `mergeable` / `good` / `pass` / `fail` are display-only annotations）: a **settled** run（every required domain opened, the pinned diff available）publishes one of `ship it` / `needs fixes` / `blocked`, and a run that cannot meet that precondition publishes the single declared override `incomplete` with its cause and unscanned scope — plus findings presented to the user, and the posted GitHub Review URL when a PR number exists（posting is **mandatory** then）. Never auto-approve, never REQUEST_CHANGES, never merge. **Read-only advisory** — does not enter the plan state machine.
 
 Procedure SSOT → **`mstar-audit` SKILL.md**（common core）+ **`references/pr-review.md`**（`pr` variant 全量：tier 解析、三阶段流水线、worktree isolation、posting、report archive、batch）. This command is a thin launcher — every contract lives in the reference.
 
