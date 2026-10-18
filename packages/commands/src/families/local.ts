@@ -243,8 +243,10 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ path: z.string().min(1).optional() }),
       effects: ["write"],
       description: "Create the harness directories and default project; then run mstar store init to activate execution authority.",
-      async execute(input) {
-        const root = input.path === undefined ? process.cwd() : path.resolve(input.path);
+      async execute(input, context) {
+        // An omitted path is the invocation workspace: a pinned server owns
+        // that workspace, and the launch process cwd is not it.
+        const root = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
         setArtifactStore(createFsStore(resolveScaffoldDirs(root).harnessDir));
         const harnessDir = await scaffoldHarness(root);
         const projectDir = resolveProjectDir(root, { harnessDir });
