@@ -63,7 +63,7 @@ describe('registry peer contract (npm, no link farm)', () => {
     // this asserts.
     //
     // The scan is deliberately not lock-wide: a dev-only third-party plugin
-    // (`dsh-llm-fallbacks@0.6.6`) now declares the current `^0.2.1-rc.2` cohort
+    // (`dsh-llm-fallbacks@0.6.7`) now declares the current `^0.2.1-rc.2` cohort
     // for its own peers, but the lock still carries a transitive
     // `@deepseek-ai/dsh-client-ui-plugin-manager` copy at the older
     // `0.2.0-rc.2` (with nested `dsh-timeout` / `dsh-typert-protocol` /
