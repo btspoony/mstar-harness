@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -19,9 +18,6 @@ import {
   ensureSymlink,
   validateLocalHarnessRepo,
   validateSymlink,
-  appendGitignore,
-  appendHarnessProjectGitignore,
-  missingHarnessProcessGitignoreEntries,
 } from "./shared-install";
 
 /**
@@ -71,8 +67,6 @@ const CODEX_AGENT_NAMES = [
   "writing-specialist",
   "prompt-engineer",
 ];
-
-const CODEX_AGENT_GITIGNORE = [".codex/agents/*.toml", ".codex/agents/*.toml.*.bak"];
 
 const CODEX_PROJECT_COMMAND_NAMES = [
   "iteration-start",
@@ -152,20 +146,13 @@ function projectIterationSkillLinkPath(skillName: string) {
   return path.join(resolveProjectRoot(), ".agents", "skills", skillName, "SKILL.md");
 }
 
-function iterationSkillGitignoreEntry(skillName: string) {
-  return `.agents/skills/${skillName}`;
-}
-
 function ensureIterationSkillLinks(dryRun: boolean) {
   const notes: string[] = [];
-  const projectRoot = resolveProjectRoot();
   for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);
     notes.push(ensureSymlink(source, linkPath, dryRun));
   }
-  const gitignoreEntries = CODEX_PROJECT_COMMAND_NAMES.map(iterationSkillGitignoreEntry);
-  notes.push(...appendGitignore(projectRoot, gitignoreEntries, dryRun));
   notes.push(
     "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit, amazing-test-audit, amazing-pr-review, amazing-e2e-check) \u2014 symlinked to harness commands/*.md.",
   );
@@ -174,16 +161,10 @@ function ensureIterationSkillLinks(dryRun: boolean) {
 
 function validateIterationSkillLinks() {
   const errors: string[] = [];
-  const projectRoot = resolveProjectRoot();
-  const gitignorePath = path.join(projectRoot, ".gitignore");
-  const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-  const lines = gitignore.split(/\r?\n/);
   for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);
     errors.push(...validateSymlink(source, linkPath));
-    const entry = iterationSkillGitignoreEntry(skillName);
-    if (!lines.includes(entry)) errors.push(`Missing .gitignore entry: ${entry}`);
   }
   return errors;
 }
@@ -221,9 +202,6 @@ function runInit(scope: Scope, dryRun: boolean) {
   }
 
   if (scope === "project") {
-    const projectRoot = resolveProjectRoot();
-    notes.push(...appendGitignore(projectRoot, CODEX_AGENT_GITIGNORE, dryRun));
-    notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
     notes.push(...ensureIterationSkillLinks(dryRun));
   } else {
     notes.push(GLOBAL_ITERATION_SKILLS_WARNING);
@@ -244,17 +222,6 @@ function runDoctor(scope: Scope) {
   const errors = [...validateLocalHarnessRepo(), ...validateAgentFiles(scope), ...diagnostic.errors];
   const notes = [...diagnostic.notes];
   if (scope === "project") {
-    const projectRoot = resolveProjectRoot();
-    const gitignorePath = path.join(projectRoot, ".gitignore");
-    const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    for (const entry of CODEX_AGENT_GITIGNORE) {
-      if (!gitignore.split(/\r?\n/).includes(entry)) {
-        errors.push(`Missing .gitignore entry: ${entry}. Run: mstar-harness init --target codex --scope project`);
-      }
-    }
-    for (const entry of missingHarnessProcessGitignoreEntries(gitignore)) {
-      errors.push(`Missing .gitignore entry: ${entry}`);
-    }
     errors.push(...validateIterationSkillLinks());
   }
   return { location: diagnostic.location, errors, notes };

@@ -89,8 +89,8 @@ export type OmpDoctorInput = {
   ompAvailable: boolean;
   installedPlugins: Array<Record<string, unknown>>;
   localHarnessRepoErrors: string[];
-  missingGitignoreEntries: string[];
 };
+
 
 /** Assemble read-only omp doctor findings from host artifacts and CLI probe results. */
 export function diagnoseOmpHost(input: OmpDoctorInput): { location: string; errors: string[] } {
@@ -116,6 +116,5 @@ export function diagnoseOmpHost(input: OmpDoctorInput): { location: string; erro
     }
   }
 
-  for (const entry of input.missingGitignoreEntries) errors.push(`Missing .gitignore entry: ${entry}`);
   return { location: input.harnessRepoPath, errors };
 }

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasHarnessRootDeclaration } from "@mstar-harness/engine";
 import { runCliCommand } from "../exec";
 
 export const REPO_URL = "https://github.com/btspoony/mstar-harness.git";
@@ -207,63 +206,4 @@ export function validateSymlink(target: string, linkPath: string) {
     errors.push(`Symlink ${linkPath} points to ${actual}, expected ${expected}`);
   }
   return errors;
-}
-
-/**
- * Harness `.gitignore` fence entries: default-ignore the harness dir,
- * re-include tracked results. The canonical tracked-results shape — only for
- * an UNDECLARED `.gitignore` (see `missingHarnessProcessGitignoreEntries`).
- */
-export const HARNESS_PROCESS_GITIGNORE = [
-  ".mstar/**",
-  "!.mstar/AGENTS.md",
-  "!.mstar/knowledge/",
-  "!.mstar/knowledge/**",
-  "!.mstar/specs/",
-  "!.mstar/specs/**",
-  ".agents/**",
-  "!.agents/AGENTS.md",
-  "!.agents/knowledge/",
-  "!.agents/knowledge/**",
-  "!.agents/specs/",
-  "!.agents/specs/**",
-  ".mstarc",
-];
-
-/**
- * Canonical harness entries absent from an UNDECLARED `.gitignore`. A file
- * stating any harness-root declaration is author-owned: it reports no missing
- * entries, so the four `doctor` paths stay silent instead of pushing the blind
- * append that would invert the authored policy.
- */
-export function missingHarnessProcessGitignoreEntries(gitignoreContent: string): string[] {
-  if (hasHarnessRootDeclaration(gitignoreContent)) return [];
-  const lines = gitignoreContent.split(/\r?\n/);
-  return HARNESS_PROCESS_GITIGNORE.filter((entry) => !lines.includes(entry));
-}
-
-export function appendGitignore(projectRoot: string, entries: string[], dryRun: boolean) {
-  const gitignorePath = path.join(projectRoot, ".gitignore");
-  const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  const missing = entries.filter((entry) => !lines.has(entry));
-  if (!missing.length) return [] as string[];
-  if (!dryRun) {
-    const prefix = current && !current.endsWith("\n") ? "\n" : "";
-    fs.appendFileSync(gitignorePath, `${prefix}${missing.join("\n")}\n`, "utf8");
-  }
-  return missing.map((entry) => `Added ${entry} to .gitignore`);
-}
-
-/**
- * Harness fence write path: a no-op for an author-owned `.gitignore` (any
- * harness-root declaration) — no append, reorder, dedupe or normalization, so
- * the authored bytes survive. An undeclared file still receives the canonical
- * entries through the generic `appendGitignore`.
- */
-export function appendHarnessProjectGitignore(projectRoot: string, dryRun: boolean) {
-  const gitignorePath = path.join(projectRoot, ".gitignore");
-  const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-  if (hasHarnessRootDeclaration(current)) return [] as string[];
-  return appendGitignore(projectRoot, HARNESS_PROCESS_GITIGNORE, dryRun);
 }

@@ -621,8 +621,8 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
  * Canonical `.mstar/` `.gitignore` snippet — verbatim embedded copy of the
  * skill's canonical snippet (plan-conventions § Git 跟踪策略; the skill is
  * the SSOT, this constant exists so the engine never reads skill files at
- * runtime). The CLI `init` fence (packages/cli/src/adapters/shared-install.ts
- * HARNESS_PROCESS_GITIGNORE) mirrors these entries verbatim. Ends with a
+ * runtime). `mstar-harness harness scaffold` is its only writer: the installer
+ * (`init`) never reads or writes `.gitignore`. Ends with a
  * trailing newline so it can be appended directly.
  */
 const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)

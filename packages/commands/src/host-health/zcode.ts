@@ -1,28 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasHarnessRootDeclaration } from "@mstar-harness/engine";
 import { resolveProjectRoot } from "./paths.js";
 
 const MARKETPLACE_ID = "mstar-local";
 const MARKETPLACE_NAME = "mstar-local";
 const GITHUB_REPO = "btspoony/mstar-harness";
 const PLUGIN_NAME = "morning-star-harness";
-const HARNESS_PROCESS_GITIGNORE = [
-  ".mstar/**",
-  "!.mstar/AGENTS.md",
-  "!.mstar/knowledge/",
-  "!.mstar/knowledge/**",
-  "!.mstar/specs/",
-  "!.mstar/specs/**",
-  ".agents/**",
-  "!.agents/AGENTS.md",
-  "!.agents/knowledge/",
-  "!.agents/knowledge/**",
-  "!.agents/specs/",
-  "!.agents/specs/**",
-  ".mstarc",
-];
 const ZCODE_PLUGIN_MARKER = ".zcode-plugin/plugin.json";
 const ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
 const ZCODE_AGENT_SMOKE_NAMES = ["fullstack-dev", "qc-specialist"];
@@ -150,17 +134,6 @@ export function diagnoseZcodeHost(scope: ZcodeScope, roots: ZcodeHostRoots = {})
   if (scope === "project") {
     const checkoutPath = path.join(projectRoot, ZCODE_PLUGIN_CHECKOUT_PROJECT);
     errors.push(...validateGitCheckout(checkoutPath));
-    const gitignorePath = path.join(projectRoot, ".gitignore");
-    const gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
-    const lines = gitignore.split(/\r?\n/);
-    if (!lines.includes(ZCODE_PLUGIN_CHECKOUT_PROJECT)) {
-      errors.push(`Missing .gitignore entry: ${ZCODE_PLUGIN_CHECKOUT_PROJECT}`);
-    }
-    if (!hasHarnessRootDeclaration(gitignore)) {
-      for (const entry of HARNESS_PROCESS_GITIGNORE) {
-        if (!lines.includes(entry)) errors.push(`Missing .gitignore entry: ${entry}`);
-      }
-    }
     errors.push(...validatePluginAgents(checkoutPath));
   } else {
     errors.push(...validatePluginAgents(harnessRepoPath));

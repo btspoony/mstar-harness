@@ -10,8 +10,6 @@ import {
   HARNESS_REPO_PATH,
   ensureLocalHarnessRepo,
   ensureGitCheckout,
-  appendGitignore,
-  appendHarnessProjectGitignore,
 } from "./shared-install";
 
 export function writeMarketplaceFiles(
@@ -169,8 +167,6 @@ function runInit(scope: Scope, dryRun: boolean) {
     // The registered marketplace still points at the github repo (durable across machines).
     const checkoutPath = path.join(projectRoot, ZCODE_PLUGIN_CHECKOUT_PROJECT);
     notes.push(...ensureGitCheckout(REPO_URL, checkoutPath, dryRun));
-    notes.push(...appendGitignore(projectRoot, [ZCODE_PLUGIN_CHECKOUT_PROJECT], dryRun));
-    notes.push(...appendHarnessProjectGitignore(projectRoot, dryRun));
     notes.push(
       `Materialized local ZCode plugin checkout at ${ZCODE_PLUGIN_CHECKOUT_PROJECT} for smoke checks (the registered marketplace still points at the github repo).`,
     );
