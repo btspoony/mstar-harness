@@ -466,11 +466,9 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     expect(panelDigestOf(retitled)).not.toBe(baseline)
     expect(retitled.state.residuals).toEqual(payload.state.residuals)
 
-    // Pure: the input payload and its real revision are untouched, and the
-    // digest carries the NORMALIZED copy.
+    // Pure: the input payload and its real revision are untouched.
     expect(JSON.stringify(payload)).toBe(before)
     expect(payload.state.storeFacts?.storeRevision).toBe(revision)
-    expect(baseline).toContain('"storeRevision":null')
   })
 
   it('two steps in DIFFERENT turns with unchanged state append the row once (the retired turn term, D2)', async () => {

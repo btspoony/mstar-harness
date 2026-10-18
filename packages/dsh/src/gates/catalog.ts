@@ -1116,6 +1116,14 @@ function iterationGateSource(
  * A workspace with no resolved `{HARNESS_DIR}` (`state === null`) composes no
  * row at all and records no digest (the projection would be an empty wrapper).
  *
+ * Persist retry: the snapshot persist is a SECOND, independent obligation of an
+ * emission. A DEGRADED write (a transient store failure — no ACTIVE authority
+ * yet, a busy store, a retired generation) is retried on later steps while the
+ * payload stays unchanged, WITHOUT re-appending the identical model row, so a
+ * transient failure cannot latch the web panel stale until the next payload
+ * change. A by-design skip (no session id / cwd / harness dir) is never
+ * retried.
+ *
  * An aborted step publishes nothing: the delegated decision
  * is returned unchanged (tool-skill precedent; a narrowed abort race —
  * an abort after delegation must not surface as a turn failure).
@@ -1138,8 +1146,9 @@ function iterationGateSource(
  * @param ttlMs - catalog refresh interval in milliseconds.
  * @param invalidation - the apply-scoped session-keyed invalidation (ledger
  * records evict every session of a harness; a picker commit evicts one).
- * @param digests - per session+workspace emission digests (last rendered text
- * + its panel projection) for the change-driven re-emission.
+ * @param digests - per session+workspace emission digests (last rendered text +
+ * its panel projection, plus the degraded-persist retry latch) for the
+ * change-driven re-emission.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
@@ -1179,25 +1188,46 @@ export async function preStepCatalogListener(
     const messages = [...decision.messages]
     const text = renderEngineStatusCatalog(catalogPayload)
     const panelKey = panelDigestOf(catalogPayload)
+    const digestKey = agentDigestKey(payload.agent, cwd)
+    const prior = digests.get(digestKey)
     // Change gate (D2): inject the ONE unified row on the first emission, when
     // its rendered text changed since the last emission, or when the
     // panel-relevant payload projection changed (the panel renders more than
     // the row). A new turn alone is NOT a trigger. Per session+workspace, so
     // different sessions/workspaces keep independent digests.
-    const digestKey = agentDigestKey(payload.agent, cwd)
-    const prior = digests.get(digestKey)
-    if (prior === undefined || prior.text !== text || prior.panelKey !== panelKey) {
+    const changed = prior === undefined || prior.text !== text || prior.panelKey !== panelKey
+    if (changed) {
       messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
-      // The persisted snapshot is written at THIS gate — the only place the
-      // composed payload is known to have reached the model. A later reader
-      // (the web-only host endpoint) therefore serves a record of what was
-      // emitted, never a re-resolution that could disagree with the session
-      // log. Keyed by `session.header.id`: a stub without a real id has
-      // nothing to key on, so the write is skipped (a reader then answers the
-      // explicit unavailable state rather than another session's row).
-      persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent, authorityGenerationByPayload.get(catalogPayload))
     }
-    digests.set(digestKey, { text, panelKey })
+    // The persist is a separate obligation: attempt it on a change AND on an
+    // unchanged step whose last attempt degraded (a transient store failure
+    // must not latch the panel stale until the payload changes again). The
+    // persisted snapshot is written at THIS gate — the only place the composed
+    // payload is known to have reached the model. A later reader (the web-only
+    // host endpoint) therefore serves a record of what was emitted, never a
+    // re-resolution that could disagree with the session log. Keyed by
+    // `session.header.id`: a stub without a real id has nothing to key on, so
+    // the write is skipped (a reader then answers the explicit unavailable
+    // state rather than another session's row) and never retried.
+    let persistPending = prior?.persistPending ?? false
+    if (changed || persistPending) {
+      const persisted = persistEngineStatusSnapshot(
+        ctx,
+        harnessDir,
+        cwd,
+        payload.turn,
+        catalogPayload,
+        payload.agent,
+        authorityGenerationByPayload.get(catalogPayload),
+      )
+      persistPending = persisted === 'degraded'
+    }
+    if (prior === undefined || changed) {
+      digests.set(digestKey, { text, panelKey, persistPending })
+    } else {
+      // Unchanged: only the retry latch moves, so the digest identity stays.
+      prior.persistPending = persistPending
+    }
     return { kind: 'enter', messages }
   } catch (error) {
     ctx.logger(CATALOG_LOGGER).error(
@@ -1237,6 +1267,14 @@ function sessionHintForCatalog(harnessDir: string | null, agent: unknown): Sessi
 export interface EmissionDigest {
   readonly text: string
   readonly panelKey: string
+  /**
+   * The last persist attempt for this digest DEGRADED (a transient store
+   * failure). The gate retries the persist on a later step while the payload
+   * is unchanged, without re-appending the identical row, and clears this once
+   * the write lands. A by-design skip (no session id / cwd / harness dir)
+   * never sets it, so nothing retries forever.
+   */
+  persistPending: boolean
 }
 
 /**
@@ -1266,6 +1304,11 @@ function agentDigestKey(agent: unknown, cwd: string | undefined): string {
  * degrades to a warn log — the advisory emission path never aborts the step it
  * observes (same containment rule as the append path above), and never
  * fabricates a successful write.
+ *
+ * The tri-state verdict is the retry latch: `'degraded'` asks the gate to
+ * retry the persist on a later step with the same payload, `'skipped'` is by
+ * design (no session id / cwd / harness dir — nothing to key a row to, so it is
+ * never retried), and `'written'` clears any pending retry.
  * @param ctx - registrant context (logger only).
  * @param harnessDir - the workspace's resolved `{HARNESS_DIR}` (null when none).
  * @param cwd - the session workspace the payload was resolved for.
@@ -1281,14 +1324,14 @@ function persistEngineStatusSnapshot(
   catalogPayload: MstarEngineStatusPayload,
   agent: unknown,
   selectedGeneration?: DshSelectedGeneration,
-): void {
+): 'written' | 'degraded' | 'skipped' {
   const sessionId = sessionHeaderIdOf(agent)
-  if (sessionId === undefined || cwd === undefined) return
+  if (sessionId === undefined || cwd === undefined) return 'skipped'
   // No harness root ⇒ nothing to key a snapshot to: the endpoint answers the
   // explicit unavailable state for that workspace anyway, so this is a normal
   // composition (a workspace that never initialized a harness) rather than a
   // degraded write — skip it without a warn per turn.
-  if (harnessDir === null) return
+  if (harnessDir === null) return 'skipped'
   const result = writeEngineStatusSnapshot(harnessDir, {
     sessionId,
     cwd,
@@ -1300,6 +1343,8 @@ function persistEngineStatusSnapshot(
     ctx.logger(CATALOG_LOGGER).warn(
       `engine-status snapshot not persisted for ${sessionId} (readers answer unavailable): ${result.reason}`,
     )
+    return 'degraded'
   }
+  return 'written'
 }
 

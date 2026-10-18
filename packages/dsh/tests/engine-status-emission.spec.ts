@@ -177,6 +177,47 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(retiredRead.kind === 'ok' && retiredRead.emission).toBeUndefined()
   })
 
+  it('retries a degraded persist on a later UNCHANGED step without re-appending the row', async () => {
+    // Default TTL: each session+workspace keeps ONE cached payload across the
+    // three steps, so every step after the first carries the same rendered text
+    // and panel projection (the change gate stays closed).
+    const app = (booted = await bootApp())
+    const inbox = [inboxMessage()]
+    // (a) No ACTIVE store yet: the row IS emitted, and its persist degrades.
+    const first = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_retry', app.root, inbox, 1, 1),
+      defaultEnter(inbox),
+    )
+    expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
+    expect(readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
+
+    // (b) The store becomes ACTIVE. The payload is unchanged, so no second row
+    // is appended — but the pending persist is retried and lands.
+    await seedStore(app.harnessDir)
+    const second = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_retry', app.root, inbox, 2, 2),
+      defaultEnter(inbox),
+    )
+    expect(second.kind === 'enter' && second.messages.length).toBe(inbox.length)
+    const persisted = readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root)
+    expect(persisted.kind).toBe('ok')
+    if (persisted.kind !== 'ok') throw new Error('unreachable')
+    expect(persisted.entry.turn).toBe(2)
+
+    // (c) The successful retry clears the latch: a third unchanged step neither
+    // appends the row nor rewrites the emission (the persisted turn stays 2).
+    const third = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_retry', app.root, inbox, 3, 3),
+      defaultEnter(inbox),
+    )
+    expect(third.kind === 'enter' && third.messages.length).toBe(inbox.length)
+    const unchanged = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retry', app.root)
+    expect(unchanged.kind === 'ok' && unchanged.emission?.turn).toBe(2)
+  })
+
   it('keys independent sessions separately', async () => {
     const app = (booted = await bootApp())
     await seedStore(app.harnessDir)

@@ -35,7 +35,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { HarnessResolver } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 
 let booted: BootResult | undefined
@@ -226,7 +226,16 @@ describe('HarnessResolver — workspace-root boundary: probe stops at the sessio
 describe('agent/pre-step — the harness dir resolves from the session workspace, never the process cwd', () => {
   it('agent with a session cwd → the WORKSPACE-resolved harness dir produces the state row', async () => {
     const ws = await makeWorkspace('dsh-ws-prestep-')
-    await mkdir(join(ws, '.agents'), { recursive: true })
+    // Two workspaces carry DISTINCT ACTIVE facts: the emitted row must witness
+    // THIS workspace's lifecycle, so a pre-step that resolves the other
+    // (equally initialized) harness dir cannot pass.
+    const other = await makeWorkspace('dsh-ws-prestep-other-')
+    await seedActiveWorkflow(join(ws, '.agents'), 'ws-target', [
+      { id: 'ws-target-plan', title: 'Target plan', file: 'plans/ws-target-plan.md', status: 'Todo' },
+    ], {}, 'sess-target', ws)
+    await seedActiveWorkflow(join(other, '.agents'), 'ws-other', [
+      { id: 'ws-other-plan', title: 'Other plan', file: 'plans/ws-other-plan.md', status: 'Todo' },
+    ], {}, 'sess-other', other)
     booted = await bootApp({ harnessDir: null })
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws), defaultEnter([]))
@@ -237,12 +246,16 @@ describe('agent/pre-step — the harness dir resolves from the session workspace
     // The PERSISTED source is the producer-owned catalog source; the resolved
     // harness dir is payload data and is NOT persisted with it.
     expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
-    expect(buildCatalogPayload(booted.ctx, join(ws, '.agents')).harnessDir).toBe(join(ws, '.agents'))
-    // The row no longer renders the harness-dir watermark; the rendered STATE
-    // section is the workspace-resolution witness (a `state: null` payload —
-    // no resolved harness dir — composes no row at all, see the case below).
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain('workflow selection: ERROR (store.not-initialized)')
+    // The row the pre-step ACTUALLY emitted witnesses the target workspace's
+    // ACTIVE lifecycle and plan row…
+    expect(text).toContain('workflow: ws-target (active)')
+    expect(text).toContain('plans: ws-target-plan(Todo)')
+    // …and never the other workspace's, whose harness dir is just as valid.
+    expect(text).not.toContain('ws-other')
+    // The row no longer renders the harness-dir watermark (the rendered STATE
+    // section is the workspace-resolution witness; a `state: null` payload —
+    // no resolved harness dir — composes no row at all, see the case below).
     expect(text).not.toContain('harness dir:')
   })
 
