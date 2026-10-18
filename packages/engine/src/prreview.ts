@@ -108,7 +108,13 @@ export type PrTallyInput = {
   incomplete?: PrIncomplete;
 };
 
-/** Result of {@link computePrTally}. */
+/**
+ * Result of {@link computePrTally}, which always emits `band`. An
+ * `mstar.review/v1` envelope tally carries this shape through
+ * {@link MstarReviewTally} instead, where `band` is optional: the envelope
+ * validator accepts a band-less tally as legacy-valid, so only a consumer
+ * constructing an envelope tally may omit it.
+ */
 export type PrTallyResult = {
   verdict: PrVerdict;
   /** `max(0, 100 - <class deductions>)` per the locked schedule, integer, floor 0. */
