@@ -24,7 +24,7 @@ export function registerMcpCommand(program: Command): void {
     )
     .option(
       "--harness <path>",
-      "absolute harness root for every call; without it the server probes process.cwd() for one",
+      "absolute harness root for every call; it also anchors the invocation workspace at its parent, so cwd-derived paths land under the pinned harness. Without it the server probes process.cwd() for one",
       absoluteHarness,
     )
     .action(async (options: McpCommandOptions) => {

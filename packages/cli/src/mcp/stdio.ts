@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { Transport } from "@modelcontextprotocol/server";
@@ -18,6 +19,9 @@ export interface McpStdioOptions {
    * Harness root the mounting process owns. Unset keeps the `process.cwd()`
    * probe: the plugin is installed once for many repositories, so a root is
    * passed per mount rather than inferred from whatever cwd the host chose.
+   * A pinned root also becomes the invocation's workspace root (its parent
+   * directory), so implicit harness-derived paths anchor on the pinned
+   * harness instead of the launch cwd.
    */
   harnessRoot?: string;
 }
@@ -43,12 +47,20 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * root is also the admission default for any command that resolves its own root
  * from `input.harness`, so a pinned server cannot fall back to the process cwd's
  * harness.
+ *
+ * The pin also anchors the invocation's **workspace**: `cwd` becomes the pinned
+ * root's parent directory, not `process.cwd()`. Every implicit harness-derived
+ * path then follows the pin — a command that derives its review root from the
+ * cwd (e.g. `audit.scaffold` without `--reviews-dir`), a relative `--dir` /
+ * findings path, and `resolveProcessHarnessDir(cwd)` — so a pinned call cannot
+ * write into the launch cwd's harness. Unpinned keeps today's behavior: `cwd`
+ * is `process.cwd()` and the control root is its probe.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
   const resolver: ResolveContext = (_definition, _sessionId, signal, _services, effects: McpEffects) => {
     const sessionId = declaredSessionId(options.identityEnv);
     return {
-      cwd: process.cwd(),
+      cwd: options.harnessRoot === undefined ? process.cwd() : dirname(options.harnessRoot),
       controlRoot: options.harnessRoot ?? resolveProcessHarnessDir(process.cwd()),
       ...(sessionId === undefined ? {} : { sessionId }),
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },

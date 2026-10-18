@@ -83,7 +83,11 @@ the row's `args` to launch `mstar mcp --harness <absolute path>` and/or
 every registered command's root selection, not only the invocation context: a
 command that declares a per-call `harness` accepts an explicit override, while
 the `persist` family always uses the invocation's server root (the pin, or the
-cwd probe when unpinned) and takes no per-call harness. `--identity-env`
+cwd probe when unpinned) and takes no per-call harness. The pin also anchors
+the **invocation workspace** at the pinned root's parent, so a command that
+derives paths from its working directory (`audit.scaffold` deriving
+`{REVIEW_DIR}` without `--reviews-dir`, a relative `--dir` or findings path)
+lands under the pinned harness rather than the launch cwd. `--identity-env`
 declares a connection-wide default, so per-caller identity needs an explicit
 `sessionId` or its own scoped mount. Because a patch replaces the row's whole
 `config`, such an override restates the `command` too.

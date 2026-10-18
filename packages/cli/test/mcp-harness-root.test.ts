@@ -71,6 +71,40 @@ async function competingPersistRoots(): Promise<{ pinned: string; cwd: string; c
   return { pinned, cwd, cwdRoot };
 }
 
+/**
+ * Two roots whose review trees a cwd-derived write would separate: the pinned
+ * workspace owns harness A, while the launch workspace owns a DIFFERENT harness
+ * of its own. `audit.scaffold` publishes no `harness` field and derives
+ * `{REVIEW_DIR}` from the invocation cwd, so a cwd-derived report lands under
+ * the launch harness and is visible there — the pinned call must not.
+ */
+async function competingReviewRoots(): Promise<{
+  harness: string;
+  launch: string;
+  launchHarness: string;
+  findings: string;
+}> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const harness = path.join(root, "pinned", ".mstar");
+  const launch = path.join(root, "launch");
+  const launchHarness = path.join(launch, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  mkdirSync(launchHarness, { recursive: true });
+  const findings = path.join(root, "findings.json");
+  writeFileSync(findings, JSON.stringify({
+    findings: [{
+      title: "the pinned workspace anchors an implicit harness path",
+      description: "the review root is derived from the invocation cwd",
+      priority: "P2",
+      effort: "S",
+      risk: "LOW",
+      category: "bug",
+    }],
+  }));
+  return { harness, launch, launchHarness, findings };
+}
+
 /** The fixture's own discriminator, read from a successful persist envelope. */
 function persistOrigin(envelope: CommandEnvelope): unknown {
   return (envelope.data as { payload?: { origin?: string } } | null | undefined)?.payload?.origin;
@@ -210,6 +244,44 @@ describe("MCP harness root", () => {
       const probed = await callCatalogList(createContextResolver());
       expect(probed).toMatchObject({ status: "refused", code: "store.not-initialized" });
     } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a pinned harness anchors an implicit cwd-derived path on its own workspace", async () => {
+    const fixture = await competingReviewRoots();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "audit.scaffold");
+    if (definition === undefined) throw new Error("missing command: audit.scaffold");
+    const server = createMcpServer(createContextResolver({ harnessRoot: fixture.harness }), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      // `audit.scaffold` publishes no `harness` field, so the pin cannot reach
+      // it through admission: the workspace anchor is the only propagation. The
+      // launch cwd owns a different harness, so a cwd-derived review root would
+      // create its run dir there and be visible below.
+      const { tools } = await client.listTools();
+      const scaffold = tools.find((entry) => entry.name === "mstar_audit_scaffold")!;
+      expect(scaffold.inputSchema.properties).not.toHaveProperty("harness");
+
+      const envelope = await toolEnvelope(client, "mstar_audit_scaffold", { findings: fixture.findings });
+      expect(envelope).toMatchObject({ status: "ok", code: "audit.scaffold.ok" });
+      const report = envelope.data as { outDir: string; file: string };
+      expect(report.outDir.startsWith(`${path.join(fixture.harness, "reviews")}${path.sep}`)).toBe(true);
+      expect(existsSync(report.file)).toBe(true);
+      expect(existsSync(path.join(fixture.launchHarness, "reviews"))).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
