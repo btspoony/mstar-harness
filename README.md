@@ -91,7 +91,7 @@ An iteration ends only after its post-merge close: a closed phase, an open pull 
 | Command | When |
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey that produces prioritized, ready-to-execute improvement plans; narrow it with a category focus (`bug`, `security`, `perf`, `tech-debt`, …). |
-| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | Pre-merge review of a PR or branch at three strengths, ending in one verdict — `ship it`, `needs fixes`, or `blocked` from the finding tally on a settled run, or the single declared `incomplete` when a required domain or the pinned diff was never opened. |
+| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | Pre-merge review of a PR or branch at three strengths, ending in one verdict — `ship it`, `needs fixes`, or `blocked` from the finding tally on a settled run (completed without a stop, every required domain opened, the pinned diff available), or the single declared `incomplete` when the run stopped or was cancelled/timed out, or a required domain or the pinned diff was never opened. |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | Read-only audit of the test surface → plans to delete, repair, consolidate, or relocate tests. |
 | `/amazing-e2e-check [environment] [scenarios]` | Runs browser, device, or installed-deployment scenarios you explicitly asked for, in a separate workflow. |
 
