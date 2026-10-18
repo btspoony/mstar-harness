@@ -3,7 +3,7 @@
  * data path.
  *
  * The persisted catalog row is an ANCHOR (its `source` is the frozen
- * three-member first-party arm and carries no payload), so a panel fixture is
+ * producer-owned catalog source and carries no payload), so a panel fixture is
  * now the PAYLOAD THE HOST WOULD HAVE STORED for the session, delivered
  * through the channel the production client actually calls:
  * `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`.
@@ -31,8 +31,8 @@ export const SESSION_CWD = '/proj'
 /** The endpoint result's snapshot timestamp (freshness marker). */
 export const SNAPSHOT_AT = '2024-07-03T09:23:20.000Z'
 
-/** The locked anchor source: exactly three members, never a payload. */
-export const ANCHOR_SOURCE = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
+/** The locked anchor source: exactly two members, never a payload. */
+export const ANCHOR_SOURCE = { kind: 'mstar-engine', form: 'catalog' } as const
 
 /** One recorded gateway call (the literal arguments, for request-shape asserts). */
 export interface GatewayCall {
@@ -141,7 +141,7 @@ export function otherKindCatalogRow(): ConversationNode {
     seq: 3,
     time: 1_720_000_000_000,
     content: [],
-    source: { kind: 'plugin', plugin: 'mstar-iteration-gate', form: 'catalog' },
+    source: { kind: 'mstar-iteration-gate', form: 'catalog' },
     form: 'catalog',
   } as unknown as ConversationNode
 }

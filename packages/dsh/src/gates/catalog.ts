@@ -119,14 +119,15 @@ function pluginVersion(): string {
 
 /**
  * The durable source of the ONE unified engine-status catalog row: the
- * first-party `plugin` arm with a CLOSED member set. The `kind` vocabulary is
- * frozen per released dsh session-format edge and the historical edges refuse
- * unexpected `source` members, so this literal is the whole persisted
- * provenance — every fact the row publishes travels in
- * {@link engineStatusPayload} instead.
+ * plugin's producer-owned kind with a CLOSED member set. dsh session-format
+ * V4 refuses the retired `{ kind: 'plugin', plugin }` wrapper at message
+ * admission, so the kind itself identifies the producer; rows written by
+ * older generations are lifted by the V3→V4 migration and stay readable.
+ * Every fact the row publishes travels in {@link engineStatusPayload}
+ * instead.
  */
 function engineStatusSource(): MstarEngineStatusSource {
-  return { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }
+  return { kind: 'mstar-engine', form: 'catalog' }
 }
 
 /** Synchronous catalog consumers have no ACTIVE workflow selection. */

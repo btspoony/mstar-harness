@@ -1,11 +1,11 @@
 /**
  * Smoke spec for the dsh client-seam faces the panel consumes (T1):
  * anchor reading — the latest `kind==='context' && form==='catalog'` node
- * whose FIRST-PARTY `plugin` source carries this plugin's identity — the
- * panel's own exported discriminator, over `ChatSnapshot.legacy.nodes`,
+ * whose producer-owned `mstar-engine` source carries this plugin's identity —
+ * the panel's own exported discriminator, over `ChatSnapshot.legacy.nodes`,
  * driven by the `createSnapshotStore` test double. The source is the locked
- * three-member arm (never a payload), and the payload itself travels over
- * the host's shared `/api` gateway (`use-mstar-engine-status` /
+ * producer-owned catalog source (never a payload), and the payload itself
+ * travels over the host's shared `/api` gateway (`use-mstar-engine-status` /
  * `engine-status-client`).
  *
  * (The former conversation.view registry describe is retired with the
@@ -23,12 +23,12 @@ import { latestEngineStatusRow } from '../src/client/panel/use-mstar-engine-stat
 
 describe('dsh client-seam — catalog reading (spec §5)', () => {
   /**
-   * The persisted ANCHOR row: the first-party `plugin` arm with exactly three
-   * members — the payload is NOT on the source (it is fetched over the `/api`
-   * gateway), and a fourth key here would be refused by every released
+   * The persisted ANCHOR row: the producer-owned `mstar-engine` source with
+   * exactly two members — the payload is NOT on the source (it is fetched over
+   * the `/api` gateway), and a third key here would be refused by the released
    * session-format edge.
    */
-  const anchorSource = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
+  const anchorSource = { kind: 'mstar-engine', form: 'catalog' } as const
   const engineRow = {
     kind: 'context',
     seq: 2,
@@ -41,7 +41,7 @@ describe('dsh client-seam — catalog reading (spec §5)', () => {
   /** The panel's OWN discriminator (spec §2.4) — imported, never re-declared. */
   const latestEngineStatus = latestEngineStatusRow
 
-  it('the anchor source is exactly the three first-party members — never a payload', () => {
+  it('the anchor source is exactly the two producer-owned members — never a payload', () => {
 
     for (const payloadMember of ['version', 'harnessDir', 'enforcement', 'iteration', 'state']) {
       expect(anchorSource).not.toHaveProperty(payloadMember)

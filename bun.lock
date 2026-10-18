@@ -63,6 +63,7 @@
       "name": "@mstar-harness/dsh",
       "version": "4.0.1",
       "devDependencies": {
+        "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-rc.2",
         "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.2",
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",

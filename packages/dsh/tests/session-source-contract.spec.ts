@@ -2,22 +2,26 @@
  * Persisted engine-status source contract — the regression pin.
  *
  * The ONE unified engine-status catalog row is appended on the first step of
- * every turn, so its `source` is a PERSISTED, cross-repo format: dsh freezes
- * the `kind` vocabulary per released session-format edge, and the released
- * historical edges refuse both a `kind` outside the first-party set and any
- * unexpected `source` member. A row that fails either audit makes the edge
- * refuse the WHOLE session log, so the contract is pinned here on a row
- * produced by the REAL composition (the `bootApp` + `ctx.waterfall(
+ * every turn, so its `source` is a PERSISTED, cross-repo format: dsh
+ * session-format V4 admits only producer-owned source kinds and refuses the
+ * retired `{ kind: 'plugin', plugin }` wrapper at message admission. A row
+ * that fails admission makes the run fail to persist (`format v4 message
+ * requires a producer-owned source kind`), so the contract is pinned here on a
+ * row produced by the REAL composition (the `bootApp` + `ctx.waterfall(
  * 'agent/pre-step', …)` path of `catalog.spec.ts`) — never on a hand-written
  * literal, which would keep passing while the emitted row drifted.
  *
  * Assertion 1 pins the exact source value; assertion 2 pins the CLOSED member
  * set, i.e. the mechanism itself — a future "just add one field to the source"
- * edit fails here first, before it can brick a log.
+ * edit fails here first, before it can brick a log. Assertion 3 runs the row
+ * through dsh's own V4 row admission; assertion 4 proves that admission
+ * refuses the retired wrapper, so assertion 3 is load-bearing rather than
+ * vacuous.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { assertV4RowAdmission } from '@deepseek-ai/dsh-session-format-v3-to-v4'
 import { bootApp, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
@@ -28,7 +32,7 @@ afterEach(async () => {
 })
 
 /** The ONE locked persisted source of the engine-status catalog row. */
-const LOCKED_SOURCE = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
+const LOCKED_SOURCE = { kind: 'mstar-engine', form: 'catalog' } as const
 
 /** The loop's default pre-step decision: enter the step with the inbox messages. */
 const defaultEnter = (messages: UserMessage[]): (() => Promise<PreStepDecision>) =>
@@ -53,16 +57,34 @@ async function emittedCatalogRow(): Promise<UserMessage> {
   return row
 }
 
-describe('engine-status catalog row — persisted source contract (edge-safe)', () => {
-  it('persists exactly the first-party plugin arm — no custom kind, no extra member', async () => {
+/** The physical `user/message` row a persistence writer hands to V4 admission. */
+function physicalRow(message: object) {
+  return { type: 'user/message', seq: 0, time: 1, data: message }
+}
+
+describe('engine-status catalog row — persisted source contract (V4-safe)', () => {
+  it('persists exactly the producer-owned catalog source — no wrapper, no extra member', async () => {
     const row = await emittedCatalogRow()
 
     expect(row.source).toEqual(LOCKED_SOURCE)
   })
 
-  it('persists a CLOSED member set — form/kind/plugin and nothing else', async () => {
+  it('persists a CLOSED member set — form/kind and nothing else', async () => {
     const row = await emittedCatalogRow()
 
-    expect(Object.keys(row.source).sort()).toEqual(['form', 'kind', 'plugin'])
+    expect(Object.keys(row.source).sort()).toEqual(['form', 'kind'])
+  })
+
+  it('is admitted by dsh session-format V4 row validation', async () => {
+    const row = await emittedCatalogRow()
+
+    expect(() => assertV4RowAdmission(physicalRow(row))).not.toThrow()
+  })
+
+  it('proves V4 admission refuses the retired `plugin` wrapper', async () => {
+    const row = await emittedCatalogRow()
+    const retired = { ...row, source: { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } }
+
+    expect(() => assertV4RowAdmission(physicalRow(retired))).toThrow(/producer-owned source kind/)
   })
 })

@@ -2,14 +2,15 @@
  * Data-path tests for the workflow-viz panel (spec §5): the
  * `useMstarEngineStatus({ useChat, useSessions, sessionId, engineStatus })`
  * hook finds the latest engine-status ANCHOR row (`kind === 'context'` +
- * `form === 'catalog'` + the first-party `source.kind === 'plugin'` with one
- * of this plugin's two anchor identities — emitted `mstar-engine`, or legacy
- * `mstar-engine-status` persisted by shipped builds before 2026-09-11), reads
+ * `form === 'catalog'` + the producer-owned `source.kind === 'mstar-engine'`,
+ * or a legacy kind lifted by the dsh V3→V4 migration — `plugin:mstar-engine`
+ * or `plugin:mstar-engine-status` persisted by shipped builds before
+ * 2026-09-11), reads
  * the session's workspace directory from the session standard kit, and pulls
  * that session's snapshot from the host's shared `/api` typert gateway.
  *
  * The anchor row does not carry the payload (the persisted source is the
- * locked three-member arm), so these specs stub THE CHANNEL: a gateway stub
+ * locked two-member catalog source), so these specs stub THE CHANNEL: a gateway stub
  * records the literal `connection.rpc.call('/api', 'mstar/engineStatus',
  * { args: { sessionId, cwd } })` request and answers with the transport
  * envelope the host produces. The hook runs through real renders
@@ -17,8 +18,8 @@
  * renders the validated answer.
  *
  * Coverage:
- * - the anchor discriminator (latest row wins; the legacy `mstar-engine-status`
- *   identity still anchors; an unknown identity is NOT an anchor → `waiting`);
+ * - the anchor discriminator (latest row wins; the migrated legacy kinds still
+ *   anchor; an unknown kind is NOT an anchor → `waiting`);
  * - the request shape: exactly one `/api` + `mstar/engineStatus` call per
  *   (session, anchor row), carrying the session id and the session's cwd;
  * - a new anchor row (snapshot bump = refresh signal) asks again and serves
@@ -75,10 +76,12 @@ function payload(version: string): MstarEngineStatusPayload {
 
 /**
  * Legacy anchor source: rows emitted by shipped builds before 2026-09-11
- * persist `plugin: 'mstar-engine-status'`. They keep anchoring their sessions
- * — data compat for persisted session logs, not a code-compat layer.
+ * persist `plugin: 'mstar-engine-status'` in their V3 logs, and the dsh
+ * V3→V4 migration lifts the wrapper to `kind: 'plugin:mstar-engine-status'`.
+ * They keep anchoring their sessions — data compat for persisted session
+ * logs, not a code-compat layer.
  */
-const LEGACY_ANCHOR_SOURCE = { kind: 'plugin', plugin: 'mstar-engine-status', form: 'catalog' } as const
+const LEGACY_ANCHOR_SOURCE = { kind: 'plugin:mstar-engine-status', form: 'catalog' } as const
 
 /**
  * One anchor row with an explicit source (the legacy and unknown-identity
@@ -186,6 +189,18 @@ describe('useMstarEngineStatus — anchor row selection (spec §2.4, §5)', () =
     expect(after.at).toBe('2024-07-03T09:24:20.000Z')
   })
 
+  it('a migrated `plugin:mstar-engine` anchor row (current identity, written by a released V3 build) still anchors', async () => {
+    const store = {
+      getSnapshot: () =>
+        chatSnapshot([userNode(), rowWithSource({ kind: 'plugin:mstar-engine', form: 'catalog' }, 1_720_001_000_000)]),
+    }
+    const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
+    const view = await settleView(seats(store, gateway))
+    expect(view.state).toBe('ok')
+    expect(view.anchorTime).toBe(1_720_001_000_000)
+    expect(gateway.calls).toHaveLength(1)
+  })
+
   it('a legacy `mstar-engine-status` anchor row (persisted by shipped builds before the identity rename) still anchors', async () => {
     const store = { getSnapshot: () => chatSnapshot([userNode(), rowWithSource(LEGACY_ANCHOR_SOURCE, 1_720_001_000_000)]) }
     const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
@@ -211,11 +226,11 @@ describe('useMstarEngineStatus — explicit empty and degraded states (spec §3,
     expect(gateway.calls).toHaveLength(0)
   })
 
-  it('an unknown anchor identity (a `plugin` value that is neither accepted identity) → waiting, never data', async () => {
-    // Same row shape as the anchor — the ONLY discriminator is the identity.
+  it('an unknown anchor kind → waiting, never data', async () => {
+    // Same row shape as the anchor — the ONLY discriminator is the kind.
     const store = {
       getSnapshot: () =>
-        chatSnapshot([userNode(), rowWithSource({ kind: 'plugin', plugin: 'other-thing', form: 'catalog' }, 1_720_001_000_000)]),
+        chatSnapshot([userNode(), rowWithSource({ kind: 'other-thing', form: 'catalog' }, 1_720_001_000_000)]),
     }
     const gateway = stubGateway(servedSnapshot(payload('2.0.4')))
     expect((await settleView(seats(store, gateway))).state).toBe('waiting')

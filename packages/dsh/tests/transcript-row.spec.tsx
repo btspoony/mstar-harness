@@ -1,7 +1,7 @@
 /**
  * AC6 transcript-row render assertion: the FIRST-PARTY transcript renders the
  * plugin's catalog row — label AND body — when the row carries the locked
- * three-member `plugin` source.
+ * producer-owned catalog source.
  *
  * Why this spec renders dsh's own chat bundle instead of the panel: the row
  * under test is produced by the host's chat projection and drawn by dsh's chat
@@ -13,7 +13,7 @@
  * - `apply(ctx)` is called on a capture-only context, so the REAL node
  *   definitions and the REAL keyed `context` renderer are harvested;
  * - the durable log event (a `user/message` whose `source` is the locked
- *   `{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }` row)
+ *   `{ kind: 'mstar-engine', form: 'catalog' }` row)
  *   is projected through that definition's own `match` + `start`, so the row's
  *   `provenance` / `form` come from upstream's own code, not from this spec;
  * - the renderer is rendered with the disclosure OPEN (`react` is supplied
@@ -24,7 +24,7 @@
  * Asserted surface (all real upstream output):
  * - the row's title label is non-empty and the row carries the source label
  *   span `data-context-source` with this plugin's identity — the label
- *   resolves through the first-party `plugin` arm;
+ *   resolves through the producer-owned source kind;
  * - the body is the OPAQUE body: `data-context-injection-body` with NO
  *   `data-context-form`, carrying the model-facing text plus the raw source
  *   fields. The locked source carries no `entries`, and upstream's catalog body
@@ -70,8 +70,8 @@ interface NodeDefinition {
   start(context: unknown, match: unknown, reader: unknown): unknown
 }
 
-/** The locked source of the row under test: exactly three first-party members. */
-const LOCKED_SOURCE = { kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' } as const
+/** The locked source of the row under test: exactly two producer-owned members. */
+const LOCKED_SOURCE = { kind: 'mstar-engine', form: 'catalog' } as const
 
 /** The model-facing text the plugin emits beside the row (opaque body input). */
 const MODEL_TEXT = '<mstar_engine_status>\nversion: 2.0.4\n</mstar_engine_status>'
@@ -198,7 +198,7 @@ describe('first-party transcript row — the locked engine-status source (AC6)',
     expect(t('message.contextInjection').length).toBeGreaterThan(0)
     expect(html).toContain(`>${t('message.contextInjection')}<`)
     // The source label renders THIS plugin's identity — the label resolves
-    // through the first-party `plugin` arm (`label = source.plugin`).
+    // through the producer-owned source kind (`label = source.kind`).
     expect(html).toContain('data-context-source="true"')
     expect(html).toContain('>mstar-engine<')
   })

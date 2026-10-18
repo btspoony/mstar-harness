@@ -336,8 +336,8 @@ function bindUseChat(store: { getSnapshot(): ChatSnapshot }): SnapshotSelectorHo
 /**
  * Build a chat-target snapshot carrying the ANCHOR row at the given time
  * (`null` = the plugin never ran on this session). The row itself carries NO
- * payload — the persisted source is the locked three-member arm and the
- * payload is served over the `/api` gateway (spec §5 data path).
+ * payload — the persisted source is the locked producer-owned catalog source
+ * and the payload is served over the `/api` gateway (spec §5 data path).
  */
 function snapshotFor(source: MstarEngineStatusPayload | null, lastUpdated: number | null): ChatSnapshot {
   const nodes: ConversationNode[] = [

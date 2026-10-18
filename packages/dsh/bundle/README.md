@@ -114,10 +114,10 @@ the glyph + the title captured at open — it does not follow a mid-session
 locale switch), and a docked body renders NOTHING while `tab.visible ===
 false` (collapsed column or another pane tab active). The tab renders the
 latest `mstar-engine` catalog **anchor** row — the persisted source is the
-bare first-party `plugin` arm
-(`{ kind: 'plugin', plugin: 'mstar-engine', form: 'catalog' }`; the anchor
-reader also accepts the legacy `mstar-engine-status` identity from
-persisted logs) — and the payload is fetched from the host's
+producer-owned catalog source
+(`{ kind: 'mstar-engine', form: 'catalog' }`; the anchor
+reader also accepts the V3→V4-migrated legacy kinds `plugin:mstar-engine` and
+`plugin:mstar-engine-status` from persisted logs) — and the payload is fetched from the host's
 `/api/mstar/engineStatus` endpoint (the gateway owns the route; the
 panel's browser half calls
 `connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
