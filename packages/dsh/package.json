@@ -28,6 +28,7 @@
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
     },
+    "./locale/*.json": "./locale/*.json",
     "./bundle/cordis.patch.yml": "./bundle/cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -35,6 +36,7 @@
     "SECURITY.md",
     "dist",
     "bundle",
+    "locale",
     "harness-skills",
     "harness-agents",
     "harness-commands"
