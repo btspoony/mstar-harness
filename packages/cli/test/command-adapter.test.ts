@@ -91,6 +91,7 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("Usage: mstar mcp");
   expect(result.stdout).toContain("Run the Morning Star MCP server over stdio");
+  expect(result.stdout).toContain("--identity-env <NAME>");
 });
 
 /**

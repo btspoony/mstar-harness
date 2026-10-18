@@ -10,14 +10,23 @@ import { validateCommandOutcome } from "./outcome.js";
  * immutable primitive session selector admission already validated — never the
  * handler value — so a resolver cannot reach or replace what the handler will
  * observe.
+ *
+ * `defaultSessionId` is the identity a launcher declared for every call (the
+ * stdio server's `--identity-env` channel). It is read at admission so a
+ * required session selector is satisfied by that declared default; the per-call
+ * selector still wins, and an invalid default reaches the same safe-id guard as
+ * any other identity because the resolver never repairs it.
  */
-export type ResolveContext = (
-  definition: CommandDefinition,
-  sessionId: string | undefined,
-  signal: AbortSignal,
-  services: Array<{ close(): Promise<void> }>,
-  effects: McpEffects,
-) => InvocationContext | Promise<InvocationContext>;
+export type ResolveContext = {
+  (
+    definition: CommandDefinition,
+    sessionId: string | undefined,
+    signal: AbortSignal,
+    services: Array<{ close(): Promise<void> }>,
+    effects: McpEffects,
+  ): InvocationContext | Promise<InvocationContext>;
+  readonly defaultSessionId?: string;
+};
 
 export function mcpToolName(commandId: string): string {
   return `mstar_${commandId.replace(/[.-]/g, "_")}`;
@@ -123,7 +132,15 @@ export function registerMcpCommands(
         vendor: "mstar-harness",
         jsonSchema: { input: () => contract.jsonSchema, output: () => contract.jsonSchema },
         validate(input) {
-          const admitted = admitCommandInput(definition, input, descriptor, contract.schema, (data) => handlerInput(definition, data));
+          const defaultSessionId = resolveContext.defaultSessionId;
+          const admitted = admitCommandInput(
+            definition,
+            input,
+            descriptor,
+            contract.schema,
+            (data) => handlerInput(definition, data),
+            defaultSessionId === undefined ? undefined : { sessionId: defaultSessionId },
+          );
           return admitted.success ? { value: admitted } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },
       },
