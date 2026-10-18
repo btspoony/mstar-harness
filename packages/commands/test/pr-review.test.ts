@@ -328,6 +328,67 @@ describe("pr-review command family", () => {
     }
   });
 
+  test("findings-payload errors join the incomplete-flag diagnostics in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{}]));
+    const flags = { findings, incompleteReason: " ", unscanned: "src/auth.ts" };
+
+    // The findings payload is validated in the same collection phase as the
+    // incomplete flags, so one call reports both the invalid mergeClass and
+    // the blank cause (packages/cli/AGENTS.md § Aggregated validation). The
+    // direct execute route and the admitted one agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "findings and incomplete flags")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "findings", code: "invalid" }),
+        expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(text).toContain("--incomplete-reason must be a single line of non-blank text");
+    }
+
+    // A missing findings file is the same caller-correctable class (usage, exit
+    // 2), not a failed execution, and joins the same refusal.
+    const missing = await command("pr-review.tally").execute(
+      { findings: path.join(cwd, "absent.json"), incompleteReason: " ", unscanned: "src/auth.ts" },
+      context,
+    );
+    expect(missing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(missing, "missing findings file")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "findings", message: expect.stringContaining("findings file not found") }),
+      expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+    ]));
+  });
+
+  test("a lone --unscanned none declares the engine's empty scope", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
+
+    // Case-insensitive and whitespace-trimmed, the sentinel maps to the empty
+    // array the header renders as `unscanned: none`.
+    for (const raw of ["none", "  NONE  "]) {
+      const result = await command("pr-review.tally").execute({ findings, incompleteReason: "budget spent", unscanned: raw }, context);
+      expect(result.status, raw).toBe("ok");
+      expect(result.data).toMatchObject({
+        incomplete: { reason: "budget spent", unscanned: [] },
+        chatHeader:
+          "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 nit=1 unverified=0\n" +
+          "cause: budget spent\nunscanned: none",
+      });
+    }
+
+    // `none` beside other entries is a literal scope name, never the sentinel.
+    const mixed = await command("pr-review.tally").execute({ findings, incompleteReason: "budget spent", unscanned: "none, src/auth.ts" }, context);
+    expect(mixed.status).toBe("ok");
+    expect(mixed.data).toMatchObject({ incomplete: { unscanned: ["none", "src/auth.ts"] } });
+  });
+
   test("unknown outcome after posting does not claim success or retry", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");

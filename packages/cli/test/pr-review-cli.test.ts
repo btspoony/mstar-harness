@@ -138,10 +138,11 @@ describe("mstar pr-review tally", () => {
     });
   });
 
-  test("missing findings file exits 1", () => {
+  test("missing findings file is a usage refusal (exit 2)", () => {
     withTempDir((dir) => {
       const result = runCli(["pr-review", "tally", "--findings", join(dir, "absent.json")]);
-      expect(result.exitCode).toBe(1);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(message(result)).toContain("not found");
     });
   });
@@ -275,6 +276,49 @@ describe("mstar pr-review tally", () => {
       const body = message(result);
       expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
       expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+    });
+  });
+
+  test("a findings-payload error and a blank incomplete flag are refused in one response (aggregated validation)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[{}]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--incomplete-reason",
+        " ",
+        "--unscanned",
+        "src/auth.ts",
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const body = message(result);
+      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+    });
+  });
+
+  test("a lone --unscanned none declares the engine's empty scope", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, '[{"mergeClass":"must-fix"},{"mergeClass":"nit"}]');
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--incomplete-reason",
+        "budget spent before the security domain",
+        "--unscanned",
+        "none",
+      ]);
+      expect(result.exitCode).toBe(0);
+      const resultData = data(result);
+      expect(resultData.incomplete).toEqual({ reason: "budget spent before the security domain", unscanned: [] });
+      expect(resultData.chatHeader).toContain("unscanned: none");
     });
   });
 });
