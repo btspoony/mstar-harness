@@ -5,7 +5,7 @@
     "": {
       "name": "morning-star",
       "dependencies": {
-        "@mstar-harness/engine": "^4.0.1",
+        "@mstar-harness/engine": "^4.0.2",
       },
       "devDependencies": {
         "@oh-my-pi/pi-coding-agent": "^17.2.11",
@@ -25,7 +25,7 @@
     },
     "packages/cli": {
       "name": "@mstar-harness/cli",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "bin": {
         "mstar-harness": "dist/mstar-harness.js",
         "mstar": "dist/mstar-harness.js",
@@ -47,7 +47,7 @@
     },
     "packages/commands": {
       "name": "@mstar-harness/commands",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "dependencies": {
         "@mstar-harness/engine": "workspace:*",
         "@mstar-harness/judgment": "workspace:*",
@@ -61,7 +61,7 @@
     },
     "packages/dsh": {
       "name": "@mstar-harness/dsh",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "devDependencies": {
         "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.2",
         "@mstar-harness/commands": "workspace:*",
@@ -75,7 +75,7 @@
         "clsx": "^2.0.0",
         "diff": "^9.0.0",
         "dsh-llm-fallbacks": "0.6.6",
-        "immer": "^10.1.1",
+        "immer": "^11.1.21",
         "js-yaml": "^5.4.3",
         "katex": "^0.19.0",
         "mdast-util-from-markdown": "^2.0.3",
@@ -169,7 +169,7 @@
     },
     "packages/engine": {
       "name": "@mstar-harness/engine",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "dependencies": {
         "mdast-util-from-markdown": "^2.0.3",
         "mdast-util-gfm": "^3.1.0",
@@ -194,7 +194,7 @@
     },
     "packages/omp": {
       "name": "@mstar-harness/omp",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "devDependencies": {
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
@@ -209,7 +209,7 @@
     },
     "packages/opencode": {
       "name": "@mstar-harness/opencode",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "dependencies": {
         "@opencode-ai/plugin": "1.4.8",
       },
@@ -220,7 +220,7 @@
     },
     "packages/opencode-v2": {
       "name": "@mstar-harness/opencode-v2",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "dependencies": {
         "@opencode/plugin": "2.0.26",
         "@opencode/schema": "2.0.26",
@@ -1133,7 +1133,7 @@
 
     "ignore-walk": ["ignore-walk@8.0.0", "", { "dependencies": { "minimatch": "^10.0.3" } }, "sha512-FCeMZT4NiRQGh+YkeKMtWrOmBgWjHjMJ26WQWrRQyoyzqevdaGSakUaJW5xQYmjLlUVk2qUnCjYVBax9EKKg8A=="],
 
-    "immer": ["immer@10.2.0", "", {}, "sha512-d/+XTN3zfODyjr89gM3mPq1WNX2B8pYsu7eORitdwyA2sBubnTl3laYlBk4sXY5FUa5qTZGBDPJICVbvqzjlbw=="],
+    "immer": ["immer@11.1.21", "", {}, "sha512-bZSadeCPGdaY5/qRLgr6mDSH1ra21rD3rqpiWk7+QTr4ayYPTE9qZYdLh/NdPhMe0wSrTvHD/Lk8q5EwhUs0aw=="],
 
     "ini": ["ini@6.0.0", "", {}, "sha512-IBTdIkzZNOpqm7q3dRqJvMaldXjDHWkEDfrwGEQTs5eaQMWV+djAhR+wahyNNMAa+qpbDUhBMVt4ZKNwpPm7xQ=="],
 
