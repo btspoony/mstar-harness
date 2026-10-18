@@ -170,7 +170,7 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
 // Disposition: doneAt normalization was asserted only over legacy snapshot plan rows; ACTIVE plan rows are covered by store-backed consumers.
 
 describe('mstar-engine-status — advisory degrade (state section null)', () => {
-  it('no status.json → the row still appends with state: null (watermark only)', async () => {
+  it('no status.json → the row still appends and the state section discloses the authority verdict', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-absent-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -192,22 +192,22 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
     expect(text).not.toContain('plans:')
   })
 
-  it('no harness dir (agent-less, no config) → the row appends with harnessDir null and state null', async () => {
+  it('no harness dir (agent-less, no config) → no row is composed (state: null)', async () => {
     booted = await bootApp({ harnessDir: null })
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    expect(decision.messages).toHaveLength(1)
-    const row = lastMessage(decision)
-    if (row?.source.kind !== 'mstar-engine') return
     // No explicit `harnessDir` config and an agent-less payload → the
-    // resolved `{HARNESS_DIR}` is null (the payload the listener built).
+    // resolved `{HARNESS_DIR}` is null (the payload the listener built). The
+    // payload carries no state section, so after D1 the rendered block would be
+    // an empty wrapper: the listener composes no row.
     const payload = buildCatalogPayload(booted!.ctx, null)
     expect(payload.harnessDir).toBeNull()
     expect(payload.state).toBeNull()
-    expect(textOf(row)).toContain('harness dir: none')
+    expect(decision.messages).toHaveLength(0)
+    expect(lastMessage(decision)).toBeUndefined()
   })
 })
 

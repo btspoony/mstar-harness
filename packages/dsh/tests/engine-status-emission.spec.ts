@@ -17,12 +17,12 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { initializeStore, readDshStatusEmission } from '@mstar-harness/engine'
+import { initializeStore, readDshStatusEmission, readExecutionState } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
-import { readEngineStatusSnapshot } from '../src/engine-status-store.ts'
-import { bootApp, seedStore, type BootResult } from './harness.ts'
+import { readEngineStatusSnapshot, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -52,7 +52,7 @@ function stepPayloadOf(sessionId: string, cwd: string, messages: UserMessage[], 
   } as never
 }
 
-describe('engine-status emission — written at the real digest-gated emission', () => {
+describe('engine-status emission — written at the real change-driven emission', () => {
   it('persists the emitted payload keyed by session.header.id and cwd', async () => {
     const app = (booted = await bootApp())
     await seedStore(app.harnessDir)
@@ -86,53 +86,157 @@ describe('engine-status emission — written at the real digest-gated emission',
     )
   })
 
-  it('keeps ONE row per session: a later turn replaces the emission instead of appending history', async () => {
-    const app = (booted = await bootApp())
+  it('keeps ONE row per session: an unchanged step emits nothing and a real change replaces the emission', async () => {
+    // TTL 0 rebuilds the payload at every step, so a change is visible
+    // immediately — and an UNCHANGED rebuild (whose only difference is the
+    // emission's own store-revision write) must still emit nothing.
+    const app = (booted = await bootApp({ catalogTtlMs: 0 }))
     await seedStore(app.harnessDir)
     const inbox = [inboxMessage()]
     for (const step of [1, 2, 3]) {
-      await app.ctx.waterfall(
+      const decision = await app.ctx.waterfall(
         'agent/pre-step',
         stepPayloadOf('ses_alpha', app.root, inbox, 7, step),
         defaultEnter(inbox),
       )
+      // Only the first step appends: the rebuilt payload is unchanged, and the
+      // revision its predecessor's write bumped is normalized away.
+      expect(decision.kind === 'enter' && decision.messages.length).toBe(step === 1 ? inbox.length + 1 : inbox.length)
     }
-    // Same-turn re-emission is digest-gated AND the store keeps one row.
+    // The store keeps ONE row, still the first emission's turn.
     const sameTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
     expect(sameTurn.kind === 'ok' && sameTurn.emission?.turn).toBe(7)
-    // The next turn is a new emission: it UPSERTs the same session row.
-    await app.ctx.waterfall(
+
+    // A REAL change (a newly open issue changes the panel projection) is the
+    // emission trigger: the row is replaced with the new turn.
+    await seedOpenIssue(app.harnessDir, { title: 'a newly opened issue', severity: 'high', operationId: 'op-emission-turn' })
+    const changed = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_alpha', app.root, inbox, 8, 1),
       defaultEnter(inbox),
     )
+    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length + 1)
     const nextTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
     expect(nextTurn.kind === 'ok' && nextTurn.emission?.turn).toBe(8)
   })
 
-  it('does not write a cached emission into a replacement authority generation', async () => {
-    const app = (booted = await bootApp())
+  it('writes the replacement generation only for a real change, and refuses a write carrying the retired generation', async () => {
+    const app = (booted = await bootApp({ catalogTtlMs: 0 }))
     await seedStore(app.harnessDir)
     const inbox = [inboxMessage()]
-    await app.ctx.waterfall(
+    const first = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_generation', app.root, inbox, 1),
       defaultEnter(inbox),
     )
+    expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
     expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root).kind).toBe('ok')
+    // The generation the first emission was built under (the one it persisted with).
+    const retired = await readExecutionState({ harnessDir: app.harnessDir })
 
+    // Replace the authority generation.
     for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
     const replacement = await initializeStore({ harnessDir: app.harnessDir })
     replacement.close()
 
-    const decision = await app.ctx.waterfall(
+    // No change → no emission, so the retired row is not resurrected and
+    // nothing is written into the replacement generation.
+    const unchanged = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_generation', app.root, inbox, 2),
       defaultEnter(inbox),
     )
-    expect(decision.kind).toBe('enter')
-    const replacementRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
-    expect(replacementRead.kind === 'ok' && replacementRead.emission).toBeUndefined()
+    expect(unchanged.kind === 'enter' && unchanged.messages.length).toBe(inbox.length)
+    const afterReplacement = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
+    expect(afterReplacement.kind === 'ok' && afterReplacement.emission).toBeUndefined()
+
+    // A REAL change in the replacement generation emits with the CURRENT
+    // generation: the row lands, keyed by the new turn.
+    await seedOpenIssue(app.harnessDir, { title: 'a replacement-generation issue', severity: 'medium', operationId: 'op-emission-generation' })
+    const changed = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_generation', app.root, inbox, 3),
+      defaultEnter(inbox),
+    )
+    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length + 1)
+    const writtenRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
+    expect(writtenRead.kind === 'ok' && writtenRead.emission?.turn).toBe(3)
+
+    // The guard still refuses a write that carries the retired generation —
+    // a cached payload can never resurrect the previous authority's row.
+    const stale = writeEngineStatusSnapshot(app.harnessDir, {
+      sessionId: 'ses_retired',
+      cwd: app.root,
+      turn: 9,
+      payload: await buildCatalogPayloadWithStore(app.ctx, app.harnessDir),
+      selectedGeneration: { storeId: retired.storeId, epoch: retired.epoch },
+    })
+    expect(stale.kind).toBe('degraded')
+    expect(stale.kind === 'degraded' && stale.reason).toContain('store.stale-epoch')
+    const retiredRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retired', app.root)
+    expect(retiredRead.kind === 'ok' && retiredRead.emission).toBeUndefined()
+  })
+
+  it('retries a degraded persist on a later UNCHANGED step without re-appending the row', async () => {
+    // Default TTL: each session+workspace keeps ONE cached payload across the
+    // three steps, so every step after the first carries the same rendered text
+    // and panel projection (the change gate stays closed).
+    const app = (booted = await bootApp())
+    const inbox = [inboxMessage()]
+    // (a) No ACTIVE store yet: the row IS emitted, and its persist degrades.
+    // The window brackets the FIRST emission, which is the only clock the
+    // stored row may name.
+    const firstStart = Date.now()
+    const first = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_retry', app.root, inbox, 1, 1),
+      defaultEnter(inbox),
+    )
+    const firstEnd = Date.now()
+    expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
+    expect(readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
+
+    // (b) The store becomes ACTIVE. The payload is unchanged, so no second row
+    // is appended — but the pending persist is retried and lands. It carries
+    // the ORIGINAL emission turn and time: the row the model saw was emitted in
+    // turn 1, and a retried write must not relabel it with the retry's turn or
+    // stamp the retry's clock as the freshness time.
+    await seedStore(app.harnessDir)
+    // The retry lands strictly after the first emission: a store-stamped row
+    // would carry a time outside the first step's window.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const retryStart = Date.now()
+    expect(retryStart).toBeGreaterThan(firstEnd)
+    const second = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_retry', app.root, inbox, 2, 2),
+      defaultEnter(inbox),
+    )
+    expect(second.kind === 'enter' && second.messages.length).toBe(inbox.length)
+    const persisted = readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root)
+    expect(persisted.kind).toBe('ok')
+    if (persisted.kind !== 'ok') throw new Error('unreachable')
+    expect(persisted.entry.turn).toBe(1)
+    const persistedAt = Date.parse(persisted.entry.at)
+    expect(persistedAt).toBeGreaterThanOrEqual(firstStart)
+    expect(persistedAt).toBeLessThanOrEqual(firstEnd)
+    expect(persistedAt).toBeLessThan(retryStart)
+
+    // (c) The successful retry clears the latch: a third unchanged step neither
+    // appends the row nor touches the store at all (the execution token is
+    // unchanged, so no write happened) — the emission keeps turn 1 and its
+    // original time.
+    const tokenBefore = (await readExecutionState({ harnessDir: app.harnessDir })).token
+    const third = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_retry', app.root, inbox, 3, 3),
+      defaultEnter(inbox),
+    )
+    expect(third.kind === 'enter' && third.messages.length).toBe(inbox.length)
+    const unchanged = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retry', app.root)
+    expect(unchanged.kind === 'ok' && unchanged.emission?.turn).toBe(1)
+    expect(unchanged.kind === 'ok' && unchanged.emission?.emittedAt).toBe(persisted.entry.at)
+    expect((await readExecutionState({ harnessDir: app.harnessDir })).token).toBe(tokenBefore)
   })
 
   it('keys independent sessions separately', async () => {
@@ -145,6 +249,26 @@ describe('engine-status emission — written at the real digest-gated emission',
     expect(readEngineStatusSnapshot(app.harnessDir, 'ses_beta', '/proj/other').kind).toBe('ok')
     // A cwd that is not the row's own workspace is never served.
     expect(readEngineStatusSnapshot(app.harnessDir, 'ses_beta', app.root).kind).toBe('unavailable')
+  })
+
+  it('retains the watermark trio in the row when the composition has no system-prompt service (finding C)', async () => {
+    // The host provides no `system-prompt` service: `registerHarnessPrompt`
+    // fails open and injects neither `mstar:harness-rules` nor
+    // `mstar:engine-status`, so the row is the ONLY channel for the version /
+    // harness dir / enforcement facts.
+    const app = (booted = await bootApp({ withoutSystemPrompt: true }))
+    await seedStore(app.harnessDir)
+    const inbox = [inboxMessage()]
+    const decision = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_watermark', app.root, inbox, 1),
+      defaultEnter(inbox),
+    )
+    const row = decision.kind === 'enter' ? decision.messages.at(-1) : undefined
+    const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
+    expect(text.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
+    expect(text).toContain('\nharness dir: ' + app.harnessDir + '\n')
+    expect(text).toContain('\nenforcement: soft\n')
   })
 
   it('still emits the row but persists no row when the agent carries no session id', async () => {

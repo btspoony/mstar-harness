@@ -97,7 +97,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 | `dispatchBinding` | unset → fail-closed `empty-binding` under hard | the dispatching agent's own role (the anti-recursion CALLER) for the precheck |
 | `skillRoots` | unset | additional skill roots (custom mirrors) |
 | `bundledSkillDir` | unset → plugin resolves its OWN packaged `harness-skills/` mirror package-relative | bundled skill mount — the repo-root `skills/` mirror synced by `bundle-assets` at build time (gitignored), resolved package-relative (NOT cwd-anchored). An explicit value wins; a RELATIVE override stays cwd-anchored, so pass an absolute path in the profile layer |
-| `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace unified `mstar-engine` catalog row (watermark + iteration gate + workspace-state digest) re-reads `status.json` / the compass / the knowledge index; the hot path is a timestamp compare + cache hit between refreshes |
+| `catalogTtlMs` | unset → `60000` | pre-step catalog cache refresh interval (ms) — how often the per-workspace unified `mstar-engine` catalog row (iteration phase gate + workspace-state digest) re-reads the control-root `store.db` execution authority / the compass / the knowledge catalog; the hot path is a timestamp compare + cache hit between refreshes. Emission is change-driven, never per turn: first emission, then only when the rendered row or the panel-relevant payload projection changes. The watermark trio (version / harness dir / enforcement) is payload-only and model-visible through the always-on system prompt, so the row repeats it only as the fallback while prompt registration is not live |
 
 ## Client half (workflow panel)
 
@@ -184,11 +184,13 @@ renders a CENTERED inactive-state card that activates automatically once a
 harness is detected. Projection is the pure `projectGraph(source)`
 function (schema constants vs catalog evidence strictly separated; never
 throws; explicit degraded states — muted empty states, never orange warn
-boxes). Refresh follows the session snapshot, no polling — a ledger
-record (dispatch/settle) invalidates the workspace's TTL-cached catalog
-row so the panel refreshes per step; while the main agent idles the panel
-keeps the last snapshot (no live push channel). Full realized layout
-detail: `packages/dsh/README.md` (§ Web client plugin).
+boxes). Refresh follows the newest emitted anchor row, no polling — a
+ledger record (dispatch/settle) invalidates the workspace's TTL-cached
+catalog row, so the next step rebuilds and re-emits only if the row's text
+or panel projection changed, and the panel then re-reads that session's
+stored snapshot; an unchanged step emits nothing, and while the main agent
+idles the panel keeps the last snapshot (no live push channel). Full
+realized layout detail: `packages/dsh/README.md` (§ Web client plugin).
 
 Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,

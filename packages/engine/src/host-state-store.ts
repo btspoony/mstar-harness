@@ -119,6 +119,13 @@ export function writeDshSessionBinding(
   }
 }
 
+/**
+ * Record this session's newest status emission.
+ * `emittedAt` is the ISO time the caller OBSERVED the emission; a persist that
+ * is retried later passes the original one so the stored row keeps naming when
+ * the model actually saw the payload. When it is omitted (or empty), the store
+ * stamps the write transaction's own time.
+ */
 export function recordDshStatusEmission(
   context: StoreContext,
   sessionId: string,
@@ -126,13 +133,14 @@ export function recordDshStatusEmission(
   turn: number,
   payloadJson: string,
   selectedGeneration?: DshSelectedGeneration,
+  emittedAt?: string,
 ): DshWriteResult {
   try {
     withDshWriteTransaction(context, (tx) => {
       tx.db.prepare(
         "insert into dsh_status_emissions(session_id, cwd, turn, emitted_at, payload_json) values (?, ?, ?, ?, ?) " +
           "on conflict(session_id, cwd) do update set turn = excluded.turn, emitted_at = excluded.emitted_at, payload_json = excluded.payload_json",
-      ).run(sessionId, cwd, turn, now(), payloadJson);
+      ).run(sessionId, cwd, turn, emittedAt === undefined || emittedAt === "" ? now() : emittedAt, payloadJson);
       tx.markChanged();
     }, selectedGeneration);
     return { kind: "written" };

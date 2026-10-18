@@ -23180,10 +23180,10 @@ function writeDshSessionBinding(context, sessionId, cwd, update, selectedGenerat
     return { kind: "degraded", reason: error instanceof Error ? error.message : String(error) };
   }
 }
-function recordDshStatusEmission(context, sessionId, cwd, turn, payloadJson, selectedGeneration) {
+function recordDshStatusEmission(context, sessionId, cwd, turn, payloadJson, selectedGeneration, emittedAt) {
   try {
     withDshWriteTransaction(context, (tx) => {
-      tx.db.prepare("insert into dsh_status_emissions(session_id, cwd, turn, emitted_at, payload_json) values (?, ?, ?, ?, ?) on conflict(session_id, cwd) do update set turn = excluded.turn, emitted_at = excluded.emitted_at, payload_json = excluded.payload_json").run(sessionId, cwd, turn, now(), payloadJson);
+      tx.db.prepare("insert into dsh_status_emissions(session_id, cwd, turn, emitted_at, payload_json) values (?, ?, ?, ?, ?) on conflict(session_id, cwd) do update set turn = excluded.turn, emitted_at = excluded.emitted_at, payload_json = excluded.payload_json").run(sessionId, cwd, turn, emittedAt === undefined || emittedAt === "" ? now() : emittedAt, payloadJson);
       tx.markChanged();
     }, selectedGeneration);
     return { kind: "written" };

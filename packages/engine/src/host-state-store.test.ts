@@ -285,6 +285,32 @@ describe("host-state store domain", () => {
       handle.close();
     }
   });
+  test("stores a caller-supplied emission time and stamps a current ISO time when it is omitted", async () => {
+    const { context, handle } = await fresh("emission-time");
+    try {
+      // Omitted: the store's own transaction time (still the native default).
+      const before = Date.now();
+      expect(recordDshStatusEmission(context, "s", "/cwd", 1, "first")).toEqual({ kind: "written" });
+      const after = Date.now();
+      const stamped = readDshStatusEmission(context, "s", "/cwd");
+      if (stamped.kind !== "ok") throw new Error("unreachable");
+      const stampedAt = Date.parse(stamped.emission!.emittedAt);
+      expect(stampedAt).toBeGreaterThanOrEqual(before);
+      expect(stampedAt).toBeLessThanOrEqual(after);
+      // Explicit: the caller's emission time wins over both the insert default
+      // and the previous row on the upsert (a retried persist keeps it).
+      expect(recordDshStatusEmission(context, "s", "/cwd", 2, "second", undefined, "2026-10-12T00:00:00.000Z")).toEqual({ kind: "written" });
+      expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
+        kind: "ok", emission: { turn: 2, emittedAt: "2026-10-12T00:00:00.000Z", payloadJson: "second" },
+      });
+      expect(recordDshStatusEmission(context, "s", "/cwd", 3, "third", undefined, "2026-10-12T00:00:01.000Z")).toEqual({ kind: "written" });
+      expect(readDshStatusEmission(context, "s", "/cwd")).toMatchObject({
+        kind: "ok", emission: { turn: 3, emittedAt: "2026-10-12T00:00:01.000Z" },
+      });
+    } finally {
+      handle.close();
+    }
+  });
   test("refuses imported session bindings at a different cwd and preserves exact-pair replay", async () => {
     const { context, handle } = await fresh("binding-import-cwd");
     try {

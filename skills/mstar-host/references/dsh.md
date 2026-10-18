@@ -200,14 +200,36 @@ stays synchronous shape validation: a project register is migration history,
 and a retired path is not a lookup. Config / `.mstarc` `soft` are the local
 rollbacks. Hard gates are never a global default.
 
-Every composed agent step carries ONE **`<mstar_engine_status>`** catalog
-message: the watermark (unified mstar version, harness dir, enforcement),
-the iteration phase-gate section when a steering compass resolved, and the
-workspace-state digest section (plan registry, open issues from the store rollup,
-branch/policy anchors, active leases, knowledge digest, compass direction)
-when the workspace has harness authority (store.db registry). The row is digest-gated (once per
-turn, re-injected only when it changed) over one per-workspace TTL-cached
-build (`catalogTtlMs`, default 60 s).
+A composed agent step carries ONE **`<mstar_engine_status>`** catalog
+message when the row is emitted: the iteration phase-gate section when a
+steering compass resolved, and the workspace-state digest section (plan
+registry, open issues from the store rollup, branch/policy anchors, plan row
+scopes — a recorded scope, not a lease — knowledge digest, compass direction)
+when the workspace has harness authority (store.db registry). When no
+lifecycle is selected the row renders `workflow selection: ERROR (<code>)
+<message>` instead of those state lines, and that message names the execution
+authority plus a real recovery (`mstar workflow register` /
+`mstar iteration register`, or picking a registered lifecycle for this
+session) rather than a retired `status.json` path. Emission is
+change-driven per session+workspace: first emission, then only when the
+rendered row or the panel-relevant payload projection changes — the start of
+a turn is not a trigger, so a long unchanged session does not accumulate
+copies, and a workspace with no resolved `{HARNESS_DIR}` composes no row at
+all. The block is a projection of the payload: the version / harness dir /
+enforcement watermark stays in the payload (the panel meta dock renders
+version + harness dir from it) and stays model-visible once in the always-on
+system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), never
+repeated in the row. The one exception is a composition without
+`dsh-system-prompt`: the registration fails open and neither prompt section
+exists, so the row falls back to re-rendering the trio itself (the listener's
+`showWatermark` option, taken from that registration verdict) — the watermark
+is never absent from the model's context. The newest per-session emission
+persists in the control-root `store.db` (`dsh_status_emissions`), so its
+freshness footer `turn` / `at` mean the last emission, not the current turn;
+the row is not periodically re-anchored, so after host-side context compaction
+it may be absent until the next change — the system-prompt digest still
+carries the version, the active workflow and its non-Done plans. The build
+behind it is one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
 
 ### Execution authority in this host (source state)
 
@@ -417,8 +439,8 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   structured source, never the model text). A ledger record
   (dispatch/settle/link) invalidates the affected workspace's TTL cache entry
   IMMEDIATELY (apply-scoped `harnessDir → cache key` reverse map +
-  invalidation closure) → the next pre-step rebuilds and (digest text change)
-  re-injects the row — the 60 s TTL no longer bounds ledger-change latency; it
+  invalidation closure) → the next pre-step rebuilds and (rendered-text or
+  panel-projection change) re-injects the row — the 60 s TTL no longer bounds ledger-change latency; it
   still bounds non-ledger staleness.
 - **Explicit ledger target (ACTIVE authority)**: each event boundary resolves
   the session's selected native target and validates its current store identity,

@@ -86,8 +86,11 @@ export type EngineStatusSnapshotWrite =
 
 /**
  * One write request — the emission site's payload plus its session identity.
- * The store stamps the emission time itself; no caller-supplied timestamp is
- * accepted (the durable row's time is the store transaction's own).
+ * The stored `at` is the EMISSION time: the emission site supplies the ISO time
+ * it captured when the row was emitted, and a persist retried on a later step
+ * repeats that same time, so the freshness footer's `at` never claims the
+ * retry as a new emission. Omitting `emittedAt` (a direct write) lets the store
+ * stamp its own transaction time.
  */
 export interface EngineStatusSnapshotWriteInput {
   /** The session whose catalog row this payload is (`session.header.id`). */
@@ -100,6 +103,12 @@ export interface EngineStatusSnapshotWriteInput {
   readonly payload: object
   /** The selected authority generation of the emission's selection, when bound. */
   readonly selectedGeneration?: DshSelectedGeneration
+  /**
+   * ISO time of the EMISSION this write records. A retried persist passes the
+   * original emission time so the stored row keeps naming when the model saw
+   * the payload; omitted means "stamp this write" (a direct store write).
+   */
+  readonly emittedAt?: string
 }
 
 /**
@@ -246,6 +255,7 @@ export function writeEngineStatusSnapshot(
     input.turn,
     JSON.stringify(input.payload),
     input.selectedGeneration,
+    input.emittedAt,
   )
   return written.kind === 'written' ? { kind: 'written' } : { kind: 'degraded', reason: written.reason }
 }
