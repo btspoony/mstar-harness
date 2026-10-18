@@ -110,6 +110,23 @@ export function setHarnessPromptLogger(sink: HarnessPromptLogSink): HarnessPromp
   return prior
 }
 
+/**
+ * Lifecycle hooks for {@link registerHarnessPrompt} — the scheduling-independent
+ * registration signal. `onRegistered` fires ONLY after both the
+ * `mstar:harness-rules` section and the `mstar:engine-status` context have
+ * actually landed (never from the contained failure path); `onDisposed` fires
+ * from the registration disposer after those entries are removed (HMR
+ * re-apply / service removal), so the fallback can return. Both hooks are
+ * contained: a throw is logged and can never change the registration outcome
+ * or escape the fiber teardown.
+ */
+export interface HarnessPromptRegistrationHooks {
+  /** Both registrations landed (last successful step of the inject callback). */
+  onRegistered?: () => void
+  /** The registrations were disposed; nothing from this registration is live. */
+  onDisposed?: () => void
+}
+
 /** One consumed prompt-section registration (`@deepseek-ai/dsh-system-prompt` `PromptSection` contract — text may be a provider, same as {@link PromptContextInput}). */
 interface PromptSectionInput {
   readonly name: string
@@ -172,16 +189,27 @@ function resolveAssemblyHarnessDir(context: object, resolver: HarnessResolver, f
  *   workspace), and the section's enforcement word is re-read from the
  *   compass per assembly — so both stay correct in zero-config deployments
  *   and follow mid-session compass flips.
+ * @param options.onRegistered - fires after BOTH registrations have landed
+ *   (the last successful step of the inject callback; a contained
+ *   registration failure never calls it). This — not the return value — is
+ *   the confirmed-live signal a consumer must base fallback rendering on.
+ * @param options.onDisposed - fires from the collected disposer after the
+ *   section and context are removed (HMR re-apply / service removal), so a
+ *   consumer's confirmed-live state can return to the fallback.
  * @returns `true` when the service exists and registration was scheduled;
  *   `false` when `ctx.systemPrompt` is structurally absent (one debug log,
  *   boot unaffected) or the synchronous registration path threw (contained
  *   warn). The actual registration runs in an inject child that settles
  *   ASYNC — a failure there is contained to a warn and cannot be observed
  *   through this return value (`true` only guarantees scheduling, not
- *   landing; `apply` ignores the value, so boot is never affected). Never
+ *   landing; `apply` ignores the value, so boot is never affected). Use
+ *   {@link HarnessPromptRegistrationHooks} for landed-state decisions. Never
  *   throws.
  */
-export function registerHarnessPrompt(ctx: Context, options: { resolver: HarnessResolver }): boolean {
+export function registerHarnessPrompt(
+  ctx: Context,
+  options: { resolver: HarnessResolver } & HarnessPromptRegistrationHooks,
+): boolean {
   const systemPrompt = ctx.get('systemPrompt') as SystemPromptView | undefined
   if (systemPrompt === undefined || typeof systemPrompt.section !== 'function' || typeof systemPrompt.context !== 'function') {
     log('debug', 'systemPrompt service absent — mstar:harness-rules injection skipped (composition without dsh-system-prompt)')
@@ -238,13 +266,39 @@ export function registerHarnessPrompt(ctx: Context, options: { resolver: Harness
           } catch {
             // ignore — the layer entry is already gone
           }
+          // The entries are gone: this registration no longer carries the
+          // version / harness dir / enforcement facts, so a fallback consumer
+          // must return to its watermark. Called after BOTH removal attempts
+          // (and independently of their outcome — the hook is the live-state
+          // signal, not a disposal-success report).
+          notifyRegistrationHook(options.onDisposed, 'onDisposed')
         }
       }, 'mstar:harness-rules disposer collection')
+      // LAST successful step — nothing below can fail the registration, so
+      // the hook is exactly the "both registrations landed" signal. A throw
+      // from `section`, the awaited provider, or `context` above skips it and
+      // is caught by the contained path below: a failed registration must
+      // never report itself as live.
+      notifyRegistrationHook(options.onRegistered, 'onRegistered')
     } catch (error) {
       log('warn', `mstar:harness-rules registration failed (contained — session boot unaffected): ${errorMessage(error)}`)
     }
   })
   return true
+}
+
+/**
+ * Invoke one lifecycle hook with the module's never-throws discipline: a
+ * throwing consumer callback is logged and swallowed, so it can neither fail
+ * the registration nor break the fiber teardown.
+ */
+function notifyRegistrationHook(hook: (() => void) | undefined, name: string): void {
+  if (hook === undefined) return
+  try {
+    hook()
+  } catch (error) {
+    log('warn', `mstar:harness-rules ${name} hook failed (contained — registration state unchanged): ${errorMessage(error)}`)
+  }
 }
 
 /**

@@ -36,7 +36,7 @@ import {
   createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
 } from './gates/catalog.ts'
-import type { CatalogCacheEntry, TurnDigest } from './gates/catalog.ts'
+import type { CatalogCacheEntry, EmissionDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
@@ -437,7 +437,27 @@ export function apply(ctx: Context, config: Config): void {
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  registerHarnessPrompt(ctx, { resolver })
+  // The catalog row's watermark FALLBACK tracks CONFIRMED LIVE registration,
+  // never the scheduling verdict: `registerHarnessPrompt` returning `true`
+  // only means its async inject child was scheduled — that child's
+  // `section`/`context`/provider can still fail (contained) or its
+  // registration can later be disposed (service removal / HMR), and in both
+  // cases nothing carries the version / harness dir / enforcement facts.
+  // Count LANDED registrations instead: 0 live registrations ⇒ the row is
+  // the only channel for the watermark trio and re-renders it itself.
+  // A counter rather than a boolean keeps the state correct under a
+  // re-apply/teardown overlap: each landed registration adds one and its own
+  // disposer removes one, whatever order the two fibers settle in.
+  let harnessPromptRegistrationsActive = 0
+  registerHarnessPrompt(ctx, {
+    resolver,
+    onRegistered: () => {
+      harnessPromptRegistrationsActive += 1
+    },
+    onDisposed: () => {
+      if (harnessPromptRegistrationsActive > 0) harnessPromptRegistrationsActive -= 1
+    },
+  })
   // Adoption advisory  — the warn-only deployment-taxonomy
   // pass: when fallbacks is mounted, ONE pass per apply reports the adoption
   // state (seeded / persona-overridden / missing + revert affordance via the
@@ -819,15 +839,15 @@ export function apply(ctx: Context, config: Config): void {
   // same cwd) can never be served each other's selection; a session with no
   // stable id is built uncached.
   //
-  // Digest-gated re-emission: per session+workspace the row is injected once
-  // per turn and re-injected only when its rendered text changed (a
-  // 20-step turn shows the catalog once, not 20 times — see
-  // preStepCatalogListener / agentDigestKey).
+  // Change-driven re-emission (D2): per session+workspace the row is appended
+  // on first emission, when its rendered text changed, or when the
+  // panel-relevant payload projection changed — never solely because a new
+  // turn started (see preStepCatalogListener / panelDigestOf / agentDigestKey).
   const ttlMs = config.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS
   const catalogCache = new Map<string, CatalogCacheEntry>()
-  // Per session+workspace turn digests for the digest-gated re-emission
-  // (inject once per turn; re-inject only when the row changed).
-  const catalogDigests = new Map<string, TurnDigest>()
+  // Per session+workspace emission digests (last rendered text + panel
+  // projection) for the change-driven re-emission.
+  const catalogDigests = new Map<string, EmissionDigest>()
   // Catalog-invalidation hook : the apply-scoped session-keyed reverse map +
   // invalidation closure, created HERE with the same lifetime as the cache
   // above (an HMR fiber restart recreates both — module-level state would
@@ -842,7 +862,15 @@ export function apply(ctx: Context, config: Config): void {
   const catalogInvalidation = createCatalogInvalidation(catalogCache, catalogDigests)
   setAgentFlowInvalidator(catalogInvalidation.invalidate)
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, catalogCache, ttlMs, catalogInvalidation, catalogDigests, payload, next))
+    preStepCatalogListener(ctx, resolver, catalogCache, ttlMs, catalogInvalidation, catalogDigests, payload, next, {
+      // Without a system-prompt service — or while its registration is not
+      // CONFIRMED live (scheduled ≠ landed; a contained failure or a disposal
+      // counts) — the row is the ONLY channel for the watermark trio; with a
+      // live registration the trio stays in the always-on prompt. The lazy
+      // predicate is re-evaluated per step, so a registration landing (or
+      // disappearing) mid-session flips the row on the next step.
+      showWatermark: () => harnessPromptRegistrationsActive === 0,
+    }))
 
   // Panel channel — the host half of the engine-status endpoint
   // (`/api/mstar/engineStatus`): the `mstar` service + its invocation

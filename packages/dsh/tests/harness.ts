@@ -22,6 +22,7 @@ import { pathToFileURL } from 'node:url'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
 import { createScope } from '@deepseek-ai/dsh-scope'
+import type { PromptContext, PromptSection } from '@deepseek-ai/dsh-system-prompt'
 import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import {
@@ -39,6 +40,7 @@ import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
 import type { SubagentsServiceView } from '../src/gates/role-persona.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
+import { ENGINE_STATUS_CONTEXT_NAME, HARNESS_RULES_SECTION_NAME } from '../src/gates/system-prompt.ts'
 import * as plugin from '../src/index.ts'
 
 /**
@@ -645,6 +647,36 @@ export async function fakeChild(ctx: Context, prompt: string): Promise<{ agent: 
 export function startInfo(id: string, provider = 'in-process'): SubagentStartPayload {
   return { runId: `run-${id}`, provider, id, local: true }
 }
+
+/**
+ * The REAL `@deepseek-ai/dsh-system-prompt` module with ONE name-scoped
+ * registration failure injected (see {@link BootOptions.systemPromptFailure}).
+ * The service's own construction-time sections and every other row keep
+ * working; only the mstar registration path throws — the contained failure
+ * `registerHarnessPrompt`'s documented contract describes.
+ */
+function failingSystemPromptModule(
+  Base: typeof import('@deepseek-ai/dsh-system-prompt').default,
+  failure: 'section' | 'context',
+): { default: unknown } {
+  const FailingSystemPrompt = class extends Base {
+    override section(section: PromptSection): () => void {
+      if (failure === 'section' && section.name === HARNESS_RULES_SECTION_NAME) {
+        throw new Error('system-prompt failure fixture: section registration refused')
+      }
+      return super.section(section)
+    }
+
+    override context(context: PromptContext): () => void {
+      if (failure === 'context' && context.name === ENGINE_STATUS_CONTEXT_NAME) {
+        throw new Error('system-prompt failure fixture: context registration refused')
+      }
+      return super.context(context)
+    }
+  }
+  return { default: FailingSystemPrompt }
+}
+
 export interface BootOptions {
   /** `Enforcement` override for the plugin Config (`hard` | `soft`). */
   enforcement?: 'hard' | 'soft'
@@ -658,6 +690,27 @@ export interface BootOptions {
   bundledSkillDir?: string
   /** Catalog cache refresh interval in ms (Config `catalogTtlMs`). */
   catalogTtlMs?: number
+  /**
+   * Omit the `@deepseek-ai/dsh-system-prompt` row — a host composition WITHOUT
+   * the service (`registerHarnessPrompt` then fails open and registers neither
+   * `mstar:harness-rules` nor `mstar:engine-status`). The engine-status row
+   * must then carry the watermark trio itself (the finding-C fallback). The
+   * `dsh-tools` row injects `systemPrompt`, so it simply never applies here;
+   * the plugin's own tool seams are optional children.
+   */
+  withoutSystemPrompt?: boolean
+  /**
+   * Compose the REAL `system-prompt` service but make the MSTAR registration
+   * throw, so a boot can model the scheduled-versus-landed distinction:
+   * `registerHarnessPrompt` still returns `true` (the service exists and the
+   * async inject child was scheduled), yet no prompt section carries the
+   * watermark trio. `'section'` throws from `section()` for
+   * `mstar:harness-rules`; `'context'` throws from `context()` for
+   * `mstar:engine-status` (after the section landed). Only the mstar
+   * registrations fail — the service's own construction-time sections and
+   * every other row keep the real behaviour.
+   */
+  systemPromptFailure?: 'section' | 'context'
   /**
    * Mount the {@link FakeJobRegistry} as the `jobs` service (the
    * `@deepseek-ai/dsh-jobs-fake` row + module map) so the plugin's
@@ -1136,8 +1189,9 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     { name: '@deepseek-ai/dsh-skill' },
     // The real dsh-tools ToolRegistry service injects `systemPrompt`
     // (unlike the removed peer-stub), so the system-prompt row mounts
-    // before the tool registry row.
-    { name: '@deepseek-ai/dsh-system-prompt' },
+    // before the tool registry row. `withoutSystemPrompt` models a host
+    // composition that omits the service entirely.
+    ...(options.withoutSystemPrompt === true ? [] : [{ name: '@deepseek-ai/dsh-system-prompt' }]),
     // The tool registry row mounts before the plugin so `ctx.tools` exists
     // when the v2 seams register their model-facing tools (the real dsh app
     // always composes dsh-tools).
@@ -1257,8 +1311,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // npm registry; the host app provides it at runtime via peerDependencies.
     ['@deepseek-ai/dsh-skill', await import('@deepseek-ai/dsh-skill')],
     // The `ctx.systemPrompt` service seam the real dsh-tools ToolRegistry
-    // injects — the REAL package (npm registry).
-    ['@deepseek-ai/dsh-system-prompt', await import('@deepseek-ai/dsh-system-prompt')],
+    // injects — the REAL package (npm registry), optionally with the
+    // mstar-registration failure injected (`systemPromptFailure`).
+    ['@deepseek-ai/dsh-system-prompt', options.systemPromptFailure === undefined
+      ? await import('@deepseek-ai/dsh-system-prompt')
+      : failingSystemPromptModule((await import('@deepseek-ai/dsh-system-prompt')).default, options.systemPromptFailure)],
     // The `ctx.tools` registry seam — the REAL package (npm registry) whose
     // default export provides the ToolRegistry service (the host app provides
     // it at runtime via peerDependencies).

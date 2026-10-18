@@ -33,6 +33,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
 import { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import { bootApp, fakeChild, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
@@ -100,6 +101,49 @@ async function assembleWithEngineStatus(ctx: BootResult['ctx']) {
     await settleInjectChild()
   }
   throw new Error('mstar:engine-status context did not register')
+}
+
+/** One pre-existing inbox message the loop pulled from the inbox. */
+const inboxMessage = (): UserMessage =>
+  createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'inbox' }] })
+
+/** One `agent/pre-step` payload carrying a real session identity. */
+function stepPayloadOf(app: BootResult, sessionId: string, messages: UserMessage[], turn: number) {
+  return {
+    agent: { session: { header: { id: sessionId, cwd: app.root } } },
+    messages,
+    turn,
+    step: turn,
+    signal: new AbortController().signal,
+  } as never
+}
+
+/** The model-facing text of the emitted engine-status row from a REAL `agent/pre-step`. */
+async function catalogRowText(app: BootResult, sessionId: string, turn: number): Promise<string> {
+  const inbox = [inboxMessage()]
+  const decision = await app.ctx.waterfall(
+    'agent/pre-step',
+    stepPayloadOf(app, sessionId, inbox, turn),
+    () => Promise.resolve({ kind: 'enter', messages: inbox } as never),
+  )
+  const row = decision.kind === 'enter' ? decision.messages.at(-1) : undefined
+  return row?.content[0]?.type === 'text' ? row.content[0].text : ''
+}
+
+/**
+ * The composed `@deepseek-ai/dsh-system-prompt` ROW fiber, looked up through
+ * the cordis plugin registry (the class plugin's name is `SystemPrompt`).
+ * Disposing it models the host removing the service — the inject child that
+ * owns the mstar registration unwinds, exactly like an HMR unload.
+ */
+function promptServiceRowFiber(ctx: BootResult['ctx']): { dispose(): Promise<void> } {
+  type RegistryRuntime = { name?: string; fibers: Iterable<{ dispose(): Promise<void> }> }
+  const registry = (ctx as unknown as { registry: { values(): Iterable<RegistryRuntime> } }).registry
+  for (const runtime of registry.values()) {
+    if (runtime.name !== 'SystemPrompt') continue
+    for (const fiber of runtime.fibers) return fiber
+  }
+  throw new Error('system-prompt row fiber not found')
 }
 
 describe('mstar:harness-rules global section + mstar:engine-status context ', () => {
@@ -275,6 +319,55 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     const section = after.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
     expect(section!.text).toContain('enforcement: hard')
+  })
+
+  it('(j) a contained registration failure keeps the row watermark fallback (scheduled ≠ landed)', async () => {
+    // `registerHarnessPrompt` returns true for both compositions (the service
+    // exists, so the inject child is scheduled), yet the registration itself
+    // throws inside the child. The fallback criterion is CONFIRMED live
+    // registration, so the row must still carry the version / harness-dir /
+    // enforcement trio in both cases.
+    for (const failure of ['section', 'context'] as const) {
+      booted = await bootApp({ systemPromptFailure: failure })
+      // The service IS composed, so `registerHarnessPrompt` reported `true`
+      // and scheduled the inject child — the schedule is not the finding's
+      // failure mode.
+      expect(booted.ctx.get('systemPrompt')).toBeDefined()
+      // Let the inject child run its (failing) registration.
+      await settleInjectChild()
+      const text = await catalogRowText(booted, `ses_registration_${failure}`, 1)
+      expect(text.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
+      expect(text).toContain(`harness dir: ${booted.harnessDir}`)
+      expect(text).toContain('enforcement: soft')
+      // The failure really is a NON-landing: the section only landed for the
+      // context failure, and the engine-status context never landed.
+      const assembly = await booted.ctx.systemPrompt.assemble()
+      const sectionLanded = assembly.sections.some((section) => section.name === HARNESS_RULES_SECTION_NAME)
+      expect(sectionLanded).toBe(failure === 'context')
+      expect(assembly.contexts.some((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)).toBe(false)
+      await booted.dispose()
+      booted = undefined
+    }
+  })
+
+  it('(k) disposing a live registration returns the row watermark (onDisposed)', async () => {
+    const app = booted = await bootApp()
+    // Wait until BOTH registrations are live — the confirmed state the lazy
+    // predicate reads — then the row is watermark-free (unchanged live case).
+    await assembleWithEngineStatus(app.ctx)
+    const liveText = await catalogRowText(app, 'ses_disposed', 1)
+    expect(liveText.startsWith('<mstar_engine_status>\n')).toBe(true)
+    expect(liveText).not.toContain('mstar version:')
+    expect(liveText).not.toContain('harness dir:')
+    // Removing the service row (HMR / host teardown) disposes the inject child
+    // and its collected registration: `onDisposed` flips the fallback back,
+    // and the still-mounted listener re-enables the watermark on the next step.
+    await promptServiceRowFiber(app.ctx).dispose()
+    await settleInjectChild()
+    const fallbackText = await catalogRowText(app, 'ses_disposed', 2)
+    expect(fallbackText.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
+    expect(fallbackText).toContain(`harness dir: ${app.harnessDir}`)
+    expect(fallbackText).toContain('enforcement: soft')
   })
 
 

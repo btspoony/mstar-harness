@@ -23,8 +23,9 @@ export const name = 'dsh-invariant'
  * listeners (`fs/write-intent` + `fs/edit-intent` status gate, the scoped
  * skill-lint gate, the v2 seam gates for design-md/audit/compound/roles
  * paths), the `tools/pre-execute` dispatch listener (field + lease + worktree
- * L1/L2 gates), the advisory `agent/pre-step` catalog listener (engine-status
- * watermark + iteration-gate row), the v2 seam tools registered on `ctx.tools`
+ * L1/L2 gates), the advisory `agent/pre-step` catalog listener (change-driven
+ * engine-status row: iteration-gate section + workspace-state digest), the v2
+ * seam tools registered on `ctx.tools`
  * (`mstar_sdd_*`, `mstar_iteration_gate`, the validate wrappers), the
   * `ctx.dshMstar` and `ctx.dshHostAdapter` services, and the child skill-filesystem
  * mount (skills provider registration) — whose presence and removal are

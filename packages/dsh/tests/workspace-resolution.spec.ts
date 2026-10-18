@@ -15,15 +15,15 @@
  *     workspace-local harness still resolves; explicit `config.harnessDir`
  *     stays authoritative outside the boundary.
  *  2. Pre-step catalog — no-config boot: an agent carrying a session cwd
- *     watermarks the WORKSPACE's harness dir; an agent-less event shows
- *     `harness dir: none` even though the process cwd walk-up would reach
- *     a global `~/.mstar` on this machine (regression proof: the old code
- *     probed from `process.cwd()`).
+ *     resolves the WORKSPACE's harness dir (and renders its state row); an
+ *     agent-less event resolves no harness dir, so no row is composed even
+ *     though the process cwd walk-up would reach a global `~/.mstar` on this
+ *     machine (regression proof: the old code probed from `process.cwd()`).
  *  3. Status gate — no-config boot: an fs intent whose actor carries the
  *     session agent gates the WORKSPACE's status.json; an agent-less actor
  *     is inert (no harness dir).
- *  4. Digest/staleness — within one turn an unchanged workspace does not
- *     re-inject the catalog row (digest-gated re-emission); a NEW
+ *  4. Change gate/staleness — an unchanged workspace does not re-inject the
+ *     catalog row (change-driven re-emission); a NEW
  *     workspace resolves fresh on its own first use (independent cache +
  *     digest key).
  */
@@ -35,7 +35,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { HarnessResolver } from '../src/index.ts'
-import { bootApp, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 
 let booted: BootResult | undefined
@@ -220,13 +220,22 @@ describe('HarnessResolver — workspace-root boundary: probe stops at the sessio
 })
 
 /* ===========================================================================
- * 2. Pre-step catalog — watermark resolves per session workspace (no config)
+ * 2. Pre-step catalog — the harness dir resolves per session workspace (no config)
  * ========================================================================== */
 
-describe('agent/pre-step — the watermark harness dir resolves from the session workspace, never the process cwd', () => {
-  it('agent with a session cwd → watermark shows the WORKSPACE-resolved harness dir', async () => {
+describe('agent/pre-step — the harness dir resolves from the session workspace, never the process cwd', () => {
+  it('agent with a session cwd → the WORKSPACE-resolved harness dir produces the state row', async () => {
     const ws = await makeWorkspace('dsh-ws-prestep-')
-    await mkdir(join(ws, '.agents'), { recursive: true })
+    // Two workspaces carry DISTINCT ACTIVE facts: the emitted row must witness
+    // THIS workspace's lifecycle, so a pre-step that resolves the other
+    // (equally initialized) harness dir cannot pass.
+    const other = await makeWorkspace('dsh-ws-prestep-other-')
+    await seedActiveWorkflow(join(ws, '.agents'), 'ws-target', [
+      { id: 'ws-target-plan', title: 'Target plan', file: 'plans/ws-target-plan.md', status: 'Todo' },
+    ], {}, 'sess-target', ws)
+    await seedActiveWorkflow(join(other, '.agents'), 'ws-other', [
+      { id: 'ws-other-plan', title: 'Other plan', file: 'plans/ws-other-plan.md', status: 'Todo' },
+    ], {}, 'sess-other', other)
     booted = await bootApp({ harnessDir: null })
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws), defaultEnter([]))
@@ -237,23 +246,34 @@ describe('agent/pre-step — the watermark harness dir resolves from the session
     // The PERSISTED source is the producer-owned catalog source; the resolved
     // harness dir is payload data and is NOT persisted with it.
     expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
-    expect(buildCatalogPayload(booted.ctx, join(ws, '.agents')).harnessDir).toBe(join(ws, '.agents'))
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain(`harness dir: ${join(ws, '.agents')}`)
+    // The row the pre-step ACTUALLY emitted witnesses the target workspace's
+    // ACTIVE lifecycle and plan row…
+    expect(text).toContain('workflow: ws-target (active)')
+    expect(text).toContain('plans: ws-target-plan(Todo)')
+    // …and never the other workspace's, whose harness dir is just as valid.
+    expect(text).not.toContain('ws-other')
+    // The row no longer renders the harness-dir watermark (the rendered STATE
+    // section is the workspace-resolution witness; a `state: null` payload —
+    // no resolved harness dir — composes no row at all, see the case below).
+    expect(text).not.toContain('harness dir:')
   })
 
-  it('agent-less event → `harness dir: none` (regression: the old boot probe from process.cwd() reached the global ~/.mstar on this machine)', async () => {
+  it('agent-less event → no harness dir resolves → no row is composed (regression: the old boot probe from process.cwd() reached the global ~/.mstar on this machine)', async () => {
     booted = await bootApp({ harnessDir: null })
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
-    expect(buildCatalogPayload(booted.ctx, null).harnessDir).toBeNull()
-    const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain('harness dir: none')
+    // No explicit `harnessDir` config and an agent-less payload → the resolved
+    // `{HARNESS_DIR}` is null, the payload's state is null, and the advisory
+    // row is not composed at all.
+    const payload = buildCatalogPayload(booted.ctx, null)
+    expect(payload.harnessDir).toBeNull()
+    expect(payload.state).toBeNull()
+    expect(decision.messages).toEqual([])
+    expect(lastMessage(decision)).toBeUndefined()
   })
 })
 
@@ -286,7 +306,7 @@ describe('fs/write-intent — the status gate follows the session workspace (no 
  * ========================================================================== */
 
 describe('agent/pre-step — per-workspace source staleness (no config)', () => {
-  it('within one turn an unchanged workspace does not re-inject; a NEW workspace resolves fresh', async () => {
+  it('an unchanged workspace does not re-inject; a NEW workspace resolves fresh', async () => {
     const ws = await makeWorkspace('dsh-ws-stale-')
     await mkdir(join(ws, '.agents'), { recursive: true })
     booted = await bootApp({ harnessDir: null })
@@ -298,9 +318,9 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     expect(lastMessage(first)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(booted.ctx, join(ws, '.agents')).enforcement).toEqual({ hard: false, source: 'none' })
 
-    // Same turn + unchanged → the digest gate suppresses the identical row
-    // (the within-TTL staleness is moot: the row is simply not re-injected
-    // until it changes or a new turn starts).
+    // Same turn + unchanged → the change gate suppresses the identical row
+    // (the row is simply not re-injected until its text or the panel
+    // projection changes).
     const second = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws), defaultEnter([]))
     expect(second.kind).toBe('enter')
     if (second.kind !== 'enter') return
