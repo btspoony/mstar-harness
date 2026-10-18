@@ -17,12 +17,15 @@ test("issue payload help uses registry field requiredness", () => {
 
 const originalSessionId = process.env.MSTAR_HOST_SESSION_ID;
 const originalMinted = process.env.MSTAR_EXECUTION_IDENTITY;
+const originalDsh = process.env.DSH_SESSION_ID;
 
 afterEach(() => {
   if (originalSessionId === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
   else process.env.MSTAR_HOST_SESSION_ID = originalSessionId;
   if (originalMinted === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY;
   else process.env.MSTAR_EXECUTION_IDENTITY = originalMinted;
+  if (originalDsh === undefined) delete process.env.DSH_SESSION_ID;
+  else process.env.DSH_SESSION_ID = originalDsh;
 });
 
 /** The canonical tuple a launcher writes, exactly as `session.run` serializes it. */
@@ -52,6 +55,7 @@ test("CLI session identity consumes the launcher-minted identity ahead of the am
 
 test("CLI session identity resolves and attributes the environment fallback", () => {
   delete process.env.MSTAR_EXECUTION_IDENTITY;
+  delete process.env.DSH_SESSION_ID;
   process.env.MSTAR_HOST_SESSION_ID = "env-session";
   expect(resolveCliSessionIdentity(undefined)).toEqual({
     sessionId: "env-session",
@@ -60,6 +64,7 @@ test("CLI session identity resolves and attributes the environment fallback", ()
 });
 test("CLI session identity treats empty and whitespace environment values as unset", () => {
   delete process.env.MSTAR_EXECUTION_IDENTITY;
+  delete process.env.DSH_SESSION_ID;
   for (const value of ["", "   ", "\t\n"]) {
     process.env.MSTAR_HOST_SESSION_ID = value;
     expect(resolveCliSessionIdentity(undefined)).toEqual({});
@@ -70,6 +75,7 @@ test("CLI session identity treats empty and whitespace environment values as uns
 test("CLI session identity omits both value and source when unset", () => {
   delete process.env.MSTAR_HOST_SESSION_ID;
   delete process.env.MSTAR_EXECUTION_IDENTITY;
+  delete process.env.DSH_SESSION_ID;
   expect(resolveCliSessionIdentity(undefined)).toEqual({});
 });
 

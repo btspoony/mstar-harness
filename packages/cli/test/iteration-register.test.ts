@@ -66,6 +66,7 @@ function cliEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
+    if (key === "DSH_SESSION_ID") continue;
     if (value !== undefined) env[key] = value;
   }
   env.MSTAR_HOST_SESSION_ID = FIXTURE_SESSION_ID;
