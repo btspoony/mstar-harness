@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-10-18
+
+### Changed
+
+- **Documented the tally `band` producer/envelope split on the published type** (requested by issue #504). The `PrTallyResult` doc now states that `computePrTally` always emits `band`, that an `mstar.review/v1` envelope tally carries the `MstarReviewTally` shape where `band` is optional, and that the envelope validator accepts a band-less tally as legacy-valid — so a consumer constructing a typed tally no longer has to infer the split from the schema description. Types, validator, schemas and generated bundles are unchanged.
+
+- Version alignment with harness **4.0.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.3**.
+
 ## [4.0.2] - 2026-10-18
 
 ### Harness

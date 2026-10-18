@@ -6,6 +6,28 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-10-18
+
+### Harness
+
+- **dsh engine-status row**: the model-facing `<mstar_engine_status>` block no longer repeats the **watermark trio** — it renders only the iteration phase gate and the workspace-state digest. `mstar version:` / `harness dir:` / `enforcement:` stay in the persisted payload (the panel meta dock renders version + harness dir; enforcement stays in the state section) and stay model-visible once in the always-on system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), so the row is now a projection of the payload rather than a byte-identical render.
+- Emission is **change-driven instead of per-turn**: the row is appended on the first emission for a session+workspace and then only when its rendered text or the panel-relevant payload projection changes, so an unchanged session no longer accumulates an identical copy on every turn's first step. The projection excludes the store revision, which the emission's own write advances.
+- A workspace with **no resolved `{HARNESS_DIR}` composes no row** (after the watermark removal it would be an empty wrapper).
+- **Watermark fallback:** a host composition without `dsh-system-prompt` registers neither prompt section, so the row re-renders the watermark trio (`mstar version:` / `harness dir:` / `enforcement:`) there — the version, harness dir and enforcement facts stay in the model's context in that composition too. The default composition (a system prompt is present) keeps the watermark in the prompt only.
+- The no-active-lifecycle message no longer points at the retired `status.json` root: it names the cause and the real recovery commands (`mstar workflow register` for a plan, `mstar iteration register` for an iteration), and the row's `leases` line became `row scope` — each plan row's own recorded worktree + branch, a scope rather than an ownership claim.
+- Documented the resulting panel semantics: the stored emission is the last payload the model saw, so its freshness footer `turn` / `at` mean *last emission*; after host-side context compaction the row is not periodically re-anchored until the next change (the system-prompt digest still carries the version, the active workflow and its plans).
+- **`dsh-llm-fallbacks` pin bumped `0.6.6` → `0.6.7`**: the two hand-written literals move together — the `@mstar-harness/dsh` devDependency (`packages/dsh/package.json`) and the CLI install-spec constant (`packages/cli/package.json` → `mstar.dshLlmFallbacks`, read by `init` / `doctor --target dsh`) — and the lock re-resolves the row to `0.6.7` with the registry integrity for that version. `0.6.7` keeps the same peer set as `0.6.6` (the `^0.2.1-rc.2` dsh cohort, `@deepseek-ai/cordis` `^4.0.5`, `@deepseek-ai/schemastery` `^3.18.5`, `react` `^18.2.0`), so the workspace peer line already matches it; its only service-surface change is additive (a dispatch-role getter plus role-projection exports), none of it consumed by mstar — the structural mirror and its real → view type gate need no change. Nothing upgrades an already-installed host: `doctor --target dsh` reports an older row `drifted` until `init --target dsh` re-adds the pinned spec. Workspace verification: `tests/peer-deps.spec.ts` 7 pass, the `fallbacks-*` suites 53 pass (60 tests across the scoped 7-file set, zero skips), and both type gates (`typecheck:src` and `typecheck:tests`) exit clean.
+- `@mstar-harness/dsh` now ships a package-root **plugin icon** (`icon.svg`: the Morning Star brand star, tile dropped, on dsh's 36px artwork canvas), so the dsh **Plugins page** renders the Morning Star mark on the package card and its component rows instead of the generic plugin glyph.
+- Declared `icon` in the package manifest and added `icon.svg` to the published `files` list; the icon is faceted gold so one asset reads on both the light and dark plugin surfaces.
+- `@mstar-harness/dsh` now ships `locale/en.json` + `locale/zh.json`, so the dsh **Plugins page** shows the plugin's localized title and description instead of the raw package name and the long npm description.
+- Declared the `./locale/*.json` subpath export and added `locale` to the published `files` list (the same shape as `dsh-advisor` and `dsh-llm-fallbacks`).
+- **dsh plugin**: the engine-status catalog row now emits the producer-owned `{ kind: 'mstar-engine', form: 'catalog' }` source instead of the retired `{ kind: 'plugin', plugin: 'mstar-engine' }` wrapper. dsh session-format V4 refuses that wrapper at message admission (`format v4 message requires a producer-owned source kind`), so every composed step failed to persist; the panel anchor reader now accepts the V3→V4-migrated legacy kinds (`plugin:mstar-engine` and `plugin:mstar-engine-status`), keeping existing sessions anchored.
+- Added a regression test that runs the real composed row through dsh's V4 row admission, and proves that admission refuses the retired wrapper.
+
+- Version alignment with harness **4.0.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.3**.
+
 ## [4.0.2] - 2026-10-18
 
 ### Changed
