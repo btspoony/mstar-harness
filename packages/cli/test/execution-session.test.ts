@@ -480,6 +480,7 @@ describe("mstar session run — documented invocation", () => {
     }
   });
 
+  // Drives several real CLI child processes against a temporary DB, so it needs a budget above the default.
   test("binds, resumes and mutates in a temporary DB, and a retry replays the same receipt", async () => {
     const fixture = await activeFixture("mstar-session-chain");
     const { coordinatorWire } = await prepareRow(fixture);
@@ -571,7 +572,7 @@ describe("mstar session run — documented invocation", () => {
     if (!("plan" in stored.data)) throw new Error("the plan read did not return a plan view");
     const planView: ExecutionPlanView = stored.data;
     expect(planView.plan.status).toBe("InReview");
-  });
+  }, 30_000);
 });
 
 /** The full public `workflow register` argv the active route requires. */
