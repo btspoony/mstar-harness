@@ -73,6 +73,6 @@
   "devDependencies": {
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
-    "@oh-my-pi/pi-coding-agent": "18.3.0"
+    "@oh-my-pi/pi-coding-agent": "18.11.0"
   }
 }
