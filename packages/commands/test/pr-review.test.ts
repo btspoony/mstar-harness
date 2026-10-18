@@ -226,6 +226,186 @@ describe("pr-review command family", () => {
     });
   });
 
+  test("tally maps the incomplete flags into the engine input and refuses one-sided supply", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
+
+    // The settled run keeps its derived verdict and its two-line header.
+    const settled = await command("pr-review.tally").execute({ findings }, context);
+    expect(settled.status).toBe("ok");
+    expect(settled.data).toMatchObject({
+      verdict: "blocked",
+      chatHeader: "blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 nit=1 unverified=0",
+    });
+
+    // The declared run reports the same partial grade under the neutral token,
+    // with the cause and the comma-split scope carried through.
+    const partial = await command("pr-review.tally").execute(
+      { findings, incompleteReason: "budget spent before the security domain", unscanned: "src/auth.ts, packages/engine" },
+      context,
+    );
+    expect(partial.status).toBe("ok");
+    expect(partial.data).toMatchObject({
+      verdict: "incomplete",
+      scorePct: 53,
+      band: "fail",
+      incomplete: { reason: "budget spent before the security domain", unscanned: ["src/auth.ts", "packages/engine"] },
+      chatHeader:
+        "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 nit=1 unverified=0\n" +
+        "cause: budget spent before the security domain\nunscanned: src/auth.ts, packages/engine",
+    });
+
+    // One-sided supply: the execute guard and the admitted contract agree.
+    const direct = await command("pr-review.tally").execute({ findings, incompleteReason: "budget spent" }, context);
+    expect(direct).toMatchObject({
+      status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "--incomplete-reason and --unscanned go together",
+    });
+    const admitted = await executeCommand("pr-review.tally", { findings, incompleteReason: "budget spent" }, context);
+    expect(admitted).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(admitted, "one-sided incomplete flags")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "unscanned", code: "required" }),
+    ]));
+
+    // A blank or multi-line cause is a caller error (exit 2), not an engine failure.
+    for (const reason of [" ", "budget spent\nsecurity domain still unopened"]) {
+      const refused = await command("pr-review.tally").execute({ findings, incompleteReason: reason, unscanned: "src/auth.ts" }, context);
+      expect(refused).toMatchObject({
+        status: "usage", code: "command.invalid-input", exitCode: 2,
+        message: "--incomplete-reason must be a single line of non-blank text",
+      });
+    }
+  });
+
+  test("both invalid incomplete flags are reported in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const flags = { findings, incompleteReason: " ", unscanned: "src/auth.ts,,packages/engine" };
+
+    // One call reports every invalid field: the blank cause no longer hides the
+    // blank scope entry behind a second rerun (packages/cli/AGENTS.md
+    // § Aggregated validation). The direct execute route and the admitted one
+    // agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "both incomplete flags")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+        expect.objectContaining({ path: "unscanned", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(text).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+    }
+  });
+
+  test("a new-flag error and a count error are reported in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const flags = { findings, incompleteReason: " ", unscanned: "src/auth.ts", unverified: "x" };
+
+    // The incomplete-flag checks and the three count checks share one
+    // collection phase, so the invalid --unverified is no longer hidden
+    // behind the blank cause (packages/cli/AGENTS.md § Aggregated
+    // validation). The direct execute route and the admitted one agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "mixed flag and count errors")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+        expect.objectContaining({ path: "unverified", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+    }
+  });
+
+  test("findings-payload errors join the incomplete-flag diagnostics in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{}]));
+    const flags = { findings, incompleteReason: " ", unscanned: "src/auth.ts" };
+
+    // The findings payload is validated in the same collection phase as the
+    // incomplete flags, so one call reports both the invalid mergeClass and
+    // the blank cause (packages/cli/AGENTS.md § Aggregated validation). The
+    // direct execute route and the admitted one agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "findings and incomplete flags")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "findings", code: "invalid" }),
+        expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(text).toContain("--incomplete-reason must be a single line of non-blank text");
+    }
+
+    // A missing findings file is the same caller-correctable class (usage, exit
+    // 2), not a failed execution, and joins the same refusal.
+    const missing = await command("pr-review.tally").execute(
+      { findings: path.join(cwd, "absent.json"), incompleteReason: " ", unscanned: "src/auth.ts" },
+      context,
+    );
+    expect(missing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(missing, "missing findings file")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "findings", message: expect.stringContaining("findings file not found") }),
+      expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+    ]));
+
+    // An unparseable payload joins the same phase rather than escaping it as
+    // the parser's own failure: the blank flag is still reported beside it in
+    // one refusal (packages/cli/AGENTS.md § Aggregated validation). The parser
+    // text is not quoted back, so the file's bytes stay out of the refusal.
+    const malformedFile = path.join(cwd, "malformed.json");
+    writeFileSync(malformedFile, '[{"mergeClass": "must-fix",}');
+    const malformed = await command("pr-review.tally").execute(
+      { findings: malformedFile, incompleteReason: " ", unscanned: "src/auth.ts" },
+      context,
+    );
+    expect(malformed).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(malformed, "malformed findings file")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "findings", code: "invalid", message: "findings file must contain valid JSON" }),
+      expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+    ]));
+    expect(malformed.status === "ok" ? "" : malformed.message).toContain("findings file must contain valid JSON");
+  });
+
+  test("a lone --unscanned none declares the engine's empty scope", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
+
+    // Case-insensitive and whitespace-trimmed, the sentinel maps to the empty
+    // array the header renders as `unscanned: none`.
+    for (const raw of ["none", "  NONE  "]) {
+      const result = await command("pr-review.tally").execute({ findings, incompleteReason: "budget spent", unscanned: raw }, context);
+      expect(result.status, raw).toBe("ok");
+      expect(result.data).toMatchObject({
+        incomplete: { reason: "budget spent", unscanned: [] },
+        chatHeader:
+          "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 nit=1 unverified=0\n" +
+          "cause: budget spent\nunscanned: none",
+      });
+    }
+
+    // `none` beside other entries is a literal scope name, never the sentinel.
+    const mixed = await command("pr-review.tally").execute({ findings, incompleteReason: "budget spent", unscanned: "none, src/auth.ts" }, context);
+    expect(mixed.status).toBe("ok");
+    expect(mixed.data).toMatchObject({ incomplete: { unscanned: ["none", "src/auth.ts"] } });
+  });
+
   test("unknown outcome after posting does not claim success or retry", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");

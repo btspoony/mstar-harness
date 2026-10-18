@@ -1,6 +1,6 @@
 # Deep PR Review Process
 
-Read-only, evidence-first review of a pull request / branch / diff, producing exactly one verdict: `ship it` / `needs fixes` / `blocked`. Runs under `mstar-audit` § `pr` variant, reusing the Recon → Audit → Vet discipline (recon = PR scope + repo guidance; vet = three-way attack). The reviewer never edits the worktree, never merges, and never approves-as-merge.
+Read-only, evidence-first review of a pull request / branch / diff, producing exactly one verdict: `ship it` / `needs fixes` / `blocked` / `incomplete`. Runs under `mstar-audit` § `pr` variant, reusing the Recon → Audit → Vet discipline (recon = PR scope + repo guidance; vet = three-way attack). The reviewer never edits the worktree, never merges, and never approves-as-merge.
 
 **Test review (every tier, within the assigned diff and directly affected contracts):** keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. For a confirmed non-product assertion, domain findings and the synthesized report must name its non-product-assertion class and conclude **"delete, or replace with a product-behaviour assertion"**. Calibrate against the PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression. Inspect assertions and production-owner contracts rather than deleting by example name; use `references/test-audit.md` §§ 2–7 for retention and candidate evidence. This is a read-only review obligation, not permission to edit tests or run suites.
 
@@ -10,8 +10,8 @@ Deep PR review is a **three-stage pipeline**: collect → domain review → synt
 
 - **Stage 1 — Collect**: PM fans out lightweight read-only agents by **domain** — business domain / change surface / tech stack; use the host's lightest read-only agent (`scout` / `explorer` / `general` — whatever the host offers). Each collect seat reads the changed files in its domain plus related context and returns **evidence in its result payload** (any seat may be **write-blocked** — read-only sandbox / EPERM; the main agent extracts the payload and writes the evidence file — § Local report archive / `references/pr-review-seat-evidence.md`): `file:line` observations, potential issue surfaces, and security-surface observations (the seat carries a security lens per `security-review.md` §2/§3 **research** discipline — trace origin, never invent an attacker, never record secret values — and still records MEDIUM / unverified items as **leads** in its evidence payload; the HIGH-only filter applies to formal findings, not leads). Collect seats produce **no** findings table, compute **no** verdict, and publish **nothing**. **Kept-wave only**: by default (pack exists) this wave folds into Stage 2 and **no collect seats are dispatched**; it runs as its own wave only when kept — **no snapshot** (`--diff` / `--working-tree` modes write no diff snapshot; `worktree-setup` prints `diffFile: null` there) or **PM judgment** (unfamiliar sprawling surface). Either way is declared in the report `- notes:` — `collect wave folded (pack)` / `collect wave kept (no pack / PM judgment: <reason>)`.
 - **Stage 2 — Domain review**: mstar built-in roles (`code-reviewer` / `fullstack-dev` / `frontend-dev`) split along the same domain framing, each reviewing code + security in its domain (security via the `security-review.md` lens) and producing findings with **Merge class** (§ Merge class). By default (pack exists) these seats are dispatched with the **`collectFolded`** option (CLI: `mstar pr-review seat-prompt --collect-folded`) — a fold bullet after the `## Budget` block tells each seat to do its own collection: pinned diff pack first, then changed files in its domain (§ Seat prompts) — so no separate collect wave precedes them. Each domain seat returns its findings in the **result payload** — any seat may be **write-blocked**; the main agent writes the Stage 2 evidence file (§ Local report archive / `references/pr-review-seat-evidence.md`). A large PR (>~300 changed lines, or spanning multiple change surfaces/domains) or a security-sensitive surface (auth, LLM, supply chain, data — `security-review.md` §9 extended surfaces) adds an **independent cross-domain security seat**. The fold removes only the collect wave — the **independent cross-domain security seat is never folded**.
-- **Stage 3 — Synthesis (main agent)**: the main agent (the command's orchestrator) collects all domain findings + evidence files → **dedupe** → **tiered three-way vet** (full for must-fix/should-fix; evidence-verify for nits — open the cited file; `file:line` must genuinely support the claim) → **tally** (§ Tally and derived score — locked deduction schedule + bands) → **verdict** → report + **publish GitHub Review** (§ Comment posting — publishing authority belongs to the main agent). The main agent does not backfill uncollected / unreviewed domains — a missing domain is declared in the report under `- unverified:` / `- notes:`. **The envelope is mandatory**: after the tally, the main agent **must** fold the accepted findings into a `mstar.review/v1` envelope (`synthesizeReview` — or the equivalent engine call) and persist it via `mstar-harness persist review --key <pr-or-review-id> --stdin` (or `getArtifactStore().put`); the Markdown archive is an optional human copy, **not** a substitute for the envelope.
-- A domain whose seat returned **no evidence** (crashed / Blocked / empty output) is an **uncollected domain**, declared the same way under `- unverified:` / `- notes:`.
+- **Stage 3 — Synthesis (main agent)**: the main agent (the command's orchestrator) collects all domain findings + evidence files → **dedupe** → **tiered three-way vet** (full for must-fix/should-fix; evidence-verify for nits — open the cited file; `file:line` must genuinely support the claim) → **tally** (§ Tally and derived score — locked deduction schedule + bands) → **verdict** → report + **publish GitHub Review** (§ Comment posting — publishing authority belongs to the main agent). The main agent does not backfill uncollected / unreviewed domains: an unopened **required** domain leaves the run unsettled and is declared through the single `incomplete` trigger list in § Verdict synthesis — a per-item residual the vet could not verify is not that case and stays a settled run's `- unverified:` entry. **The envelope is mandatory**: after the tally, the main agent **must** fold the accepted findings into a `mstar.review/v1` envelope (`synthesizeReview` — or the equivalent engine call) and persist it via `mstar-harness persist review --key <pr-or-review-id> --stdin` (or `getArtifactStore().put`); the Markdown archive is an optional human copy, **not** a substitute for the envelope.
+- A domain whose seat returned **no evidence** (crashed / Blocked / empty output) is an **uncollected domain**: the run is not settled, so the report declares the single override `incomplete` with its cause and unscanned scope (§ Verdict synthesis). Per-item unverifiability is a different case — a settled run keeps that residual under `- unverified:`.
 - **Capture duty (Stage 3, main agent)**: every seat — collect, domain, security — **returns findings as evidence and never writes the store**; at synthesis the **main agent captures the confirmed findings** as issues in `{HARNESS_DIR}/store.db` per the single-authority contract in **`mstar-project-governance`「Issue capture」** (plan-scoped `mstar plan issue-add`, unscoped `mstar issue add`; a recurrence of the same finding **appends an occurrence** to the existing issue — never a second issue). Capture records evidence only; a disposition is a **separate authorized act** (§4 closure authority). The canonical duty is not restated here.
 
 > **Engine check (when available):** run `mstar-harness persist write review --key <pr-or-review-id> --file <review.json>` (or `import { synthesizeReview, validateMstarReviewV1 } from "@mstar-harness/engine"` in a host hook) to fold the accepted findings into the `mstar.review/v1` envelope and persist it — `synthesizeReview` derives verdict/tally from `computePrTally` (pure, no I/O), and `kind: review` runs `validateMstarReviewV1` before put, refusing invalid envelopes (exit 1, nothing written). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
@@ -83,7 +83,7 @@ Each tier carries a wall-clock budget (§ Review depth (tiers) **Budget** column
 2. **② Seat topology** — collect fold (Stage 1 folds into the domain seats — the default shape for `default`, and for `deep` when the pack exists; kept-wave `deep` folds here under budget pressure) and/or merge the independent cross-domain security seat into the domain seats. **NEVER on a security-sensitive surface** (`security-review.md` §9 extended surfaces — Inference ladder step 3: sensitive surfaces are never thinned; there the overrun is declared instead).
 3. **③ Display** — nits fold into the review summary body (display only — every accepted finding stays listed; § Verdict synthesis).
 
-**Never degradable** (any tier, any rung): verdict-from-tally, posting ownership (sole main agent), evidence `file:line` + self-check, local report archival, the batch contract — the ladder-relevant core of the § Review depth (tiers) never-cut list. **Every degradation taken is declared** in the report under `- notes:` (rung + what was cut).
+**Never degradable** (any tier, any rung): verdict-from-tally, posting ownership (sole main agent), evidence `file:line` + self-check, local report archival, the batch contract — the ladder-relevant core of the § Review depth (tiers) never-cut list. **Every degradation taken is declared** in the report under `- notes:` (rung + what was cut). Verdict-from-tally governs every **settled** run (§ Verdict synthesis defines one — completed without a stop, every required domain opened and the resolved diff basis readable and complete); a run that cannot meet that precondition publishes the one declared override `incomplete` instead (§ Verdict synthesis owns the single trigger list and the cause/scope facts) — a declared state, not a degraded verdict, and never a pass that authorizes merge.
 
 > **Engine check (when available):** run `mstar pr-review budget` (or `import { PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE } from "@mstar-harness/engine"` in a host hook) to print the per-tier time-budget table (wall-clock target + per-seat caps) and the nudge cadence — seat prompts interpolate their budget block from the same constant table; never hand-copy per-seat cap numbers or cadence seconds. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
@@ -206,11 +206,12 @@ The **main agent** is the final vet layer, and the synthesis vet is **tiered**: 
 
 - Order findings by impact-if-shipped; no padding, no invented requirements, no style grading.
 - List **every** accepted finding — `must-fix`, `should-fix`, and nits alike; nothing is truncated.
-- The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe.
+- The verdict is **derived from the tally, not chosen**: classify every accepted finding (§ Merge class) → apply leftover `unmet` AC increments if any (§ Linked-issue hygiene) → apply **Verdict-from-tally** (§ Tally and derived score) → emit that one token. The reviewer does not pick a verdict by vibe. That derived token is what a **settled** run publishes; the one declared override below replaces the token without re-deriving it.
 - Exactly one verdict:
   - `ship it` — evidence-backed, safe to ship.
   - `needs fixes` — issues found; address before merge.
   - `blocked` — a must-fix issue stands in the way of shipping.
+  - `incomplete` — **the one declared override, and the single trigger list for it**: a **settled** run — **completed without a stop**, every required domain opened and the resolved diff basis readable and complete (the pinned snapshot when the mode produces one, otherwise the resolved `--diff` / `--working-tree` input) — publishes the tally-derived token above; a run that cannot meet that precondition publishes this token instead, with the two facts a bare token cannot carry. It fires when the tier's budget/elapsed wall-clock ran out, the run was cancelled, a **required** domain seat was never opened, or the resolved diff basis could not be read — a stopped, cancelled or timed-out run is never settled even when its domains and diff were opened. Per-item unverifiability is **not** this case: a residual the vet could not verify belongs to a settled run and is recorded under `- unverified:` (§ Tally and derived score). **Declared, not derived** — the caller states the run was bounded/stopped and supplies the **cause** (why it stopped) and the **unscanned** scope (what it never reached). The score, band and four counts stay the count-derived ones, marked `partial`. It is **neither a pass nor a failure**: a consumer must never read it as `ship it`, never record it as an approval, and it **never authorizes merge**. Carriers → § Tally and derived score › Override invariant (envelope fact), § Display contract (header), § Local report archive (report frontmatter).
 
 ## Merge class (PR findings only)
 
@@ -288,11 +289,14 @@ Score and band never override verdict.
 blocked + any score_pct       → not shippable
 needs fixes + any score_pct   → still address findings before merge
 ship it + score_pct < 100    → allowed (nits and/or unverified deducted)
+incomplete + any score_pct   → still not a pass and still not mergeable; the grade is a partial one
 High score_pct never means APPROVE. Low score_pct never means REQUEST_CHANGES.
 A band grades the finding load only — `ship it` + `good` (e.g. 3 unverified) is legal.
 ```
 
-> **Engine check (when available):** the invariant is enforced structurally — `computePrTally` derives the verdict from the tally before the score is computed, and `mstar pr-review validate-report` flags a `verdict` that does not follow from the report's own tally (`prreview.report.verdict-mismatch`, severity high). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+**A bounded/stopped run declares the override; it is the only one.** The tally cannot express "the review is not whole" — that is a fact about the run, not about the change — so the declaration replaces the emitted verdict token and nothing else: `computePrTally` keeps the count-derived `scorePct`, `band` and four counts, and the band renders as `partial` (§ Display contract). The fact is rejected on every other verdict, so the token is never published bare and a settled report never carries it: the `mstar.review/v1` envelope requires `incomplete: { reason, unscanned }` on that verdict (its own `synthesizeReview` echoes the same facts onto `tally.incomplete`), and the local report frontmatter requires `incomplete_reason` plus `unscanned` (§ Local report archive).
+
+> **Engine check (when available):** the invariant is enforced structurally — `computePrTally` derives the verdict from the tally before the score is computed, and `mstar pr-review validate-report` flags a `verdict` that does not follow from the report's own tally (`prreview.report.verdict-mismatch`, severity high); that check is skipped for the declared `incomplete` token alone, while its `score_pct` recompute still runs. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Worked examples (check table)
 
@@ -312,10 +316,11 @@ A band grades the finding load only — `ship it` + `good` (e.g. 3 unverified) i
 | 0 / 0 / 0 / 3 (unverified cap boundary) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
 | 7 / 0 / 0 / 0 (floor) | 0 | `fail` | `blocked` | `blocked · 0% (fail)` |
 | 0 / 0 / 0 / 100 (unverified class cap) | 85 | `good` | `ship it` | `ship it · 85% (good)` |
+| 1 / 0 / 1 / 0 + declared `incomplete` (explicit override) | 53 | `fail` | `incomplete` | `incomplete · 53% (fail, partial)` |
 
-`blocked · 55%` is still not shippable. `needs fixes · 88%` still means address findings. `ship it · 85% (good)` is legal — the band grades the finding load, the verdict governs mergeability. This table is mirrored row-for-row as the engine test fixture (`packages/engine/test/prreview.test.ts`) — the table text is the SSOT anchor.
+`blocked · 55%` is still not shippable. `needs fixes · 88%` still means address findings. `ship it · 85% (good)` is legal — the band grades the finding load, the verdict governs mergeability. This table is mirrored row-for-row as the engine test fixture (`packages/engine/test/prreview.test.ts`) — the table text is the SSOT anchor. Rows 1–14 are the **count-derived** rows and mirror the fixture's check-table array; the `incomplete` row is the one **explicit override** — identical counts and identical 53 / `fail` grade, token declared by the caller — and the fixture covers that case in its own `computePrTally — incomplete verdict` block. An override display continues past its first line with the `cause:` and `unscanned:` lines (§ Display contract).
 
-> **Engine check (when available):** run `mstar pr-review tally --findings <file.json> [--unverified <n>] [--unmet-ac-unsafe <n>] [--unmet-ac-safe <n>]` (or `import { computePrTally } from "@mstar-harness/engine"` in a host hook) to compute this tally, verdict and score from the accepted findings JSON — the check table above is the SSOT the engine fixture mirrors (`packages/engine/test/prreview.test.ts`); never hand-compute when the CLI is available. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar pr-review tally --findings <file.json> [--unverified <n>] [--unmet-ac-unsafe <n>] [--unmet-ac-safe <n>] [--incomplete-reason <text> --unscanned <csv>]` (or `import { computePrTally } from "@mstar-harness/engine"` in a host hook) to compute this tally, verdict and score from the accepted findings JSON — the two incomplete flags declare a bounded/stopped run and must be supplied together, and a lone `--unscanned none` (case-insensitive) declares the engine's empty scope, which the header renders as `unscanned: none`; the check table above is the SSOT the engine fixture mirrors (`packages/engine/test/prreview.test.ts`); never hand-compute when the CLI is available. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Originating spec discovery
 
@@ -379,10 +384,13 @@ Executed by the main agent at Stage 3 — review seats never run this procedure.
 
 The posted review body is a three-section report. Section order fixed; omit a subsection only when its content is genuinely empty (write `none`, never delete the heading). The block below shows only **fill-in slots**: a `<...>` that wraps descriptive text (`<verdict>`, `<n>`, `<finding title>`, …) is a slot — replace the whole bracket pair with real content and never render those brackets. The literal HTML tags in the template (`<details>`, `<summary>`, `<br>`) are **structural** — keep them verbatim so the collapsible block survives. The Slot rules below the template are guidance — never copy them into the posted body.
 
-**Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔. Finding classes: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
+**Section emoji map** — verdict: `ship it` ✅ · `needs fixes` ⚠️ · `blocked` ⛔ · `incomplete` ⏸️. Finding classes: 🔴 must-fix · 🟠 should-fix · 🔵 nit · ❓ unverified.
 
 ````markdown
 ## <verdict-emoji> Verdict: `<verdict>` · Score <score_pct>% (<band>)
+
+cause: <reason>
+unscanned: <csv | none>
 
 | Findings | Count |
 | --- | --- |
@@ -432,6 +440,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 
 **Slot rules (guidance — not part of the posted body):**
 
+- **Verdict**: render the band bare (`mergeable` | `good` | `pass` | `fail`). For `incomplete` only, render it as `<band>, partial` and keep the `cause:` / `unscanned:` lines under the heading — `cause` is why the run stopped, `unscanned` the comma-joined scope it never reached (`none` when nothing was left unscanned). Every other verdict deletes both lines, so a settled body keeps its exact shape.
 - **What this PR does**: from the PR description plus your own read of the changed files, not copied marketing text.
 - **Findings**: ranked by impact-if-shipped (§ Verdict synthesis); every accepted finding listed, nothing truncated; repeat the `#### <class-emoji> <title>` block per finding. **Body soft cap ~150 lines**: past the cap, take degradation ③ (§ Time budget & degradation ladder) — nits fold into the summary body (display only: findings are never dropped — every accepted finding stays listed in some form), and the fold is declared in the report under `- notes:`.
 - **Linked-issue AC**: fill only when § Linked-issue hygiene applied; otherwise a bare `none`.
@@ -439,7 +448,7 @@ The posted review body is a three-section report. Section order fixed; omit a su
 - **Considered & rejected**: one bullet per rejected candidate from the three-way attack / vet pass (§ Attack and vet), so the next reviewer does not re-chase it; bare `none` when nothing was rejected.
 - **Plan to fix**: fix plan in markdown (ordered steps per finding, files touched, verification gates); when there is no fix plan, replace the whole `<details>` block with a single line `none`.
 
-- The Verdict section replaces the old two-line tally header on GitHub: same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured. The chat display contract (§ Display contract) is unchanged.
+- The Verdict section replaces the old two-line tally header on GitHub: the same facts (verdict token + `score_pct` as Score with its band + four-class tally), structured — plus, for `incomplete`, the `partial` mark and its `cause:` / `unscanned:` lines. The chat display contract (§ Display contract) is unchanged.
 - When the fix plan itself contains fenced code blocks, open the outer fence with four backticks so the inner fences survive.
 
 ### Local report archive
@@ -461,9 +470,11 @@ The posted PR comment is the deliverable; the local report is the durable refere
   url: <pr url>          # omit for bare branch / diff
   head: <head sha>
   base: <base ref>
-  verdict: ship it | needs fixes | blocked
+  verdict: ship it | needs fixes | blocked | incomplete
   score_pct: <n>         # band is derived from this (mergeable | good | pass | fail) — never stored
   tally: { must-fix: <n>, should-fix: <n>, nit: <n>, unverified: <n> }
+  incomplete_reason: <why the run stopped>   # required exactly when verdict: incomplete (non-empty); rejected for every other verdict
+  unscanned: <csv>                          # required exactly when verdict: incomplete — comma-separated scope the run never reached, or none; rejected for every other verdict
   comments: posted | n/a-no-pr | failed   # posting tri-state — never collapse failed into n/a-no-pr ("yes" = posted alias)
   review_url: <posted review html_url>   # n/a-no-pr when skipped; failed: <gh error summary> when POST failed
   generated_at: <YYYY-MM-DD>
@@ -476,12 +487,12 @@ The posted PR comment is the deliverable; the local report is the durable refere
 **Posting failure does not skip archival.** The report is saved regardless of the POST outcome: on failure it archives the chat display content plus the `gh` error summary, so a failed POST still leaves the durable copy.
 
 > **Engine check (when available):** run `mstar pr-review report-path [--reviews-dir <dir>] --target pr:<n>|branch:<slug>|diff:<sha>|diff [--stage 1|2 --slug <domain-seat>] [--date <YYYY-MM-DD>]` (`--reviews-dir` defaults to the resolved `{REVIEW_DIR}`) (or `import { prReviewReportPath } from "@mstar-harness/engine"` in a host hook) to resolve the run directory, the report file, and the Evidence-file names above — including the same-day `report-r2`/`report-r3` escalation, which the resolver scans for instead of the agent eyeballing the directory. Pure resolution: it never writes; the main agent still writes the file content. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
-- **Body**: the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed, the body is the chat display content instead (§ Display contract two lines + ranked findings + leftover AC), so the local copy is still complete.
+- **Body**: the exact text posted as the GitHub Review body — verbatim, not a paraphrase. When `comments: n/a-no-pr` or posting failed, the body is the chat display content instead (§ Display contract header lines + ranked findings + leftover AC), so the local copy is still complete.
 
 ## Output shape
 
 - `- findings:` — list of evidence-backed findings (`none` when none). Each accepted finding includes **Merge class** (§ Merge class).
-- `- verdict:` — exactly one of `ship it` / `needs fixes` / `blocked` (§ Verdict synthesis).
+- `- verdict:` — exactly one of `ship it` / `needs fixes` / `blocked` / `incomplete` (§ Verdict synthesis); an `incomplete` report's display header also carries its `cause:` and `unscanned:` lines (§ Display contract).
 - `- score_pct:` — integer 0–100 from the locked deduction schedule (§ Tally and derived score), annotated with its band on the report's Verdict heading.
 - `- tally:`
   - `- must-fix: <n>`
@@ -500,20 +511,31 @@ The posted PR comment is the deliverable; the local report is the durable refere
 
 - `- report:` — local archive path (§ Local report archive), e.g. `{REVIEW_DIR}/2026-08-24-pr134/report.md`; `n/a` only when the harness dir is undiscoverable.
 
-> **Engine check (when available):** run `mstar pr-review validate-report <file.md>` (or `import { validatePrReviewReport } from "@mstar-harness/engine"` in a host hook) to machine-check a saved local report against the Frontmatter + Output-shape contract above — verdict-from-tally consistency, the locked-schedule `score_pct` recompute, the comments tri-state (a failed POST is `failed`, never `n/a-no-pr`), the required-field set (`type`, `verdict`, `score_pct`, `tally`, `comments`, `review_url`, `generated_at`) and `generated_at` format. Exit 1 with violations; run it before worktree cleanup. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar pr-review validate-report <file.md>` (or `import { validatePrReviewReport } from "@mstar-harness/engine"` in a host hook) to machine-check a saved local report against the Frontmatter + Output-shape contract above — verdict-from-tally consistency (skipped for `verdict: incomplete`, which declares its own token; a drifted `score_pct` is still flagged), the locked-schedule `score_pct` recompute, the comments tri-state (a failed POST is `failed`, never `n/a-no-pr`), the required-field set (`type`, `verdict`, `score_pct`, `tally`, `comments`, `review_url`, `generated_at`, plus `incomplete_reason` and `unscanned` when `verdict: incomplete` — rejected on every other verdict) and `generated_at` format. Exit 1 with violations; run it before worktree cleanup. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### Display contract (chat output)
 
 Tone: matter-of-fact — no praise-padding, no flattery; state each severity together with the conditions that enable it.
 
-First two lines of the **chat** display — verbatim:
+First two lines of the **chat** display — verbatim, for a settled run:
 
 ```
 {verdict} · {score_pct}% ({band})
 must-fix=<n> should-fix=<n> nit=<n> unverified=<n>
 ```
 
+A run that stopped short prints **four** lines instead — the same facts plus the `partial` mark and the two facts the token cannot carry:
+
+```
+incomplete · {score_pct}% ({band}, partial)
+must-fix=<n> should-fix=<n> nit=<n> unverified=<n>
+cause: {reason}
+unscanned: {csv | none}
+```
+
+`partial` marks the grade as earned by the collected findings only; `cause` is why the run stopped and `unscanned` is the comma-joined scope it never reached (`none` when nothing was left unscanned). A settled run prints its two-line header byte-for-byte — no `partial`, no extra lines — and the `incomplete` header never appears under any other token.
+
 Then ranked findings / leftover AC summary. Do not put `score_pct%` on the `- verdict:` token line.
 
-The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Score with its band + four-class emoji tally table).
+The GitHub Review `body` no longer uses the two-line header — it follows § Report template, whose Verdict section carries the same facts structured (verdict token + Score with its band + four-class emoji tally table) and, for `incomplete`, the partial mark plus the `cause:` / `unscanned:` lines.
 

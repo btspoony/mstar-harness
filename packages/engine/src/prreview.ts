@@ -32,8 +32,13 @@ import { AUDIT_CATEGORIES, AUDIT_CONFIDENCES, AUDIT_EFFORTS, AUDIT_RISKS } from 
 export const MERGE_CLASSES = ["must-fix", "should-fix", "nit"] as const;
 export type MergeClass = (typeof MERGE_CLASSES)[number];
 
-/** The three PR-review verdict tokens (pr-review.md § Verdict synthesis). */
-export const PR_VERDICTS = ["ship it", "needs fixes", "blocked"] as const;
+/**
+ * The four PR-review verdict tokens (pr-review.md § Verdict synthesis) —
+ * `incomplete` is the neutral token of a bounded/stopped run: neither a pass
+ * nor a failure, never mergeable, and it overrides the count-derived token
+ * only when the caller declares the run incomplete.
+ */
+export const PR_VERDICTS = ["ship it", "needs fixes", "blocked", "incomplete"] as const;
 export type PrVerdict = (typeof PR_VERDICTS)[number];
 
 /**
@@ -72,12 +77,25 @@ export const REVIEW_EMOJI: Record<MergeClass | "unverified", string> = {
 };
 
 /**
+ * Why a run stopped short and what it did not cover — the fact that makes
+ * {@link PrVerdict} `incomplete` meaningful instead of a bare token
+ * (pr-review.md § Verdict synthesis). `reason` is the declared cause the
+ * consumer reads; `unscanned` is the scope the run never reached (empty =
+ * nothing left unscanned).
+ */
+export type PrIncomplete = {
+  reason: string;
+  unscanned: readonly string[];
+};
+
+/**
  * Input to {@link computePrTally}. `findings` are the post-vet accepted
  * findings only; `unverifiedCount` is the count of residual items under
  * `- unverified:` (0 when absent / `none`); `unmetAc` is the leftover
  * unmet acceptance criteria (not met, not cut) — each increments the tally
  * (§ Linked-issue hygiene), it is not a fourth class and not a second
- * finding.
+ * finding. `incomplete` marks a bounded/stopped run: the verdict becomes
+ * `incomplete` while the score and band stay the count-derived ones.
  */
 export type PrTallyInput = {
  /** Post-vet accepted findings only. */
@@ -86,6 +104,8 @@ export type PrTallyInput = {
   unverifiedCount?: number;
  /** Leftover unmet ACs (not met, not cut). */
   unmetAc?: readonly { unsafeToShip: boolean }[];
+ /** Declared cause + unscanned scope of a bounded/stopped run; absent = the run completed. */
+  incomplete?: PrIncomplete;
 };
 
 /** Result of {@link computePrTally}. */
@@ -98,6 +118,8 @@ export type PrTallyResult = {
   tally: { mustFix: number; shouldFix: number; nit: number; unverified: number };
   /** Two-line chat display header, verbatim per pr-review.md § Display contract. */
   chatHeader: string;
+  /** Echo of {@link PrTallyInput.incomplete}; absent when the run completed. */
+  incomplete?: PrIncomplete;
 };
 
 // ---------------------------------------------------------------------------
@@ -164,7 +186,9 @@ const PR_SCORE_SCHEDULE_HINT =
  * should_fix ≥ 1 → `needs fixes`; else `ship it`. The score follows the
  * locked diminishing deduction schedule via {@link prScoreDeduction} and
  * the band is its display annotation — neither overrides the verdict
- * (override invariant).
+ * (override invariant). A supplied `incomplete` overrides only the token
+ * (`incomplete`), never the score/band/tally: the run still reports the
+ * partial grade its collected findings earn, labelled `partial`.
  */
 export function computePrTally(input: PrTallyInput): PrTallyResult {
  // Engine boundary guard : a negative unverified count lets
@@ -179,6 +203,35 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
     throw new TypeError(
       `computePrTally: unverifiedCount must be a non-negative integer - got ${String(input.unverifiedCount)}`,
     );
+  }
+ // Engine boundary guard : the `incomplete` fact IS the
+ // verdict's cause — a blank reason renders a bare token with no cause
+ // and an envelope its own validator (`review.incomplete-malformed`)
+ // rejects, so no consumer can publish it. A line break would break the
+ // four-line header contract (pr-review.md § Display contract), so the
+ // cause and every scope entry stay single-line. An empty `unscanned`
+ // array stays legal: it means nothing was left unscanned.
+  if (input.incomplete !== undefined) {
+    if (
+      typeof input.incomplete.reason !== "string" ||
+      input.incomplete.reason.trim() === "" ||
+      /[\r\n]/.test(input.incomplete.reason)
+    ) {
+      throw new TypeError(
+        `computePrTally: incomplete.reason must be a non-empty single-line string - got ${JSON.stringify(input.incomplete.reason)}`,
+      );
+    }
+    if (
+      !Array.isArray(input.incomplete.unscanned) ||
+      !input.incomplete.unscanned.every(
+        (entry) => typeof entry === "string" && entry.trim() !== "" && !/[\r\n]/.test(entry),
+      )
+    ) {
+      throw new TypeError(
+        "computePrTally: incomplete.unscanned must be an array of single-line non-empty strings - " +
+          `got ${JSON.stringify(input.incomplete.unscanned)}`,
+      );
+    }
   }
   let mustFix = 0;
   let shouldFix = 0;
@@ -197,13 +250,30 @@ export function computePrTally(input: PrTallyInput): PrTallyResult {
 
   const tally = { mustFix, shouldFix, nit, unverified };
   const scorePct = Math.max(0, 100 - prScoreDeduction(tally));
-  const verdict: PrVerdict = mustFix >= 1 ? "blocked" : shouldFix >= 1 ? "needs fixes" : "ship it";
+  const verdict: PrVerdict = input.incomplete !== undefined
+    ? "incomplete"
+    : mustFix >= 1 ? "blocked" : shouldFix >= 1 ? "needs fixes" : "ship it";
   const band = scoreBand(scorePct);
-  const chatHeader =
-    `${verdict} \u00b7 ${scorePct}% (${band})\n` +
-    `must-fix=${mustFix} should-fix=${shouldFix} nit=${nit} unverified=${unverified}`;
+  const tallyLine = `must-fix=${mustFix} should-fix=${shouldFix} nit=${nit} unverified=${unverified}`;
+ // The incomplete header keeps the same score/band/tally facts, marks the
+ // grade `partial` (it is not a whole-review grade) and states the two
+ // facts the token alone cannot carry: why the run stopped and what it
+ // never scanned. An empty scope renders the explicit `none`.
+  const chatHeader = input.incomplete === undefined
+    ? `${verdict} \u00b7 ${scorePct}% (${band})\n${tallyLine}`
+    : `${verdict} \u00b7 ${scorePct}% (${band}, partial)\n` +
+      `${tallyLine}\n` +
+      `cause: ${input.incomplete.reason}\n` +
+      `unscanned: ${input.incomplete.unscanned.length === 0 ? "none" : input.incomplete.unscanned.join(", ")}`;
 
-  return { verdict, scorePct, band, tally, chatHeader };
+  return {
+    verdict,
+    scorePct,
+    band,
+    tally,
+    chatHeader,
+    ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +323,8 @@ export type MstarReviewTally = Omit<PrTallyResult, "band"> & { band?: PrScoreBan
  * document with harness vocab, sibling to the Markdown pr-review report.
  * `verdict` is PR_VERDICTS; `tally` (when present) must be a full
  * {@link MstarReviewTally} (shape-checked) whose `verdict` must equal the
- * top-level `verdict` (consistency rule).
+ * top-level `verdict` (consistency rule). `incomplete` is required exactly
+ * when `verdict` is `incomplete`, and rejected for every other verdict.
  */
 export type MstarReviewV1 = {
   schema: "mstar.review/v1";
@@ -262,11 +333,59 @@ export type MstarReviewV1 = {
   tally?: MstarReviewTally;
   findings: MstarReviewFinding[];
   target?: { owner?: string; repo?: string; pr?: number; head_sha?: string };
+  /** Declared cause + unscanned scope; carried only by the `incomplete` verdict. */
+  incomplete?: PrIncomplete;
 };
 
 /** The four count keys inside a `PrTallyResult` (pr-review.md § Tally and
  * derived score — must/should/nit/unverified, no fourth class). */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
+
+/** The producer's single-line rule ({@link computePrTally}): the cause and
+ * every unscanned entry render inside the four-line header contract, so each
+ * is a non-blank string with no CR/LF. Reused here so the validator accepts
+ * exactly what the producer can emit. */
+function isSingleLineFact(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+}
+
+/** True when `fact` is a readable `incomplete` fact: a single-line `reason`
+ * plus a list of single-line `unscanned` entries (an empty list states nothing
+ * was left unscanned). */
+function isIncompleteFact(fact: unknown): fact is PrIncomplete {
+  if (!isPlainObject(fact)) return false;
+  return isSingleLineFact(fact.reason) &&
+    Array.isArray(fact.unscanned) && fact.unscanned.every(isSingleLineFact);
+}
+
+/**
+ * Report every reason `fact` is not a readable `incomplete` fact
+ * (`review.incomplete-malformed`), naming each invalid field so one refusal
+ * carries all of them. `label` names the level that carried the fact
+ * (`incomplete` for the envelope's top-level fact, `tally.incomplete` for the
+ * echo inside a provided tally).
+ */
+function checkIncompleteShape(fact: unknown, label: string, violations: ValidationResult[]): void {
+  if (isIncompleteFact(fact)) return;
+  if (!isPlainObject(fact)) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-malformed",
+      `${label} must be an object with a single-line non-blank reason string and an unscanned array of single-line non-blank strings`,
+    ));
+    return;
+  }
+  if (!isSingleLineFact(fact.reason)) {
+    violations.push(violation("high", "review.incomplete-malformed", `${label}.reason must be a single-line non-blank string`));
+  }
+  if (!Array.isArray(fact.unscanned) || !fact.unscanned.every(isSingleLineFact)) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-malformed",
+      `${label}.unscanned must be an array of single-line non-blank strings (an empty array states nothing was left unscanned)`,
+    ));
+  }
+}
 
 /**
  * Shape-check an envelope-provided `tally` against the `PrTallyResult`
@@ -276,9 +395,13 @@ const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
  * PR_VERDICTS, `scorePct` an integer in [0, 100], all four class counts
  * non-negative integers, `chatHeader` a string, and the optional `band`
  * must be a valid token when present (absent = legacy-valid envelope).
+ * The tally's own `incomplete` echo obeys the same presence rule as the
+ * envelope's top-level fact — required by the `incomplete` verdict, absent
+ * for every other one, and shape-checked by {@link checkIncompleteShape}.
  * Shape only — no arithmetic consistency (the locked schedule and
  * `computePrTally` are untouched); the verdict-equality rule stays a
- * separate violation (`review.verdict-tally-mismatch`).
+ * separate violation (`review.verdict-tally-mismatch`), and agreement
+ * between the two `incomplete` levels is `review.incomplete-tally-mismatch`.
  */
 function checkProvidedTallyShape(tally: Record<string, unknown>, violations: ValidationResult[]): void {
   if (typeof tally.verdict !== "string" || !(PR_VERDICTS as readonly string[]).includes(tally.verdict)) {
@@ -337,6 +460,28 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
       `use one of: ${PR_SCORE_BANDS.join(" | ")}`,
     ));
   }
+  // The nested echo of the run's own fact is held to the top-level rule: a
+  // tally verdict of `incomplete` without it publishes a bare token, and any
+  // other tally verdict carrying one claims a stopped run it did not report.
+  if (tally.verdict === "incomplete") {
+    if (tally.incomplete === undefined) {
+      violations.push(violation(
+        "high",
+        "review.missing-incomplete",
+        'tally.verdict "incomplete" requires the matching tally.incomplete fact carrying the declared cause and the unscanned scope',
+        'add tally.incomplete: { reason: "<why the run stopped>", unscanned: ["<path>", ...] }',
+      ));
+    } else {
+      checkIncompleteShape(tally.incomplete, "tally.incomplete", violations);
+    }
+  } else if (tally.incomplete !== undefined) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-unexpected",
+      `tally.incomplete is carried only by the "incomplete" tally verdict - tally.verdict is "${String(tally.verdict)}"`,
+      'remove tally.incomplete, or set tally.verdict: incomplete',
+    ));
+  }
 }
 
 /**
@@ -352,7 +497,13 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
  * malformed one is rejected with `review.tally-malformed` (shape only — no
  * arithmetic consistency); a `tally.verdict` disagreeing with the top-level
  * `verdict` is rejected with `review.verdict-tally-mismatch` (consistency
- * rule, architect-locked).
+ * rule, architect-locked). The `incomplete` verdict must carry an
+ * `incomplete` fact — a non-empty `reason` plus an `unscanned` string array
+ * — and no other verdict may carry it, at the envelope level and inside a
+ * provided tally alike (`review.missing-incomplete` /
+ * `review.incomplete-malformed` / `review.incomplete-unexpected`); the two
+ * levels must agree when both are present
+ * (`review.incomplete-tally-mismatch`).
  */
 export function validateMstarReviewV1(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -452,6 +603,30 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
     });
   }
 
+ // The neutral `incomplete` token carries a fact no other verdict may
+ // carry: why the run stopped and what it never scanned. Required exactly
+ // when the verdict is `incomplete` (a bare token would be unreadable), and
+ // rejected everywhere else.
+  if (doc.verdict === "incomplete") {
+    if (doc.incomplete === undefined) {
+      violations.push(violation(
+        "high",
+        "review.missing-incomplete",
+        'verdict "incomplete" requires an incomplete fact carrying the declared cause and the unscanned scope',
+        'add incomplete: { reason: "<why the run stopped>", unscanned: ["<path>", ...] }',
+      ));
+    } else {
+      checkIncompleteShape(doc.incomplete, "incomplete", violations);
+    }
+  } else if (doc.incomplete !== undefined) {
+    violations.push(violation(
+      "high",
+      "review.incomplete-unexpected",
+      `incomplete is carried only by the "incomplete" verdict - verdict is "${String(doc.verdict)}"`,
+      'remove incomplete, or set verdict: incomplete',
+    ));
+  }
+
   if (doc.tally !== undefined) {
     if (!isPlainObject(doc.tally)) {
       violations.push(violation("high", "review.invalid-tally", "tally must be a PrTallyResult object"));
@@ -465,6 +640,24 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
           "high",
           "review.verdict-tally-mismatch",
           `tally.verdict "${String(doc.tally.verdict)}" does not equal the top-level verdict "${String(doc.verdict)}" - the envelope verdict and tally must agree (consistency rule)`,
+        ));
+      }
+      // The envelope's fact and its nested echo are one declaration; a pair of
+      // readable facts that differ means one level was doctored, so refusing
+      // beats silently preferring the top-level copy. Malformed facts are
+      // already refused by the shape rules above and are not compared.
+      const topIncomplete = doc.incomplete;
+      const tallyIncomplete = doc.tally.incomplete;
+      if (
+        isIncompleteFact(topIncomplete) && isIncompleteFact(tallyIncomplete) &&
+        (topIncomplete.reason !== tallyIncomplete.reason ||
+          topIncomplete.unscanned.length !== tallyIncomplete.unscanned.length ||
+          topIncomplete.unscanned.some((entry, index) => entry !== tallyIncomplete.unscanned[index]))
+      ) {
+        violations.push(violation(
+          "high",
+          "review.incomplete-tally-mismatch",
+          `tally.incomplete does not match the top-level incomplete fact - the cause and the unscanned scope must be identical (tally ${JSON.stringify(tallyIncomplete)}, envelope ${JSON.stringify(topIncomplete)})`,
         ));
       }
     }
@@ -501,14 +694,23 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
  * caller omits `summary_md` (template locked in the
  * engine test; no LLM). Verdict line mirrors the chat display contract
  * (score with its band); each finding contributes one
- * `- <mergeClass>: <title>` bullet.
+ * `- <mergeClass>: <title>` bullet. A bounded/stopped run adds the `partial`
+ * mark and the two facts the token cannot carry — its cause and the scope it
+ * never reached — mirroring pr-review.md § Display contract.
  */
 function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["findings"]): string {
+  const incomplete = tally.incomplete;
   const lines = [
-    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band})`,
+    `## Verdict: ${tally.verdict} \u00b7 ${tally.scorePct}% (${tally.band}${incomplete === undefined ? "" : ", partial"})`,
     "",
     `must-fix=${tally.tally.mustFix} should-fix=${tally.tally.shouldFix} nit=${tally.tally.nit} unverified=${tally.tally.unverified}`,
   ];
+  if (incomplete !== undefined) {
+    lines.push(
+      `cause: ${incomplete.reason}`,
+      `unscanned: ${incomplete.unscanned.length === 0 ? "none" : incomplete.unscanned.join(", ")}`,
+    );
+  }
   if (findings.length > 0) {
     lines.push("");
     for (const finding of findings) {
@@ -523,20 +725,25 @@ function defaultReviewSummary(tally: PrTallyResult, findings: MstarReviewV1["fin
  * . Pure and synchronous — verdict/tally come ONLY
  * from {@link computePrTally}; no I/O, no GitHub, no store, no seat
  * dispatch. `findings` pass through untouched; `target` is carried when
- * provided. When `summary_md` is omitted, {@link defaultReviewSummary}
- * builds the locked deterministic template.
+ * provided. A supplied `incomplete` marks the run stopped-short: the token
+ * becomes `incomplete` (with the cause/scope carried on the envelope, since
+ * {@link validateMstarReviewV1} requires it for that verdict) while the
+ * tally stays the partial count-derived one. When `summary_md` is omitted,
+ * {@link defaultReviewSummary} builds the locked deterministic template.
  */
 export function synthesizeReview(input: {
   findings: MstarReviewV1["findings"];
   summary_md?: string;
   unverifiedCount?: number;
   unmetAc?: PrTallyInput["unmetAc"];
+  incomplete?: PrIncomplete;
   target?: MstarReviewV1["target"];
 }): MstarReviewV1 {
   const tally = computePrTally({
     findings: input.findings,
     unverifiedCount: input.unverifiedCount,
     unmetAc: input.unmetAc,
+    ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
   });
   return {
     schema: "mstar.review/v1",
@@ -544,6 +751,7 @@ export function synthesizeReview(input: {
     summary_md: input.summary_md ?? defaultReviewSummary(tally, input.findings),
     tally,
     findings: input.findings,
+    ...(input.incomplete === undefined ? {} : { incomplete: input.incomplete }),
     ...(input.target !== undefined ? { target: input.target } : {}),
   };
 }
@@ -783,9 +991,15 @@ function parseCommentsState(raw: string | undefined): PrCommentsState | null {
  * shape tri-states, semantics verbatim):
  *
  * - `type: pr-review` required.
- * - `verdict` exactly one of the three verdict tokens (§ Verdict synthesis)
+ * - `verdict` exactly one of the four verdict tokens (§ Verdict synthesis)
  * and CONSISTENT with the tally (any must_fix -> blocked; else any
- * should_fix -> needs fixes; else ship it).
+ * should_fix -> needs fixes; else ship it) — the `incomplete` token is the
+ * one exception: it overrides the derived token, so the consistency check
+ * is skipped for it alone.
+ * - `incomplete_reason` + `unscanned` required exactly when `verdict` is
+ * `incomplete` (the token alone would be unreadable) and rejected for every
+ * other verdict; `unscanned` is a comma-separated list of non-empty values
+ * (`none` when the run left no scope unscanned).
  * - `score_pct` integer 0-100 and equal to the recompute from the
  * document's own tally via {@link computePrTally} (locked diminishing
  * schedule — mismatch = hand-arithmetic drift, the exact defect class this
@@ -827,6 +1041,35 @@ export function validatePrReviewReport(text: string): GateResult {
     violations.push(violation("medium", "prreview.report.invalid-verdict", `verdict "${doc.verdict}" is not one of ${JSON.stringify(PR_VERDICTS)}`, `use one of: ${PR_VERDICTS.join(" | ")}`));
   }
 
+ // A report that stopped short carries the same two facts the chat header
+ // states: the declared cause and the scope it never scanned. Both are
+ // required for `verdict: incomplete` and rejected on every other verdict,
+ // so the token is never published bare nor smuggled onto a settled report.
+  if (doc.verdict === "incomplete") {
+    if (doc.incomplete_reason === undefined) {
+      violations.push(violation("medium", "prreview.report.missing-incomplete_reason", "missing required frontmatter field for verdict: incomplete - incomplete_reason"));
+    } else if (doc.incomplete_reason.trim() === "") {
+      violations.push(violation("medium", "prreview.report.invalid-incomplete-reason", "incomplete_reason must state the non-empty cause the run stopped for"));
+    }
+    if (doc.unscanned === undefined) {
+      violations.push(violation("medium", "prreview.report.missing-unscanned", "missing required frontmatter field for verdict: incomplete - unscanned"));
+    } else if (doc.unscanned.split(",").some((entry) => entry.trim() === "")) {
+      violations.push(violation(
+        "medium",
+        "prreview.report.invalid-unscanned",
+        `unscanned ${JSON.stringify(doc.unscanned)} must be a comma-separated list of non-empty values`,
+        "list the unscanned scope, or write unscanned: none when the run left none",
+      ));
+    }
+  } else if (doc.incomplete_reason !== undefined || doc.unscanned !== undefined) {
+    violations.push(violation(
+      "medium",
+      "prreview.report.incomplete-unexpected",
+      `incomplete_reason / unscanned are carried only by verdict: incomplete - verdict is "${String(doc.verdict)}"`,
+      "remove both keys, or set verdict: incomplete",
+    ));
+  }
+
   let scoreOk = false;
   if (doc.score_pct !== undefined) {
     const rawScore = doc.score_pct.trim();
@@ -861,7 +1104,16 @@ export function validatePrReviewReport(text: string): GateResult {
         ));
       }
     }
-    if (doc.verdict !== undefined && (PR_VERDICTS as readonly string[]).includes(doc.verdict) && doc.verdict !== recompute.verdict) {
+ // `incomplete` is the one token that overrides the tally-derived verdict
+ // (a stopped run is neither a pass nor a failure), so the consistency
+ // check does not apply to it; every other verdict still follows the tally
+ // exactly.
+    if (
+      doc.verdict !== undefined &&
+      (PR_VERDICTS as readonly string[]).includes(doc.verdict) &&
+      doc.verdict !== "incomplete" &&
+      doc.verdict !== recompute.verdict
+    ) {
       violations.push(violation(
         "high",
         "prreview.report.verdict-mismatch",
