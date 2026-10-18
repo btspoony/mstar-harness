@@ -14,6 +14,12 @@ export interface McpStdioOptions {
    * a launcher that mounts a scoped server declares the channel explicitly.
    */
   identityEnv?: string;
+  /**
+   * Harness root the mounting process owns. Unset keeps the `process.cwd()`
+   * probe: the plugin is installed once for many repositories, so a root is
+   * passed per mount rather than inferred from whatever cwd the host chose.
+   */
+  harnessRoot?: string;
 }
 
 function declaredSessionId(identityEnv: string | undefined): string | undefined {
@@ -25,19 +31,22 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
 /**
  * Build the stdio context resolver for one launch. The exported `resolveContext`
  * below is this factory with no options, so the unparameterized server keeps
- * reading no ambient identity.
+ * reading no ambient identity and probing `process.cwd()` for its harness root.
  *
  * A declared identity is only a default: `registerMcpCommands` merges a
  * per-call `sessionId` ahead of `resolved.sessionId`. A malformed declared value
  * is not repaired here — it reaches the same safe-session-id guard as a per-call
  * value, which refuses loudly.
+ *
+ * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
+ * rebased or discovered, because the mounting process owns the root.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
   const resolver: ResolveContext = (_definition, _sessionId, signal, _services, effects: McpEffects) => {
     const sessionId = declaredSessionId(options.identityEnv);
     return {
       cwd: process.cwd(),
-      controlRoot: resolveProcessHarnessDir(process.cwd()),
+      controlRoot: options.harnessRoot ?? resolveProcessHarnessDir(process.cwd()),
       ...(sessionId === undefined ? {} : { sessionId }),
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
       signal,

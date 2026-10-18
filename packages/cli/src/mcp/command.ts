@@ -1,8 +1,18 @@
-import type { Command } from "commander";
+import { isAbsolute } from "node:path";
+import { CommanderError, type Command } from "commander";
 import { serveMcpStdio } from "./stdio.js";
 
 interface McpCommandOptions {
   identityEnv?: string;
+  harness?: string;
+}
+
+/** A relative root is a usage refusal, never a cwd-relative guess. */
+function absoluteHarness(value: string): string {
+  if (!isAbsolute(value)) {
+    throw new CommanderError(2, "commander.invalidArgument", `--harness must be an absolute path; got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 export function registerMcpCommand(program: Command): void {
@@ -12,7 +22,12 @@ export function registerMcpCommand(program: Command): void {
       "--identity-env <NAME>",
       "read the default session id from environment variable NAME; without it no ambient identity is read, and a per-call sessionId always wins",
     )
+    .option(
+      "--harness <path>",
+      "absolute harness root for every call; without it the server probes process.cwd() for one",
+      absoluteHarness,
+    )
     .action(async (options: McpCommandOptions) => {
-      await serveMcpStdio({ identityEnv: options.identityEnv });
+      await serveMcpStdio({ identityEnv: options.identityEnv, harnessRoot: options.harness });
     });
 }
