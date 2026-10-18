@@ -2,6 +2,7 @@
   "name": "@mstar-harness/dsh",
   "version": "4.0.2",
   "description": "Morning Star harness dsh (DeepSeek Harness) cordis function plugin — in-process engine gates (status/dispatch/lease) with hard refusal channels.",
+  "icon": "./icon.svg",
   "keywords": [
     "dsh",
     "dsh-plugin"
@@ -34,6 +35,7 @@
   },
   "files": [
     "SECURITY.md",
+    "icon.svg",
     "dist",
     "bundle",
     "locale",

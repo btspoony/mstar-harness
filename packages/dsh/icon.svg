@@ -1,0 +1,26 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Morning Star mark: the brand star from assets/logo.svg / logo-dark.svg
+       (tile dropped), faceted for the 36px dsh plugin artwork canvas. -->
+  <defs>
+    <linearGradient id="mstar-tip-top" x1="18" y1="6.5" x2="18" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7DA8E"/>
+      <stop offset="1" stop-color="#E4AF49"/>
+    </linearGradient>
+    <linearGradient id="mstar-tip-right" x1="29" y1="17.5" x2="18" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F0C46B"/>
+      <stop offset="1" stop-color="#CB8C26"/>
+    </linearGradient>
+    <linearGradient id="mstar-tip-bottom" x1="18" y1="29.5" x2="18" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DAA03A"/>
+      <stop offset="1" stop-color="#B7791B"/>
+    </linearGradient>
+    <linearGradient id="mstar-tip-left" x1="7" y1="17.5" x2="18" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3CE7D"/>
+      <stop offset="1" stop-color="#D89E35"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#mstar-tip-top)" d="M18 6.5 20.25 15.25 18 18 15.75 15.25Z"/>
+  <path fill="url(#mstar-tip-right)" d="M29 17.5 20.25 19.75 18 18 20.25 15.25Z"/>
+  <path fill="url(#mstar-tip-bottom)" d="M18 29.5 15.75 19.75 18 18 20.25 19.75Z"/>
+  <path fill="url(#mstar-tip-left)" d="M7 17.5 15.75 15.25 18 18 15.75 19.75Z"/>
+</svg>
