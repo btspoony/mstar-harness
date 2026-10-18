@@ -25,7 +25,10 @@ function setup() {
   let protocolReads = 0;
   const context: InvocationContext = {
     cwd: root,
-    controlRoot: root,
+    // The transport's control root IS the harness dir (the cwd probe returns
+    // `resolveHarnessDir(...)`, not its parent); persist resolves its store
+    // from this server-owned value.
+    controlRoot: harness,
     versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     signal: new AbortController().signal,
     effects: {

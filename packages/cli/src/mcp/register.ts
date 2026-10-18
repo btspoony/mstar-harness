@@ -123,6 +123,23 @@ function handlerInput(definition: CommandDefinition, input: unknown, defaultHarn
   return normalized;
 }
 
+/**
+ * Normalize a blank `harness` BEFORE the tool schema runs. `handlerInput` fills
+ * an absent value after admission has already parsed the input, so a `min(1)`
+ * harness schema would refuse `""` as a usage error while a bare optional-string
+ * schema would accept it — the same call judged differently by two families
+ * that resolve the same root. Writing the pinned default over a blank value at
+ * the earliest seam makes both uniform, and an explicit non-blank value is
+ * untouched. The caller's object is never mutated: a shallow copy carries the
+ * normalized field.
+ */
+function normalizedBlankHarness(input: unknown, defaultHarness: string | undefined): unknown {
+  if (defaultHarness === undefined || input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const record = input as Record<string, unknown>;
+  if (typeof record.harness !== "string" || record.harness.trim() !== "") return input;
+  return { ...record, harness: defaultHarness };
+}
+
 export function registerMcpCommands(
   server: McpServer,
   definitions: readonly CommandDefinition[],
@@ -160,7 +177,7 @@ export function registerMcpCommands(
           const defaultHarness = harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
             definition,
-            input,
+            normalizedBlankHarness(input, defaultHarness),
             descriptor,
             contract.schema,
             (data) => handlerInput(definition, data, defaultHarness),

@@ -22,10 +22,13 @@
 #
 # Mount contract: a deployment that needs a pinned root or a declared identity
 # launches the server with `mstar mcp --harness <absolute path>` and/or
-# `--identity-env <NAME>`. The pinned root is the DEFAULT for every registered
-# command's root selection, and an explicit per-call `harness` overrides it;
-# the declared identity is a connection-wide default (a per-caller identity
-# needs an explicit `sessionId` or its own scoped mount).
+# `--identity-env <NAME>`. The pinned root is the server-owned DEFAULT for
+# every registered command's root selection: a command that declares a
+# per-call `harness` accepts an explicit override, while the `persist` family
+# always uses the invocation's server root (the pin, or the cwd probe when
+# unpinned) and takes no per-call harness; the declared identity is a
+# connection-wide default (a per-caller identity needs an explicit `sessionId`
+# or its own scoped mount).
 # The shipped row keeps neutral defaults: no path, no identity declared. An
 # override restates the row's whole `config`, including the `args` list.
 

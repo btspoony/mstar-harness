@@ -5,7 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
-import { initializeStore } from "@mstar-harness/engine";
+import { captureIssue, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions, type CommandEnvelope } from "@mstar-harness/commands";
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
@@ -74,6 +74,52 @@ async function competingPersistRoots(): Promise<{ pinned: string; cwd: string; c
 /** The fixture's own discriminator, read from a successful persist envelope. */
 function persistOrigin(envelope: CommandEnvelope): unknown {
   return (envelope.data as { payload?: { origin?: string } } | null | undefined)?.payload?.origin;
+}
+
+const CAPTURE_INPUT = {
+  projectId: "_default",
+  title: "Finding from the harness-root fixture",
+  kind: "bug",
+  severity: "high",
+  impact: "the pinned root is not observable",
+  acceptance: "the command reads the pinned root",
+  sourceIdentity: "mcp-harness-root/fixture",
+  rootCauseKey: "mcp-harness-root-fixture",
+  acceptanceKey: "mcp-harness-root-fixture-acceptance",
+  occurrenceKey: "mcp-harness-root-fixture-occurrence",
+  sourceKind: "qc",
+  location: "packages/cli/test/mcp-harness-root.test.ts",
+  observedBehavior: "observed by the harness-root fixture",
+  evidence: ["fixture evidence"],
+  discoveredAt: "2026-10-18T00:00:00Z",
+} as const;
+
+/**
+ * Two roots that an issue-bearing command can distinguish: the pinned root has
+ * an ACTIVE store with one captured issue, while the cwd's own `.mstar` is an
+ * uninitialized directory. A command that reaches the pinned root answers from
+ * that store; a cwd-probed command refuses instead.
+ */
+async function competingAuthorityRoots(): Promise<{ pinned: string; cwd: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const pinned = path.join(root, "control", ".mstar");
+  const cwd = path.join(root, "workspace");
+  mkdirSync(pinned, { recursive: true });
+  mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
+  (await initializeStore({ harnessDir: pinned })).close();
+  await captureIssue({ harnessDir: pinned }, { ...CAPTURE_INPUT }, { operationId: "mcp-harness-root-capture", actor: "project-manager" });
+  return { pinned, cwd };
+}
+
+/** Read one tool result back as the command envelope it carries. */
+async function toolEnvelope(client: Client, name: string, args: Record<string, unknown>): Promise<CommandEnvelope> {
+  const result = await client.callTool({ name, arguments: args });
+  if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
+  const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
+  const start = text.indexOf('{"version":1,');
+  if (start < 0) throw new Error(`no command envelope in the tool result: ${text}`);
+  return JSON.parse(text.slice(start)) as CommandEnvelope;
 }
 
 /** Drive one real command call through the production registration path. */
@@ -170,7 +216,7 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("the persist family defaults to the pinned root and an explicit per-call harness overrides it", async () => {
+  test("the persist family always uses the invocation's server root and publishes no per-call harness", async () => {
     const fixture = await competingPersistRoots();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
@@ -186,44 +232,31 @@ describe("MCP harness root", () => {
     const server = createMcpServer(createContextResolver({ harnessRoot: fixture.pinned }), selected);
     const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
     const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
-    const call = async (name: string, args: Record<string, unknown>): Promise<CommandEnvelope> => {
-      const result = await client.callTool({ name, arguments: args });
-      if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
-      const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
-      const start = text.indexOf('{"version":1,');
-      if (start < 0) throw new Error(`no command envelope in the tool result: ${text}`);
-      return JSON.parse(text.slice(start)) as CommandEnvelope;
-    };
     try {
       await server.connect(serverEnd);
       await client.connect(clientEnd);
 
-      // The published schema is what makes the launcher default reach the
-      // family at all: registration fills `harness` only for a tool that
-      // declares it.
+      // The root is a server-owned fact, not a client-selectable capability:
+      // the family must not publish a `harness` field at all. A tool field that
+      // could relocate the store would let a client point the write/delete at
+      // another harness's protected documents.
       const { tools } = await client.listTools();
       const persist = tools.find((entry) => entry.name === "mstar_persist_get")!;
-      expect(persist.inputSchema.properties).toHaveProperty("harness");
+      expect(persist.inputSchema.properties).not.toHaveProperty("harness");
+      expect(persist.inputSchema.required ?? []).not.toContain("harness");
 
-      // No per-call harness: the connection pin (A) wins over the cwd probe (B).
-      const pinned = await call("mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY });
+      // The connection pin (A) wins over the cwd probe (B), so the read act on
+      // the pinned root's document.
+      const pinned = await toolEnvelope(client, "mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY });
       expect(pinned).toMatchObject({ status: "ok" });
       expect(persistOrigin(pinned)).toBe("pinned");
 
-      // A blank value is not an override — the engine's own root resolution
-      // treats it as absent, so the pin must apply rather than the cwd probe.
-      const blank = await call("mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY, harness: "   " });
-      expect(persistOrigin(blank)).toBe("pinned");
-
-      // An explicit non-blank per-call harness still wins over the pin.
-      const explicit = await call("mstar_persist_get", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot });
-      expect(persistOrigin(explicit)).toBe("cwd");
-
-      // `persist.delete` shares that root resolution: without a per-call
-      // harness it removes the pinned root's document and leaves the cwd's.
+      // A client-supplied root is not a capability: an extra `harness` field is
+      // not part of the contract and the server root still decides. The delete
+      // removes the pinned root's document and leaves the cwd's untouched.
       const pinnedDocument = path.join(fixture.pinned, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
       const cwdDocument = path.join(fixture.cwdRoot, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
-      const deleted = await call("mstar_persist_delete", { kind: "review", key: PERSIST_PROBE_KEY });
+      const deleted = await toolEnvelope(client, "mstar_persist_delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot });
       expect(deleted).toMatchObject({ status: "ok", data: { deleted: true } });
       expect(existsSync(pinnedDocument)).toBe(false);
       expect(existsSync(cwdDocument)).toBe(true);
@@ -235,6 +268,39 @@ describe("MCP harness root", () => {
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
       if (previousStore === undefined) delete process.env.MSTAR_STORE_MODULE;
       else process.env.MSTAR_STORE_MODULE = previousStore;
+    }
+  });
+
+  test("a blank harness on a min(1) harness command resolves to the pinned root instead of a usage refusal", async () => {
+    const fixture = await competingAuthorityRoots();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "status.tech-debt");
+    if (definition === undefined) throw new Error("missing command: status.tech-debt");
+    const server = createMcpServer(createContextResolver({ harnessRoot: fixture.pinned }), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      // `status.tech-debt` declares its harness as `z.string().min(1)`, so an
+      // empty string would be a usage refusal if the pin were only injected
+      // after admission. Normalizing blank to the pin before validation makes
+      // it read the pinned root (A), whose store holds the fixture's one issue,
+      // instead of the uninitialized cwd root (B).
+      const envelope = await toolEnvelope(client, "mstar_status_tech_debt", { harness: "" });
+      expect(envelope.code).not.toBe("command.invalid-input");
+      expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
+      expect((envelope.data as { total_open: number }).total_open).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
   });
 

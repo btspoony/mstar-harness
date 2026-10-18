@@ -8,7 +8,6 @@ import {
   guardInjectedStore,
   loadStoreModule,
   resolveArtifactPath,
-  resolveProcessHarnessDir,
   validateMstarReviewV1,
   type ArtifactStore,
 } from "@mstar-harness/engine";
@@ -86,19 +85,20 @@ function validatePayload(kind: PersistKind, payload: unknown): void {
 }
 
 /**
- * Resolve the store for one persist verb. `harness` is the command's own root
- * input: an explicit value (or the connection-wide default admission fills in
- * for it) wins over the cwd probe, so a mounted MCP server pinned to one root
- * never deletes or reads a document from the cwd's root. An injected
- * `--store`/`MSTAR_STORE_MODULE` module keeps precedence over both — it owns
- * its own root.
+ * Resolve the store for one persist verb. `root` is the invocation's
+ * server-owned control root: the transport's cwd probe for the CLI and the
+ * launcher pin for `mstar mcp --harness`, never a client-supplied value. The
+ * root is therefore not a per-call capability a caller can relocate: the
+ * FsStore classifies protected targets against the same root it writes, so a
+ * client that could choose it could bypass that classification. An injected
+ * `--store`/`MSTAR_STORE_MODULE` module keeps precedence — it owns its own
+ * root — and a null root keeps the ambient artifact-store fallback.
  */
-async function resolveStore(storeFlag: string | undefined, cwd: string, harness: string | undefined): Promise<ArtifactStore> {
+async function resolveStore(storeFlag: string | undefined, root: string | null): Promise<ArtifactStore> {
   if (storeFlag !== undefined) return guardInjectedStore(await loadStoreModule(storeFlag));
   const envStore = process.env.MSTAR_STORE_MODULE;
   if (envStore !== undefined) return guardInjectedStore(await loadStoreModule(envStore));
-  const harnessDir = resolveProcessHarnessDir(cwd, harness);
-  return harnessDir === null ? getArtifactStore() : createFsStore(harnessDir);
+  return root === null ? getArtifactStore() : createFsStore(root);
 }
 
 function parseKind(kind: unknown, command: string): PersistKind | CommandEnvelope<never> {
@@ -144,11 +144,10 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           { key: "input", flags: "--input <json>", required: false },
           { key: "file", flags: "--file <path>", required: false },
           { key: "store", flags: "--store <module>", required: false },
-          { key: "harness", flags: "--harness <path>", required: false },
           { key: "schema", flags: "--schema <id>", required: false },
         ],
       },
-      input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), harness: z.string().optional(), schema: z.string().optional() }),
+      input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), schema: z.string().optional() }),
       payloads: Object.fromEntries(Object.entries(payloadSchemas).map(([kind, descriptor]) => [
         kind,
         { schema: descriptor.schema, help: descriptor.help },
@@ -167,7 +166,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         try { payload = JSON.parse(raw); } catch (error) { return refusalEnvelope({ command: id, status: "refused", code: "persist.invalid-json", exitCode: 1, message: `persist payload is not valid JSON: ${messageOf(error)}`, recovery: "Correct the JSON syntax, then run mstar persist write review --key <key> --input <json> to retry." }); }
         try {
           validatePayload(kind, payload);
-          const store = await resolveStore(input.store, context.cwd, input.harness);
+          const store = await resolveStore(input.store, context.controlRoot);
           await store.put({ kind, key: input.key, payload, ...(input.schema === undefined ? {} : { schema: input.schema }) });
           return ok(id, { kind, key: input.key });
         } catch (error) {
@@ -177,8 +176,8 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     }),
     command({
       id: "persist.get",
-      cli: { path: ["persist", "get"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "validate", flags: "--validate", required: false }, { key: "versioned", flags: "--versioned", required: false }, { key: "store", flags: "--store <module>", required: false }, { key: "harness", flags: "--harness <path>", required: false }] },
-      input: z.object({ kind: z.string(), key: z.string().min(1), validate: z.boolean().optional(), versioned: z.boolean().optional(), store: z.string().optional(), harness: z.string().optional() }),
+      cli: { path: ["persist", "get"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "validate", flags: "--validate", required: false }, { key: "versioned", flags: "--versioned", required: false }, { key: "store", flags: "--store <module>", required: false }] },
+      input: z.object({ kind: z.string(), key: z.string().min(1), validate: z.boolean().optional(), versioned: z.boolean().optional(), store: z.string().optional() }),
       output, effects: ["read"], description: "Read one persisted document.",
       async execute(input, context) {
         const id = "persist.get";
@@ -188,7 +187,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const keyProblem = invalidKey(kind, input.key);
         if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist get review --key <key> to retry." });
         try {
-          const store = await resolveStore(input.store, context.cwd, input.harness);
+          const store = await resolveStore(input.store, context.controlRoot);
           if (input.versioned === true) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
             if (typeof root !== "string") return refusalEnvelope({ command: id, status: "refused", code: "coordination.local-store-required", exitCode: 1, message: "versioned reads require the local FsStore", recovery: "Read versioned bytes through the local FsStore; run mstar persist get review --key <key> --versioned." });
@@ -212,15 +211,15 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     }),
     command({
       id: "persist.list",
-      cli: { path: ["persist", "list"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "store", flags: "--store <module>", required: false }, { key: "harness", flags: "--harness <path>", required: false }] },
-      input: z.object({ kind: z.string(), store: z.string().optional(), harness: z.string().optional() }), output, effects: ["read"], description: "List persisted keys.",
+      cli: { path: ["persist", "list"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "store", flags: "--store <module>", required: false }] },
+      input: z.object({ kind: z.string(), store: z.string().optional() }), output, effects: ["read"], description: "List persisted keys.",
       async execute(input, context) {
         const id = "persist.list";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
         if (kind === "json") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "ArtifactStore json keys are absolute paths and cannot be listed" });
         try {
-          const store = await resolveStore(input.store, context.cwd, input.harness);
+          const store = await resolveStore(input.store, context.controlRoot);
           if (typeof store.list !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support list" });
           const refs = await store.list(kind);
           return ok(id, refs.map(({ key }) => key).sort());
@@ -231,8 +230,8 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
     }),
     command({
       id: "persist.delete",
-      cli: { path: ["persist", "delete"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "store", flags: "--store <module>", required: false }, { key: "harness", flags: "--harness <path>", required: false }] },
-      input: z.object({ kind: z.string(), key: z.string().min(1), store: z.string().optional(), harness: z.string().optional() }), output, effects: ["write"], description: "Delete one persisted document.",
+      cli: { path: ["persist", "delete"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }], options: [{ key: "key", flags: "--key <key>", required: true }, { key: "store", flags: "--store <module>", required: false }] },
+      input: z.object({ kind: z.string(), key: z.string().min(1), store: z.string().optional() }), output, effects: ["write"], description: "Delete one persisted document.",
       async execute(input, context) {
         const id = "persist.delete";
         const kind = parseKind(input.kind, id);
@@ -241,7 +240,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const keyProblem = invalidKey(kind, input.key);
         if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist delete review --key <key> to retry." });
         try {
-          const store = await resolveStore(input.store, context.cwd, input.harness);
+          const store = await resolveStore(input.store, context.controlRoot);
           if (typeof store.delete !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support delete" });
           await store.delete({ kind, key: input.key });
           return ok(id, { kind, key: input.key, deleted: true });
