@@ -66,7 +66,7 @@ Command-only supplements:
 
 ## 1. Research
 
-Survey harness execution / catalog via `mstar status validate` / `mstar catalog list`（ACTIVE：store.db），以及 `{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`；glob planning artifacts（roadmap/deferred/features/backlog/TODO/plan Markdown）作历史线索，不替代 store 权威。读 `STRATEGY.md` 与可选 knowledge README 散文；Research candidates 从 catalog 发现，不从 README Active 登记行推导。优先 prior iteration 未完成事项。
+First resolve the selected catalog project (`_default` when unassigned), then query `mstar roadmap show --project <id>` and `mstar milestone list --project <id>` for the store-authoritative unfinished route scope and structured goals; record known absence explicitly. Roadmap/milestone rules → **`mstar-project-governance`**. Survey harness execution / catalog via `mstar status validate` / `mstar catalog list`（ACTIVE：store.db），以及 `{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`；glob planning artifacts（roadmap/deferred/features/backlog/TODO/plan Markdown）仅作历史证据，绝不替代 store 读取，也不从 README 索引行或 catalog 路径回退读取路线内容。读 `STRATEGY.md` 与可选 knowledge README 散文；Research candidates 从 catalog 发现，不从 README Active 登记行推导。优先 store 中 prior iteration 未完成事项。
 
 ## 2. Explore Directions
 

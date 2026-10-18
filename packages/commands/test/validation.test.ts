@@ -280,6 +280,38 @@ describe("validation command family", () => {
     mkdirSync(rolesDir);
     expect((await definition("roles.validate").execute({ rolesDir, skillsDir: cwd }, context(cwd))).status).toBe("refused");
   });
+  test("roles validation lints the engine-absent archive's reference files and tolerates a missing refs dir", async () => {
+    const skillsRoot = path.join(tempRoot(), "skills");
+    const rolesDir = path.join(skillsRoot, "mstar-roles");
+    mkdirSync(rolesDir, { recursive: true });
+    mkdirSync(path.join(skillsRoot, "mstar-fixture"), { recursive: true });
+    writeFileSync(
+      path.join(skillsRoot, "mstar-fixture", "SKILL.md"),
+      "---\nname: mstar-fixture\n---\n\n## Load Order\n\nRead `mstar-harness-core` first.\n",
+    );
+    const archive = path.join(skillsRoot, "mstar-engine-legacy");
+    mkdirSync(path.join(archive, "references"), { recursive: true });
+    writeFileSync(
+      path.join(archive, "SKILL.md"),
+      "---\nname: mstar-engine-legacy\n---\n\n## Load Order\n\nFollow the host-selected lifecycle authority first.\n",
+    );
+    writeFileSync(path.join(archive, "references", "field-history.md"), "Engine-present fields → `mstar-fixture`.\n");
+
+    const input = { rolesDir, skillsDir: skillsRoot };
+    const result = await definition("roles.validate").execute(input, context(skillsRoot));
+    expect(
+      violationsOf(result).some(
+        ({ code, message }) =>
+          code === "roles.loadorder.legacy.archive.reference" && message.includes("mstar-fixture"),
+      ),
+    ).toBe(true);
+
+    // S-1: the references dir is read best-effort — its absence is not a crash
+    // and reports no archive-reference row.
+    rmSync(path.join(archive, "references"), { recursive: true, force: true });
+    const withoutRefs = await definition("roles.validate").execute(input, context(skillsRoot));
+    expect(violationsOf(withoutRefs).some(({ code }) => code === "roles.loadorder.legacy.archive.reference")).toBe(false);
+  });
   test("roles validation scans root-relative directories from a nested invocation and preserves absolute paths", async () => {
     const projectRoot = path.join(tempRoot(), "project");
     const invocationCwd = path.join(projectRoot, "packages", "nested");

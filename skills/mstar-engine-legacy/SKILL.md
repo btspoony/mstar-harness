@@ -7,14 +7,14 @@ description: "Morning Star engine-absent safety and historical-field archive. Us
 
 ## Load Order
 
-- 先 Read **`mstar-harness-core`**（SKILL.md；冲突时以 core 为准）。
-- **条件加载**：仅当宿主**无 engine 能力**时读取本 skill 及其 references —— 无 `mstar` CLI、无 engine import、engine 约束未激活。engine 约束激活（或宿主含 engine 能力）时**不加载**：此时运行时 skills 的 engine-check 指针 + 短契约文本为权威（见 core 索引行）。
+- Follow the host-selected lifecycle authority first; this archive never overrides runtime authorization and names no other `mstar-*` skill (inbound-only).
+- **条件加载**：仅当宿主**无 engine 能力**时读取本 skill 及其 references —— 无 `mstar` CLI、无 engine import、engine 约束未激活。engine 约束激活（或宿主含 engine 能力）时**不加载**：此时运行时 skills 的 engine-check 指针 + 短契约文本为权威。
 - 本 skill 是**单一条件归档**：承接因 engine 校验而从运行时 skills 中移除的 contract 全文，engine-absent 宿主在此找回完整文本。归档只提供字段历史与安全/流程散文——**不**提供文件执行路径；engine-absent 宿主的执行状态走对话追踪（no-plan mode）。
 
 ## Scope
 
 - 归档**被承接的完整契约散文**（Task 2 displaced prose 的单一收容处）：
-  1. `status.json` v1→v2 字段历史表（字段、severity、lifecycle、jq/flock 示例）
+  1. `status.json` v1→v2 字段历史表（字段、severity、lifecycle、jq/flock 示例）与 `references/migration-source-shapes.md`（root/snapshot/register 历史形状；无执行路径或 live writer）
   2. Concurrent-write and checkout safety without recreated claim/bind/transfer APIs
   3. 各宿主 QC 座次 N=3/N=1 重述（omp / opencode / cursor / codex / kimi / zcode / dsh）
   4. 反递归完整清单（leaf executor checklist、红线、NEVER 规则）
@@ -31,6 +31,7 @@ description: "Morning Star engine-absent safety and historical-field archive. Us
 | 需要 | 打开 |
 |------|------|
 | status 字段 / severity / lifecycle / 迁移 / jq-flock 示例 | `references/status-field-history.md` |
+| Historical root/snapshot/register shapes, provenance, closure, read aliases and retired rollups | `references/migration-source-shapes.md` |
 | Checkout/atomic safety; no supported writer means report capability, never edit protected state | `references/lease-protocol.md` |
 | 各宿主 QC 座次 N=3/N=1 重述 | `references/qc-seat-n-restatements.md` |
 | 反递归完整清单（leaf checklist + 红线） | `references/anti-recursion-checklists.md` |
@@ -40,6 +41,7 @@ description: "Morning Star engine-absent safety and historical-field archive. Us
 
 - **不加载条件**：engine 约束激活，或宿主含 engine 能力（`mstar` CLI / engine import 可用）→ 本 skill 不加载。
 - **归档唯一性**：完整契约文本只存在于本文件；不得同时在运行时 skills 重复维护全文（运行时只放指针 + engine-check）。
+- **Inbound-only**：运行时 skills 可指向本归档（条件归档指针），本归档**永不点名其它 `mstar-*` skill**——指代运行时契约时用中性描述（如 the runtime dispatch rules / the current field reference / the host references）；engine lint 以 `roles.loadorder.legacy.archive.reference` 强制。
 - **权威性**：engine-absent 时，本文件的完整文本是字段历史与安全/流程参考；engine-present 时，运行时 skills + engine 校验是权威，本文件不是。
 - **不改契约语义**：承接文本的字段名、severity 枚举、N 规则与反递归清单逐字保留；只做整理与归档（并移除文件执行路径的退役措辞），不重写规则。
 - **无文件执行路径**：不得以 `status.json` / snapshot / lease 文件重建执行状态；engine-absent 宿主的执行状态 = 对话追踪（no-plan mode），门禁（QC/QA）仍适用。
@@ -52,4 +54,4 @@ description: "Morning Star engine-absent safety and historical-field archive. Us
 ## References
 
 - 本 skill 的 references（见 When Workflow 表）。
-- 权威运行时契约（engine-present 时读）：`mstar-artifacts`（status v2 / register）、`mstar-iteration`、`mstar-dispatch-gates`、`mstar-host`。
+- Current execution, issue and lifecycle authority belongs to the runtime field reference and domain operations; this archive supplies history only.

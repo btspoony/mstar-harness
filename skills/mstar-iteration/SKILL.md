@@ -9,6 +9,8 @@ description: "Use when starting, driving, resuming, or closing a Morning Star it
 
 **Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. Phase 2 implement 波次（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**；Phase 2 QC 前 → **`mstar-review-qc`**。Git/worktree 载体（有 git 写或 lease 时）→ **`mstar-branch-worktree`**。**Phase 1 角色派发 preflight**（每次 invoke 前的 assignment preflight；`enforcement: hard` fail-fast）→ **`references/command-shared-invariants.md`**（本 skill 直接触发时不依赖 command 层）。On conflict, **`mstar-harness-core` wins**.
 
+Phase 1 roadmap/milestone reads and Phase 3 close updates → **`mstar-project-governance`**, the sole owner of project roadmap/milestone read/write rules.
+
 **Phase detail 不在本 skill 正文**：按下方 **Phase route map** 只加载当前动作对应的一行 detail——**禁止**无条件通读全部 phase references。
 
 The primary coordinator owns all rows of the selected iteration and dispatches ordinary leaf tasks. Row configuration remains revisable during active execution; `progress` records the start and review states, and direct `complete` verifies QC/QA and the actual serial merge before writing `Done`. No row-specific PM launch or binding is required. Command entry accepts no arguments; reject nonempty arguments instead of broadening their scope.

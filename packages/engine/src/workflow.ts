@@ -261,12 +261,14 @@ export type IntegrationMergeLease = {
 
 /**
  * Validate one snapshot top-level `integration_merge_lease` object
- * (status-and-residuals.md § Snapshot top-level `integration_merge_lease`
- * (v3)): required `holder` / `claimed_at` / `plan_id` / `source_branch` /
+ * (`mstar-engine-legacy/references/migration-source-shapes.md`
+ * § "Migration-source top-level fields" — the retired snapshot top-level
+ * shape): required `holder` / `claimed_at` / `plan_id` / `source_branch` /
  * `target_branch`; optional `session_label`. Absent = unclaimed; `null` and
  * tombstone objects are invalid (writers delete the key on release).
  * Integration merges into `spec_integration_branch` are serial — one holder
- * at a time (phase-2-worktree-lease.md § Integration merge lease).
+ * at a time (status-and-residuals.md § "Integration merge exclusion (ACTIVE
+ * `execution_integration_leases`)").
  */
 export function validateIntegrationMergeLease(lease: unknown): GateResult {
   const violations: ValidationResult[] = [];

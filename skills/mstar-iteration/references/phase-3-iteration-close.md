@@ -51,8 +51,9 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 ## 3.3 更新 roadmap
 
 1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：current iteration 标记为 **`delivered`**（或等价明确措辞），next iteration 记下即将开始的内容、触发条件和 owner。compass 是执行叙事，不是项目 roadmap 内容权威。
-2. 对该 catalog project，从 roadmap 域**读** store 当前正文及 project/roadmap revisions。存在正文时**导出为独立 Markdown 候选**并编辑候选中的 status / goal items；已知项目无记录时明确创建新候选并在 replacement 中预期 absent，**不**从 `roadmap.md` 补读。review 后使用 revision-guarded roadmap replacement 更新完整正文；若版本变化，重读权威并重新 review，不能盲目重试。**绝不编辑 live `projects/<id>/roadmap.md`**。读写/校验的唯一规则家 → **`mstar-project-governance`**；命令选项 → built `mstar roadmap --help`。
-3. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
+2. 对该 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` **读** store 当前正文及 project/roadmap revisions，再按 **`mstar-project-governance`** 的唯一读写/校验规则复核独立候选并完成 revision-guarded roadmap replacement；已知项目无记录时明确记录 absence，不走文件 fallback。
+3. Roadmap replacement 后，先用 `mstar milestone list --project <id>` 读取项目目标，再按 built verb help 将匹配 milestone 的 ID 传给 `mstar milestone status`，读取关联 issue 证据。对本迭代范围对应的 milestone，通过 `mstar milestone update` 使用观察到的 store revision 显式更新状态；标记 `delivered` 前须满足 **`mstar-project-governance`「Milestone」** 的交付前提，绝不隐式关闭 issue。在 compass `## Roadmap Position` 记录 milestone ID、状态更新及关联 issue 证据；无匹配 milestone 时记 `N/A`，不得以迭代交付节点代替项目 milestone。写入规则与选项仍归 **`mstar-project-governance`** / built verb help。
+4. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
 At close, review the local ignored per-edit attribution record for this iteration against delivered edits and plan-QC references (`mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution). Record actual correction time for a missed row and disclose the unobserved prior edit; unknown model remains `unknown`. Do not paste real runtime provenance into tracked artifacts or turn this review into a machine completeness check.
 
@@ -71,6 +72,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 compound 完成；package 已盘点（提升 / 保留 / 跳过已记入 Summary）；新增 knowledge doc 均完成 store catalog 登记（或记明无可结晶原因）
 - [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；项目 roadmap 的 store 替换已以观察到的版本完成；STRATEGY 已按需更新
+- [ ] §3.3 已读取项目 milestone list/status；匹配 milestone 已按观察到的 store revision 显式更新并记录证据，`delivered` 满足治理规则的交付前提且未隐式关闭 issue；无匹配项已记 `N/A`
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Compound Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
 - [ ] PR base = 当前权威 workflow `branch.target`（ACTIVE：执行行；与 compass 一致），不是未记录的 `main`

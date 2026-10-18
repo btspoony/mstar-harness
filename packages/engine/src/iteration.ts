@@ -318,8 +318,8 @@ function registeredPlanIds(compassDoc: CompassDoc): string[] {
 
 /**
  * Locate the snapshot plans[] row for a plan id. Reads accept `id` or
- * `plan_id` (status-and-residuals.md § Compatibility: read accepts both,
- * write prefers `id`).
+ * `plan_id` (`mstar-engine-legacy/references/migration-source-shapes.md`
+ * § "Plan-key compatibility": read accepts both, write prefers `id`).
  */
 function findPlanRow(snapshotDoc: SnapshotDoc, planId: string): Record<string, unknown> | null {
   if (!Array.isArray(snapshotDoc.plans)) return null;

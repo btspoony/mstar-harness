@@ -17,7 +17,7 @@ import { validateStatus } from "@mstar-harness/engine";
 
 ## Why the archive exists
 
-When engine validators enforce a contract (status schema, lease fields, QC seat N, role binding, anti-recursion gates, path resolution, …), the runtime skills no longer need to carry the full contract prose — they keep the short pointer + the engine check. `mstar-engine-legacy` is the **single conditional archive** of that displaced full prose: engine-absent hosts read it here; engine-present hosts never load it (`mstar-harness-core` load condition).
+When engine validators enforce a contract (status schema, lease fields, QC seat N, role binding, anti-recursion gates, path resolution, …), the runtime skills no longer need to carry the full contract prose — they keep the short pointer + the engine check. `mstar-engine-legacy` is the **single conditional archive** of that displaced full prose: engine-absent hosts read it here; engine-present hosts never load it (the runtime load contract's conditional-load rule).
 
 ## Reading the boilerplate when the engine is absent
 

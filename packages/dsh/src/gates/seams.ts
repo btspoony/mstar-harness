@@ -19,7 +19,9 @@ import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assertLightDarkParity,
+  collectLegacyArchiveReferenceTexts,
   lintLoadOrder,
+  mergeLegacyArchiveReferences,
   referenceExists,
   resolveReviewDir,
   validateDesignTokenFrontmatter,
@@ -223,7 +225,10 @@ export function validateCompoundDoc(doc: string, _path: string, harnessDir: stri
  * against the on-disk references layout, plus load-order declarations
  * across every sibling `mstar-*` skill (unreadable sibling SKILL.md files
  * are skipped — best-effort reads for a lint that must never take the gate
- * down). The `skillsRoot` override exists for the validate tool (its
+ * down). The engine-absent archive is linted over its whole text face, so its
+ * `references/*.md` are merged into its SKILL.md text (missing/unreadable
+ * references dirs contribute nothing — no guard needed at the call site).
+ * The `skillsRoot` override exists for the validate tool (its
  * explicit `skills_root` parameter); the gate path keeps the default
  * (the parent of the roles dir).
  * @param rolesDir - the mstar-roles skill directory.
@@ -243,7 +248,8 @@ export function validateRolesState(rolesDir: string, skillsRoot: string = dirnam
       // skip unreadable sibling — the mapping checks still stand
     }
   }
-  violations.push(...lintLoadOrder(skillTexts).violations)
+  const linted = mergeLegacyArchiveReferences(skillTexts, collectLegacyArchiveReferenceTexts(skillsRoot))
+  violations.push(...lintLoadOrder(linted).violations)
   return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
 }
 
