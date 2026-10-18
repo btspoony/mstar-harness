@@ -36,7 +36,7 @@ import {
   createCatalogInvalidation,
   DEFAULT_CATALOG_TTL_MS,
 } from './gates/catalog.ts'
-import type { CatalogCacheEntry, TurnDigest } from './gates/catalog.ts'
+import type { CatalogCacheEntry, EmissionDigest } from './gates/catalog.ts'
 import { installEngineStatusEndpoint } from './engine-status-endpoint.ts'
 import { writeIntentListener, editIntentListener } from './gates/status.ts'
 import type { StatusGateAdvisory } from './gates/status.ts'
@@ -819,15 +819,15 @@ export function apply(ctx: Context, config: Config): void {
   // same cwd) can never be served each other's selection; a session with no
   // stable id is built uncached.
   //
-  // Digest-gated re-emission: per session+workspace the row is injected once
-  // per turn and re-injected only when its rendered text changed (a
-  // 20-step turn shows the catalog once, not 20 times — see
-  // preStepCatalogListener / agentDigestKey).
+  // Change-driven re-emission (D2): per session+workspace the row is appended
+  // on first emission, when its rendered text changed, or when the
+  // panel-relevant payload projection changed — never solely because a new
+  // turn started (see preStepCatalogListener / panelDigestOf / agentDigestKey).
   const ttlMs = config.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS
   const catalogCache = new Map<string, CatalogCacheEntry>()
-  // Per session+workspace turn digests for the digest-gated re-emission
-  // (inject once per turn; re-inject only when the row changed).
-  const catalogDigests = new Map<string, TurnDigest>()
+  // Per session+workspace emission digests (last rendered text + panel
+  // projection) for the change-driven re-emission.
+  const catalogDigests = new Map<string, EmissionDigest>()
   // Catalog-invalidation hook : the apply-scoped session-keyed reverse map +
   // invalidation closure, created HERE with the same lifetime as the cache
   // above (an HMR fiber restart recreates both — module-level state would

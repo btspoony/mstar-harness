@@ -4,10 +4,11 @@
  * Two seams under test:
  *
  * (a) agent/pre-step iteration gate — the existing engine-status catalog
- * listener ALSO appends one `mstar-iteration-gate` catalog row (engine
- * `evaluatePhaseGate` against the control-path status.json + the steering
- * delivery-compass.md), cached at BOOT (no per-step disk I/O; a mid-session status/compass
- * change does not re-watermark until a config reload re-runs apply()).
+ * listener appends ONE unified `mstar-engine` row whose iteration-gate section
+ * comes from the engine's `evaluatePhaseGate` against the ACTIVE execution
+ * workflow + the steering delivery-compass.md, read through the catalog cache
+ * (no per-step disk I/O; a mid-session status/compass change lands at the next
+ * TTL refresh, and an unchanged row is never re-appended by a new turn).
  * Advisory contract: calls `next()`, never vetoes, never replaces the
  * delegated messages. No status.json + steering compass at boot → the row
  * is simply absent (the engine-status catalog still appends).
@@ -226,7 +227,8 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     expect(decision.kind === 'enter' && decision.messages.length).toBe(inbox.length + 1)
     expect(decision.kind === 'enter' && decision.messages.slice(0, -1)).toEqual(inbox)
 
-    // ONE unified catalog row: watermark + iteration-gate section + state section.
+    // ONE unified catalog row: the iteration-gate section + the state section
+    // (a projection of the payload — no watermark trio).
     const row = lastMessage(decision)
     expect(row?.role).toBe('user')
     expect(row?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
@@ -323,17 +325,28 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     expect(decision).toEqual({ kind: 'enter', messages: [] })
   })
 
-  it('process-stability : gate result cached at boot — seeding an ACTIVE workflow after boot does not add another row, no per-step I/O', async () => {
+  it('process-stability : the cached build is served — seeding an ACTIVE workflow after boot changes nothing and the new turn re-appends no row', async () => {
     const app = booted = await bootApp()
     const inbox = [inboxMessage()]
+    // A session-scoped payload: an agent with no stable session id is built
+    // UNCACHED (every step re-reads), so only a session identity can prove the
+    // cache-hit / no-per-step-I/O claim below.
+    const stepPayloadFor = (turn: number) => ({
+      agent: { session: { header: { id: 's-process-stability' } } },
+      messages: inbox,
+      turn,
+      step: 1,
+      signal: new AbortController().signal,
+    } as never)
 
-    // Boot without an ACTIVE workflow → only the engine-status row.
-    const before = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    // Boot without an ACTIVE workflow → the one engine-status row.
+    const before = await app.ctx.waterfall('agent/pre-step', stepPayloadFor(1), defaultEnter(inbox))
     expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length + 1)
     expect(lastMessage(before)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
 
-    // Adding the ACTIVE workflow + compass mid-session does NOT re-watermark
-    // within the catalog TTL: the cache is built at boot.
+    // Adding the ACTIVE workflow + compass mid-session does NOT change the row
+    // within the catalog TTL: the cache is built on first use, and the
+    // unchanged row is not re-appended by the start of a new turn.
     await seedActiveWorkflow(app.harnessDir, 'iter-00000808-wt', [PLAN_TODO], {
       type: 'iteration',
       compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',
@@ -341,9 +354,11 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     await seedHarness(app.harnessDir, {
       'iterations/iter-00000808-wt/delivery-compass.md': COMPASS_ACTIVE,
     })
-    const after = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox, 2), defaultEnter(inbox))
-    expect(after.kind === 'enter' && after.messages.length).toBe(inbox.length + 1)
-    expect(lastMessage(after)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
+    const after = await app.ctx.waterfall('agent/pre-step', stepPayloadFor(2), defaultEnter(inbox))
+    expect(after.kind).toBe('enter')
+    if (after.kind !== 'enter') return
+    // The inbox is delegated unchanged — no second copy of the identical row.
+    expect(after.messages).toEqual(inbox)
   })
 
   // Disposition — malformed status.json handling is a retired file-route assertion; ACTIVE execution authority reports store and workflow errors.

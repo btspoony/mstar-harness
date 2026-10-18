@@ -16,7 +16,7 @@
  *     (default) and denies (hard);
  *  4. skill-lint gate — broken SKILL.md write flagged;
  *  5. seam gates — broken DESIGN.md write flagged;
- *  6. agent/pre-step — engine-status watermark + iteration-gate row composed
+ *  6. agent/pre-step — engine-status projection (iteration gate + state) composed
  *     into the step messages (AC-7 "full mstar-gated session");
  *  7. v2 seam tools — mstar_sdd_workspace creates the SDD dir,
  *     mstar_iteration_gate evaluates the committed fixtures;
@@ -380,11 +380,11 @@ describe('seam gates — broken DESIGN.md flagged on write', () => {
 })
 
 /* ===========================================================================
- * 7. agent/pre-step — iteration-gate row + catalog watermark
+ * 7. agent/pre-step — engine-status projection + iteration-gate row
  * ========================================================================== */
 
-describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
-  it('boot with status + steering compass → pre-step composes the engine-status watermark AND the iteration-gate row', async () => {
+describe('agent/pre-step — engine-status projection + iteration-gate row', () => {
+  it('boot with status + steering compass → pre-step composes the engine-status row (a projection) AND the iteration-gate row', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-e2e-prestep-'))
     const harnessDir = join(root, 'harness')
     // The ACTIVE workflow snapshot carries the sole compass link.
@@ -399,7 +399,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    // ONE unified catalog row (watermark + iteration gate + workspace state).
+    // ONE unified catalog row (iteration gate + workspace state).
     expect(decision.messages.length).toBe(inbox.length + 1)
     expect(decision.messages.slice(0, -1)).toEqual(inbox)
 
@@ -410,7 +410,8 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // the same builder the pre-step listener rendered the row from.
     const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
 
-    // Watermark fields — AC-6 shape.
+    // Payload facts (the panel meta dock renders them — the row text does not
+    // repeat them: D1 removed the watermark trio from the projection).
     expect(payload.version).toBe(ENGINE_VERSION)
     expect(payload.harnessDir).toBe(harnessDir)
     expect(payload.enforcement).toEqual({ hard: false, source: 'none' })
@@ -438,12 +439,14 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
       targetBranch: 'dev-dsh',
     })
 
-    // The composed session log carries the model-facing block.
+    // The composed session log carries the model-facing block: the wrapper +
+    // the iteration-gate / workspace-state lines, never the watermark trio
+    // (those facts live in the payload and in the always-on system prompt).
     const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
     expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain(`mstar version: ${ENGINE_VERSION}`)
-    expect(text).toContain(`harness dir: ${harnessDir}`)
-    expect(text).toContain('enforcement: soft') // no compass hardens, no Config override
+    expect(text).not.toContain('mstar version:')
+    expect(text).not.toContain('harness dir:')
+    expect(text).not.toContain('enforcement:')
     expect(text).toContain('iteration: e2e-iter')
     expect(text).toContain('transition: phase-2-execute')
     expect(text).toContain('gate: PASS')
@@ -537,9 +540,10 @@ describe('bundledSkillDir — launch-cwd resolution', () => {
     }
   })
 
-  it('an explicit relative root without deployment keys boots safely: engine-status watermark always appends', async () => {
-    // No configured harness and no session workspace: skill configuration
-    // must not prevent the advisory catalog from composing its watermark.
+  it('an explicit relative root without deployment keys boots safely: no harness dir → no engine-status row', async () => {
+    // No configured harness and no session workspace: skill configuration must
+    // not prevent the advisory catalog from composing — but with no
+    // `{HARNESS_DIR}` there is no state to compose, so no row is appended.
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, bundledSkillDir: './skills', harnessDir: null })
     expect(booted.ctx.dshHostAdapter).toBeInstanceOf(DshHostAdapter)
 
@@ -547,10 +551,8 @@ describe('bundledSkillDir — launch-cwd resolution', () => {
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
     const statusRow = decision.messages.find((m) => m.source.kind === 'mstar-engine')
-    expect(statusRow).toBeDefined()
-    const text = statusRow?.content[0]?.type === 'text' ? statusRow.content[0].text : ''
-    expect(text).toContain('<mstar_engine_status>')
-    expect(text).toContain(`mstar version: ${ENGINE_VERSION}`)
+    expect(statusRow).toBeUndefined()
+    expect(decision.messages).toEqual([])
   })
 })
 

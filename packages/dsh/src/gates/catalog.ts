@@ -2,9 +2,13 @@
  * Engine-status pre-step catalog — the ONE unified `mstar-engine`
  * row appended at `agent/pre-step`. *
  * `preStepCatalogListener` delegates through `next()` and appends the unified
- * catalog message (watermark fields + iteration phase-gate section +
- * workspace-state digest) to the composed step messages, digest-gated per
- * agent+workspace turn. The per-workspace TTL cache
+ * catalog message (iteration phase-gate section + workspace-state digest) to
+ * the composed step messages, change-gated per session+workspace: first
+ * emission, a rendered-text change, or a panel-projection change. The block is
+ * a PROJECTION of the payload — the version / harness-dir / enforcement
+ * watermark stays in the payload (the panel renders it) and in the always-on
+ * system prompt, never in the row text. A workspace with no resolved
+ * `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache
  * (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps
  * the hot path a timestamp compare + Map lookup between refreshes.
  *
@@ -32,8 +36,9 @@
  *
  * Module boundary: no barrel — the entry imports by explicit relative path;
  * the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`,
- * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `TurnDigest`,
- * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal.
+ * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`,
+ * `panelDigestOf`, `createCatalogInvalidation` / `CatalogInvalidation`) are
+ * entry-internal.
  */
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
@@ -141,7 +146,9 @@ function syncAuthoritySelection(_harnessDir: string, _hint?: SessionHint): Workf
 
 /**
  * The payload the ONE unified engine-status catalog row renders from (the
- * watermark + iteration gate + workspace-state digest). Every field is
+ * renderer projects the iteration gate + workspace-state digest out of it; the
+ * version / harness-dir / enforcement watermark stays payload + panel data).
+ * Every field is
  * boot/workspace-resolved — the unified mstar version is a
  * process-immutable manifest read, the compass enforcement resolves like
  * the gates themselves, and the iteration/state sections come from the
@@ -243,11 +250,12 @@ export interface CatalogInvalidation {
    */
   invalidate(harnessDir: string): void
   /**
-   * Delete ONE session's cache entry (and its re-emission digest) — the
-   * picker commit path: the session's durable hint changed, so the next
-   * pre-step rebuilds from the acknowledged binding and re-emits the row
-   * within the same turn instead of serving the pre-pick payload until the
-   * TTL expires.
+   * Delete ONE session's cache entry (and its emission digest) — the picker
+   * commit path: the session's durable hint changed, so the next pre-step
+   * rebuilds from the acknowledged binding and re-emits the row even if the
+   * rendered text is unchanged. A picker commit is an explicit re-anchor, so
+   * deleting the digest intentionally re-arms the emission (documented
+   * behavior; it is not part of the per-turn path).
    */
   invalidateSession(harnessDir: string | null, sessionId: string | undefined): void
 }
@@ -255,7 +263,7 @@ export interface CatalogInvalidation {
 /** Create the apply-scoped invalidation bound to ONE catalog cache + its digests. */
 export function createCatalogInvalidation(
   cache: Map<string, CatalogCacheEntry>,
-  digests: Map<string, TurnDigest>,
+  digests: Map<string, EmissionDigest>,
 ): CatalogInvalidation {
   /** harnessDir → (session id → cache key). */
   const keysByHarnessDir = new Map<string, Map<string, string>>()
@@ -288,8 +296,9 @@ export function createCatalogInvalidation(
       if (key !== undefined) cache.delete(key)
       // The digest is identity-keyed (JSON tuple of session id + cwd): drop
       // every entry of this session so the next pre-step re-emits the rebuilt
-      // row. The prefix is the injective first-field encoding, not a raw
-      // delimiter, so a session id that is a prefix of another cannot steal it.
+      // row (the picker commit is an explicit re-anchor). The prefix is the
+      // injective first-field encoding, not a raw delimiter, so a session id
+      // that is a prefix of another cannot steal it.
       const prefix = `[${JSON.stringify(sessionId)},`
       for (const digestKey of [...digests.keys()]) {
         if (digestKey.startsWith(prefix)) digests.delete(digestKey)
@@ -438,15 +447,17 @@ async function readBuildFacts(harnessDir: string | null, hint: SessionHint | und
   return { ...facts, authority }
 }
 
-/** Model-facing rendering of the unified engine-status catalog (the `<mstar_engine_status>` block). */
+/**
+ * Model-facing rendering of the unified engine-status catalog (the
+ * `<mstar_engine_status>` block): the wrapper plus the iteration phase-gate
+ * and workspace-state lines. This is a PROJECTION of the payload, not a
+ * byte-identical render: the version / harness-dir / enforcement watermark
+ * stays in the payload (the panel meta dock renders it) and stays
+ * model-visible once in the always-on system prompt (`mstar:engine-status`
+ * digest + `mstar:harness-rules`), so the row never repeats it.
+ */
 function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
-  const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
-  const lines = [
-    '<mstar_engine_status>',
-    `mstar version: ${source.version}`,
-    `harness dir: ${source.harnessDir ?? 'none'}`,
-    `enforcement: ${enforcement}`,
-  ]
+  const lines = ['<mstar_engine_status>']
   const iteration = source.iteration
   if (iteration !== undefined) {
     const gate = iteration.gate
@@ -506,6 +517,33 @@ function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
   }
   lines.push('</mstar_engine_status>')
   return lines.join('\n')
+}
+
+/**
+ * The PANEL-relevant projection of one payload, as the emission digest's
+ * comparison key: the payload JSON with `state.storeFacts.storeRevision`
+ * normalized to `null`.
+ *
+ * Why exactly that field: emitting persists the payload (`persistEngineStatusSnapshot`),
+ * and that store write advances the shared store revision 1:1 — so comparing
+ * raw payloads would read the emission's own side effect as a change and
+ * re-emit every step, recreating the per-turn repetition the change-driven
+ * cadence removes. Every other payload field is either static or a real fact
+ * the panel renders (e.g. `state.residualFindings[].title` changes the panel
+ * without changing the row text, so it must still trigger an emit + persist).
+ *
+ * Pure: the input payload is never mutated (shallow copies of the payload and
+ * its state; `storeFacts` is replaced with a normalized copy).
+ * @param payload - the payload the current step composed.
+ * @returns the JSON comparison key (stable across a revision bump).
+ */
+export function panelDigestOf(payload: MstarEngineStatusPayload): string {
+  const state = payload.state
+  if (state === null || state.storeFacts === undefined) return JSON.stringify(payload)
+  return JSON.stringify({
+    ...payload,
+    state: { ...state, storeFacts: { ...state.storeFacts, storeRevision: null } },
+  })
 }
 
 /**
@@ -1067,16 +1105,16 @@ function iterationGateSource(
  * unified `mstar-engine` catalog message to the composed step
  * messages, so the durable session log carries it (model-visible ⟺ logged,
  * MessageSource form): the `<mstar_engine_status>` block renders the
- * watermark fields (version, harness dir, enforcement), plus the iteration
- * phase-gate section when a steering compass + status.json resolve, plus
- * the workspace-state digest section when the workspace has a status.json.
+ * iteration phase-gate section when a steering compass + an ACTIVE execution
+ * workflow resolve, plus the workspace-state digest section.
  *
- * Digest-gated re-emission (the documented P3 dedup, landed early): per
- * agent+workspace, the row is injected ONCE per turn — later steps of the
- * same turn append it again only when its rendered text CHANGED (a TTL
- * refresh picked up new state). The durable session log therefore carries
- * the row on the first step of every turn plus each change, not on every
- * step; a 20-step turn shows the catalog once, not 20 times.
+ * Change-driven re-emission (D2): per session+workspace, the row is appended on
+ * first emission, when its rendered text changed, or when the panel-relevant
+ * payload projection changed ({@link panelDigestOf} — the panel renders more
+ * than the row, e.g. the open-issue detail rows). The start of a new turn is
+ * NOT a trigger: an unchanged workspace shows the row once, not once per turn.
+ * A workspace with no resolved `{HARNESS_DIR}` (`state === null`) composes no
+ * row at all and records no digest (the projection would be an empty wrapper).
  *
  * An aborted step publishes nothing: the delegated decision
  * is returned unchanged (tool-skill precedent; a narrowed abort race —
@@ -1100,8 +1138,8 @@ function iterationGateSource(
  * @param ttlMs - catalog refresh interval in milliseconds.
  * @param invalidation - the apply-scoped session-keyed invalidation (ledger
  * records evict every session of a harness; a picker commit evicts one).
- * @param digests - per session+workspace turn digests (last rendered text)
- * for the digest-gated re-emission.
+ * @param digests - per session+workspace emission digests (last rendered text
+ * + its panel projection) for the change-driven re-emission.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
  */
@@ -1111,18 +1149,18 @@ export async function preStepCatalogListener(
   cache: Map<string, CatalogCacheEntry>,
   ttlMs: number,
   invalidation: CatalogInvalidation,
-  digests: Map<string, TurnDigest>,
+  digests: Map<string, EmissionDigest>,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
 ): Promise<PreStepDecision> {
   const decision = await next()
   if (decision.kind === 'reject' || payload.signal.aborted) return decision
   try {
-    // The watermark harness dir resolves from the WORKSPACE of the session
-    // whose agent enters the step (the session cwd) — never the process
-    // cwd. Each session then keys its OWN cache entry (D4), built on first
-    // use and TTL-refreshed (Config `catalogTtlMs`; the hot path is a
-    // timestamp compare + Map lookup between refreshes).
+    // The harness dir resolves from the WORKSPACE of the session whose agent
+    // enters the step (the session cwd) — never the process cwd. Each session
+    // then keys its OWN cache entry (D4), built on first use and TTL-refreshed
+    // (Config `catalogTtlMs`; the hot path is a timestamp compare + Map lookup
+    // between refreshes).
     const cwd = sessionCwdOf(payload.agent)
     const sessionId = sessionHeaderIdOf(payload.agent)
     const harnessDir = resolver.forWorkspace(cwd)
@@ -1133,15 +1171,22 @@ export async function preStepCatalogListener(
     // hint and reports the degrade once through the logger.
     const hint = sessionHintForCatalog(harnessDir, payload.agent)
     const catalogPayload = await catalogPayloadFor(ctx, cache, invalidation, harnessDir, sessionId, cwd ?? '', hint, ttlMs)
+    // No resolved `{HARNESS_DIR}` ⇒ the payload carries no state section, and
+    // after D1 the rendered block would be an empty `<mstar_engine_status>`
+    // wrapper: compose no row and record no digest (there is nothing that could
+    // change later without a harness dir appearing).
+    if (catalogPayload.state === null) return decision
     const messages = [...decision.messages]
     const text = renderEngineStatusCatalog(catalogPayload)
-    // Digest gate: inject the ONE unified row on the first step of a turn,
-    // or when its rendered text changed since the last injection (a TTL
-    // refresh picked up new state). Per session+workspace, so different
-    // sessions/workspaces keep independent digests.
+    const panelKey = panelDigestOf(catalogPayload)
+    // Change gate (D2): inject the ONE unified row on the first emission, when
+    // its rendered text changed since the last emission, or when the
+    // panel-relevant payload projection changed (the panel renders more than
+    // the row). A new turn alone is NOT a trigger. Per session+workspace, so
+    // different sessions/workspaces keep independent digests.
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
-    if (prior === undefined || prior.turn !== payload.turn || prior.text !== text) {
+    if (prior === undefined || prior.text !== text || prior.panelKey !== panelKey) {
       messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
       // The persisted snapshot is written at THIS gate — the only place the
       // composed payload is known to have reached the model. A later reader
@@ -1152,7 +1197,7 @@ export async function preStepCatalogListener(
       // explicit unavailable state rather than another session's row).
       persistEngineStatusSnapshot(ctx, harnessDir, cwd, payload.turn, catalogPayload, payload.agent, authorityGenerationByPayload.get(catalogPayload))
     }
-    digests.set(digestKey, { turn: payload.turn, text })
+    digests.set(digestKey, { text, panelKey })
     return { kind: 'enter', messages }
   } catch (error) {
     ctx.logger(CATALOG_LOGGER).error(
@@ -1183,10 +1228,15 @@ function sessionHintForCatalog(harnessDir: string | null, agent: unknown): Sessi
   return selected === undefined ? identity : { ...identity, selectedWorkflowId: selected }
 }
 
-/** Per session+workspace turn digest: the rendered catalog text as of the last injection. */
-export interface TurnDigest {
-  turn: number
-  text: string
+/**
+ * Per session+workspace emission digest: the rendered catalog text and the
+ * panel-relevant payload projection ({@link panelDigestOf}) as of the last
+ * emission. A digest keys on content, not on turns — a new turn is not an
+ * emission trigger.
+ */
+export interface EmissionDigest {
+  readonly text: string
+  readonly panelKey: string
 }
 
 /**

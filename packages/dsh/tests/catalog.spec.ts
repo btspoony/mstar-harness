@@ -22,14 +22,17 @@
  * MUST call `next()` and build on the delegated decision; it never returns
  * `reject` (would block the step) and never replaces the delegated messages
  * (would drop them). It appends one `catalog`-form MessageSource named
- * `mstar-engine` whose content is the unified mstar version
- * (own manifest, single-version invariant with the bundled engine), the
- * compass enforcement mode (`resolveCompassEnforcement`), the harness dir,
- * — so the model-visible row is reconstructable from the session log
- * (MessageSource form; model-visible ⟺ logged). The watermark is
- * boot/workspace-resolved  and the append is error-contained
- * ; an aborted step returns the delegated decision unchanged
- * . Fiber disposal removes the listener (HMR-safe).
+ * `mstar-engine` whose content is the renderer's PROJECTION of the payload:
+ * the `<mstar_engine_status>` wrapper plus the iteration-gate and
+ * workspace-state lines. The version / harness dir / enforcement watermark
+ * stays in the payload (the panel meta dock renders it) and in the always-on
+ * system prompt — never in the row text, so the model-visible row is still
+ * reconstructable from the session log (MessageSource form; model-visible ⟺
+ * logged). The append is change-driven (first emission, rendered-text change,
+ * or panel-projection change; a new turn alone appends nothing) and a
+ * workspace without a resolved `{HARNESS_DIR}` composes no row at all. The
+ * append is error-contained ; an aborted step returns the delegated
+ * decision unchanged . Fiber disposal removes the listener (HMR-safe).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -53,7 +56,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
-import { buildCatalogPayload, buildCatalogPayloadWithStore, catalogCacheKey } from '../src/gates/catalog.ts'
+import { buildCatalogPayload, buildCatalogPayloadWithStore, catalogCacheKey, panelDigestOf } from '../src/gates/catalog.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
 
@@ -232,18 +235,22 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
       harnessDir: app.harnessDir,
       enforcement: { hard: false, source: 'none' },
     })
-    // The composed session log carries the model-facing text.
+    // The composed session log carries the model-facing text: the payload is a
+    // PROJECTION — the wrapper + the state lines, never the watermark trio
+    // (the payload above keeps those facts for the panel).
     expect(catalog?.content[0]?.type).toBe('text')
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain(`mstar version: ${PLUGIN_VERSION}`)
-    expect(text).toContain(`harness dir: ${app.harnessDir}`)
-    expect(text).toContain('enforcement: soft')
+    expect(text.startsWith('<mstar_engine_status>\n')).toBe(true)
+    expect(text.endsWith('\n</mstar_engine_status>')).toBe(true)
+    expect(text).not.toContain('mstar version:')
+    expect(text).not.toContain('harness dir:')
+    expect(text).not.toContain('enforcement:')
   })
 
-  it('renders the compass enforcement mode as the watermark (active hard compass → hard)', async () => {
-    // The watermark is built at boot for the explicit config (the cache is
-    // pre-seeded at apply) — the compass must exist before apply() runs to
-    // be seen by the boot build.
+  it('reads the compass enforcement mode into the payload — the rendered row no longer carries the watermark (D1)', async () => {
+    // The enforcement flag is built at boot for the explicit config (the cache
+    // is built on first use) — the compass must exist before apply() runs to
+    // be seen by the build.
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -266,19 +273,25 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
     expect(buildCatalogPayload(app.ctx, app.harnessDir).enforcement).toEqual({ hard: true, source: 'compass' })
     const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain('enforcement: hard (compass)')
+    expect(text).not.toContain('enforcement:')
   })
 
-  it('keeps the watermark stable within the catalog TTL — a compass appearing after boot does not re-watermark immediately (TTL-bounded)', async () => {
+  it('serves the cached build within the catalog TTL — a compass appearing after the build is not read, and no row is re-appended (D2)', async () => {
     const app = booted = await bootApp()
     // Prime the session cache (D4: no boot pre-seed — the first pre-step
-    // builds it). A compass that appears afterwards does not change the
-    // catalog row until the TTL expires.
-    await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    // builds it). A compass that appears afterwards is not read until the TTL
+    // expires (or a ledger invalidation drops the entry).
+    const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    expect(textOf(catalogRowOf(first).row)).not.toContain('iteration:')
     await seedHarness(app.harnessDir, {
       'iterations/00000808-catalog-test/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })
+    // A FRESH build sees the compass…
+    expect(buildCatalogPayload(app.ctx, app.harnessDir).enforcement).toEqual({ hard: true, source: 'compass' })
 
+    // …but the pre-step serves the cached build: the row is unchanged, so the
+    // new turn appends nothing (had the entry rebuilt, the new state would
+    // have changed the row and re-emitted it).
     const decision = await app.ctx.waterfall('agent/pre-step', {
       agent: { session: { header: { id: SESSION_ID } } },
       messages: [],
@@ -287,14 +300,8 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
       signal: new AbortController().signal,
     } as never, defaultEnter([]))
 
-    const catalog = lastMessage(decision)
-    expect(catalog?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
-    // The STALE watermark is observable in the rendered text (the payload is
-    // not persisted on the row, so the text is the row's own record of it):
-    // the boot build saw no compass, and the post-boot compass is not read
-    // until the TTL expires.
-    const text = catalog?.content[0]?.type === 'text' ? catalog.content[0].text : ''
-    expect(text).toContain('enforcement: soft')
+    expect(decision.kind).toBe('enter')
+    expect(decision.kind === 'enter' && decision.messages).toEqual([])
   })
 
   it('omits the iteration section when the iteration-gate row cannot be built — the appended message stays losslessly JSON-serializable (Session.append boundary)', async () => {
@@ -383,6 +390,155 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
     expect(decision).toEqual({ kind: 'enter', messages: broken })
+  })
+})
+
+describe('mstar-engine-status catalog — watermark-free projection + change-driven emission (D1/D2)', () => {
+  /** A later step of the SAME session+workspace (the durable catalog identity). */
+  const stepPayloadAt = (turn: number, messages: UserMessage[] = []) => ({
+    agent: { session: { header: { id: SESSION_ID } } },
+    messages,
+    turn,
+    step: 1,
+    signal: new AbortController().signal,
+  } as never)
+
+  it('renders an ACTIVE payload as a projection — wrapper + workflow/plans/residuals, never the watermark trio (D1)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-projection-'))
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'wf-projection', [
+      { id: 'plan-projection', title: 'Plan', file: 'plans/plan-projection.md', status: 'Todo' },
+    ], {}, SESSION_ID, root, 'wf-projection')
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const { row } = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([])))
+    const text = textOf(row)
+
+    // The wrapper and the section lines the row exists for stay.
+    expect(text.startsWith('<mstar_engine_status>\n')).toBe(true)
+    expect(text.endsWith('\n</mstar_engine_status>')).toBe(true)
+    expect(text).toContain('workflow: wf-projection (active)')
+    expect(text).toContain('plans: plan-projection(Todo)')
+    expect(text).toContain('residuals: none open')
+    // The watermark trio duplicates the always-on system prompt: the row never
+    // repeats it (it is a PROJECTION of the payload, not a byte-identical render).
+    expect(text).not.toContain('mstar version:')
+    expect(text).not.toContain('harness dir:')
+    expect(text).not.toContain('enforcement:')
+    // …while the payload keeps the facts the panel meta dock renders.
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
+    expect(payload).toMatchObject({
+      version: PLUGIN_VERSION,
+      harnessDir,
+      enforcement: { hard: false, source: 'none' },
+    })
+    expect(payload.state?.storeFacts?.storeRevision).toEqual(expect.any(Number))
+  })
+
+  it('panelDigestOf ignores ONLY the self-perturbing store revision — and never mutates the payload (D2)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-panelkey-'))
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'wf-panelkey', [], {}, SESSION_ID, root, 'wf-panelkey')
+    await seedOpenIssue(harnessDir, { title: 'panel-visible issue', severity: 'high', operationId: 'op-panelkey-1' })
+    const app = booted = await bootApp({ root, harnessDir })
+    const payload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
+    if (payload.state === null) throw new Error('expected a state section')
+    const revision = payload.state.storeFacts?.storeRevision
+    if (revision === null || revision === undefined) throw new Error('expected a store revision')
+    /** A deep copy so each case perturbs only its own field. */
+    const copy = (): MstarEngineStatusPayload => JSON.parse(JSON.stringify(payload)) as MstarEngineStatusPayload
+
+    const before = JSON.stringify(payload)
+    const baseline = panelDigestOf(payload)
+
+    // The emission's OWN store write bumps the revision 1:1 — it must not read
+    // as a change (otherwise the row re-emits every step, the defect D2 removes).
+    const bumped = copy()
+    if (bumped.state === null || bumped.state.storeFacts === undefined) throw new Error('expected store facts')
+    ;(bumped.state.storeFacts as { storeRevision: number | null }).storeRevision = revision + 1
+    expect(panelDigestOf(bumped)).toBe(baseline)
+
+    // A panel-visible detail change IS a change, even when the rollup the text
+    // renders is byte-identical (the detail rows are panel-only facts).
+    const retitled = copy()
+    if (retitled.state === null || retitled.state.residualFindings === null) throw new Error('expected residual findings')
+    ;(retitled.state.residualFindings[0] as { title: string }).title = 'a retitled open issue'
+    expect(panelDigestOf(retitled)).not.toBe(baseline)
+    expect(retitled.state.residuals).toEqual(payload.state.residuals)
+
+    // Pure: the input payload and its real revision are untouched, and the
+    // digest carries the NORMALIZED copy.
+    expect(JSON.stringify(payload)).toBe(before)
+    expect(payload.state.storeFacts?.storeRevision).toBe(revision)
+    expect(baseline).toContain('"storeRevision":null')
+  })
+
+  it('two steps in DIFFERENT turns with unchanged state append the row once (the retired turn term, D2)', async () => {
+    const app = booted = await bootApp()
+    const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    expect(catalogRowOf(first).source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
+
+    // A new turn alone is NOT an emission trigger: the cached build is
+    // unchanged, so nothing is appended.
+    for (const turn of [2, 3]) {
+      const later = await app.ctx.waterfall('agent/pre-step', stepPayloadAt(turn), defaultEnter([]))
+      expect(later.kind).toBe('enter')
+      expect(later.kind === 'enter' && later.messages).toEqual([])
+    }
+  })
+
+  it('a step whose rendered text changed appends again — even in the SAME turn (the change term, D2)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cadence-'))
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'wf-cadence', [], {}, SESSION_ID, root, 'wf-cadence')
+    // TTL 0: each step rebuilds, so the fixture's change is visible immediately
+    // (the CHANGE, not the turn, decides whether the row is appended).
+    const app = booted = await bootApp({ root, harnessDir, catalogTtlMs: 0 })
+
+    const first = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))).row
+    expect(textOf(first)).toContain('residuals: none open')
+
+    await seedOpenIssue(harnessDir, { title: 'a newly opened issue', severity: 'high', operationId: 'op-cadence-1' })
+
+    const second = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))).row
+    expect(textOf(second)).toContain('residuals: high 1')
+    expect(textOf(second)).not.toBe(textOf(first))
+  })
+
+  it('a panel-visible change with identical rendered text appends again; an unchanged step re-emits nothing (the panel term + revision exclusion, D2)', async () => {
+    const app = booted = await bootApp({ catalogTtlMs: 0 })
+    await seedStore(app.harnessDir)
+    // Error-branch state (no ACTIVE lifecycle): the error line REPLACES the
+    // data lines, so the open-issue facts below are panel-only.
+    const first = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))).row
+    const firstText = textOf(first)
+    expect(firstText).toContain('workflow selection: ERROR')
+
+    await seedOpenIssue(app.harnessDir, { title: 'a panel-visible issue', severity: 'high', operationId: 'op-panel-1' })
+
+    const second = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))).row
+    // Identical text — the emission was driven by the panel projection alone.
+    expect(textOf(second)).toBe(firstText)
+
+    // A third step with NO change appends nothing: the second emission's own
+    // store write bumped the revision, which the projection normalizes away.
+    const third = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
+    expect(third.kind).toBe('enter')
+    expect(third.kind === 'enter' && third.messages).toEqual([])
+  })
+
+  it('state === null (no resolved {HARNESS_DIR}) composes no mstar-engine row and records no digest (D4)', async () => {
+    const app = booted = await bootApp({ harnessDir: null })
+    const inbox = [inboxMessage()]
+
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    expect(decision).toEqual({ kind: 'enter', messages: inbox })
+    expect(buildCatalogPayload(app.ctx, null).state).toBeNull()
+
+    // No digest was recorded either, so a later turn stays row-free rather
+    // than emitting an empty `<mstar_engine_status></mstar_engine_status>`.
+    const later = await app.ctx.waterfall('agent/pre-step', stepPayloadAt(2, inbox), defaultEnter(inbox))
+    expect(later).toEqual({ kind: 'enter', messages: inbox })
   })
 })
 
@@ -578,12 +734,10 @@ Implement the invalidation.
 
     // An OUT-OF-BAND ledger line in B (direct write to the workflow dir,
     // bypassing recordDispatch → NO invalidation fires for B): if B's cache
-    // entry survives, the line stays INVISIBLE within the REAL TTL (cache hit
-    // — no rebuild). This is the observable for "B's cached entry survives":
-    // the dsh-llm message envelope deep-clones its source (`createMessage` →
-    // `freezeMessage` → `structuredClone`), so cache-hit identity cannot be
-    // asserted by reference equality through the message — the direct-write
-    // invisibility is the equivalent (and stronger) cache-hit proof.
+    // entry survives, the line stays INVISIBLE and no row is re-appended
+    // within the REAL TTL (cache hit — no rebuild). This is the observable for
+    // "B's cached entry survives": had the entry rebuilt, the new line would
+    // have changed the rendered text and re-emitted it.
     appendLiveEvent(join(wsB, '.mstar'), 'wf-1', { v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })
 
     // A ledger record for workspace A ONLY — the apply-bound invalidator
@@ -602,20 +756,23 @@ Implement the invalidation.
     })
 
     // Next pre-step for A (new turn): the entry was invalidated → REBUILT (a
-    // fresh source carrying the new workflow-dir dispatch event).
+    // fresh source carrying the new workflow-dir dispatch event) → the changed
+    // text is appended.
     const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsA, 2, 's-A'), defaultEnter([]))).row
     expect(textOf(rowA2)).toContain('agent flow: 1 events')
     expect(textOf(rowA2)).toContain('by role: fullstack-dev 1')
 
     // Next pre-step for B (new turn): B's entry was NOT invalidated → the
-    // cache HIT serves the cached build — the out-of-band B line stays
-    // invisible within the TTL (no global clear; a multi-workspace deployment
-    // does not rebuild every workspace per record).
-    const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2, 's-B'), defaultEnter([]))).row
-    expect(textOf(rowB2)).not.toContain('agent flow:') // cached build — the direct line is NOT visible
+    // cache HIT serves the cached build, so the row is unchanged and nothing
+    // is re-appended: the out-of-band B line stays invisible within the TTL
+    // (no global clear; a multi-workspace deployment does not rebuild every
+    // workspace per record).
+    const afterB = await app.ctx.waterfall('agent/pre-step', stepFor(wsB, 2, 's-B'), defaultEnter([]))
+    expect(afterB.kind).toBe('enter')
+    expect(afterB.kind === 'enter' && afterB.messages).toEqual([])
   })
 
-  it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible within the TTL (only the record path invalidates)', async () => {
+  it('without a ledger change the cache-hit behavior is unchanged — a directly-written ledger line stays invisible and unemitted within the TTL (only the record path invalidates)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cachehit-'))
     const harnessDir = await seedActiveTree(root)
     const app = booted = await bootApp({ root, harnessDir })
@@ -630,8 +787,9 @@ Implement the invalidation.
     appendLiveEvent(harnessDir, 'wf-1', { v: 1, ts: Date.now(), kind: 'dispatch', role: 'fullstack-dev', verdict: 'ok', hard: false })
 
     // Pre-step 2 (turn 2, within the REAL TTL): the cache entry was NOT
-    // invalidated → the cached build is reused (stale) — the 60s TTL
-    // fallback still bounds an out-of-band ledger change.
+    // invalidated → the cached build is served, the row is unchanged, and the
+    // new turn appends NOTHING (had it rebuilt, the new line would have
+    // re-emitted). The 60s TTL remains the bound on out-of-band ledger reads.
     const second = await app.ctx.waterfall('agent/pre-step', {
       agent: { session: { header: { id: SESSION_ID } } },
       messages: [],
@@ -639,8 +797,8 @@ Implement the invalidation.
       step: 1,
       signal: new AbortController().signal,
     } as never, defaultEnter([]))
-    const { row } = catalogRowOf(second)
-    expect(textOf(row)).not.toContain('agent flow:')
+    expect(second.kind).toBe('enter')
+    expect(second.kind === 'enter' && second.messages).toEqual([])
   })
 })
 
@@ -1155,10 +1313,13 @@ Pick.
     expect(textOf(rowB1)).not.toContain('plan-a')
 
     appendLiveEvent(harnessDir, 'wf-b', { v: 1, ts: Date.now(), kind: 'dispatch', role: 'architect', verdict: 'ok', hard: false })
-    const rowA2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 2), defaultEnter([]))).row
-    const rowB2 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 2), defaultEnter([]))).row
-    expect(textOf(rowA2)).not.toContain('agent flow:')
-    expect(textOf(rowB2)).not.toContain('agent flow:')
+    // No invalidation fired: both cache entries survive, both rows are
+    // unchanged, so the new-turn steps append NOTHING (had either rebuilt, the
+    // new ledger line would have re-emitted that session's row).
+    const afterA = await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 2), defaultEnter([]))
+    const afterB = await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 2), defaultEnter([]))
+    expect(afterA.kind === 'enter' && afterA.messages).toEqual([])
+    expect(afterB.kind === 'enter' && afterB.messages).toEqual([])
 
     plugin.recordDispatch({
       harnessDir,
@@ -1169,6 +1330,9 @@ Pick.
       violations: [],
       hard: false,
     })
+    // The record invalidates EVERY session entry of this harness: both rebuild
+    // (the direct wf-b line and the recorded wf-a line), so both change and
+    // re-emit.
     const rowA3 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-A', 3), defaultEnter([]))).row
     const rowB3 = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepFor('s-B', 3), defaultEnter([]))).row
     expect(textOf(rowA3)).toContain('agent flow: 1 events')

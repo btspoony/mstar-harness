@@ -17,12 +17,12 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { initializeStore, readDshStatusEmission } from '@mstar-harness/engine'
+import { initializeStore, readDshStatusEmission, readExecutionState } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
-import { readEngineStatusSnapshot } from '../src/engine-status-store.ts'
-import { bootApp, seedStore, type BootResult } from './harness.ts'
+import { readEngineStatusSnapshot, writeEngineStatusSnapshot } from '../src/engine-status-store.ts'
+import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -52,7 +52,7 @@ function stepPayloadOf(sessionId: string, cwd: string, messages: UserMessage[], 
   } as never
 }
 
-describe('engine-status emission — written at the real digest-gated emission', () => {
+describe('engine-status emission — written at the real change-driven emission', () => {
   it('persists the emitted payload keyed by session.header.id and cwd', async () => {
     const app = (booted = await bootApp())
     await seedStore(app.harnessDir)
@@ -86,53 +86,95 @@ describe('engine-status emission — written at the real digest-gated emission',
     )
   })
 
-  it('keeps ONE row per session: a later turn replaces the emission instead of appending history', async () => {
-    const app = (booted = await bootApp())
+  it('keeps ONE row per session: an unchanged step emits nothing and a real change replaces the emission', async () => {
+    // TTL 0 rebuilds the payload at every step, so a change is visible
+    // immediately — and an UNCHANGED rebuild (whose only difference is the
+    // emission's own store-revision write) must still emit nothing.
+    const app = (booted = await bootApp({ catalogTtlMs: 0 }))
     await seedStore(app.harnessDir)
     const inbox = [inboxMessage()]
     for (const step of [1, 2, 3]) {
-      await app.ctx.waterfall(
+      const decision = await app.ctx.waterfall(
         'agent/pre-step',
         stepPayloadOf('ses_alpha', app.root, inbox, 7, step),
         defaultEnter(inbox),
       )
+      // Only the first step appends: the rebuilt payload is unchanged, and the
+      // revision its predecessor's write bumped is normalized away.
+      expect(decision.kind === 'enter' && decision.messages.length).toBe(step === 1 ? inbox.length + 1 : inbox.length)
     }
-    // Same-turn re-emission is digest-gated AND the store keeps one row.
+    // The store keeps ONE row, still the first emission's turn.
     const sameTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
     expect(sameTurn.kind === 'ok' && sameTurn.emission?.turn).toBe(7)
-    // The next turn is a new emission: it UPSERTs the same session row.
-    await app.ctx.waterfall(
+
+    // A REAL change (a newly open issue changes the panel projection) is the
+    // emission trigger: the row is replaced with the new turn.
+    await seedOpenIssue(app.harnessDir, { title: 'a newly opened issue', severity: 'high', operationId: 'op-emission-turn' })
+    const changed = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_alpha', app.root, inbox, 8, 1),
       defaultEnter(inbox),
     )
+    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length + 1)
     const nextTurn = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_alpha', app.root)
     expect(nextTurn.kind === 'ok' && nextTurn.emission?.turn).toBe(8)
   })
 
-  it('does not write a cached emission into a replacement authority generation', async () => {
-    const app = (booted = await bootApp())
+  it('writes the replacement generation only for a real change, and refuses a write carrying the retired generation', async () => {
+    const app = (booted = await bootApp({ catalogTtlMs: 0 }))
     await seedStore(app.harnessDir)
     const inbox = [inboxMessage()]
-    await app.ctx.waterfall(
+    const first = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_generation', app.root, inbox, 1),
       defaultEnter(inbox),
     )
+    expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
     expect(readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root).kind).toBe('ok')
+    // The generation the first emission was built under (the one it persisted with).
+    const retired = await readExecutionState({ harnessDir: app.harnessDir })
 
+    // Replace the authority generation.
     for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
     const replacement = await initializeStore({ harnessDir: app.harnessDir })
     replacement.close()
 
-    const decision = await app.ctx.waterfall(
+    // No change → no emission, so the retired row is not resurrected and
+    // nothing is written into the replacement generation.
+    const unchanged = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_generation', app.root, inbox, 2),
       defaultEnter(inbox),
     )
-    expect(decision.kind).toBe('enter')
-    const replacementRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
-    expect(replacementRead.kind === 'ok' && replacementRead.emission).toBeUndefined()
+    expect(unchanged.kind === 'enter' && unchanged.messages.length).toBe(inbox.length)
+    const afterReplacement = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
+    expect(afterReplacement.kind === 'ok' && afterReplacement.emission).toBeUndefined()
+
+    // A REAL change in the replacement generation emits with the CURRENT
+    // generation: the row lands, keyed by the new turn.
+    await seedOpenIssue(app.harnessDir, { title: 'a replacement-generation issue', severity: 'medium', operationId: 'op-emission-generation' })
+    const changed = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_generation', app.root, inbox, 3),
+      defaultEnter(inbox),
+    )
+    expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length + 1)
+    const writtenRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
+    expect(writtenRead.kind === 'ok' && writtenRead.emission?.turn).toBe(3)
+
+    // The guard still refuses a write that carries the retired generation —
+    // a cached payload can never resurrect the previous authority's row.
+    const stale = writeEngineStatusSnapshot(app.harnessDir, {
+      sessionId: 'ses_retired',
+      cwd: app.root,
+      turn: 9,
+      payload: await buildCatalogPayloadWithStore(app.ctx, app.harnessDir),
+      selectedGeneration: { storeId: retired.storeId, epoch: retired.epoch },
+    })
+    expect(stale.kind).toBe('degraded')
+    expect(stale.kind === 'degraded' && stale.reason).toContain('store.stale-epoch')
+    const retiredRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retired', app.root)
+    expect(retiredRead.kind === 'ok' && retiredRead.emission).toBeUndefined()
   })
 
   it('keys independent sessions separately', async () => {
