@@ -36,7 +36,7 @@ function cliEnv(harness: string, identity: ExecutionIdentity): Record<string, st
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_EXECUTION_IDENTITY") continue;
+    if (key === "MSTAR_EXECUTION_IDENTITY" || key === "DSH_SESSION_ID") continue;
     if (value !== undefined) env[key] = value;
   }
   env.MSTAR_HARNESS_DIR = harness;
