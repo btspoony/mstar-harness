@@ -363,6 +363,23 @@ describe("pr-review command family", () => {
       expect.objectContaining({ path: "findings", message: expect.stringContaining("findings file not found") }),
       expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
     ]));
+
+    // An unparseable payload joins the same phase rather than escaping it as
+    // the parser's own failure: the blank flag is still reported beside it in
+    // one refusal (packages/cli/AGENTS.md § Aggregated validation). The parser
+    // text is not quoted back, so the file's bytes stay out of the refusal.
+    const malformedFile = path.join(cwd, "malformed.json");
+    writeFileSync(malformedFile, '[{"mergeClass": "must-fix",}');
+    const malformed = await command("pr-review.tally").execute(
+      { findings: malformedFile, incompleteReason: " ", unscanned: "src/auth.ts" },
+      context,
+    );
+    expect(malformed).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(malformed, "malformed findings file")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "findings", code: "invalid", message: "findings file must contain valid JSON" }),
+      expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+    ]));
+    expect(malformed.status === "ok" ? "" : malformed.message).toContain("findings file must contain valid JSON");
   });
 
   test("a lone --unscanned none declares the engine's empty scope", async () => {

@@ -124,13 +124,24 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (!existsSync(file)) {
         diagnostics.push({ path: "findings", code: "invalid", message: `findings file not found: ${file}` });
       } else {
-        // An unparseable file stays an execution failure (exit 1), not a
-        // caller-correctable field: there is no payload to validate further.
-        const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-        if (!Array.isArray(parsed)) {
+        // An unparseable file is the same caller-correctable class as the
+        // other findings faults (usage, exit 2), so it joins the collection
+        // phase instead of aborting it: there is no payload to validate
+        // further, but the flags and counts still report their own faults in
+        // the same refusal. The parser's own text is withheld because it
+        // echoes the file's bytes back.
+        let parsed: unknown;
+        let unparseable = false;
+        try {
+          parsed = JSON.parse(readFileSync(file, "utf8"));
+        } catch {
+          unparseable = true;
+          diagnostics.push({ path: "findings", code: "invalid", message: "findings file must contain valid JSON" });
+        }
+        if (!unparseable && !Array.isArray(parsed)) {
           diagnostics.push({ path: "findings", code: "invalid", message: "findings file must be a JSON array of {mergeClass} objects" });
-        } else {
-          findings = parsed.flatMap((row, index) => {
+        } else if (!unparseable) {
+          findings = (parsed as unknown[]).flatMap((row, index) => {
             const mergeClass = row && typeof row === "object" && !Array.isArray(row) ? (row as Record<string, unknown>).mergeClass : undefined;
             if (typeof mergeClass !== "string" || !allowed.includes(mergeClass)) {
               diagnostics.push({ path: "findings", code: "invalid", message: `findings[${index}].mergeClass must be one of ${allowed.join(" | ")}` });

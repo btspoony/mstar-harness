@@ -147,13 +147,14 @@ describe("mstar pr-review tally", () => {
     });
   });
 
-  test("malformed findings JSON exits 1", () => {
+  test("malformed findings JSON is a usage refusal (exit 2)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "{");
       const result = runCli(["pr-review", "tally", "--findings", findings]);
-      expect(result.exitCode).toBe(1);
-      expect(envelope(result)).toMatchObject({ status: "error", code: "pr-review.tally.failed" });
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(message(result)).toContain("findings file must contain valid JSON");
     });
   });
 
@@ -297,6 +298,28 @@ describe("mstar pr-review tally", () => {
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
       expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+    });
+  });
+
+  test("a malformed findings file and a blank incomplete flag are refused in one response (aggregated validation)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, '[{"mergeClass": "must-fix",}');
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--incomplete-reason",
+        " ",
+        "--unscanned",
+        "src/auth.ts",
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const body = message(result);
+      expect(body).toContain("findings file must contain valid JSON");
       expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
     });
   });
