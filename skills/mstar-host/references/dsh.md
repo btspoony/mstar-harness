@@ -219,13 +219,17 @@ all. The block is a projection of the payload: the version / harness dir /
 enforcement watermark stays in the payload (the panel meta dock renders
 version + harness dir from it) and stays model-visible once in the always-on
 system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), never
-repeated in the row. The newest per-session emission persists in the
-control-root `store.db` (`dsh_status_emissions`), so its freshness footer
-`turn` / `at` mean the last emission, not the current turn; the row is not
-periodically re-anchored, so after host-side context compaction it may be
-absent until the next change — the system-prompt digest still carries the
-version, the active workflow and its non-Done plans. The build behind it is
-one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
+repeated in the row. The one exception is a composition without
+`dsh-system-prompt`: the registration fails open and neither prompt section
+exists, so the row falls back to re-rendering the trio itself (the listener's
+`showWatermark` option, taken from that registration verdict) — the watermark
+is never absent from the model's context. The newest per-session emission
+persists in the control-root `store.db` (`dsh_status_emissions`), so its
+freshness footer `turn` / `at` mean the last emission, not the current turn;
+the row is not periodically re-anchored, so after host-side context compaction
+it may be absent until the next change — the system-prompt digest still
+carries the version, the active workflow and its non-Done plans. The build
+behind it is one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
 
 ### Execution authority in this host (source state)
 

@@ -37,8 +37,9 @@
  * Module boundary: no barrel — the entry imports by explicit relative path;
  * the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`,
  * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`,
- * `panelDigestOf`, `createCatalogInvalidation` / `CatalogInvalidation`) are
- * entry-internal.
+ * `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`,
+ * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and
+ * the two renderers/projections are exported so both modes are unit-testable.
  */
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
@@ -74,7 +75,7 @@ import type {
   StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
-import { CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
+import { CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, stripInterpolationHazard, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
 import { readExecutionWorkflowSource, type SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
@@ -135,12 +136,18 @@ function engineStatusSource(): MstarEngineStatusSource {
   return { kind: 'mstar-engine', form: 'catalog' }
 }
 
-/** Synchronous catalog consumers have no ACTIVE workflow selection. */
+/**
+ * The selection verdict of a SYNCHRONOUS catalog consumer: it never read the
+ * execution authority, so it cannot claim an ACTIVE workflow. The message is
+ * model-facing (the state section renders it verbatim), so it names the
+ * authority and carries the same recovery the pre-step route offers — a code
+ * alone gives the agent neither a cause nor a way out.
+ */
 function syncAuthoritySelection(_harnessDir: string, _hint?: SessionHint): WorkflowSelectionView {
   return {
     kind: 'error',
     code: 'status.missing',
-    message: 'no ACTIVE execution workflow was read by the synchronous catalog consumer',
+    message: 'no ACTIVE execution workflow was read by the synchronous catalog consumer \u2014 the execution authority serves the active set; register one with "mstar workflow register" (plan) or "mstar iteration register"',
   }
 }
 
@@ -447,6 +454,19 @@ async function readBuildFacts(harnessDir: string | null, hint: SessionHint | und
   return { ...facts, authority }
 }
 
+/** Renderer options for {@link renderEngineStatusCatalog}. */
+export interface RenderEngineStatusOptions {
+  /**
+   * Re-render the watermark trio. The composition WITHOUT a `system-prompt`
+   * service is the only caller that sets it: there the always-on
+   * `mstar:harness-rules` / `mstar:engine-status` prompt never registers, so
+   * suppressing the trio would leave the model with none of the version /
+   * harness-dir / enforcement context. The default (host carries a system
+   * prompt) keeps the row watermark-free.
+   */
+  readonly includeWatermark?: boolean
+}
+
 /**
  * Model-facing rendering of the unified engine-status catalog (the
  * `<mstar_engine_status>` block): the wrapper plus the iteration phase-gate
@@ -455,9 +475,26 @@ async function readBuildFacts(harnessDir: string | null, hint: SessionHint | und
  * stays in the payload (the panel meta dock renders it) and stays
  * model-visible once in the always-on system prompt (`mstar:engine-status`
  * digest + `mstar:harness-rules`), so the row never repeats it.
+ *
+ * `includeWatermark` is the fallback channel for a composition that has NO
+ * `system-prompt` service (the prompt sections cannot register): the trio then
+ * leads the block, exactly as the pre-trim renderer emitted it, so the facts
+ * the rest of the harness assumes are model-visible still reach the model.
+ * Exported (like {@link panelDigestOf}) so both modes are unit-testable.
+ * @param source - the payload the current step composed.
+ * @param options - see {@link RenderEngineStatusOptions}.
  */
-function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
+export function renderEngineStatusCatalog(
+  source: MstarEngineStatusPayload,
+  options: RenderEngineStatusOptions = {},
+): string {
   const lines = ['<mstar_engine_status>']
+  if (options.includeWatermark === true) {
+    const enforcement = `${source.enforcement.hard ? 'hard' : 'soft'}${source.enforcement.source === 'none' ? '' : ` (${source.enforcement.source})`}`
+    lines.push(`mstar version: ${source.version}`)
+    lines.push(`harness dir: ${stripInterpolationHazard(source.harnessDir ?? 'none')}`)
+    lines.push(`enforcement: ${enforcement}`)
+  }
   const iteration = source.iteration
   if (iteration !== undefined) {
     const gate = iteration.gate
@@ -593,11 +630,12 @@ function hhmm(ts: number): string {
  * would otherwise have to read status.json / the compass / the catalog for.
  * Built from the SAME cached cycle as the sibling rows (one status.json +
  * compass read per cache refresh; the issue/catalog facts arrive as the
- * async pre-read's {@link StoreFacts}). Returns undefined when the workspace
- * has no harness dir, or resolves neither a status.json nor a structured
- * selection verdict (the row is absent — advisory degrade, same as the
- * iteration-gate row): a verdict is operator-visible reason, so it keeps the
- * section PRESENT even after the execution authority retired the file registry.
+ * async pre-read's {@link StoreFacts}). A resolved `{HARNESS_DIR}` ALWAYS
+ * yields a section: a selection verdict — `status.missing` included — is an
+ * operator-visible reason and keeps it PRESENT with its code, message and
+ * recovery, even after the execution authority retired the file registry.
+ * The caller is the one that answers `state: null`, and only for an
+ * unresolved harness dir.
  *
  * v3 per-lifecycle aggregation (compass v3.0.0 § Catalog selection rule):
  * the state section aggregates the SELECTED workflow lifecycle — resolved
@@ -623,9 +661,14 @@ function harnessStateSource(
   selection: WorkflowSelectionView,
   facts: StoreFacts,
   authoritySnapshot?: Record<string, unknown>,
-): MstarHarnessState | null {
+): MstarHarnessState {
   if (selection.kind === 'error') {
-    return selection.code === 'status.missing' ? null : selectionErrorState(selection, facts, harnessDir)
+    // EVERY selection verdict is an operator-visible reason, so it keeps the
+    // section PRESENT: `status.missing` included. `state === null` means
+    // exactly one thing — no resolved `{HARNESS_DIR}` — and must never absorb
+    // an initialization failure for a workspace that HAS one (the model would
+    // silently lose both the cause and the recovery path).
+    return selectionErrorState(selection, facts, harnessDir)
   }
   if (authoritySnapshot === undefined) {
     return selectionErrorState({
@@ -709,7 +752,14 @@ function harnessStateSource(
       agentFlow: readAgentFlow(join(harnessDir, selection.dir), selection.workflowId, 50, harnessDir),
     }
   } catch {
-    return null // advisory degrade — the state section is absent, never hardening
+    // A resolved `{HARNESS_DIR}` ALWAYS answers a section: a build failure is
+    // an operator-visible error section (with a real re-read command), never a
+    // silent `state: null` — that value now means exactly "no harness dir".
+    return selectionErrorState({
+      kind: 'error',
+      code: 'execution.state-unreadable',
+      message: 'the workspace state could not be read \u2014 re-read it with "mstar status validate" and retry the step; the catalog row degrades instead of failing the step',
+    }, facts, harnessDir)
   }
 }
 
@@ -1098,6 +1148,17 @@ function iterationGateSource(
   }
 }
 
+/** Listener options for {@link preStepCatalogListener}. */
+export interface PreStepCatalogOptions {
+  /**
+   * Render the watermark trio in the row. Set only by a composition WITHOUT a
+   * `system-prompt` service (`registerHarnessPrompt` failed open): the
+   * always-on prompt that normally carries the version / harness dir /
+   * enforcement does not exist there, so the row must.
+   */
+  readonly showWatermark?: boolean
+}
+
 /**
  * Advisory `agent/pre-step` waterfall listener (agent
  * catalog): delegates through `next()` (never `reject` — that would block the
@@ -1113,8 +1174,15 @@ function iterationGateSource(
  * payload projection changed ({@link panelDigestOf} — the panel renders more
  * than the row, e.g. the open-issue detail rows). The start of a new turn is
  * NOT a trigger: an unchanged workspace shows the row once, not once per turn.
- * A workspace with no resolved `{HARNESS_DIR}` (`state === null`) composes no
- * row at all and records no digest (the projection would be an empty wrapper).
+ * A workspace with no resolved `{HARNESS_DIR}` composes no row at all and
+ * records no digest (the projection would be an empty wrapper). The gate keys
+ * on the RESOLVED HARNESS DIR, never on a null state: a selection verdict
+ * (`status.missing` included) is an operator-visible error row, so suppressing
+ * it would hide both the cause and its recovery from the model.
+ *
+ * Watermark fallback: when the host composition provides no `system-prompt`
+ * service, `showWatermark` re-renders the version / harness-dir / enforcement
+ * trio in the row — there is no always-on prompt section carrying it.
  *
  * Persist retry: the snapshot persist is a SECOND, independent obligation of an
  * emission. A DEGRADED write (a transient store failure — no ACTIVE authority
@@ -1122,7 +1190,8 @@ function iterationGateSource(
  * payload stays unchanged, WITHOUT re-appending the identical model row, so a
  * transient failure cannot latch the web panel stale until the next payload
  * change. A by-design skip (no session id / cwd / harness dir) is never
- * retried.
+ * retried. The retried write carries the digest's ORIGINAL emission turn: the
+ * snapshot records when the model last saw the row, not when the write landed.
  *
  * An aborted step publishes nothing: the delegated decision
  * is returned unchanged (tool-skill precedent; a narrowed abort race —
@@ -1151,6 +1220,8 @@ function iterationGateSource(
  * change-driven re-emission.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
+ * @param options - `showWatermark` re-renders the watermark trio (the
+ * composition without a `system-prompt` service, where nothing else carries it).
  */
 export async function preStepCatalogListener(
   ctx: Context,
@@ -1161,6 +1232,7 @@ export async function preStepCatalogListener(
   digests: Map<string, EmissionDigest>,
   payload: { agent: unknown; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal },
   next: () => Promise<PreStepDecision>,
+  options: PreStepCatalogOptions = {},
 ): Promise<PreStepDecision> {
   const decision = await next()
   if (decision.kind === 'reject' || payload.signal.aborted) return decision
@@ -1183,10 +1255,12 @@ export async function preStepCatalogListener(
     // No resolved `{HARNESS_DIR}` ⇒ the payload carries no state section, and
     // after D1 the rendered block would be an empty `<mstar_engine_status>`
     // wrapper: compose no row and record no digest (there is nothing that could
-    // change later without a harness dir appearing).
-    if (catalogPayload.state === null) return decision
+    // change later without a harness dir appearing). The predicate is the
+    // RESOLVED DIR, not the state: `state === null` means exactly "no harness
+    // dir", and a selection verdict for a resolved workspace must render.
+    if (harnessDir === null) return decision
     const messages = [...decision.messages]
-    const text = renderEngineStatusCatalog(catalogPayload)
+    const text = renderEngineStatusCatalog(catalogPayload, { includeWatermark: options.showWatermark })
     const panelKey = panelDigestOf(catalogPayload)
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
@@ -1199,6 +1273,12 @@ export async function preStepCatalogListener(
     if (changed) {
       messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
     }
+    // The EMISSION turn of the row the model last saw: this step's turn on a
+    // first/changed emission, the retained one on an unchanged step. A retried
+    // persist must keep it — the snapshot records WHEN THE MODEL SAW the row,
+    // so relabelling a retry with the retry's own turn would make the panel's
+    // freshness footer and the session evidence disagree.
+    const emittedTurn = changed || prior === undefined ? payload.turn : prior.emittedTurn
     // The persist is a separate obligation: attempt it on a change AND on an
     // unchanged step whose last attempt degraded (a transient store failure
     // must not latch the panel stale until the payload changes again). The
@@ -1215,7 +1295,7 @@ export async function preStepCatalogListener(
         ctx,
         harnessDir,
         cwd,
-        payload.turn,
+        emittedTurn,
         catalogPayload,
         payload.agent,
         authorityGenerationByPayload.get(catalogPayload),
@@ -1223,9 +1303,10 @@ export async function preStepCatalogListener(
       persistPending = persisted === 'degraded'
     }
     if (prior === undefined || changed) {
-      digests.set(digestKey, { text, panelKey, persistPending })
+      digests.set(digestKey, { text, panelKey, emittedTurn, persistPending })
     } else {
-      // Unchanged: only the retry latch moves, so the digest identity stays.
+      // Unchanged: only the retry latch moves, so the digest identity (and its
+      // original emission turn) stays.
       prior.persistPending = persistPending
     }
     return { kind: 'enter', messages }
@@ -1261,12 +1342,21 @@ function sessionHintForCatalog(harnessDir: string | null, agent: unknown): Sessi
 /**
  * Per session+workspace emission digest: the rendered catalog text and the
  * panel-relevant payload projection ({@link panelDigestOf}) as of the last
- * emission. A digest keys on content, not on turns — a new turn is not an
- * emission trigger.
+ * emission. A digest keys its CHANGE decision on content, not on turns — a new
+ * turn is not an emission trigger. It does retain {@link emittedTurn}, because
+ * the persisted snapshot must keep the turn the row was actually emitted in,
+ * even when a degraded persist is retried on a much later step.
  */
 export interface EmissionDigest {
   readonly text: string
   readonly panelKey: string
+  /**
+   * The turn the row was EMITTED in (first emission or rendered-text/panel
+   * change). A retried persist reuses it verbatim, so the stored snapshot's
+   * `turn` always names the turn the model last saw the row — never the turn
+   * of whichever step happened to retry the write.
+   */
+  readonly emittedTurn: number
   /**
    * The last persist attempt for this digest DEGRADED (a transient store
    * failure). The gate retries the persist on a later step while the payload

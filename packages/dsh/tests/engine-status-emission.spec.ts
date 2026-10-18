@@ -193,7 +193,9 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
 
     // (b) The store becomes ACTIVE. The payload is unchanged, so no second row
-    // is appended — but the pending persist is retried and lands.
+    // is appended — but the pending persist is retried and lands. It carries
+    // the ORIGINAL emission turn: the row the model saw was emitted in turn 1,
+    // and a retried write must not relabel it with the retry's turn.
     await seedStore(app.harnessDir)
     const second = await app.ctx.waterfall(
       'agent/pre-step',
@@ -204,10 +206,12 @@ describe('engine-status emission — written at the real change-driven emission'
     const persisted = readEngineStatusSnapshot(app.harnessDir, 'ses_retry', app.root)
     expect(persisted.kind).toBe('ok')
     if (persisted.kind !== 'ok') throw new Error('unreachable')
-    expect(persisted.entry.turn).toBe(2)
+    expect(persisted.entry.turn).toBe(1)
 
     // (c) The successful retry clears the latch: a third unchanged step neither
-    // appends the row nor rewrites the emission (the persisted turn stays 2).
+    // appends the row nor touches the store at all (the execution token is
+    // unchanged, so no write happened) — the emission keeps turn 1.
+    const tokenBefore = (await readExecutionState({ harnessDir: app.harnessDir })).token
     const third = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_retry', app.root, inbox, 3, 3),
@@ -215,7 +219,8 @@ describe('engine-status emission — written at the real change-driven emission'
     )
     expect(third.kind === 'enter' && third.messages.length).toBe(inbox.length)
     const unchanged = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_retry', app.root)
-    expect(unchanged.kind === 'ok' && unchanged.emission?.turn).toBe(2)
+    expect(unchanged.kind === 'ok' && unchanged.emission?.turn).toBe(1)
+    expect((await readExecutionState({ harnessDir: app.harnessDir })).token).toBe(tokenBefore)
   })
 
   it('keys independent sessions separately', async () => {
@@ -228,6 +233,26 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(readEngineStatusSnapshot(app.harnessDir, 'ses_beta', '/proj/other').kind).toBe('ok')
     // A cwd that is not the row's own workspace is never served.
     expect(readEngineStatusSnapshot(app.harnessDir, 'ses_beta', app.root).kind).toBe('unavailable')
+  })
+
+  it('retains the watermark trio in the row when the composition has no system-prompt service (finding C)', async () => {
+    // The host provides no `system-prompt` service: `registerHarnessPrompt`
+    // fails open and injects neither `mstar:harness-rules` nor
+    // `mstar:engine-status`, so the row is the ONLY channel for the version /
+    // harness dir / enforcement facts.
+    const app = (booted = await bootApp({ withoutSystemPrompt: true }))
+    await seedStore(app.harnessDir)
+    const inbox = [inboxMessage()]
+    const decision = await app.ctx.waterfall(
+      'agent/pre-step',
+      stepPayloadOf('ses_watermark', app.root, inbox, 1),
+      defaultEnter(inbox),
+    )
+    const row = decision.kind === 'enter' ? decision.messages.at(-1) : undefined
+    const text = row?.content[0]?.type === 'text' ? row.content[0].text : ''
+    expect(text.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
+    expect(text).toContain('\nharness dir: ' + app.harnessDir + '\n')
+    expect(text).toContain('\nenforcement: soft\n')
   })
 
   it('still emits the row but persists no row when the agent carries no session id', async () => {

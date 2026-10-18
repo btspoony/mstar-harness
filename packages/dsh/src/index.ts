@@ -437,7 +437,12 @@ export function apply(ctx: Context, config: Config): void {
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  registerHarnessPrompt(ctx, { resolver })
+  // The registration verdict drives the catalog row's watermark FALLBACK: a
+  // composition without the service registers neither `mstar:harness-rules`
+  // nor `mstar:engine-status`, so nothing else carries the version / harness
+  // dir / enforcement facts — the row then re-renders them itself
+  // (PreStepCatalogOptions.showWatermark).
+  const systemPromptInjected = registerHarnessPrompt(ctx, { resolver })
   // Adoption advisory  — the warn-only deployment-taxonomy
   // pass: when fallbacks is mounted, ONE pass per apply reports the adoption
   // state (seeded / persona-overridden / missing + revert affordance via the
@@ -842,7 +847,11 @@ export function apply(ctx: Context, config: Config): void {
   const catalogInvalidation = createCatalogInvalidation(catalogCache, catalogDigests)
   setAgentFlowInvalidator(catalogInvalidation.invalidate)
   ctx.on('agent/pre-step', (payload, next) =>
-    preStepCatalogListener(ctx, resolver, catalogCache, ttlMs, catalogInvalidation, catalogDigests, payload, next))
+    preStepCatalogListener(ctx, resolver, catalogCache, ttlMs, catalogInvalidation, catalogDigests, payload, next, {
+      // Without a system-prompt service the row is the ONLY channel for the
+      // watermark trio; with it, the trio stays in the always-on prompt.
+      showWatermark: !systemPromptInjected,
+    }))
 
   // Panel channel — the host half of the engine-status endpoint
   // (`/api/mstar/engineStatus`): the `mstar` service + its invocation

@@ -56,7 +56,13 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { MstarEngineStatusPayload, MstarEngineStatusSource } from '../src/index.ts'
-import { buildCatalogPayload, buildCatalogPayloadWithStore, catalogCacheKey, panelDigestOf } from '../src/gates/catalog.ts'
+import {
+  buildCatalogPayload,
+  buildCatalogPayloadWithStore,
+  catalogCacheKey,
+  panelDigestOf,
+  renderEngineStatusCatalog,
+} from '../src/gates/catalog.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
 
@@ -537,6 +543,81 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     // than emitting an empty `<mstar_engine_status></mstar_engine_status>`.
     const later = await app.ctx.waterfall('agent/pre-step', stepPayloadAt(2, inbox), defaultEnter(inbox))
     expect(later).toEqual({ kind: 'enter', messages: inbox })
+  })
+})
+
+describe('mstar-engine-status catalog — status.missing is an identifiable error state (row-trim finding A)', () => {
+  it('renders an ERROR row with a recovery path for a RESOLVED harness dir, never a suppressed state (A)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-status-missing-'))
+    const harnessDir = join(root, 'harness')
+    const app = booted = await bootApp({ root, harnessDir })
+    // The SYNCHRONOUS builder is the documented `status.missing` producer: no
+    // ACTIVE execution workflow was pre-read, so the payload must say so. A
+    // resolved harness dir therefore yields an ERROR state — `state === null`
+    // means exactly "no resolved {HARNESS_DIR}" and must not absorb this case.
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+    const state = payload.state
+    expect(state).not.toBeNull()
+    if (state === null) throw new Error('unreachable')
+    expect(payload.harnessDir).toBe(harnessDir)
+    expect(state.selection).toMatchObject({ kind: 'error', code: 'status.missing' })
+    // The rendered model line names the identifiable failure…
+    const text = renderEngineStatusCatalog(payload)
+    expect(text).toContain('workflow selection: ERROR (status.missing)')
+    expect(text).not.toBe('<mstar_engine_status>\n</mstar_engine_status>')
+    // …AND carries a recovery the operator can actually run.
+    expect(text).toContain('mstar workflow register')
+    expect(text).toContain('mstar iteration register')
+
+    // The gate keys on the resolved harness dir, not on a null state: the real
+    // pre-step emits a row for this workspace even though its authority answers
+    // an error selection. `status.missing` itself is file/sync-route only, so
+    // the async route's own verdict (`workflow.selection.no-active` with an
+    // ACTIVE store) is the shape it must render here — the same PRESENT-state
+    // error branch the sync `status.missing` above now reaches.
+    await seedStore(app.harnessDir)
+    const asyncPayload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
+    expect(asyncPayload.state).not.toBeNull()
+    expect(asyncPayload.state?.selection).toMatchObject({
+      kind: 'error',
+      code: 'workflow.selection.no-active',
+    })
+    const inbox = [inboxMessage()]
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    const rowText = textOf(catalogRowOf(decision).row)
+    expect(rowText).toContain('workflow selection: ERROR (')
+    expect(rowText).toContain('mstar workflow register')
+  })
+})
+
+describe('mstar-engine-status catalog — watermark fallback without a system-prompt service (row-trim finding C)', () => {
+  it('renders the watermark trio only for the fallback composition, ahead of the state lines (C)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-watermark-'))
+    const harnessDir = join(root, 'harness')
+    const app = booted = await bootApp({ root, harnessDir })
+    const payload = buildCatalogPayload(app.ctx, harnessDir)
+
+    // Default composition (the host carries a system prompt): the trio stays
+    // out of the row — the always-on prompt is its single channel.
+    const plain = renderEngineStatusCatalog(payload)
+    expect(plain).not.toContain('mstar version:')
+    expect(plain).not.toContain('harness dir:')
+    expect(plain).not.toContain('enforcement:')
+
+    // Fallback composition (no `system-prompt` service): the row retains the
+    // trio, or the model sees none of these facts at all.
+    const fallback = renderEngineStatusCatalog(payload, { includeWatermark: true })
+    expect(fallback.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
+    expect(fallback).toContain(`mstar version: ${PLUGIN_VERSION}`)
+    expect(fallback).toContain(`harness dir: ${harnessDir}`)
+    expect(fallback).toContain('enforcement: soft')
+    // Ahead of the iteration/state sections it qualifies.
+    expect(fallback.indexOf('enforcement: soft')).toBeLessThan(fallback.indexOf('workflow selection: ERROR'))
+    expect(fallback.endsWith('\n</mstar_engine_status>')).toBe(true)
+
+    // No harness dir resolves: `none`, exactly as the retired payload render said.
+    const unbound = buildCatalogPayload(app.ctx, null)
+    expect(renderEngineStatusCatalog(unbound, { includeWatermark: true })).toContain('harness dir: none')
   })
 })
 

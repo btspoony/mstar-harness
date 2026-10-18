@@ -659,6 +659,15 @@ export interface BootOptions {
   /** Catalog cache refresh interval in ms (Config `catalogTtlMs`). */
   catalogTtlMs?: number
   /**
+   * Omit the `@deepseek-ai/dsh-system-prompt` row — a host composition WITHOUT
+   * the service (`registerHarnessPrompt` then fails open and registers neither
+   * `mstar:harness-rules` nor `mstar:engine-status`). The engine-status row
+   * must then carry the watermark trio itself (the finding-C fallback). The
+   * `dsh-tools` row injects `systemPrompt`, so it simply never applies here;
+   * the plugin's own tool seams are optional children.
+   */
+  withoutSystemPrompt?: boolean
+  /**
    * Mount the {@link FakeJobRegistry} as the `jobs` service (the
    * `@deepseek-ai/dsh-jobs-fake` row + module map) so the plugin's
    * `ctx.inject(['jobs'])` lifecycle-event subscription registers against it.
@@ -1136,8 +1145,9 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     { name: '@deepseek-ai/dsh-skill' },
     // The real dsh-tools ToolRegistry service injects `systemPrompt`
     // (unlike the removed peer-stub), so the system-prompt row mounts
-    // before the tool registry row.
-    { name: '@deepseek-ai/dsh-system-prompt' },
+    // before the tool registry row. `withoutSystemPrompt` models a host
+    // composition that omits the service entirely.
+    ...(options.withoutSystemPrompt === true ? [] : [{ name: '@deepseek-ai/dsh-system-prompt' }]),
     // The tool registry row mounts before the plugin so `ctx.tools` exists
     // when the v2 seams register their model-facing tools (the real dsh app
     // always composes dsh-tools).
