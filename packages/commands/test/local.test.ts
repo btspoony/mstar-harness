@@ -399,7 +399,6 @@ describe("omp host health", () => {
       ompAvailable: true,
       installedPlugins: [{ name: "@mstar-harness/omp", path: installedRoot, enabled: true }],
       localHarnessRepoErrors: [],
-      missingGitignoreEntries: [],
     })).toEqual({ location: harnessRepo, errors: [] });
   });
 
@@ -411,7 +410,6 @@ describe("omp host health", () => {
       ompAvailable: true,
       installedPlugins: [],
       localHarnessRepoErrors: [],
-      missingGitignoreEntries: [],
     });
     expect(result.errors).toContain(`Missing omp plugin marker: ${path.join(harnessRepo, "packages", "omp", "plugin.json")}`);
     expect(result.errors).toContain(`Missing omp host reference: ${path.join(harnessRepo, "packages", "omp", "skills", "mstar-host", "references", "omp.md")}`);
@@ -427,7 +425,6 @@ describe("omp host health", () => {
       ompAvailable: true,
       installedPlugins: [{ name: "@mstar-harness/omp", path: installedRoot, enabled: true }],
       localHarnessRepoErrors: [],
-      missingGitignoreEntries: [],
     });
     expect(result.errors).toContain(
       `Missing omp MCP session identity injection extension: ${path.join(installedRoot, "extensions", "mcp-identity.js")}. Update @mstar-harness/omp and enable its mcp-identity extension; ACTIVE workflow registration requires the host to supply sessionId on each MCP call.`,
@@ -444,7 +441,6 @@ describe("omp host health", () => {
       ompAvailable: true,
       installedPlugins: [{ name: "@mstar-harness/omp", path: installedRoot, enabled: true }],
       localHarnessRepoErrors: [],
-      missingGitignoreEntries: [],
     });
     expect(result.errors).toContain(
       `omp MCP session identity injection is not registered in ${path.join(installedRoot, "package.json")}. Update @mstar-harness/omp so its mcp-identity extension supplies sessionId for ACTIVE workflow registration.`,

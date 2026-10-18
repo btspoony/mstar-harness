@@ -77,23 +77,6 @@ describe("Codex regular agent installation", () => {
         const update = run(f.root, scope);
         expect(update.notes.join(" ")).toContain("Backed up");
         expect(fs.readdirSync(dest).some((name) => name.endsWith(".bak") && fs.readFileSync(path.join(dest, name), "utf8") === "user customization")).toBe(true);
-        if (scope === "project") {
-          const project = path.join(f.root, "project");
-          expect(Bun.spawnSync(["git", "init", "--quiet", project]).exitCode).toBe(0);
-          const backup = fs.readdirSync(dest).find((name) => name.endsWith(".bak"))!;
-          const ignored = Bun.spawnSync(["git", "check-ignore", "--no-index", path.join(dest, backup)], { cwd: project });
-          expect(ignored.exitCode).toBe(0);
-          const ignorePath = path.join(project, ".gitignore");
-          fs.writeFileSync(ignorePath, fs.readFileSync(ignorePath, "utf8").replace(".codex/agents/*.toml.*.bak\n", ""));
-          expect(run(f.root, scope, true).errors.join(" ")).toContain(".codex/agents/*.toml.*.bak");
-          const missingIgnoreBefore = snapshot(f.root);
-          expect(run(f.root, scope, false, true).failure).toBeUndefined();
-          expect(snapshot(f.root)).toBe(missingIgnoreBefore);
-          expect(run(f.root, scope).failure).toBeUndefined();
-          const restored = snapshot(f.root);
-          expect(run(f.root, scope).failure).toBeUndefined();
-          expect(snapshot(f.root)).toBe(restored);
-        }
         fs.appendFileSync(path.join(f.source, "codex/agents", names[0]), "\n# source update\n");
         expect(run(f.root, scope, true).errors.join(" ")).toContain("stale");
         expect(run(f.root, scope).failure).toBeUndefined();
