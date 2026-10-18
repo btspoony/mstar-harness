@@ -380,11 +380,11 @@ describe('seam gates — broken DESIGN.md flagged on write', () => {
 })
 
 /* ===========================================================================
- * 7. agent/pre-step — engine-status projection + iteration-gate row
+ * 7. agent/pre-step — one unified engine-status row (iteration gate + state)
  * ========================================================================== */
 
-describe('agent/pre-step — engine-status projection + iteration-gate row', () => {
-  it('boot with status + steering compass → pre-step composes the engine-status row (a projection) AND the iteration-gate row', async () => {
+describe('agent/pre-step — one unified engine-status row (iteration gate + state)', () => {
+  it('boot with status + steering compass → pre-step composes ONE unified row (iteration-gate + state sections)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-e2e-prestep-'))
     const harnessDir = join(root, 'harness')
     // The ACTIVE workflow snapshot carries the sole compass link.

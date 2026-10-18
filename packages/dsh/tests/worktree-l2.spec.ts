@@ -10,8 +10,11 @@
  * (no per-step disk I/O; a mid-session status/compass change lands at the next
  * TTL refresh, and an unchanged row is never re-appended by a new turn).
  * Advisory contract: calls `next()`, never vetoes, never replaces the
- * delegated messages. No status.json + steering compass at boot → the row
- * is simply absent (the engine-status catalog still appends).
+ * delegated messages. No status.json + steering compass at boot → the
+ * iteration-gate section is simply absent; with a resolved `{HARNESS_DIR}` the
+ * one unified row still appends, rendering `workflow selection: ERROR (...)`.
+ * Only a workspace with no resolved `{HARNESS_DIR}` composes no row at all
+ * (`catalogPayload.state === null`) and records no digest.
  *
  * (b) tools/pre-execute worktree checks — when the Assignment declares
  * parallel tracks (≥2 `Worktree path` header entries, or the documented
