@@ -1693,6 +1693,23 @@ describe("validateMstarReviewV1 — incomplete verdict facts", () => {
     }
   });
 
+  test("a multi-line fact is rejected at both levels, matching the producer's single-line rule", () => {
+    // computePrTally refuses a CR/LF in the cause or in any unscanned entry
+    // (the four-line header contract needs one line), so the validator must
+    // not accept a fact the producer can never emit.
+    const multiLineCause = { reason: "budget spent\nbefore the security domain", unscanned: ["src/auth.ts"] };
+    const multiLineScope = { reason: "budget spent", unscanned: ["src/auth.ts\r\npackages/engine"] };
+
+    for (const fact of [multiLineCause, multiLineScope]) {
+      expect(codes(validateMstarReviewV1(incompleteDoc({ incomplete: fact })))).toContain("review.incomplete-malformed");
+    }
+
+    // The nested tally echo is held to the same rule.
+    const nested = incompleteDoc({ incomplete: multiLineCause });
+    (nested.tally as Record<string, unknown>).incomplete = multiLineCause;
+    expect(codes(validateMstarReviewV1(nested))).toContain("review.incomplete-malformed");
+  });
+
   test("an empty unscanned array is a legal fact (nothing was left unscanned)", () => {
     const cancelled = { reason: "operator cancelled the run", unscanned: [] };
     const gate = validateMstarReviewV1(incompleteDoc({

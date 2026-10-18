@@ -303,6 +303,31 @@ describe("pr-review command family", () => {
     }
   });
 
+  test("a new-flag error and a count error are reported in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const flags = { findings, incompleteReason: " ", unscanned: "src/auth.ts", unverified: "x" };
+
+    // The incomplete-flag checks and the three count checks share one
+    // collection phase, so the invalid --unverified is no longer hidden
+    // behind the blank cause (packages/cli/AGENTS.md § Aggregated
+    // validation). The direct execute route and the admitted one agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "mixed flag and count errors")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "incompleteReason", code: "invalid" }),
+        expect.objectContaining({ path: "unverified", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+    }
+  });
+
   test("unknown outcome after posting does not claim success or retry", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");

@@ -114,39 +114,50 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         if (typeof mergeClass !== "string" || !allowed.includes(mergeClass)) throw new UsageError(`findings[${index}].mergeClass must be one of ${allowed.join(" | ")}`);
         return { mergeClass: mergeClass as MergeClass };
       });
-      const count = (raw: string | undefined, label: string) => { if (raw === undefined) return 0; if (!/^\d+$/.test(raw) || Number(raw) > 50) throw new UsageError(`${label} must be a non-negative integer no greater than 50`); return Number(raw); };
+ // One collection phase for every tally input: the two incomplete flags and
+ // the three counts all append diagnostics, and a single refusal carries all
+ // of them, so one call reports every invalid field instead of costing the
+ // caller a second rerun (packages/cli/AGENTS.md § Aggregated validation).
  // A marked-incomplete run is all-or-nothing: the token without its cause
- // and unscanned scope is unreadable, so the two flags travel together.
- // The cause renders on one header line (`cause: <reason>`) and the scope
- // entries join the single `unscanned:` line, so a blank or multi-line value
- // in either flag is a caller error refused here as usage (exit 2) rather
- // than surfacing as the engine guard's internal failure (exit 1). Both flags
- // are checked before the refusal is raised, so one call reports every
- // invalid field instead of costing the caller a second rerun
- // (packages/cli/AGENTS.md § Aggregated validation).
-      const flagDiagnostics: RefusalDiagnostic[] = [];
+ // and unscanned scope is unreadable, so the two flags travel together. The
+ // cause renders on one header line (`cause: <reason>`) and the scope entries
+ // join the single `unscanned:` line, so a blank or multi-line value in
+ // either flag is a caller error refused here as usage (exit 2) rather than
+ // surfacing as the engine guard's internal failure (exit 1).
+      const diagnostics: RefusalDiagnostic[] = [];
       if ((input.incompleteReason === undefined) !== (input.unscanned === undefined)) {
-        flagDiagnostics.push({
+        diagnostics.push({
           path: input.incompleteReason === undefined ? "incompleteReason" : "unscanned",
           code: "required",
           message: "--incomplete-reason and --unscanned go together",
         });
       }
       if (input.incompleteReason !== undefined && (input.incompleteReason.trim() === "" || /[\r\n]/.test(input.incompleteReason))) {
-        flagDiagnostics.push({ path: "incompleteReason", code: "invalid", message: "--incomplete-reason must be a single line of non-blank text" });
+        diagnostics.push({ path: "incompleteReason", code: "invalid", message: "--incomplete-reason must be a single line of non-blank text" });
       }
       if (input.unscanned !== undefined && input.unscanned.split(",").some((entry) => entry.trim() === "" || /[\r\n]/.test(entry))) {
-        flagDiagnostics.push({ path: "unscanned", code: "invalid", message: "--unscanned must be a comma-separated list of single-line non-blank entries" });
+        diagnostics.push({ path: "unscanned", code: "invalid", message: "--unscanned must be a comma-separated list of single-line non-blank entries" });
       }
-      if (flagDiagnostics.length > 0) throw new UsageError(flagDiagnostics[0]!.message, flagDiagnostics);
+      const count = (raw: string | undefined, label: string, path: string) => {
+        if (raw === undefined) return 0;
+        if (!/^\d+$/.test(raw) || Number(raw) > 50) {
+          diagnostics.push({ path, code: "invalid", message: `${label} must be a non-negative integer no greater than 50` });
+          return 0;
+        }
+        return Number(raw);
+      };
+      const unverifiedCount = count(input.unverified, "--unverified", "unverified");
+      const unmetAcUnsafe = count(input.unmetAcUnsafe, "--unmet-ac-unsafe", "unmetAcUnsafe");
+      const unmetAcSafe = count(input.unmetAcSafe, "--unmet-ac-safe", "unmetAcSafe");
+      if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics);
       const incomplete = input.incompleteReason === undefined ? undefined : {
         reason: need(input.incompleteReason, "--incomplete-reason"),
         unscanned: (input.unscanned ?? "").split(",").map((entry) => entry.trim()),
       };
       const result = computePrTally({
         findings,
-        unverifiedCount: count(input.unverified, "--unverified"),
-        unmetAc: [...Array.from({ length: count(input.unmetAcUnsafe, "--unmet-ac-unsafe") }, () => ({ unsafeToShip: true })), ...Array.from({ length: count(input.unmetAcSafe, "--unmet-ac-safe") }, () => ({ unsafeToShip: false }))],
+        unverifiedCount,
+        unmetAc: [...Array.from({ length: unmetAcUnsafe }, () => ({ unsafeToShip: true })), ...Array.from({ length: unmetAcSafe }, () => ({ unsafeToShip: false }))],
         ...(incomplete === undefined ? {} : { incomplete }),
       });
       return ok(id, result);

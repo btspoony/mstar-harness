@@ -253,6 +253,30 @@ describe("mstar pr-review tally", () => {
       expect(body).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
     });
   });
+
+  test("a new-flag error and a count error are refused in one response (aggregated validation)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--incomplete-reason",
+        " ",
+        "--unscanned",
+        "src/auth.ts",
+        "--unverified",
+        "x",
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const body = message(result);
+      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+    });
+  });
 });
 
 describe("mstar pr-review report-path", () => {

@@ -341,14 +341,21 @@ export type MstarReviewV1 = {
  * derived score — must/should/nit/unverified, no fourth class). */
 const TALLY_COUNT_KEYS = ["mustFix", "shouldFix", "nit", "unverified"] as const;
 
-/** True when `fact` is a readable `incomplete` fact: a non-empty `reason`
- * plus a list of non-empty `unscanned` entries (an empty list states nothing
+/** The producer's single-line rule ({@link computePrTally}): the cause and
+ * every unscanned entry render inside the four-line header contract, so each
+ * is a non-blank string with no CR/LF. Reused here so the validator accepts
+ * exactly what the producer can emit. */
+function isSingleLineFact(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+}
+
+/** True when `fact` is a readable `incomplete` fact: a single-line `reason`
+ * plus a list of single-line `unscanned` entries (an empty list states nothing
  * was left unscanned). */
 function isIncompleteFact(fact: unknown): fact is PrIncomplete {
   if (!isPlainObject(fact)) return false;
-  const { reason, unscanned } = fact;
-  return typeof reason === "string" && reason.trim() !== "" &&
-    Array.isArray(unscanned) && unscanned.every((entry: unknown) => typeof entry === "string" && entry.trim() !== "");
+  return isSingleLineFact(fact.reason) &&
+    Array.isArray(fact.unscanned) && fact.unscanned.every(isSingleLineFact);
 }
 
 /**
@@ -364,21 +371,18 @@ function checkIncompleteShape(fact: unknown, label: string, violations: Validati
     violations.push(violation(
       "high",
       "review.incomplete-malformed",
-      `${label} must be an object with a non-empty reason string and an unscanned array of non-empty strings`,
+      `${label} must be an object with a single-line non-blank reason string and an unscanned array of single-line non-blank strings`,
     ));
     return;
   }
-  if (typeof fact.reason !== "string" || fact.reason.trim() === "") {
-    violations.push(violation("high", "review.incomplete-malformed", `${label}.reason must be a non-empty string`));
+  if (!isSingleLineFact(fact.reason)) {
+    violations.push(violation("high", "review.incomplete-malformed", `${label}.reason must be a single-line non-blank string`));
   }
-  if (
-    !Array.isArray(fact.unscanned) ||
-    !fact.unscanned.every((entry: unknown) => typeof entry === "string" && entry.trim() !== "")
-  ) {
+  if (!Array.isArray(fact.unscanned) || !fact.unscanned.every(isSingleLineFact)) {
     violations.push(violation(
       "high",
       "review.incomplete-malformed",
-      `${label}.unscanned must be an array of non-empty strings (an empty array states nothing was left unscanned)`,
+      `${label}.unscanned must be an array of single-line non-blank strings (an empty array states nothing was left unscanned)`,
     ));
   }
 }

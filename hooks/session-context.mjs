@@ -21886,24 +21886,26 @@ ${tallyLine}` : `${verdict} · ${scorePct}% (${band}, partial)
 function isPlainObject9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function isSingleLineFact(value) {
+  return typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+}
 function isIncompleteFact(fact) {
   if (!isPlainObject9(fact))
     return false;
-  const { reason, unscanned } = fact;
-  return typeof reason === "string" && reason.trim() !== "" && Array.isArray(unscanned) && unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "");
+  return isSingleLineFact(fact.reason) && Array.isArray(fact.unscanned) && fact.unscanned.every(isSingleLineFact);
 }
 function checkIncompleteShape(fact, label, violations) {
   if (isIncompleteFact(fact))
     return;
   if (!isPlainObject9(fact)) {
-    violations.push(violation15("high", "review.incomplete-malformed", `${label} must be an object with a non-empty reason string and an unscanned array of non-empty strings`));
+    violations.push(violation15("high", "review.incomplete-malformed", `${label} must be an object with a single-line non-blank reason string and an unscanned array of single-line non-blank strings`));
     return;
   }
-  if (typeof fact.reason !== "string" || fact.reason.trim() === "") {
-    violations.push(violation15("high", "review.incomplete-malformed", `${label}.reason must be a non-empty string`));
+  if (!isSingleLineFact(fact.reason)) {
+    violations.push(violation15("high", "review.incomplete-malformed", `${label}.reason must be a single-line non-blank string`));
   }
-  if (!Array.isArray(fact.unscanned) || !fact.unscanned.every((entry) => typeof entry === "string" && entry.trim() !== "")) {
-    violations.push(violation15("high", "review.incomplete-malformed", `${label}.unscanned must be an array of non-empty strings (an empty array states nothing was left unscanned)`));
+  if (!Array.isArray(fact.unscanned) || !fact.unscanned.every(isSingleLineFact)) {
+    violations.push(violation15("high", "review.incomplete-malformed", `${label}.unscanned must be an array of single-line non-blank strings (an empty array states nothing was left unscanned)`));
   }
 }
 function checkProvidedTallyShape(tally, violations) {
