@@ -19,6 +19,14 @@
 # app-boot tolerates the row failing to load without the plugin, in which case
 # no mstar MCP tools appear and `mstar-harness doctor --target dsh` reports
 # the mismatch.
+#
+# Mount contract: a deployment that needs a pinned root or a declared identity
+# launches the server with `mstar mcp --harness <absolute path>` and/or
+# `--identity-env <NAME>`. `--harness` covers every registered command's root
+# selection, and the declared identity is a connection-wide default (a
+# per-caller identity needs an explicit `sessionId` or its own scoped mount).
+# The shipped row keeps neutral defaults: no path, no identity declared. An
+# override restates the row's whole `config`, including the `args` list.
 
 - insert:
     - id: mstar

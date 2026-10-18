@@ -39,7 +39,10 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * value, which refuses loudly.
  *
  * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
- * rebased or discovered, because the mounting process owns the root.
+ * rebased or discovered, because the mounting process owns the root. The same
+ * root is also the admission default for any command that resolves its own root
+ * from `input.harness`, so a pinned server cannot fall back to the process cwd's
+ * harness.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
   const resolver: ResolveContext = (_definition, _sessionId, signal, _services, effects: McpEffects) => {
@@ -53,13 +56,19 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
       effects,
     };
   };
-  // Admission reads this before the handler resolves the context, so a
-  // launcher-declared default satisfies a required session selector. A getter
-  // keeps it a live read of the declared channel, not a construction snapshot.
-  return Object.defineProperty(resolver, "defaultSessionId", {
+  // Admission reads these before the handler resolves the context, so a
+  // launcher-declared default satisfies a required session selector and fills an
+  // unset root input. Getters keep them live reads of the launch options, not
+  // construction snapshots.
+  Object.defineProperty(resolver, "defaultSessionId", {
     get: () => declaredSessionId(options.identityEnv),
     enumerable: true,
   });
+  Object.defineProperty(resolver, "defaultHarness", {
+    get: () => options.harnessRoot,
+    enumerable: true,
+  });
+  return resolver;
 }
 
 export const resolveContext: ResolveContext = createContextResolver();

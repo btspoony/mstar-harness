@@ -14,7 +14,7 @@ dsh 应用如何使用本插件——安装路径、配置、挂载时发生什�
 
 ### Install paths
 
-本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层：
+本包以 workspace 包形式发布（`workspaces: ["packages/*"]`），构建时把 engine 打进 `dist/`（`bun run build`；dist 已被 gitignore）。安装途径是 **profile bundle**，装进现成的 `web` profile（`dsh --profile web`——开箱即用的 web 应用 profile，即 `dsh web`），经 `dsh.bundle.patch` 清单——一个叠在 dsh-base 默认层之上的补丁层。该补丁还挂载一行宿主中立的 MCP 服务器；需要固定 harness 根或声明身份的部署用 `mstar mcp --harness <绝对路径>` 和/或 `--identity-env <NAME>` 启动它（挂载契约见 [`bundle/README.md`](bundle/README.md)）。
 
 **一条命令的 CLI 入口（推荐）**——`npx @mstar-harness/cli init --target dsh` 一次性装齐全量能力：它按序运行下面两条 `dsh plugin --profile web add` 安装（先 mstar bundle，再 `dsh-llm-fallbacks`），并可用 `npx @mstar-harness/cli doctor --target dsh` 逐行报告 `uninstalled` / `disabled` / `mounted` / `drifted`（`drifted` = fallbacks 行的安装版本不等于 pin；`init --target dsh` 会按 pin 重新 add，在此之前 `doctor` 以非零退出）。它编排的仍是同一条双命令安装；`--no-fallbacks` 跳过第二行（连带跳过 seeded 角色——见下文「零配置获得什么」）。
 

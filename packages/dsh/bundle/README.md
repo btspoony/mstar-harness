@@ -74,6 +74,17 @@ the targeted row's whole `config` — no deep merge** — so a user-level
 override must restate every field it keeps (the dsh-bundle whole-row-config
 semantics, not a merge).
 
+## MCP mount contract
+
+The `mstar-mcp` row launches the host-neutral server with neutral defaults: no
+pinned root and no declared identity. A deployment that needs either overrides
+the row's `args` to launch `mstar mcp --harness <absolute path>` and/or
+`--identity-env <NAME>`. `--harness` pins the root for every registered
+command's root selection, not only the invocation context; `--identity-env`
+declares a connection-wide default, so per-caller identity needs an explicit
+`sessionId` or its own scoped mount. Because a patch replaces the row's whole
+`config`, such an override restates the `command` too.
+
 ## Config surface
 
 The `mstar` row accepts the plugin `Config` (see `src/index.ts`):

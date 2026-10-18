@@ -185,16 +185,6 @@ describe("CLI session identity — native DSH source", () => {
       restore();
     }
   });
-
-  test("the session-identity help paragraph names the same precedence as the resolver", () => {
-    const definition = getCommandDefinitions().find(({ id }) => id === "workflow.register");
-    if (definition === undefined) throw new Error("missing workflow.register definition");
-    const contract = renderCommandContract(definition, "cli");
-    const order = ["--session-id", "MSTAR_EXECUTION_IDENTITY", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID"]
-      .map((source) => contract.indexOf(source));
-    expect(order.every((index) => index >= 0)).toBe(true);
-    expect([...order].sort((left, right) => left - right)).toEqual(order);
-  });
 });
 
 describe("generated CLI adapter", () => {

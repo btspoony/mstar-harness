@@ -10,17 +10,11 @@ import { getCommandDefinitions, type CommandEnvelope } from "@mstar-harness/comm
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
+import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver } from "../src/mcp/stdio";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-
-const effects = {
-  async readInput() { return ""; },
-  async spawn() { throw new Error("unused"); },
-  async startDashboard() { throw new Error("unused"); },
-  async openBrowser() { throw new Error("unused"); },
-};
 
 /**
  * A harness and an invocation cwd that are siblings: the cwd contains no
@@ -34,6 +28,24 @@ async function harnessOutsideCwd(): Promise<{ harness: string; cwd: string }> {
   const cwd = path.join(root, "plain-cwd");
   mkdirSync(harness, { recursive: true });
   mkdirSync(cwd, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
+  return { harness, cwd };
+}
+
+/**
+ * Two roots that a cwd probe CAN distinguish: the pinned harness owns an
+ * initialized store, while the cwd owns its own `.mstar` directory with no
+ * store. A command that resolves its own root from `input.harness` therefore
+ * reads the pinned store only when the launcher default was propagated; the
+ * cwd probe alone reaches an uninitialized store and refuses.
+ */
+async function competingCwdHarness(): Promise<{ harness: string; cwd: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const harness = path.join(root, "control", ".mstar");
+  const cwd = path.join(root, "workspace");
+  mkdirSync(harness, { recursive: true });
+  mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
   (await initializeStore({ harnessDir: harness })).close();
   return { harness, cwd };
 }
@@ -64,27 +76,29 @@ async function callWorktreeCheck(resolver: ResolveContext): Promise<CommandEnvel
   }
 }
 
-describe("MCP harness root", () => {
-  test("--harness replaces the cwd probe and its absence keeps the probe", async () => {
-    const fixture = await harnessOutsideCwd();
-    const previousCwd = process.cwd();
-    const previousHarness = process.env.MSTAR_HARNESS_DIR;
-    delete process.env.MSTAR_HARNESS_DIR;
-    process.chdir(fixture.cwd);
-    try {
-      const definition = getCommandDefinitions()[0]!;
-      const signal = new AbortController().signal;
-      const explicit = await createContextResolver({ harnessRoot: fixture.harness })(definition, undefined, signal, [], effects);
-      expect(explicit.controlRoot).toBe(fixture.harness);
-      const probed = await createContextResolver()(definition, undefined, signal, [], effects);
-      expect(probed.controlRoot).toBeNull();
-    } finally {
-      process.chdir(previousCwd);
-      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
-      else process.env.MSTAR_HARNESS_DIR = previousHarness;
-    }
-  });
+/** Drive one real command call through the production server assembly. */
+async function callCatalogList(resolver: ResolveContext): Promise<CommandEnvelope> {
+  const definition = getCommandDefinitions().find((entry) => entry.id === "catalog.list");
+  if (definition === undefined) throw new Error("missing command: catalog.list");
+  const server = createMcpServer(resolver, [definition]);
+  const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverEnd);
+    await client.connect(clientEnd);
+    const result = await client.callTool({ name: "mstar_catalog_list", arguments: {} });
+    if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
+    const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    const start = text.indexOf('{"version":1,');
+    if (start < 0) throw new Error(`no command envelope in the tool result: ${text}`);
+    return JSON.parse(text.slice(start)) as CommandEnvelope;
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
 
+describe("MCP harness root", () => {
   test("a read command resolves a harness outside the cwd through --harness", async () => {
     const fixture = await harnessOutsideCwd();
     const previousCwd = process.cwd();
@@ -103,6 +117,30 @@ describe("MCP harness root", () => {
       expect(String(probed.message)).toContain("harness directory not found");
     } finally {
       process.chdir(previousCwd);
+    }
+  });
+
+  test("the production server propagates the pinned root to a command that reads its own harness input", async () => {
+    const fixture = await competingCwdHarness();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // catalog.list resolves its root from `input.harness`, not `controlRoot`:
+      // the pinned fixture store is read only when the launcher default reached
+      // that field. The cwd has its own harness directory but no store, so a
+      // cwd-probed read refuses instead.
+      const pinned = await callCatalogList(createContextResolver({ harnessRoot: fixture.harness }));
+      expect(pinned).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+      expect((pinned.data as { items: unknown[] }).items).toEqual([]);
+
+      const probed = await callCatalogList(createContextResolver());
+      expect(probed).toMatchObject({ status: "refused", code: "store.not-initialized" });
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
   });
 
