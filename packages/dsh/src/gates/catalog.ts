@@ -457,12 +457,13 @@ async function readBuildFacts(harnessDir: string | null, hint: SessionHint | und
 /** Renderer options for {@link renderEngineStatusCatalog}. */
 export interface RenderEngineStatusOptions {
   /**
-   * Re-render the watermark trio. The composition WITHOUT a `system-prompt`
-   * service is the only caller that sets it: there the always-on
-   * `mstar:harness-rules` / `mstar:engine-status` prompt never registers, so
-   * suppressing the trio would leave the model with none of the version /
-   * harness-dir / enforcement context. The default (host carries a system
-   * prompt) keeps the row watermark-free.
+   * Re-render the watermark trio. Set while no `system-prompt` registration is
+   * CONFIRMED live (the service is absent, the asynchronous registration
+   * failed, or an earlier registration was disposed): there the always-on
+   * `mstar:harness-rules` / `mstar:engine-status` prompt does not carry the
+   * version / harness-dir / enforcement context, so suppressing the trio would
+   * leave the model with none of it. The default (live registration) keeps the
+   * row watermark-free.
    */
   readonly includeWatermark?: boolean
 }
@@ -472,12 +473,14 @@ export interface RenderEngineStatusOptions {
  * `<mstar_engine_status>` block): the wrapper plus the iteration phase-gate
  * and workspace-state lines. This is a PROJECTION of the payload, not a
  * byte-identical render: the version / harness-dir / enforcement watermark
- * stays in the payload (the panel meta dock renders it) and stays
- * model-visible once in the always-on system prompt (`mstar:engine-status`
- * digest + `mstar:harness-rules`), so the row never repeats it.
+ * stays in the payload (the panel meta dock renders it) and — while the prompt
+ * registration is live — stays model-visible once in the always-on system
+ * prompt (`mstar:engine-status` digest + `mstar:harness-rules`), so the
+ * steady-state row does not repeat it.
  *
- * `includeWatermark` is the fallback channel for a composition that has NO
- * `system-prompt` service (the prompt sections cannot register): the trio then
+ * `includeWatermark` is the fallback channel while NO `system-prompt`
+ * registration is confirmed live (the service absent, the asynchronous
+ * registration failed, or a previous registration was disposed): the trio then
  * leads the block, exactly as the pre-trim renderer emitted it, so the facts
  * the rest of the harness assumes are model-visible still reach the model.
  * Exported (like {@link panelDigestOf}) so both modes are unit-testable.
@@ -1151,12 +1154,16 @@ function iterationGateSource(
 /** Listener options for {@link preStepCatalogListener}. */
 export interface PreStepCatalogOptions {
   /**
-   * Render the watermark trio in the row. Set only by a composition WITHOUT a
-   * `system-prompt` service (`registerHarnessPrompt` failed open): the
-   * always-on prompt that normally carries the version / harness dir /
-   * enforcement does not exist there, so the row must.
+   * Render the watermark trio in the row. Driven by CONFIRMED live prompt
+   * registration (`registerHarnessPrompt`'s `onRegistered`/`onDisposed`
+   * hooks), never by the scheduling return value: a boolean pins the verdict
+   * at apply time, while a predicate is re-evaluated per step and therefore
+   * follows a registration that lands late, fails contained, or is disposed
+   * (HMR / service removal). True (or a predicate returning true) means no
+   * prompt section carries the version / harness dir / enforcement facts, so
+   * the row must.
    */
-  readonly showWatermark?: boolean
+  readonly showWatermark?: boolean | (() => boolean)
 }
 
 /**
@@ -1180,9 +1187,13 @@ export interface PreStepCatalogOptions {
  * (`status.missing` included) is an operator-visible error row, so suppressing
  * it would hide both the cause and its recovery from the model.
  *
- * Watermark fallback: when the host composition provides no `system-prompt`
- * service, `showWatermark` re-renders the version / harness-dir / enforcement
- * trio in the row — there is no always-on prompt section carrying it.
+ * Watermark fallback: when no `system-prompt` registration is CONFIRMED live
+ * (`showWatermark` — a boolean or a per-step predicate), the row re-renders the
+ * version / harness-dir / enforcement trio — there is no always-on prompt
+ * section carrying it. The predicate form exists because registration is
+ * scheduled asynchronously: a scheduled-but-failed (or later disposed)
+ * registration leaves nothing carrying the trio, so the fallback must follow
+ * landed state, not the scheduling return value.
  *
  * Persist retry: the snapshot persist is a SECOND, independent obligation of an
  * emission. A DEGRADED write (a transient store failure — no ACTIVE authority
@@ -1220,8 +1231,9 @@ export interface PreStepCatalogOptions {
  * change-driven re-emission.
  * @param payload - the proposed step the loop is about to enter.
  * @param next - the remaining pre-step chain; its value is the delegated decision.
- * @param options - `showWatermark` re-renders the watermark trio (the
- * composition without a `system-prompt` service, where nothing else carries it).
+ * @param options - `showWatermark` re-renders the watermark trio while no
+ * `system-prompt` registration is confirmed live (a boolean or a per-step
+ * predicate — the predicate form tracks landed/disposed registrations).
  */
 export async function preStepCatalogListener(
   ctx: Context,
@@ -1260,7 +1272,11 @@ export async function preStepCatalogListener(
     // dir", and a selection verdict for a resolved workspace must render.
     if (harnessDir === null) return decision
     const messages = [...decision.messages]
-    const text = renderEngineStatusCatalog(catalogPayload, { includeWatermark: options.showWatermark })
+    // Re-evaluated PER STEP: the fallback follows confirmed live registration,
+    // so a registration that lands (or is disposed) after apply flips the row
+    // on the next step rather than being frozen at boot.
+    const includeWatermark = typeof options.showWatermark === 'function' ? options.showWatermark() : options.showWatermark === true
+    const text = renderEngineStatusCatalog(catalogPayload, { includeWatermark })
     const panelKey = panelDigestOf(catalogPayload)
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
