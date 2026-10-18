@@ -206,8 +206,8 @@ async function diagnose(target: (typeof doctorTargets)[number], scope: "global" 
   if (target === "dsh") return diagnoseDshHost(runBin("dsh"));
   if (target === "omp" && scope === "project") {
     // omp has one user-wide plugin root (its link/listing ignore --scope), so a
-    // project-scoped omp setup cannot exist: report that instead of combining a
-    // global listing with project gitignore checks and calling it healthy.
+    // project-scoped omp setup cannot exist: report that instead of reporting a
+    // global listing as healthy.
     return {
       location: harnessRepoPath,
       errors: [
@@ -216,9 +216,6 @@ async function diagnose(target: (typeof doctorTargets)[number], scope: "global" 
       notes: [],
     };
   }
-  const projectRoot = scope === "project" ? resolveProjectRoot() : undefined;
-  const gitignorePath = projectRoot === undefined ? undefined : path.join(projectRoot, ".gitignore");
-  const gitignore = gitignorePath !== undefined && fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   let installed: Array<Record<string, unknown>> = [];
   let ompAvailable = true;
   try {
@@ -226,17 +223,12 @@ async function diagnose(target: (typeof doctorTargets)[number], scope: "global" 
   } catch {
     ompAvailable = false;
   }
-  const present = new Set(gitignore.split(/\r?\n/));
-  const missing = projectRoot === undefined || hasHarnessRootDeclaration(gitignore)
-    ? []
-    : emitGitignoreSnippet("mstar").split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#") && !present.has(line));
   const result = diagnoseOmpHost({
     harnessRepoPath,
     scope,
     ompAvailable,
     installedPlugins: installed,
     localHarnessRepoErrors: localHarnessErrors(),
-    missingGitignoreEntries: missing,
   });
   return { location: result.location, errors: result.errors, notes: [] };
 }

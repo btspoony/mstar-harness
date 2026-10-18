@@ -31,7 +31,6 @@ describe("amazing-e2e-check Codex command skill dry-run", () => {
       const source = join(root, ".mstar", "harness", "commands", "amazing-e2e-check.md");
       const destination = resolve(root, ".agents", "skills", "amazing-e2e-check", "SKILL.md");
       expect(notes).toContain(`Linked ${destination} -> ${source}`);
-      expect(notes).toContain("Added .agents/skills/amazing-e2e-check to .gitignore");
       expect(readdirSync(root)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });

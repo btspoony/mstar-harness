@@ -124,7 +124,7 @@ flowchart TD
 
 **范围说明。** 迭代会先与你锁定方向，然后对承接的每个 plan 各跑一遍上述循环，最后统一收尾再开 PR；不跑迭代时，这套循环就只为一个 plan 执行一次。验证或 report-only 的交付物 —— 例如一次审计 —— 在达到约定的完成条件时结束，没有 PR，也没有合并环节。在 development 这条路径上，plan 只有在证据齐全时才算完成：plan 完成、merge-ready 与已合并是三件不同的事，只有核实合并、走完 post-merge 收尾，交付才算结束。是否合并是一次单独的授权 —— 你可以显式授权，也可以自己合并 —— 分支清理则是收尾之后单独的、显式的动作。
 
-引擎负责校验流程中可机械校验的部分 —— 工作流状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。这些校验默认是 advisory：只报告问题；项目或迭代可以用 `enforcement: hard` 升级为阻断，具体能否阻断取决于宿主。过程状态（计划、workflow 记录、发现、审查报告）存放在 harness 目录，默认 `.mstar/`，默认被 gitignore。
+引擎负责校验流程中可机械校验的部分 —— 工作流状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。这些校验默认是 advisory：只报告问题；项目或迭代可以用 `enforcement: hard` 升级为阻断，具体能否阻断取决于宿主。过程状态（计划、workflow 记录、发现、审查报告）存放在 harness 目录，默认 `.mstar/`，由 scaffold 的规范 `.gitignore` 片段忽略 —— 安装器 init 不改动 `.gitignore`。
 
 ## Dashboard：本地看板
 

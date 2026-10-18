@@ -204,7 +204,7 @@ describe("cursor and kimi host presence at init", () => {
 // changes are intended for codex or dsh in this task.
 const CLI_DIST = path.resolve(import.meta.dir, "../dist/mstar-harness.js");
 
-function smokeCli(target: string, mode: "missing" | "stub", dryRun = false) {
+function smokeCli(target: string, mode: "missing" | "stub", dryRun = false, seedGitignore?: string) {
   const home = tempDir(`host-presence-${target}-home-`);
   const root = tempDir(`host-presence-${target}-project-`);
   const binDir = tempDir(`host-presence-${target}-bin-`);
@@ -212,6 +212,7 @@ function smokeCli(target: string, mode: "missing" | "stub", dryRun = false) {
   mkdirSync(path.join(harness, ".omp-plugin"), { recursive: true });
   mkdirSync(path.join(harness, ".git"), { recursive: true });
   writeFileSync(path.join(harness, ".omp-plugin", "plugin.json"), "{}");
+  if (seedGitignore !== undefined) writeFileSync(path.join(root, ".gitignore"), seedGitignore);
   if (mode === "stub") {
     const commands: Record<string, string> = {
       omp: `if [ "$1" = "--version" ]; then echo "omp test"; fi
@@ -300,6 +301,17 @@ describe("repo-built CLI host-presence smoke", () => {
       }
       console.log(`[smoke ${target} real/stub] ${present.output.trim().replaceAll("\n", " | ")}`);
     }
+  }, 30_000);
+
+  test("project-scoped init writes nothing to .gitignore", () => {
+    const seeded = "# user rules\nnode_modules\n";
+    const absent = smokeCli("cursor", "stub");
+    expect(absent.result.exitCode).toBe(0);
+    expect(existsSync(path.join(absent.root, ".gitignore"))).toBe(false);
+
+    const preserved = smokeCli("cursor", "stub", false, seeded);
+    expect(preserved.result.exitCode).toBe(0);
+    expect(readFileSync(path.join(preserved.root, ".gitignore"), "utf8")).toBe(seeded);
   }, 30_000);
 });
 

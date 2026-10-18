@@ -31,6 +31,8 @@ node node_modules/@mstar-harness/cli/dist/mstar-harness.js init
 
 `init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted, except for a target whose host has a single supported scope (omp installs host-wide, so an unscoped `init --target omp` uses `--scope global` and says so). It also resolves the published `@mstar-harness/cli` version before it touches the host: when that `latest` is **newer** than the CLI running it (a cached `npx` resolution can differ), it installs that `latest` globally and reports it; a version ahead of `latest` is left alone. `--no-global-cli` skips both the probe and that install.
 
+`init` reads and writes no `.gitignore`: host-specific install paths (`.cursor/plugins/morning-star-harness`, `.codex/agents/*.toml`, `.agents/skills/<name>`, `.zcode/plugin-checkout`) stay untracked until you ignore them yourself. Add the entries you want by hand, or run `npx @mstar-harness/cli harness scaffold` to append the canonical `.mstar/` harness snippet.
+
 The native command installs the plugin only and bypasses this CLI entirely — use it when `init` is blocked. Run `npx @mstar-harness/cli@latest init …` when the CLI that runs must itself be the newest release. The published binary is `mstar-harness`; the short alias `mstar` exists only where this package is installed, and an unrelated npm package claims the same name — use the long form when in doubt.
 
 ### OpenCode
@@ -56,7 +58,7 @@ Without the CLI — add the published plugin package to `opencode.json` yourself
 { "plugins": ["@mstar-harness/opencode-v2"] }
 ```
 
-Restart OpenCode afterwards. This path installs the plugin only: it skips the harness gitignore entries and does not run `doctor`.
+Restart OpenCode afterwards. This path installs the plugin only and does not run `doctor`.
 
 ### Cursor
 
@@ -66,7 +68,7 @@ Global (recommended for personal use):
 npx @mstar-harness/cli init --target cursor --scope global
 ```
 
-Project (plugin checkout under `.cursor/plugins/morning-star-harness`, gitignored):
+Project (plugin checkout under `.cursor/plugins/morning-star-harness`, untracked until you ignore it yourself):
 
 ```bash
 npx @mstar-harness/cli init --target cursor --scope project
@@ -87,7 +89,7 @@ Without the CLI — clone the repo into the plugin path Cursor loads (a real dir
 git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness
 ```
 
-This path installs the plugin only: it skips the harness gitignore entries and does not run `doctor`. Re-run `git pull` in that checkout to update it.
+This path installs the plugin only and does not run `doctor`. Re-run `git pull` in that checkout to update it.
 
 **Layout note:** Cursor does **not** discover symlinked plugin directories. The CLI maintains a shared checkout at `~/.mstar/harness` and a **separate real git checkout** at the Cursor plugin path. See [Install path layout](#install-path-layout).
 
@@ -124,7 +126,7 @@ Custom agent TOMLs must be regular files: Codex can discover a symlinked role bu
 
 | Scope | Iteration commands (`iteration-start`, `iteration-drive`, `iteration-loop`) |
 |-------|-------------------------------------------------------------------------------|
-| **Project** | Installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked from harness `commands/`; gitignored by CLI) |
+| **Project** | Installed as project-local skills under `.agents/skills/<name>/SKILL.md` (symlinked from harness `commands/`; left untracked — `init` writes no ignore entry) |
 | **Global** | **Not** installed (avoids polluting other projects); `init` prints a warning — re-run with `--scope project` to enable |
 
 #### Codex: agent files
@@ -146,14 +148,14 @@ npx @mstar-harness/cli doctor --target zcode
 
 Then in ZCode: **Settings → Plugin Management → Discover** → install **morning-star-harness** from the **mstar-local** marketplace.
 
-Project (plugin checkout under `.zcode/plugin-checkout`, gitignored):
+Project (plugin checkout under `.zcode/plugin-checkout`, untracked until you ignore it yourself):
 
 ```bash
 npx @mstar-harness/cli init --target zcode --scope project
 npx @mstar-harness/cli doctor --target zcode --scope project
 ```
 
-**Layout note:** the CLI registers a `mstar-local` marketplace in `~/.zcode/cli/plugins/known_marketplaces.json` pointing at the **`github:btspoony/mstar-harness`** repo (same source shape ZCode uses for built-in marketplaces). Project scope additionally keeps a real git checkout under `.zcode/plugin-checkout` (gitignored) for local agent-file smoke checks; the registered marketplace always points at the github repo so installs work across machines.
+**Layout note:** the CLI registers a `mstar-local` marketplace in `~/.zcode/cli/plugins/known_marketplaces.json` pointing at the **`github:btspoony/mstar-harness`** repo (same source shape ZCode uses for built-in marketplaces). Project scope additionally keeps a real git checkout under `.zcode/plugin-checkout` (untracked — ignore it yourself) for local agent-file smoke checks; the registered marketplace always points at the github repo so installs work across machines.
 
 The repo itself ships the marketplace catalog ZCode looks for when refreshing a `github` source: `.claude-plugin/marketplace.json` (probed first), with root `marketplace.json` as fallback. The CLI-written local snapshot is a bootstrap so **Discover** works before the first refresh; after a successful refresh ZCode replaces it with the repo manifest.
 
@@ -247,7 +249,7 @@ Cursor **does not discover symlinked plugin directories**. Use real directories 
 | --- | --- | --- | --- |
 | `~/.mstar/harness` | Codex (agent `.toml` source), OpenCode dev bundle | git checkout | Codex agent `.toml` files are **copied as regular files** from here into `~/.codex/agents/`; the Codex marketplace itself is git-sourced (`btspoony/mstar-harness`) |
 | `~/.cursor/plugins/local/morning-star-harness` | Cursor global plugin | **git checkout (real dir)** | **Not** a symlink to `~/.mstar/harness`; `init` clones or `git pull`s here |
-| `.cursor/plugins/morning-star-harness` | Cursor project plugin | **git checkout (real dir)** | gitignored; same clone/pull behavior as global |
+| `.cursor/plugins/morning-star-harness` | Cursor project plugin | **git checkout (real dir)** | untracked — `init` writes no ignore entry, add it yourself; same clone/pull behavior as global |
 
 `init --target cursor` maintains **two** checkouts: `~/.mstar/harness` (shared with Codex) and the Cursor plugin path (independent clone, kept in sync via `git pull` on each init).
 

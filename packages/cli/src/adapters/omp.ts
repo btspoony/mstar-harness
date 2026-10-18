@@ -10,7 +10,6 @@ import {
  REPO_URL,
  HARNESS_REPO_PATH,
  ensureLocalHarnessRepo,
- missingHarnessProcessGitignoreEntries,
  validateLocalHarnessRepo,
 } from "./shared-install";
 import { ensureHostPresent } from "./host-presence";
@@ -454,14 +453,12 @@ function runDoctor(scope: Scope) {
    };
  }
  const ompIsAvailable = ompAvailable();
- void missingHarnessProcessGitignoreEntries; // no project scope above, so no fence check
  return diagnoseOmpHost({
  harnessRepoPath: HARNESS_REPO_PATH,
  scope,
  ompAvailable: ompIsAvailable,
  installedPlugins: ompIsAvailable ? listInstalledPlugins() : [],
  localHarnessRepoErrors: validateLocalHarnessRepo(),
- missingGitignoreEntries: [],
  });
 }
 
