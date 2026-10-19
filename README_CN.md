@@ -92,7 +92,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [keywords]` | 只读盘点，产出按优先级排序、可直接执行的改进计划；按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）可缩小范围。 |
-| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：settled（无中断完成、必需领域全部打开、已解析的 diff basis 可读且完整）的 run 按 finding tally 给出 `ship it`、`needs fixes` 或 `blocked`；run 被中止、取消或超时，或必需领域从未打开、已解析的 diff basis 不可读时给出唯一声明的 `incomplete`。 |
+| `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：settled（无中断完成、必需领域全部打开、已解析的 diff basis 可读且完整）的 run 按 finding tally 给出 `ship it`、`needs fixes` 或 `blocked`；仅在三种情况下给出唯一派生的 `incomplete`：run 在综合之前被中止，必需领域从未打开，或已解析的 diff basis 不可读。超过 wall clock 预算不属于这三种情况：完整覆盖的 run 即使超时，仍按 tally 给出结论，并把超时作为 note 声明。 |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | 对测试面做只读审计 → 产出删除、修复、合并或迁移测试的计划。 |
 | `/amazing-e2e-check [environment] [scenarios]` | 在独立 workflow 中运行你明确要求的浏览器、真机或安装部署场景。 |
 

@@ -90,11 +90,14 @@ function withTempDir(fn: (dir: string) => void): void {
 }
 
 describe("mstar pr-review tally", () => {
+  /** The three required run facts of a run that covered its plan and read its diff. */
+  const settled = ["--required-domains", "persist", "--opened-domains", "persist", "--diff-basis", "readable"];
+
   test("happy path prints the two-line chat header + structured tally (exit 0)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, JSON.stringify([{ mergeClass: "should-fix" }, { mergeClass: "nit" }, { mergeClass: "nit" }]));
-      const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", "1"]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unverified", "1"]);
       expect(result.exitCode).toBe(0);
       // § Display contract verbatim two-liner: should-fix 12 + nit (2+1) + unverified 5 = 20 → 80.
       const resultData = data(result);
@@ -114,6 +117,7 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
+        ...settled,
         "--unmet-ac-unsafe",
         "1",
         "--unmet-ac-safe",
@@ -132,7 +136,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass":"blocker"}]');
-      const result = runCli(["pr-review", "tally", "--findings", findings]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
     });
@@ -140,7 +144,7 @@ describe("mstar pr-review tally", () => {
 
   test("missing findings file is a usage refusal (exit 2)", () => {
     withTempDir((dir) => {
-      const result = runCli(["pr-review", "tally", "--findings", join(dir, "absent.json")]);
+      const result = runCli(["pr-review", "tally", "--findings", join(dir, "absent.json"), ...settled]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(message(result)).toContain("not found");
@@ -151,7 +155,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "{");
-      const result = runCli(["pr-review", "tally", "--findings", findings]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(message(result)).toContain("findings file must contain valid JSON");
@@ -162,7 +166,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '{"mergeClass":"must-fix"}');
-      const result = runCli(["pr-review", "tally", "--findings", findings]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("must be a JSON array");
     });
@@ -172,7 +176,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
-      const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", raw]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unverified", raw]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("--unverified must be a non-negative integer");
     });
@@ -182,15 +186,15 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
-      const result = runCli(["pr-review", "tally", "--findings", findings, "--unmet-ac-unsafe", "51"]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unmet-ac-unsafe", "51"]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("must be a non-negative integer no greater than 50");
     });
   });
 
   test.each([" ", "budget spent\nsecurity domain still unopened"])(
-    "a blank or multi-line --incomplete-reason (%p) is refused as usage (exit 2), not an engine failure",
-    (reason) => {
+    "a blank or multi-line --stopped (%p) is refused as usage (exit 2), not an engine failure",
+    (stopped) => {
       withTempDir((dir) => {
         const findings = join(dir, "findings.json");
         writeFileSync(findings, "[]");
@@ -199,21 +203,20 @@ describe("mstar pr-review tally", () => {
           "tally",
           "--findings",
           findings,
-          "--incomplete-reason",
-          reason,
-          "--unscanned",
-          "src/auth.ts",
+          ...settled,
+          "--stopped",
+          stopped,
         ]);
         expect(result.exitCode).toBe(2);
         expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-        expect(message(result)).toContain("single line");
+        expect(message(result)).toContain("--stopped must be a single line of non-blank text");
       });
     },
   );
 
-  test.each(["src/auth.ts\npackages/engine", "src/auth.ts,,packages/engine"])(
-    "a blank or multi-line --unscanned entry (%p) is refused as usage (exit 2), not an engine failure",
-    (scope) => {
+  test.each(["persist,,security", "persist\nsecurity"])(
+    "a blank or multi-line --required-domains entry (%p) is refused as usage (exit 2), not an engine failure",
+    (domains) => {
       withTempDir((dir) => {
         const findings = join(dir, "findings.json");
         writeFileSync(findings, "[]");
@@ -222,65 +225,127 @@ describe("mstar pr-review tally", () => {
           "tally",
           "--findings",
           findings,
-          "--incomplete-reason",
-          "budget spent before the security domain",
-          "--unscanned",
-          scope,
+          "--required-domains",
+          domains,
+          "--opened-domains",
+          "persist",
+          "--diff-basis",
+          "readable",
         ]);
         expect(result.exitCode).toBe(2);
         expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-        expect(message(result)).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+        expect(message(result)).toContain("--required-domains must be a comma-separated list of single-line non-blank entries");
       });
     },
   );
 
-  test("both invalid incomplete flags are refused in one response (aggregated validation)", () => {
-    withTempDir((dir) => {
-      const findings = join(dir, "findings.json");
-      writeFileSync(findings, "[]");
-      const result = runCli([
-        "pr-review",
-        "tally",
-        "--findings",
-        findings,
-        "--incomplete-reason",
-        " ",
-        "--unscanned",
-        "src/a.ts,,src/b.ts",
-      ]);
-      expect(result.exitCode).toBe(2);
-      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      const body = message(result);
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
-      expect(body).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
-    });
-  });
+  test.each([
+    ["", ["--required-domains must name at least one domain"]],
+    ["persist,,", ["--required-domains must be a comma-separated list of single-line non-blank entries"]],
+  ])(
+    "--required-domains %p reports exactly one diagnostic for the field",
+    (domains, messages) => {
+      withTempDir((dir) => {
+        const findings = join(dir, "findings.json");
+        writeFileSync(findings, "[]");
+        const result = runCli([
+          "pr-review",
+          "tally",
+          "--findings",
+          findings,
+          "--required-domains",
+          domains,
+          "--opened-domains",
+          "persist",
+          "--diff-basis",
+          "readable",
+        ]);
+        expect(result.exitCode).toBe(2);
+        expect(envelope(result).status).toBe("usage");
+        // One field, one diagnostic: a malformed list must not also claim the
+        // caller supplied no domain at all.
+        expect(envelope(result).details?.diagnostics).toEqual(
+          messages.map((message) => ({ path: "requiredDomains", code: "invalid", message })),
+        );
+      });
+    },
+  );
 
-  test("a new-flag error and a count error are refused in one response (aggregated validation)", () => {
+  test("an unaccepted --diff-basis joins the other tally faults in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
-      writeFileSync(findings, "[]");
+      writeFileSync(findings, "[{}]");
+      // The basis is validated by the family, never at admission, so it is
+      // reported beside the omitted fact, the invalid count and the invalid
+      // findings entry in the same refusal.
       const result = runCli([
         "pr-review",
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
-        " ",
-        "--unscanned",
-        "src/auth.ts",
+        "--opened-domains",
+        "persist",
+        "--diff-basis",
+        "maybe",
         "--unverified",
         "x",
       ]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--diff-basis must be readable or unreadable");
+      expect(body).toContain("Rejected requiredDomains: expected present; received undefined");
+      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+    });
+  });
+
+  test("both an invalid run fact and an invalid count are refused in one response (aggregated validation)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist",
+        "--opened-domains",
+        "persist,,security",
+        "--diff-basis",
+        "readable",
+        "--stopped",
+        " ",
+        "--unverified",
+        "x",
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const body = message(result);
+      expect(body).toContain("--stopped must be a single line of non-blank text");
+      expect(body).toContain("--opened-domains must be a comma-separated list of single-line non-blank entries");
       expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
     });
   });
 
-  test("a findings-payload error and a blank incomplete flag are refused in one response (aggregated validation)", () => {
+  test.each([
+    ["--required-domains", ["--opened-domains", "persist", "--diff-basis", "readable"]],
+    ["--opened-domains", ["--required-domains", "persist", "--diff-basis", "readable"]],
+    ["--diff-basis", ["--required-domains", "persist", "--opened-domains", "persist"]],
+  ])("an omitted %s is refused instead of inferred (fail-closed)", (flag, remaining) => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...remaining]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      // The family's collection phase refuses the omission; no default stands in.
+      expect(message(result)).toContain(`${flag} is required`);
+    });
+  });
+
+  test("a findings-payload error and a blank run fact are refused in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[{}]");
@@ -289,20 +354,19 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
+        ...settled,
+        "--stopped",
         " ",
-        "--unscanned",
-        "src/auth.ts",
       ]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
       expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--stopped must be a single line of non-blank text");
     });
   });
 
-  test("a malformed findings file and a blank incomplete flag are refused in one response (aggregated validation)", () => {
+  test("a malformed findings file and a blank run fact are refused in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass": "must-fix",}');
@@ -311,20 +375,105 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
+        ...settled,
+        "--stopped",
         " ",
-        "--unscanned",
-        "src/auth.ts",
       ]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
       expect(body).toContain("findings file must contain valid JSON");
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--stopped must be a single line of non-blank text");
     });
   });
 
-  test("a lone --unscanned none declares the engine's empty scope", () => {
+  test("a required domain that never opened derives incomplete, and an explicit empty --opened-domains is the empty list", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist,security",
+        "--opened-domains",
+        "",
+        "--diff-basis",
+        "readable",
+      ]);
+      expect(result.exitCode).toBe(0);
+      // Empty findings: the count-derived score/band stay whole; the run facts
+      // alone select `incomplete` and mark the grade partial.
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("incomplete");
+      expect(resultData.incomplete).toEqual({
+        reason: "required domain seat(s) never opened: persist, security",
+        unscanned: ["persist", "security"],
+      });
+      expect(resultData.chatHeader).toBe(
+        "incomplete \u00b7 100% (mergeable, partial)\nmust-fix=0 should-fix=0 nit=0 unverified=0\n" +
+          "cause: required domain seat(s) never opened: persist, security\nunscanned: persist, security",
+      );
+    });
+  });
+
+  test("an unreadable diff basis derives incomplete and names the basis as unscanned", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist",
+        "--opened-domains",
+        "persist",
+        "--diff-basis",
+        "unreadable",
+      ]);
+      expect(result.exitCode).toBe(0);
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("incomplete");
+      expect(resultData.incomplete).toEqual({
+        reason: "the resolved diff basis could not be read",
+        unscanned: ["the resolved diff basis"],
+      });
+      expect(resultData.chatHeader).toContain("cause: the resolved diff basis could not be read");
+      expect(resultData.chatHeader).toContain("unscanned: the resolved diff basis");
+    });
+  });
+
+  test("complete coverage stays settled: the tally-derived verdict and the two-line header", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, JSON.stringify([{ mergeClass: "should-fix" }, { mergeClass: "nit" }]));
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist,security",
+        "--opened-domains",
+        "persist,security",
+        "--diff-basis",
+        "readable",
+      ]);
+      expect(result.exitCode).toBe(0);
+      // should-fix 12 + nit 2 = 14 → 86; no run fact selects `incomplete`.
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("needs fixes");
+      expect(resultData.band).toBe("good");
+      expect(resultData.chatHeader).toBe("needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 nit=1 unverified=0");
+      expect(resultData.incomplete).toBeUndefined();
+    });
+  });
+
+  test("a stopped run with full coverage declares the empty scope", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass":"must-fix"},{"mergeClass":"nit"}]');
@@ -333,15 +482,87 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
-        "budget spent before the security domain",
-        "--unscanned",
-        "none",
+        ...settled,
+        "--stopped",
+        "operator cancelled the run",
       ]);
       expect(result.exitCode).toBe(0);
       const resultData = data(result);
-      expect(resultData.incomplete).toEqual({ reason: "budget spent before the security domain", unscanned: [] });
+      expect(resultData.incomplete).toEqual({
+        reason: "the run stopped before synthesis \u2014 operator cancelled the run",
+        unscanned: [],
+      });
       expect(resultData.chatHeader).toContain("unscanned: none");
+    });
+  });
+
+  test("a stopped run with a declared partial seat scope names it as unscanned", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        ...settled,
+        "--stopped",
+        "operator cancelled the run",
+        "--partial-scope",
+        "dashboard HTTP server",
+      ]);
+      expect(result.exitCode).toBe(0);
+      const resultData = data(result);
+      expect(resultData.incomplete).toEqual({
+        reason: "the run stopped before synthesis \u2014 operator cancelled the run",
+        unscanned: ["dashboard HTTP server"],
+      });
+      expect(resultData.chatHeader).toContain("unscanned: dashboard HTTP server");
+    });
+  });
+
+  test("a settled run echoes a declared partial scope as declaredScopes and keeps the two-line header", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, '[{"mergeClass":"should-fix"}]');
+      const bare = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
+      const declared = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--partial-scope", "docs"]);
+      expect(bare.exitCode).toBe(0);
+      expect(declared.exitCode).toBe(0);
+      const declaredData = data(declared);
+      expect(declaredData).toMatchObject({ verdict: "needs fixes", declaredScopes: ["docs"] });
+      // A declared truncation is a report fact on a settled run; it never
+      // reaches the derived override or the display header.
+      expect(declaredData.incomplete).toBeUndefined();
+      expect(declaredData.chatHeader).toBe(data(bare).chatHeader);
+      expect(String(declaredData.chatHeader).split("\n")).toHaveLength(2);
+    });
+  });
+
+  test("a blank --partial-scope entry joins the other tally faults in one response", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        ...settled,
+        "--partial-scope",
+        "dashboard HTTP server",
+        "   ",
+        "--unverified",
+        "x",
+      ]);
+      expect(result.exitCode).toBe(2);
+      const body = message(result);
+      expect(body).toContain("--partial-scope entries must be single lines of non-blank text");
+      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(envelope(result).details?.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "partialScope", code: "invalid" }),
+        expect.objectContaining({ path: "unverified", code: "invalid" }),
+      ]));
     });
   });
 });

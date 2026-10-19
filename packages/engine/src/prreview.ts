@@ -491,6 +491,122 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
 }
 
 /**
+ * Immutable run facts that decide settled-vs-incomplete (pr-review.md
+ * § Verdict synthesis). Wall-clock overrun is deliberately absent: time
+ * never selects `incomplete`, so a run past its tier budget with complete
+ * coverage stays settled and declares the overrun under `- notes:`.
+ */
+export type PrReviewRunFacts = {
+  /**
+   * REQUIRED: one entry per required seat, so a domain with two seats
+   * (a normal seat plus a same-domain security-lens seat) appears twice.
+   */
+  requiredDomains: readonly string[];
+  /** REQUIRED: one entry per seat whose domain returned evidence (may be empty). */
+  openedDomains: readonly string[];
+  /** REQUIRED: the resolved diff basis was readable and complete. */
+  diffBasisReadable: boolean;
+  /** Optional: why the run stopped before synthesis (cancelled / interrupted / killed). */
+  stopped?: string;
+  /** Optional: scope entries seats declared as truncated coverage in their payload tails. */
+  partialSeatScopes?: readonly string[];
+};
+
+/** Settled, or not settled with the derived cause + unscanned scope. */
+export type PrReviewSettlement =
+  | { settled: true }
+  | { settled: false; incomplete: PrIncomplete };
+
+/**
+ * Derive whether a PR-review run settled, and if not the single-line cause
+ * plus the scope it never scanned (pr-review.md § Verdict synthesis). This
+ * is the only implementation of the trigger list.
+ *
+ * Fail-closed: every coverage fact is required, so a caller that reports
+ * nothing is refused instead of being read as complete coverage. Only a run
+ * that states its required seats, its opened seats and a readable diff
+ * basis can settle.
+ *
+ * Seat-occurrence accounting: `requiredDomains` and `openedDomains` are
+ * multisets, so each required entry consumes one matching opened entry. A
+ * domain that needs two seats therefore needs two opened entries; one seat's
+ * evidence never satisfies its same-domain sibling.
+ *
+ * Precedence: a stop before synthesis wins, then required seats that never
+ * opened, then an unreadable resolved diff basis; otherwise the run settled.
+ * `unscanned` carries the deduplicated union — each required seat that never
+ * opened, then the resolved diff basis when unreadable, then every scope a
+ * seat declared as truncated coverage — so it is complete for whichever
+ * cause wins. An `openedDomains` entry outside `requiredDomains` is ignored —
+ * a seat the tier never asked for cannot fail the run.
+ */
+export function resolvePrReviewSettlement(facts: PrReviewRunFacts): PrReviewSettlement {
+  if (facts === null || typeof facts !== "object") {
+    throw new TypeError(
+      `resolvePrReviewSettlement: run facts are required - got ${JSON.stringify(facts)}`,
+    );
+  }
+  if (facts.stopped !== undefined && !isSingleLineFact(facts.stopped)) {
+    throw new TypeError(
+      `resolvePrReviewSettlement: stopped must be a non-empty single-line string - got ${JSON.stringify(facts.stopped)}`,
+    );
+  }
+  const domainFields = [
+    ["requiredDomains", facts.requiredDomains],
+    ["openedDomains", facts.openedDomains],
+  ] as const;
+  for (const [field, value] of domainFields) {
+    if (!Array.isArray(value) || !value.every(isSingleLineFact)) {
+      throw new TypeError(
+        `resolvePrReviewSettlement: ${field} must be an array of non-empty single-line strings - got ${JSON.stringify(value)}`,
+      );
+    }
+  }
+  if (facts.requiredDomains.length === 0) {
+    throw new TypeError(
+      "resolvePrReviewSettlement: requiredDomains must be an array of non-empty single-line strings and must not be empty - got []",
+    );
+  }
+  if (typeof facts.diffBasisReadable !== "boolean") {
+    throw new TypeError(
+      `resolvePrReviewSettlement: diffBasisReadable must be a boolean - got ${JSON.stringify(facts.diffBasisReadable)}`,
+    );
+  }
+  if (facts.partialSeatScopes !== undefined && (!Array.isArray(facts.partialSeatScopes) || !facts.partialSeatScopes.every(isSingleLineFact))) {
+    throw new TypeError(
+      `resolvePrReviewSettlement: partialSeatScopes must be an array of non-empty single-line strings - got ${JSON.stringify(facts.partialSeatScopes)}`,
+    );
+  }
+  // Seat-occurrence accounting: consume one opened entry per required entry,
+  // so a second seat in the same domain is never satisfied by its sibling's
+  // evidence.
+  const unconsumed = [...facts.openedDomains];
+  const missing = facts.requiredDomains.filter((domain) => {
+    const at = unconsumed.indexOf(domain);
+    if (at < 0) return true;
+    unconsumed.splice(at, 1);
+    return false;
+  });
+  const unreadableBasis = !facts.diffBasisReadable;
+  const unscanned = [...new Set([
+    ...missing,
+    ...(unreadableBasis ? ["the resolved diff basis"] : []),
+    ...(facts.partialSeatScopes ?? []),
+  ])];
+
+  if (facts.stopped !== undefined) {
+    return { settled: false, incomplete: { reason: `the run stopped before synthesis \u2014 ${facts.stopped}`, unscanned } };
+  }
+  if (missing.length > 0) {
+    return { settled: false, incomplete: { reason: `required domain seat(s) never opened: ${missing.join(", ")}`, unscanned } };
+  }
+  if (unreadableBasis) {
+    return { settled: false, incomplete: { reason: "the resolved diff basis could not be read", unscanned } };
+  }
+  return { settled: true };
+}
+
+/**
  * Validate a `mstar.review/v1` envelope (the review envelope schema). Fail-loud sibling
  * of {@link validatePrReviewReport} (the Markdown report validator) —
  * shares PR_VERDICTS / MERGE_CLASSES only, never reuses the Markdown
@@ -1462,7 +1578,9 @@ export type PrReviewTier = "quick" | "default" | "deep";
  * - `wallClockMinutes`: prompt-discipline target for the whole review,
  * measured worktree-setup → local report saved by the main agent.
  * Overruns are declared in the report `- notes:` — budgets are never a
- * host-level hard kill.
+ * host-level hard kill, and never a settlement fact: exceeding one with
+ * complete coverage publishes the tally-derived verdict, so elapsed time
+ * never selects the `incomplete` token (pr-review.md § Verdict synthesis).
  * - `maxSeats`: review seats only — Stage 2 domain seats + the independent
  * cross-domain security seat; NOT Stage 1 collect seats (collect fan-out
  * stays governed by pr-review.md § Scale-driven fan-out).

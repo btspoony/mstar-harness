@@ -330,6 +330,7 @@ __export(exports_engine, {
   resolveKnowledgeDir: () => resolveKnowledgeDir,
   resolveMstarcEnforcement: () => resolveMstarcEnforcement,
   resolvePlanDir: () => resolvePlanDir,
+  resolvePrReviewSettlement: () => resolvePrReviewSettlement,
   resolvePrReviewTier: () => resolvePrReviewTier,
   resolveProcessHarnessDir: () => resolveProcessHarnessDir,
   resolveProjectDir: () => resolveProjectDir,
@@ -21982,6 +21983,56 @@ function checkProvidedTallyShape(tally, violations) {
   } else if (tally.incomplete !== undefined) {
     violations.push(violation15("high", "review.incomplete-unexpected", `tally.incomplete is carried only by the "incomplete" tally verdict - tally.verdict is "${String(tally.verdict)}"`, "remove tally.incomplete, or set tally.verdict: incomplete"));
   }
+}
+function resolvePrReviewSettlement(facts) {
+  if (facts === null || typeof facts !== "object") {
+    throw new TypeError(`resolvePrReviewSettlement: run facts are required - got ${JSON.stringify(facts)}`);
+  }
+  if (facts.stopped !== undefined && !isSingleLineFact(facts.stopped)) {
+    throw new TypeError(`resolvePrReviewSettlement: stopped must be a non-empty single-line string - got ${JSON.stringify(facts.stopped)}`);
+  }
+  const domainFields = [
+    ["requiredDomains", facts.requiredDomains],
+    ["openedDomains", facts.openedDomains]
+  ];
+  for (const [field, value] of domainFields) {
+    if (!Array.isArray(value) || !value.every(isSingleLineFact)) {
+      throw new TypeError(`resolvePrReviewSettlement: ${field} must be an array of non-empty single-line strings - got ${JSON.stringify(value)}`);
+    }
+  }
+  if (facts.requiredDomains.length === 0) {
+    throw new TypeError("resolvePrReviewSettlement: requiredDomains must be an array of non-empty single-line strings and must not be empty - got []");
+  }
+  if (typeof facts.diffBasisReadable !== "boolean") {
+    throw new TypeError(`resolvePrReviewSettlement: diffBasisReadable must be a boolean - got ${JSON.stringify(facts.diffBasisReadable)}`);
+  }
+  if (facts.partialSeatScopes !== undefined && (!Array.isArray(facts.partialSeatScopes) || !facts.partialSeatScopes.every(isSingleLineFact))) {
+    throw new TypeError(`resolvePrReviewSettlement: partialSeatScopes must be an array of non-empty single-line strings - got ${JSON.stringify(facts.partialSeatScopes)}`);
+  }
+  const unconsumed = [...facts.openedDomains];
+  const missing = facts.requiredDomains.filter((domain2) => {
+    const at = unconsumed.indexOf(domain2);
+    if (at < 0)
+      return true;
+    unconsumed.splice(at, 1);
+    return false;
+  });
+  const unreadableBasis = !facts.diffBasisReadable;
+  const unscanned = [...new Set([
+    ...missing,
+    ...unreadableBasis ? ["the resolved diff basis"] : [],
+    ...facts.partialSeatScopes ?? []
+  ])];
+  if (facts.stopped !== undefined) {
+    return { settled: false, incomplete: { reason: `the run stopped before synthesis — ${facts.stopped}`, unscanned } };
+  }
+  if (missing.length > 0) {
+    return { settled: false, incomplete: { reason: `required domain seat(s) never opened: ${missing.join(", ")}`, unscanned } };
+  }
+  if (unreadableBasis) {
+    return { settled: false, incomplete: { reason: "the resolved diff basis could not be read", unscanned } };
+  }
+  return { settled: true };
 }
 function validateMstarReviewV1(doc) {
   const violations = [];
