@@ -1,6 +1,5 @@
 /**
- * Agent Teams identity resolution for the agent-flow ledger (plan
- * 20261019-dsh-delegation-channels, Task 4).
+ * Agent Teams identity resolution for the agent-flow ledger.
  *
  * The official Agent Teams packages are EXPERIMENTAL and stay OPTIONAL: this
  * module reads them STRUCTURALLY — no value or type import from
@@ -99,7 +98,8 @@ export function memberNameOfSpawnResult(value: unknown): string | undefined {
 /**
  * Whether the `spawn_teammate` result itself proves the member is gone: the
  * upstream tool throws on creation failure and records a durable `failed`
- * row, so a returned `phase: 'failed'` / `status: 'failed'` is the only
+ * row, so a returned `status: 'failed'` (the runtime-enriched
+ * `TeamMemberView` field; the view has no `phase`) is the only
  * successful-return shape that does. The name stays permanently consumed
  * upstream; the ledger settles `error` instead of waiting for a turn that can
  * never run.
@@ -107,7 +107,7 @@ export function memberNameOfSpawnResult(value: unknown): string | undefined {
  */
 export function memberFailedOfSpawnResult(value: unknown): boolean {
   const member = asRecord(asRecord(value)?.member)
-  return member?.phase === 'failed' || member?.status === 'failed'
+  return member?.status === 'failed'
 }
 
 /**

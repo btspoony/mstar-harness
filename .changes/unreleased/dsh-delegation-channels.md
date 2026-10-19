@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, engine, dsh
+packages: root, engine, commands, dsh
 ---
 
 - **dsh delegation channels are capability-based, not `subagent`-only.** The engine `ToolSignal` vocabulary and the CLI `host.detect` token list accept the official Agent Teams carriers (`spawn_teammate`, `team_task_create`) next to `subagent`/`subagent_fork`, and `detectHost` reports `dsh` for any of them. Detection order is unchanged (cursor → opencode → omp → dsh → kimi → zcode → codex); the dsh row only gains accepted tokens, and every other row's verdicts stay identical.

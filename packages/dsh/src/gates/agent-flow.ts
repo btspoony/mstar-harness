@@ -777,11 +777,12 @@ function appendEvent(
  *
  * Pairing: when the input
  * carries an `exec` AND the apply-scoped `pairing` store, the successful
- * record registers the agent-namespaced key `${sessionId}\u0000${callId}` →
- * dispatchRef (the full dispatch identity), so a later
- * `tools/post-execute` for the same call can settle with the SAME identity
- * (the session id namespaces the key — a raw callId is
- * not globally unique across sessions in one process). The pairing registers
+ * record registers the session- and tool-namespaced key
+ * `${sessionId}\u0000${toolName}\u0000${callId}` → dispatchRef (the full
+ * dispatch identity), so a later `tools/post-execute` for the same call can
+ * settle with the SAME identity (the session id namespaces the key — a raw
+ * callId is not globally unique across sessions in one process — and the tool
+ * name keeps two channels' per-message ids from colliding). The pairing registers
  * only after the ledger append SUCCEEDED — a failed record never pairs to a
  * phantom dispatch. An exec-less record (host-hook path) has no callId → no
  * pairing. The pairing sub-path has its OWN catch scope: a `Map.set` throw must not log "record

@@ -709,6 +709,11 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 - A renamed `subagent` tool (Config `toolName`) silently disables the dispatch
   gate AND host detection unless `dispatchTools` declares the new name (the
   plugin warns under hard enforcement).
+- A renamed Agent Teams tool (`spawn_teammate` / `send_message` /
+  `team_task_create` / `team_task_update`) is out of reach until its fixed name
+  is added to the plugin's `TEAM_DISPATCH_TOOLS` map; team names have no Config
+  key, so the map is source-only — the same caveat as renamed `subagent`
+  instances, one level stricter.
 - Role binding is prompt-only on dsh: always include **`Execute as`** +
   **`Act as`** + skill load in the Assignment body — there is no separate
   `agent` field.

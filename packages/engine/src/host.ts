@@ -83,8 +83,9 @@ export type ToolSignal =
  * tools (roadmap §4 D5) collide with no other row, so they sit with the
  * agent-tool hosts. (`mstar-host` describes OpenCode's row as the `task`
  * tool with `subagent` (singular) while this enum spells that token
- * `task_subagent`; keep the two spellings aligned in the upstream PR that
- * carries this row, together with the CLI `HOST_SIGNALS` list.)
+ * `task_subagent`; the paired CLI list is `hostSignals` in
+ * `packages/commands/src/families/local.ts`, which already carries the same
+ * tokens — change the row and that list together.)
  * Still ambiguous → `"ambiguous"` (prompt judgment stays in the skill).
  */
 export function detectHost(signals: readonly ToolSignal[]): DetectResult {
