@@ -212,6 +212,14 @@ export type AdmittedCommand = Readonly<{
    */
   readonly sessionId?: string;
   /**
+   * The explicit per-call harness root this admission validated: a non-blank
+   * `harness` field, present only when the definition's input declares such a
+   * field and the call supplied one. An immutable primitive context fact —
+   * the transport's root selector, never handler data — so a context resolver
+   * can see the caller NAMED a root without ever reaching the handler value.
+   */
+  readonly harness?: string;
+  /**
    * The caller-supplied `input` string: the content a command's `stdin` effect
    * reads (the MCP route sends it in the call's `input` field). A primitive
    * copy, never the parsed handler value.
@@ -231,6 +239,7 @@ type AdmittedBindings = Readonly<{
   data: unknown;
   required: readonly string[];
   sessionId?: string;
+  harness?: string;
   stdinText?: string;
 }>;
 
@@ -281,6 +290,7 @@ async function runAdmitted(bindings: AdmittedBindings, context: InvocationContex
 function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
   return Object.freeze({
     ...(bindings.sessionId === undefined ? {} : { sessionId: bindings.sessionId }),
+    ...(bindings.harness === undefined ? {} : { harness: bindings.harness }),
     ...(bindings.stdinText === undefined ? {} : { stdinText: bindings.stdinText }),
     execute(context: InvocationContext): Promise<CommandEnvelope> {
       return runAdmitted(bindings, context);
@@ -424,11 +434,16 @@ export function admitCommandInput(
   const parsedRecord = parsed.data !== null && typeof parsed.data === "object" ? parsed.data as Record<string, unknown> : {};
   const stdinText = definition.effects.includes("stdin") && typeof parsedRecord.input === "string"
     ? parsedRecord.input : undefined;
+  // The explicit per-call root selector: the schema-validated `harness`
+  // field BEFORE any transport shape (a shape may fill a launcher default —
+  // only a value the CALLER supplied is the explicit selector).
+  const callHarness = parsedRecord.harness;
   return {
     success: true,
     ...admittedCommand({
       definition, contract, data: shape(parsed.data), required,
       ...(typeof selectorValue === "string" ? { sessionId: selectorValue } : {}),
+      ...(typeof callHarness === "string" && callHarness.trim() !== "" ? { harness: callHarness } : {}),
       ...(stdinText === undefined ? {} : { stdinText }),
     }),
   };

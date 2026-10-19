@@ -20,8 +20,8 @@ export function createMcpServer(
     });
   };
   server.server.onclose = () => { void closeServices(); };
-  const createRequestContext: ResolveContext = async (definition, sessionId, signal, requestServices, effects) => {
-    const context = await resolveContext(definition, sessionId, signal, requestServices, effects);
+  const createRequestContext: ResolveContext = async (definition, sessionId, signal, requestServices, effects, call) => {
+    const context = await resolveContext(definition, sessionId, signal, requestServices, effects, call);
     const requestContext: InvocationContext = Object.freeze({
       ...context,
       versions: Object.freeze({ ...context.versions }),

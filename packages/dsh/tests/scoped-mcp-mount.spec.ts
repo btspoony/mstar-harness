@@ -129,7 +129,10 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.serverName).toBe('mstar')
       expect(config.transport).toBe('stdio')
       expect(config.command).toBe('npx')
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp'])
+      // The identity-env declaration rides the args: without it the CLI's
+      // `registerMcpCommand` reads NO ambient identity, so the per-agent env
+      // key would never reach the connection.
+      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
@@ -158,7 +161,9 @@ describe('scoped MCP mount — per-agent registration', () => {
 
       expect(fake.configs).toHaveLength(1)
       expect(fake.configs[0]!.command).toBe('bun')
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp'])
+      // A loader-derived row config gets the identity-env declaration too —
+      // the per-agent env is only honored when the server is told to read it.
+      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -310,6 +315,59 @@ describe('scoped MCP mount — optional-by-presence degrade', () => {
       expect(warns.filter((line) => line.includes('mount failed'))).toHaveLength(1)
       // The rejection stays contained: no mount was attempted either.
       expect(lines.filter((line) => line.startsWith('debug:'))).toHaveLength(0)
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+})
+
+describe('scoped MCP mount — per-agent disposal', () => {
+  it('disposing an agent disposes its fiber and frees the id; another agent is unaffected', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, { provider: fake.provider })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-b'), source: 'fresh' })
+      await settle()
+      expect(fake.configs).toHaveLength(2)
+      expect(fake.disposed).toBe(0)
+
+      // Closing agent-a disposes exactly ITS scoped fiber (the MCP stdio
+      // child process dies with it); agent-b's mount is untouched.
+      ctx.events.emit('agent/disposed', { agent: rootAgent('agent-a') })
+      await settle()
+      expect(fake.disposed).toBe(1)
+      expect(fake.configs).toHaveLength(2)
+
+      // The freed id mounts again (a re-created agent gets its own mount)…
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+      expect(fake.configs).toHaveLength(3)
+      expect(fake.configs[2]!.env).toEqual(envFor('agent-a'))
+      // …and the disposal edge never leaks into the other agent.
+      ctx.events.emit('agent/disposed', { agent: rootAgent('agent-b') })
+      await settle()
+      expect(fake.disposed).toBe(2)
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a disposal edge for an unknown id is a silent no-op (never a throw)', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, { provider: fake.provider })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+      expect(() => ctx.events.emit('agent/disposed', { agent: rootAgent('never-mounted') })).not.toThrow()
+      expect(fake.disposed).toBe(0)
+      expect(fake.configs).toHaveLength(1)
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})

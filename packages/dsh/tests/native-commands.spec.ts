@@ -241,6 +241,37 @@ describe('native command tool registration', () => {
       expect(Object.keys(tool!.parameters ?? {})).not.toContain('sessionId')
     }
   })
+
+  it('describes flattened json payloads mechanically from the published schema (F-5)', async () => {
+    const app = booted = await bootApp()
+    const propertiesOf = (name: string): Record<string, { description?: string }> => {
+      // The registry's get returns the compiled tool: its parameter root is
+      // the implicit object root, so the authored specs live under
+      // `properties`.
+      const parameters = app.ctx.tools.get(name)!.parameters as { properties?: Record<string, { description?: string }> } | undefined
+      return parameters?.properties ?? {}
+    }
+    // `plan.complete`'s evidence is a shaped object whose qc/qa members are
+    // REQUIRED: the description must name them (and their own members) so a
+    // caller can construct a valid payload without guessing.
+    const evidence = propertiesOf('mstar_plan_complete').evidence
+    expect(evidence?.description).toBeDefined()
+    for (const member of ['qc', 'qa', 'decision', 'reports', 'consolidated', 'gate', 'report']) {
+      expect(evidence!.description).toContain(member)
+    }
+    // `issue.add`'s payload input node is a permissive placeholder; the
+    // description is derived from the payload descriptor's own published
+    // schema (CaptureInput) instead.
+    const payload = propertiesOf('mstar_issue_add').payload
+    expect(payload?.description).toBeDefined()
+    for (const member of ['projectId', 'title', 'kind', 'severity', 'rootCauseKey', 'discoveredAt']) {
+      expect(payload!.description).toContain(member)
+    }
+    // Scalar fields stay help-only: the derivation never invents text for a
+    // typed node.
+    const workflow = propertiesOf('mstar_plan_bind').workflow
+    expect(workflow?.description ?? '').not.toContain('Payload:')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -393,6 +424,45 @@ describe('native leaf-seat refusal — a known leaf can never mint a coordinator
     expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
     const state = await readExecutionState({ harnessDir: app.harnessDir })
     expect(state.data.workflows[0]?.coordinator ?? null).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (c2) F-0 — a refused bind surfaces the ENGINE's refusal verbatim: the
+// adoption narrowing never rewrites a non-ok envelope as a dsh-side
+// binding refusal, even when the bind arms were requested.
+// ---------------------------------------------------------------------------
+
+describe('refused bind envelope passes through verbatim (no adoption rewrite)', () => {
+  it('a refused bind with execution: true carries the engine refusal, never binding.receipt-unrecognizable', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    // A REAL bind first: the workflow then holds CHILD's coordinator seat, so
+    // the SECOND bind below is refused by the ENGINE (occupied coordinator) —
+    // with execution: true, i.e. exactly the input the adoption narrowing
+    // would otherwise read as a bind arm.
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+    const parent = agentOf(PARENT_ID, app.root)
+    const refused = envelopeOf(await run(app.ctx, 'mstar_plan_bind', parent, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(refused.status).toBe('refused')
+    // Verbatim: the engine's own refusal code and message — never the
+    // dsh-side adoption refusal the receipt narrowing would mint.
+    expect(refused.code).not.toBe('binding.receipt-unrecognizable')
+    expect(String(refused.code).startsWith('binding.')).toBe(false)
+    expect(String(refused.message)).not.toContain('no recognizable execution session reference')
+    expect(String(refused.message)).not.toContain('execution binding was NOT adopted')
+    expect(refused.command).toBe('plan.bind')
+    // The refusal exits non-zero like every engine refusal.
+    expect(refused.exitCode).not.toBe(0)
   })
 })
 

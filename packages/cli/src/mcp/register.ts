@@ -30,10 +30,21 @@ export type ResolveContext = {
     signal: AbortSignal,
     services: Array<{ close(): Promise<void> }>,
     effects: McpEffects,
+    call?: ResolveContextCall,
   ): InvocationContext | Promise<InvocationContext>;
   readonly defaultSessionId?: string;
   readonly defaultHarness?: string;
 };
+
+/**
+ * The per-call facts the transport hands the resolver after admission: only
+ * the immutable primitive selectors admission validated — never the handler
+ * value. `harness` is the explicit root the CALLER named this call (a
+ * non-blank `harness` field), undefined when the call named no root.
+ */
+export type ResolveContextCall = Readonly<{
+  readonly harness?: string;
+}>;
 
 export function mcpToolName(commandId: string): string {
   return `mstar_${commandId.replace(/[.-]/g, "_")}`;
@@ -193,8 +204,9 @@ export function registerMcpCommands(
       outputSchema: definition.output,
     }, async (admitted, extra) => {
       // The resolver and the context consume only the primitive session
-      // selector; the handler value itself never leaves the capability.
-      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects);
+      // selector and the per-call root selector; the handler value itself
+      // never leaves the capability.
+      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: admitted.harness });
       const sessionId = admitted.sessionId ?? resolved.sessionId;
       const requestContext: InvocationContext = Object.freeze({
         ...resolved,

@@ -21,12 +21,15 @@
  * mirrors the shipped bundle's `mstar-mcp` row (bundle/cordis.patch.yml:
  * `npx -y @mstar-harness/cli mcp`, stdio); when the deployment's loader
  * carries a readable row config for the package, that config is the base and
- * only the per-agent `env` is overlaid.
+ * only the per-agent `env` and the identity-env args are overlaid.
  *
- * Disposal: the `agent/created` listener is a fiber-scoped effect and every
- * mount is a child fiber of the registering context, so an HMR fiber swap
- * unloads each scoped instance — and with it the MCP client's stdio child
- * process — with the plugin. No explicit disposer is kept here.
+ * Disposal: the `agent/created` listener is a fiber-scoped effect, so an HMR
+ * fiber swap unloads the registering context with every mount it made. Each
+ * mount's child fiber is ALSO retained per agent id: the `agent/disposed`
+ * listener disposes and deletes it, so closing one agent tears down its own
+ * MCP child process (a leaked stdio child for every closed session would
+ * otherwise accumulate for the app's lifetime) and frees the id — a second
+ * agent is untouched, and a disposed id may mount again.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { isLeafSeatHeader } from './leaf-seat.ts'
@@ -37,20 +40,29 @@ export const SCOPED_MCP_MOUNT_LOGGER = 'mstar/scoped-mcp-mount'
 /** The env key carrying the per-agent session identity into the MCP server child. */
 export const MSTAR_HOST_SESSION_ID = 'MSTAR_HOST_SESSION_ID'
 
+/**
+ * The exact CLI flag the `mcp` subcommand reads for the identity channel
+ * (`registerMcpCommand` in `packages/cli/src/mcp/command.ts`:
+ * `--identity-env <NAME>`; without it the server reads NO ambient identity,
+ * so a per-agent env alone would never reach the connection).
+ */
+const IDENTITY_ENV_FLAG = '--identity-env'
+
 /** The package the mount reuses (one string literal; never a static import — optional-by-presence). */
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 
 /**
  * The base config mirroring the shipped bundle's `mstar-mcp` row
  * (bundle/cordis.patch.yml) — the same server command the shipped bundle
- * uses. A readable deployment row config replaces this wholesale (per-agent
- * `env` is overlaid after).
+ * uses, plus the identity-env declaration the CLI requires. A readable
+ * deployment row config replaces the non-args members wholesale and only the
+ * per-agent `env` and the identity-env args are overlaid.
  */
 const DEFAULT_ROW_CONFIG: Record<string, unknown> = {
   serverName: 'mstar',
   transport: 'stdio',
   command: 'npx',
-  args: ['-y', '@mstar-harness/cli', 'mcp'],
+  args: ['-y', '@mstar-harness/cli', 'mcp', IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID],
 }
 
 /**
@@ -59,6 +71,19 @@ const DEFAULT_ROW_CONFIG: Record<string, unknown> = {
  */
 export function scopedMountEnvFor(sessionId: string): Record<string, string> {
   return { [MSTAR_HOST_SESSION_ID]: sessionId }
+}
+
+/**
+ * The args one scoped instance launches its server child with: the base
+ * args with the identity-env declaration appended — the per-agent `env`
+ * only delivers the value if the server is TOLD to read that variable.
+ * A base row that already declares `--identity-env` (or a config whose
+ * `args` is not an array) is passed through untouched.
+ */
+export function scopedMountArgsFor(args: unknown): unknown {
+  if (!Array.isArray(args)) return args
+  if (args.includes(IDENTITY_ENV_FLAG)) return args
+  return [...args, IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID]
 }
 
 /** Consumer log levels the module sink understands. */
@@ -182,6 +207,16 @@ export interface ScopedMcpMountOptions {
 }
 
 /**
+ * The minimal consumed surface of the fiber `ctx.plugin` returns (cordis
+ * `Fiber & PromiseLike<Fiber>`): retaining it per agent id and disposing it
+ * on `agent/disposed` is the per-agent teardown — the HMR story stays the
+ * registering context's own fiber swap.
+ */
+interface ScopedPluginFiber {
+  dispose(): unknown
+}
+
+/**
  * Register the scoped MCP mount: an `agent/created` listener (root and
  * children alike fire — the leaf filter lives inside, the plan-mode-bridge
  * registration pattern) that mounts ONE scoped `@deepseek-ai/dsh-mcp-client`
@@ -192,9 +227,12 @@ export interface ScopedMcpMountOptions {
  * agent id per apply — a repeat event never spawns a second child process)
  * → module resolve (shared one-shot promise; absent → silent, the one-time
  * probe below owns the single debug) → `ctx.plugin(module, config)` with the
- * row-config base + the per-agent env. Every step is try/catch-contained: a
- * failure logs one warn and the agent proceeds without its mount (never a
- * boot or session failure).
+ * row-config base + the per-agent env and identity-env args, the returned
+ * fiber RETAINED under the agent id. The paired `agent/disposed` listener
+ * disposes and deletes the retained fiber, so a closed agent's MCP child
+ * process dies with it and its id may mount again. Every step is
+ * try/catch-contained: a failure logs one warn and the agent proceeds
+ * without its mount (never a boot or session failure).
  *
  * The one-time absence probe resolves the module once at registration and
  * logs ONE debug when the package is not installed — the whole degrade
@@ -222,10 +260,13 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
     // the same posture as a failed mount; never an unhandled rejection.
     log('warn', `scoped MCP module probe failed (contained — per-agent mounts stay try/catch-contained): ${errorMessage(error)}`)
   })
-  // Per-apply dedupe: agent ids already mounted by THIS context. The
-  // apply-scoped lifetime is the HMR story — a reloaded fiber starts a fresh
-  // set and re-mounts only the agents created after the swap.
-  const mounted = new Set<string>()
+  // Per-apply mount table: agent id → its retained scoped fiber (a claim
+  // lands before the module await; the fiber follows once the mount runs).
+  // The apply-scoped lifetime is the HMR story — a reloaded fiber starts a
+  // fresh set and re-mounts only the agents created after the swap — while
+  // the `agent/disposed` edge below tears one agent's child process down
+  // early.
+  const mounted = new Map<string, ScopedPluginFiber | undefined>()
 
   const mount = async (agent: unknown): Promise<void> => {
     try {
@@ -240,23 +281,24 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
       // Claim BEFORE the await: concurrent `agent/created` events for the
       // same id must never double-mount (both handlers resume after the
       // shared module promise settles — only the claimant proceeds).
-      mounted.add(id)
+      mounted.set(id, undefined)
       const mod = await modulePromise
       if (mod === undefined) {
         mounted.delete(id)
         return
       }
-      mounted.add(id)
-      // The scoped instance: one cordis child fiber per agent — its disposal
-      // rides THIS context's fiber (HMR-safe; no disposer kept here). The
+      // The scoped instance: one cordis child fiber per agent, RETAINED so
+      // the `agent/disposed` edge can dispose it when the agent closes. The
       // config is the row-config base (deployment row when readable, else
-      // the shipped-row mirror) plus exactly the per-agent identity env.
+      // the shipped-row mirror) plus the identity-env args and exactly the
+      // per-agent identity env.
       const base = loaderRowConfig(ctx) ?? DEFAULT_ROW_CONFIG
       const config: Record<string, unknown> = {
         ...base,
+        args: scopedMountArgsFor(base.args),
         env: { ...((base.env as Record<string, string> | undefined) ?? {}), ...scopedMountEnvFor(id) },
       }
-      ctx.plugin(mod as unknown as Parameters<Context['plugin']>[0], config)
+      mounted.set(id, ctx.plugin(mod as unknown as Parameters<Context['plugin']>[0], config))
     } catch (error) {
       // Contained: a dead context (post-dispose mount attempt during an HMR
       // swap) or a plugin startup failure logs one warn — the agent proceeds
@@ -270,5 +312,21 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
   // pattern; the payload is consumed structurally).
   ctx.events.on('agent/created', (payload: { agent?: unknown }) => {
     if (payload.agent !== undefined) void mount(payload.agent)
+  })
+
+  // Per-agent teardown edge: a closed agent's retained fiber disposes (its
+  // MCP stdio child process dies with it), its id frees for a re-created
+  // agent, and every other agent's mount is untouched. Contained like the
+  // mount: a disposal failure logs one warn, never a session failure.
+  ctx.events.on('agent/disposed', (payload: { agent?: unknown }) => {
+    const id = (payload.agent as { id?: unknown } | null | undefined)?.id
+    if (typeof id !== 'string') return
+    const fiber = mounted.get(id)
+    if (fiber === undefined) return
+    mounted.delete(id)
+    if (fiber === undefined) return
+    void Promise.resolve(fiber).then((instance) => instance.dispose()).catch((error: unknown) => {
+      log('warn', `scoped MCP mount disposal failed for one agent (contained — the session close proceeds): ${errorMessage(error)}`)
+    })
   })
 }

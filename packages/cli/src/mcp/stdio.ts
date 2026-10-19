@@ -5,7 +5,7 @@ import type { Transport } from "@modelcontextprotocol/server";
 import { withToolCorrection } from "./correction.js";
 import type { McpEffects } from "./effects.js";
 import { createMcpServer } from "./server.js";
-import type { ResolveContext } from "./register.js";
+import type { ResolveContext, ResolveContextCall } from "./register.js";
 
 /**
  * Commands whose own operation establishes a harness root in a workspace that
@@ -112,9 +112,16 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * be silently adopted as the caller's control root (#533): commands would fall
  * back to the launch cwd as the store root and report `store.not-initialized`
  * for a workspace the caller never named. The resolver refuses instead with
- * the cause and the recovery (`mcp.control-root-unresolved`), except for
- * bootstrap commands whose own operation establishes a harness in a workspace
- * that has none.
+ * the cause and the recovery (`mcp.control-root-unresolved`), except in two
+ * named cases. A bootstrap command's own operation establishes a harness in a
+ * workspace that has none. And a call that NAMES its root — the admitted
+ * `harness` selector (`ResolveContextCall`) — is never refused: the caller
+ * supplied the one fact the refusal says is missing, so that call's
+ * `controlRoot` is the named root (the same semantics a pinned launch has for
+ * every call) and the handler validates it. The `MSTAR_HARNESS_DIR` recovery
+ * the refusal names is real: the unpinned probe runs through the engine's own
+ * resolution (`resolveProcessHarnessDir` → `resolveHarnessDir`), which reads
+ * the variable before any cwd walk.
  *
  * The pin is also published as `harnessPin` (the exact harness dir, not its
  * parent), so a command that owns root placement — `harness.scaffold` with no
@@ -122,16 +129,26 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * re-discovering a root from the workspace anchor.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
-  const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects) => {
+  const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects, call?: ResolveContextCall) => {
     const sessionId = declaredSessionId(options.identityEnv);
+    // The root the ADMITTED CALL named (a non-blank `harness` field,
+    // validated by shared admission): the one fact a control-root refusal
+    // says is missing, so naming it lifts the refusal for this call.
+    const callHarness = call?.harness;
     let controlRoot: string | null;
     if (options.harnessRoot === undefined) {
       const probe = probeUnpinnedControlRoot(process.cwd());
       if (probe.root === null && !NULL_ROOT_BOOTSTRAP_COMMANDS.has(definition.id)) {
-        const cwd = process.cwd();
-        throw new McpControlRootError(unresolvedControlRootMessage(cwd, probe.cause), { cwd, cause: probe.cause });
+        if (callHarness === undefined) {
+          const cwd = process.cwd();
+          throw new McpControlRootError(unresolvedControlRootMessage(cwd, probe.cause), { cwd, cause: probe.cause });
+        }
+        // The caller named the root: hand THIS call that root (the handler
+        // validates it) instead of refusing a call that is not rootless.
+        controlRoot = callHarness;
+      } else {
+        controlRoot = probe.root;
       }
-      controlRoot = probe.root;
     } else {
       controlRoot = options.harnessRoot;
     }

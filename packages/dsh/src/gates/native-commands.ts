@@ -169,12 +169,74 @@ function invocationContextOf(exec: ToolExecution, resolver: { forAgent(agent: un
 }
 
 /**
+ * The description length cap for one mechanically derived payload summary
+ * (the model face stays bounded even for wide payloads like `issue.add`).
+ */
+const PAYLOAD_SUMMARY_CAP = 1000
+
+/**
+ * The scalar/structural type label of one published JSON Schema node,
+ * mechanically read from the node itself (never hand-written per command).
+ * A `$ref` is not resolved — the label stays at the node's own shape.
+ */
+function payloadTypeOf(node: unknown, depth: number): string {
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) return 'json'
+  const record = node as Record<string, unknown>
+  if (Array.isArray(record.oneOf)) {
+    return `(${record.oneOf.map((branch) => payloadTypeOf(branch, depth)).join(' | ')})`
+  }
+  const type = typeof record.type === 'string' ? record.type : undefined
+  if (type === 'object' && depth < 2) return compactPayloadSummary(record, depth + 1) ?? 'object'
+  if (type === 'array') return `${payloadTypeOf(record.items, depth + 1)}[]`
+  return type ?? 'json'
+}
+
+/**
+ * The compact member summary of one published JSON Schema node: required
+ * members unmarked, optional members suffixed `?`, nested objects expanded
+ * one level (depth-capped), unions listed branch-by-branch. The source is
+ * ALWAYS the published schema — the payload descriptor's own JSON Schema when
+ * the input node is a permissive placeholder (the issue payloads), else the
+ * input node itself (the shaped fields like `plan complete`'s evidence).
+ */
+function compactPayloadSummary(node: unknown, depth = 0): string | undefined {
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) return undefined
+  const record = node as Record<string, unknown>
+  if (Array.isArray(record.oneOf)) {
+    const branches = record.oneOf
+      .map((branch) => compactPayloadSummary(branch, depth + 1) ?? payloadTypeOf(branch, depth + 1))
+      .filter((branch): branch is string => branch !== undefined)
+    if (branches.length === 0) return undefined
+    return capPayloadSummary(`one of: ${branches.join(' | ')}`)
+  }
+  const properties = record.properties
+  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return undefined
+  const required = Array.isArray(record.required)
+    ? record.required.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  const members = Object.entries(properties as Record<string, unknown>).map(([name, child]) =>
+    `${name}: ${payloadTypeOf(child, depth)}${required.includes(name) ? '' : '?'}`,
+  )
+  if (members.length === 0) return undefined
+  return capPayloadSummary(`object { ${members.join(', ')} }`)
+}
+
+/** Truncate an overlong summary on the member boundary the cap leaves. */
+function capPayloadSummary(summary: string): string {
+  if (summary.length <= PAYLOAD_SUMMARY_CAP) return summary
+  return `${summary.slice(0, PAYLOAD_SUMMARY_CAP)}…`
+}
+
+/**
  * The dsh parameter spec for one command, mirrored MECHANICALLY from the
  * command's own published JSON Schema (the single source both transports
  * already serve) with the `sessionId` context selector removed. Scalars keep
  * their type so the model face is typed; every object/union payload stays the
  * annotation-only `json` node — the semantic validation is the shared
- * admission's, never duplicated here.
+ * admission's, never duplicated here. A `json` node whose published schema is
+ * an object with members (or a oneOf) gains a mechanically derived
+ * `description` naming those members and their types, so a caller can
+ * construct a valid payload without guessing at the flattened shape.
  */
 function parameterSpecOf(descriptor: CommandSchemaDescriptor): Record<string, import('@deepseek-ai/dsh-tools').ParameterPropertySpec> {
   const jsonSchema = descriptor.input as { properties?: Record<string, { type?: string }> } | null | undefined
@@ -199,9 +261,15 @@ function parameterSpecOf(descriptor: CommandSchemaDescriptor): Record<string, im
       : node.type === 'boolean' ? { type: 'boolean' as const }
       : { type: 'json' as const }
     const help = helpByName.get(field)?.help
+    const summary = scalar.type === 'json'
+      ? compactPayloadSummary(Object.hasOwn(descriptor.payloadSchemas, field) ? descriptor.payloadSchemas[field] : node)
+      : undefined
+    const description = [help, summary === undefined ? undefined : `Payload: ${summary}.`]
+      .filter((part): part is string => part !== undefined)
+      .join(' — ')
     spec[field] = {
       ...scalar,
-      ...(help === undefined ? {} : { description: help }),
+      ...(description === '' ? {} : { description }),
       ...(descriptor.required.includes(field) ? { required: true as const } : {}),
     }
   }
@@ -288,6 +356,12 @@ async function adoptNativeExecutionBinding(
   exec: ToolExecution,
   resolver: { forAgent(agent: unknown): string | null },
 ): Promise<CommandEnvelope> {
+  // A refused (or usage) bind IS the engine's verdict — a stale epoch, a
+  // foreign store, a scope mismatch, a missing coordinator seat — and the
+  // "engine refusals surface verbatim" contract covers it: return the
+  // incoming envelope unchanged BEFORE the bind-arm narrowing, so a refused
+  // bind is never rewritten as a dsh-side adoption refusal.
+  if (envelope.status !== 'ok') return envelope
   // Both bind arms adopt: the execution bind (the engine minted the ref) and
   // the resume bind (the caller supplied a reference). Any other command
   // input never reaches the envelope's bind arms, so this narrow check is

@@ -637,6 +637,58 @@ describe("MCP harness root", () => {
     expect(String(envelope?.message)).toContain("absolute path");
   });
 
+  test("a rootless server proceeds when the admitted call names its own harness (F-3)", async () => {
+    const fixture = await harnessOutsideCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // catalog.list resolves its own root from the `harness` input field, so
+      // an explicit call names the workspace: the resolver must NOT refuse a
+      // call that supplies the very fact the refusal says is missing — the
+      // handler validates the named root and answers from it.
+      const named = await callRawTool(createContextResolver(), "catalog.list", { harness: fixture.harness });
+      expect(named.isError).toBe(false);
+      const envelope = named.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+
+      // A truly rootless call (no launch root, no per-call harness) still
+      // refuses with the cause and the recovery.
+      const rootless = await callRawTool(createContextResolver(), "catalog.list", {});
+      const text = rawText(rootless);
+      expect(rootless.isError).toBe(true);
+      expect(text).toContain("mcp.control-root-unresolved");
+      expect(text).toContain(realpathSync(fixture.cwd));
+      expect(text).toContain("--harness");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned server resolves the MSTAR_HARNESS_DIR recovery the refusal advertises (F-4)", async () => {
+    const fixture = await harnessOutsideCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The env pin the refusal names is real: the unpinned probe runs through
+      // the engine's own resolution (resolveProcessHarnessDir →
+      // resolveHarnessDir), which reads MSTAR_HARNESS_DIR before any cwd walk,
+      // so a server env carrying the variable pins the root.
+      process.env.MSTAR_HARNESS_DIR = fixture.harness;
+      const envelope = await callCatalogList(createContextResolver());
+      expect(envelope).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+      expect((envelope.data as { items: unknown[] }).items).toEqual([]);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
   test("an unpinned server over a foreign cwd refuses with a named cause instead of a foreign store verdict", async () => {
     const fixture = await plainForeignCwd();
     const previousCwd = process.cwd();
