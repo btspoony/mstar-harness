@@ -225,6 +225,16 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建时同步（gitignore）。每条注册读取命令的 `name`/`description`/`input` frontmatter；声明了 `input` hint 的注册会将其作为 `input.hint` 公布，使 dsh web 客户端的决策表从「脱离式裸执行」翻转为 leadingInput **claim**——菜单点选后把 `/name ` 插入输入框（命令色 token + ghost hint），按 Enter 才提交，用户可以键入后续参数（与 `/plan`、`/goal`、`/advisor` 相同的交互）。handler 把**命令正文以 USER source 消息 steer 进接收 agent**（dsh-plan-mode 命令先例——`source: { kind: 'user' }`，模型把正文当作要执行的任务而非注入上下文；即 dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），用户键入的参数以 `## User input` 小节追加在正文后，返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
 
+## Native command surface
+
+插件把具名的可写 mstar 命令注册为原生 dsh 工具（`mstar_plan_bind`、`mstar_plan_prepare`、`mstar_plan_progress`、`mstar_plan_complete`、`mstar_workflow_register`、`mstar_issue_add`、`mstar_issue_close`）：每个工具在进程内调用共享的 `@mstar-harness/commands` 实现（路径中无任何 shell），并从 `exec.agent.id` 注入调用者身份——session id 参数在准入前被剥离，身份永远不可由模型选择——成功的原生 `plan bind` 还会持久化 workflow ledger 用于归因的持久执行绑定。
+
+### Scoped MCP mounts（每 agent 身份）
+
+在共享的 `mstar-mcp` bundle 行之外，插件为每个非叶 agent（`agent/created`）挂载一个 scoped 的 `@deepseek-ai/dsh-mcp-client` 实例：该 scoped 实例以与 shipped bundle 行相同的服务器命令（`npx -y @mstar-harness/cli mcp`，stdio）启动，并在子进程 `env` 中携带 `MSTAR_HOST_SESSION_ID = agent.id`，因此每个 agent 的 MCP 工具调用都归因到它自己的 session id——subagent 永远不会继承父级的 id。已知的叶席位（`header.origin === 'subagent'` 或 `delegationDepth > 0`——execution-session 叶契约）永远不能拥有绑定，不会得到挂载。挂载是 optional-by-presence：未安装 `@deepseek-ai/dsh-mcp-client` 时不注册任何东西，只记录一条 debug 日志。每个 scoped 实例都是插件 context 的子 fiber，因此 HMR 重载会连同它的服务器子进程一起卸载。
+
+**每 agent 进程成本。** 身份归因的代价是每个非叶 agent 一个 stdio 子进程：插件运行期间创建的每个 agent 都会增加一个 `npx @mstar-harness/cli mcp` 子进程（一个完整的 Node 进程——它的内存占用加上 `npx` 解析/启动延迟——存活时间与该 agent 的挂载一致），因此子进程数量随并发非叶 agent 数线性增长，且一次 HMR 重载会把它们全部重启。叶席位、未部署 `@deepseek-ai/dsh-mcp-client` 的部署、以及从不创建 agent 的会话没有额外成本。不需要每 agent 归因的部署继续使用单一共享的 `mstar-mcp` bundle 行即可——scoped mount 换来的是身份归因，而不是免费的工具面。
+
 ## Engine seam mapping
 
 每个 engine 模块都挂到一条 dsh 表面——除 lint 模块的 plan/tdd fs 闸门外均已交付（延后项；见 Known Limitations）：
