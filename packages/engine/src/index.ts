@@ -67,6 +67,7 @@ export type {
   ReviewRunLevel,
   ReviewRunRequest,
   ReviewRunSpec,
+  ScaffoldOptions,
 } from "./path.js";
 export type { MstarcConfig } from "./mstarc.js";
 export {

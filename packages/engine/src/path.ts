@@ -518,6 +518,18 @@ export function resolveReviewRunDir(opts: { reviewsDir: string; date?: string; s
 /** Subdirectories created under the harness dir by `scaffoldHarness`. */
 const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd", "reviews"] as const;
 
+/** Options for `resolveScaffoldDirs` / `scaffoldHarness`. */
+export type ScaffoldOptions = {
+  /**
+   * Explicit harness dir to scaffold, used verbatim. When present, the
+   * `MSTAR_HARNESS_DIR` / `.mstarc` / default-`.mstar` discovery rungs are
+   * skipped: a caller that already owns the exact root (e.g. `mstar mcp
+   * --harness`) must not have it re-derived from the workspace. The project
+   * dir is still derived from it.
+   */
+  harnessDir?: string;
+};
+
 /**
  * Resolve the scaffold target dirs for `root` — the harness dir and the
  * project dir — from the same config source the runtime resolvers use
@@ -530,9 +542,21 @@ const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd", "revi
  * `resolveProjectDir`). Unlike `resolveHarnessDir`, the probe rung is
  * skipped: scaffold initializes the default `.mstar/` even when a legacy
  * `.agents/` exists (default behavior unchanged without a `.mstarc`).
+ *
+ * An `options.harnessDir` caller value wins over every discovery rung and is
+ * returned as given, so a pinned root cannot be redirected by an inherited
+ * environment variable or by the workspace's `.mstarc`.
  */
-export function resolveScaffoldDirs(root: string): { harnessDir: string; projectDir: string } {
+export function resolveScaffoldDirs(
+  root: string,
+  options: ScaffoldOptions = {},
+): { harnessDir: string; projectDir: string } {
   const start = resolve(root);
+  if (options.harnessDir !== undefined) {
+    const harnessDir = options.harnessDir;
+    const projectDir = mstarcDirOverride(harnessDir, "projectDir") ?? join(harnessDir, "projects");
+    return { harnessDir, projectDir };
+  }
   const boundary = resolve(start, defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   const explicit = process.env.MSTAR_HARNESS_DIR;
@@ -553,12 +577,14 @@ export function resolveScaffoldDirs(root: string): { harnessDir: string; project
  *
  * Idempotent: existing project content and catalog identity/location are
  * never rewritten or relocated. Returns the absolute resolved harness dir.
+ * `options.harnessDir` scaffolds exactly that dir (see `resolveScaffoldDirs`);
+ * an omitted override keeps the discovery behavior above.
  * The scaffold does NOT create a legacy `residuals.json` register: the issue
  * store (`store.db`) is the findings authority and the register is migration
  * history.
  */
-export async function scaffoldHarness(root: string): Promise<string> {
-  const { harnessDir, projectDir } = resolveScaffoldDirs(root);
+export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
+  const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harnessDir, dir), { recursive: true });
   // `_default` is the fallback project identity; its directory is a location,
   // not a mandate to create or register a Markdown roadmap.

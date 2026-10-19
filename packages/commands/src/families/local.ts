@@ -245,10 +245,16 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Create the harness directories and default project; then run mstar store init to activate execution authority.",
       async execute(input, context) {
         // An omitted path is the invocation workspace: a pinned server owns
-        // that workspace, and the launch process cwd is not it.
+        // that workspace, and the launch process cwd is not it. A pinned
+        // server also names the exact harness dir, which the scaffold must
+        // target verbatim: re-discovering it from the workspace would follow
+        // MSTAR_HARNESS_DIR / .mstarc / the default `<workspace>/.mstar` and
+        // scaffold a different root.
         const root = input.path === undefined ? context.cwd : path.resolve(context.cwd, input.path);
-        setArtifactStore(createFsStore(resolveScaffoldDirs(root).harnessDir));
-        const harnessDir = await scaffoldHarness(root);
+        const harnessPin = input.path === undefined ? context.harnessPin : undefined;
+        const scaffoldOptions = harnessPin === undefined ? {} : { harnessDir: harnessPin };
+        setArtifactStore(createFsStore(resolveScaffoldDirs(root, scaffoldOptions).harnessDir));
+        const harnessDir = await scaffoldHarness(root, scaffoldOptions);
         const projectDir = resolveProjectDir(root, { harnessDir });
         const created: string[] = [];
         const skipped: string[] = [];
