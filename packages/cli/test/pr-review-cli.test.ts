@@ -521,6 +521,24 @@ describe("mstar pr-review tally", () => {
     });
   });
 
+  test("a settled run echoes a declared partial scope as declaredScopes and keeps the two-line header", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, '[{"mergeClass":"should-fix"}]');
+      const bare = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
+      const declared = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--partial-scope", "docs"]);
+      expect(bare.exitCode).toBe(0);
+      expect(declared.exitCode).toBe(0);
+      const declaredData = data(declared);
+      expect(declaredData).toMatchObject({ verdict: "needs fixes", declaredScopes: ["docs"] });
+      // A declared truncation is a report fact on a settled run; it never
+      // reaches the derived override or the display header.
+      expect(declaredData.incomplete).toBeUndefined();
+      expect(declaredData.chatHeader).toBe(data(bare).chatHeader);
+      expect(String(declaredData.chatHeader).split("\n")).toHaveLength(2);
+    });
+  });
+
   test("a blank --partial-scope entry joins the other tally faults in one response", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");

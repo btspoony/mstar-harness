@@ -37,6 +37,14 @@ function promptOf(envelope: CommandEnvelope, label: string): string {
   return data.prompt;
 }
 
+/** The rendered chat header of an ok envelope, narrowed rather than asserted. */
+function chatHeaderOf(envelope: CommandEnvelope, label: string): string {
+  if (envelope.status !== "ok" || envelope.data === null || typeof envelope.data !== "object" || !("chatHeader" in envelope.data) || typeof envelope.data.chatHeader !== "string") {
+    throw new Error(`${label}: tally must return its chat header`);
+  }
+  return envelope.data.chatHeader;
+}
+
 /** The usage diagnostics of a refusal, narrowed rather than asserted. */
 function diagnosticsOf(envelope: CommandEnvelope, label: string): readonly unknown[] {
   if (envelope.status === "ok") throw new Error(label);
@@ -332,6 +340,35 @@ describe("pr-review command family", () => {
         unscanned: ["dashboard HTTP server"],
       },
     });
+  });
+
+  test("a settled run echoes a declared partial scope as declaredScopes and keeps the header", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const settled = { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" };
+
+    const bare = await command("pr-review.tally").execute(settled, context);
+    const declared = await command("pr-review.tally").execute({ ...settled, partialScope: ["docs", "docs", "cli"] }, context);
+    expect(declared.status).toBe("ok");
+    expect(declared).toMatchObject({ data: { verdict: "ship it", declaredScopes: ["docs", "cli"] } });
+    expect(chatHeaderOf(declared, "settled with a declared scope")).toBe(chatHeaderOf(bare, "settled without one"));
+  });
+
+  test("tally help and constraints state one entry per seat for both domain options", () => {
+    const tally = command("pr-review.tally");
+    for (const key of ["requiredDomains", "openedDomains"]) {
+      const help = tally.cli.options.find((option) => option.key === key)?.help ?? "";
+      expect(help).toContain("one entry per");
+      expect(help).toContain("seat");
+      const constraints = tally.requirements.filter((requirement) => requirement.name === key).map((requirement) => requirement.constraint ?? "");
+      expect(constraints.length).toBeGreaterThan(0);
+      for (const constraint of constraints) {
+        expect(constraint).toContain("one entry per");
+        expect(constraint).toContain("seat");
+        expect(constraint).toContain("twice");
+      }
+    }
   });
 
   test("tally reports an invalid --partial-scope entry with the other field faults", async () => {
