@@ -35,6 +35,7 @@ import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@ms
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { clearExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
+import { resetExecutionBindingRootsForTests } from '../src/gates/execution-binding-roots.ts'
 import { bootApp, type BootResult } from './harness.ts'
 
 const TS = '2026-09-21T00:00:00.000Z'
@@ -61,6 +62,7 @@ const roots: string[] = []
 afterEach(async () => {
   await booted?.dispose()
   booted = undefined
+  resetExecutionBindingRootsForTests()
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
 
@@ -763,13 +765,97 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(bindingB?.executionBinding?.harnessRoot).toBe(harnessB)
     expect(bindingB?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
     expect(bindingB?.executionBinding?.session.sessionId).toBe(CHILD_ID)
-    expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
+    expect(storedBinding(app.harnessDir, app.root)).toBeUndefined()
 
     // The engine coordinator seat lives in root B's store, not root A's.
     const stateB = await readExecutionState({ harnessDir: harnessB })
     expect(stateB.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
     const stateA = await readExecutionState({ harnessDir: app.harnessDir })
     expect(stateA.data.workflows[0]?.coordinator ?? null).toBeNull()
+  })
+
+  it('resolves the FULL consumer chain from the harness the bind selected: attribution and clear act on root B, root A is never written', async () => {
+    // REGRESSION (the round-6 must-fix): the adoption writes the durable slot
+    // into the harness the bind selected, but the CONSUMERS re-derived the
+    // harness from the workspace — the ledger attribution resolved root A and
+    // dropped the binding, and the native clear answered `no-binding` against
+    // A while B held the slot. The chain below is the fixed behavior: bind to
+    // B → the ledger attribution resolves FROM B → the native clear clears B
+    // → root A is never written at any step.
+    const app = await bootedWithFixture()
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+
+    // 1. The ledger attribution resolves from B: the target names B's
+    //    workflow dir and carries B as its harness dir (the store the
+    //    ledger's scan bound and event append act in). The workflow dir is
+    //    canonicalized by the ledger boundary (realpath), so the comparison
+    //    canonicalizes B's side too.
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+    expect(target?.sessionId).toBe(CHILD_ID)
+    expect(target?.harnessDir).toBe(harnessB)
+    expect(target?.workflowDir !== undefined &&
+      realpathSync(target.workflowDir) === realpathSync(join(harnessB, 'workflows', WORKFLOW_ID))).toBe(true)
+
+    // 2. The native clear clears B — and only B. The workspace root answers
+    //    with no record both before and after; the selection survives in B.
+    const cleared = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(cleared.status).toBe('ok')
+    expect(cleared.command).toBe('execution.clear')
+    const bindingAfterClear = storedBinding(harnessB, app.root)
+    expect(bindingAfterClear?.executionBinding ?? null).toBeNull()
+    expect(bindingAfterClear?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    // The attribution is detached with the slot (the same fact the single-root
+    // clear guarantees): no durable execution binding, no ledger target.
+    expect(await resolveExecutionLedgerTarget(CHILD_ID, app.root)).toBeNull()
+    // Root A was never written by ANY step of the chain — no adoption slot, no
+    // clear residue, no record at all.
+    expect(storedBinding(app.harnessDir, app.root)).toBeUndefined()
+    const stateA = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(stateA.data.workflows[0]?.coordinator ?? null).toBeNull()
+
+    // 3. With the receipt dropped, a second clear answers the named
+    //    no-binding refusal (nothing left to clear anywhere).
+    const again = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(again.status).toBe('refused')
+    expect(again.code).toBe('execution.clear.no-binding')
+  })
+
+  it('keeps the workspace-root path unchanged: a bind without an explicit harness attributes and clears through the workspace harness', async () => {
+    // The workspace path (no explicit per-call harness) must behave exactly as
+    // before the selected-harness resolution existed.
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+    expect(target?.harnessDir).toBe(app.harnessDir)
+    expect(target?.workflowDir !== undefined &&
+      realpathSync(target.workflowDir) === realpathSync(join(app.harnessDir, 'workflows', WORKFLOW_ID))).toBe(true)
+
+    const cleared = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(cleared.status).toBe('ok')
+    expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
+    expect(await resolveExecutionLedgerTarget(CHILD_ID, app.root)).toBeNull()
   })
 })
 

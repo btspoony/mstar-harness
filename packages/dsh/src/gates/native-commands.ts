@@ -33,8 +33,9 @@
  * the Task 5 clear — the only imports are the cordis context type, the
  * dsh-tools seam, `@mstar-harness/commands`, the engine's execution-session
  * primitives, the execution-session clear internals, the shared leaf-seat
- * predicate (`leaf-seat.ts`), and the shared cwd reader / workflow-selection
- * resolvers.
+ * predicate (`leaf-seat.ts`), the adoption-root receipt
+ * (`execution-binding-roots.ts`), and the shared cwd reader /
+ * workflow-selection resolvers.
  *
  * Leaf guard: the coordinator-seat-capable tools (`mstar_plan_bind`,
  * `mstar_plan_complete`, `mstar_execution_clear`) refuse a known leaf seat
@@ -60,6 +61,7 @@ import { sessionCwdOf } from './_shared.ts'
 import { isLeafSeatHeader } from './leaf-seat.ts'
 import { adoptExecutionBinding, refusalOf } from './workflow-selection.ts'
 import { clearExecutionSessionBinding } from './execution-session.ts'
+import { clearExecutionBindingRoot, executionBindingRootOf, recordExecutionBindingRoot } from './execution-binding-roots.ts'
 
 /** The named writable set (issue AC) — the shared command ids that map 1:1 onto tools, in registration order. The surface gains exactly one tool beyond this list: the dsh-native `mstar_execution_clear` (Task 5). */
 const NATIVE_COMMAND_IDS = [
@@ -502,6 +504,11 @@ async function adoptNativeExecutionBinding(
       { storeId: resumed.storeId, epoch: resumed.epoch },
     )
     if (!adopted) throw new Error('the execution binding store refused the adoption write')
+    // The adoption receipt: the consumers (ledger attribution, the native
+    // clear) resolve THIS root for the session instead of re-deriving the
+    // workspace harness — the durable slot lives here, and nothing is ever
+    // copied into the workspace root. Only a successful adoption records.
+    recordExecutionBindingRoot(sessionId, cwd, harnessDir)
   } catch (error) {
     // The engine's own refusal code/message surface verbatim; the seat the
     // bind committed stays bound, so re-running the bind recovers.
@@ -588,10 +595,12 @@ function executionClearOk(): CommandEnvelope {
  * `clearExecutionSessionBinding` (the slash clear's validation set: readable
  * record guard, nothing-to-clear guard, and the observed-generation
  * `selectedGeneration` read) with the identity from `exec.agent.id` — the
- * parameter face is EMPTY, so identity is never model-choosable. The named
- * outcomes surface as envelopes: `cleared` → ok, `no-binding` → the named
- * refusal the slash arm threw, an unreadable/refused store → refusal carrying
- * the store's own reason.
+ * parameter face is EMPTY, so identity is never model-choosable. The resolved
+ * root is the session's SELECTED harness (the bind adoption's receipt) when
+ * one exists, the workspace harness otherwise. The named outcomes surface as
+ * envelopes: `cleared` → ok, `no-binding` → the named refusal the slash arm
+ * threw, an unreadable/refused store → refusal carrying the store's own
+ * reason.
  */
 function executionClearTool(
   resolver: { forAgent(agent: unknown): string | null },
@@ -624,9 +633,9 @@ function executionClearTool(
       if (isLeafSeatHeader(sessionHeaderOf(exec))) {
         return toCanonicalValue(leafSeatRefusal(EXECUTION_CLEAR_COMMAND))
       }
-      const harnessDir = resolver.forAgent(exec.agent)
+      const workspaceHarness = resolver.forAgent(exec.agent)
       const cwd = sessionCwdOf(exec.agent)
-      if (harnessDir === null || cwd === undefined) {
+      if (workspaceHarness === null || cwd === undefined) {
         return toCanonicalValue(refusalEnvelope({
           command: EXECUTION_CLEAR_COMMAND,
           status: 'refused',
@@ -636,8 +645,22 @@ function executionClearTool(
           recovery: 'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc) and re-run the clear.',
         }))
       }
-      const outcome = await clearExecutionSessionBinding(harnessDir, callerSessionIdOf(exec), cwd)
-      if (outcome.kind === 'cleared') return toCanonicalValue(executionClearOk())
+      // The clear resolves the session's SELECTED harness (the root the bind
+      // adoption recorded), not the workspace harness — clearing a binding
+      // adopted into another control root must act on THAT root, never
+      // misreport `no-binding` against the workspace or clear a stale slot
+      // there. A session with no adoption receipt clears through the
+      // workspace root, the unchanged pre-existing path.
+      const sessionId = callerSessionIdOf(exec)
+      const harnessDir = executionBindingRootOf(sessionId, cwd) ?? workspaceHarness
+      const outcome = await clearExecutionSessionBinding(harnessDir, sessionId, cwd)
+      if (outcome.kind === 'cleared') {
+        // Drop the adoption receipt: the slot is gone, so a later clear
+        // answers `no-binding` against the workspace root instead of
+        // re-resolving a cleared slot.
+        clearExecutionBindingRoot(sessionId, cwd)
+        return toCanonicalValue(executionClearOk())
+      }
       return toCanonicalValue(refusalEnvelope({
         command: EXECUTION_CLEAR_COMMAND,
         status: 'refused',

@@ -56,6 +56,7 @@ import type { ExecutionBinding, ExecutionPlanView, ExecutionRead, ExecutionState
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
 import type { WorkflowLedgerTarget } from './workflow-ledger.ts'
+import { executionBindingRootOf } from './execution-binding-roots.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 
 /** The active-set resolver result: the session's active lifecycle or a clear error. */
@@ -702,11 +703,21 @@ function ledgerTargetDir(root: string, workflowId: string): string | null {
  * explicit route, but it does NOT make resolve→append atomic: F2 holds the
  * maintenance exclusion around its own append, this call runs outside it, so an
  * activation may still complete between the two (recorded residual seam §4.3).
+ *
+ * The harness resolved here is the session's SELECTED harness, not the
+ * workspace's: a native bind carrying an explicit `harness` adopts its
+ * binding into THAT control root (the adoption receipt), and the returned
+ * target carries the same root so the ledger's write path (scan bound, event
+ * append) acts on the store the binding lives in. A session with no adoption
+ * receipt resolves the workspace harness — the unchanged pre-existing path.
  */
 export async function resolveExecutionLedgerTarget(sessionId: string, cwd: string): Promise<WorkflowLedgerTarget | null> {
   if (sessionId === '' || cwd === '') return null
-  const harnessDir = resolveHarnessDir(cwd, { workspaceRoot: cwd })
-  if (harnessDir === null) return null
+  const workspaceHarness = resolveHarnessDir(cwd, { workspaceRoot: cwd })
+  if (workspaceHarness === null) return null
+  // The selected root first (the bind adoption receipt); the workspace
+  // harness only backs a session that never selected an explicit root.
+  const harnessDir = executionBindingRootOf(sessionId, cwd) ?? workspaceHarness
   const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
   if (binding.kind === 'unavailable') return null
   const executionBinding = binding.binding?.executionBinding
@@ -734,7 +745,7 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
   const targetDir = ledgerTargetDir(workflowRoot, source.workflowId)
   return targetDir === null
     ? null
-    : { workflowId: source.workflowId, workflowDir: targetDir, sessionId, storeId: source.storeId, epoch: source.epoch }
+    : { workflowId: source.workflowId, workflowDir: targetDir, sessionId, storeId: source.storeId, epoch: source.epoch, harnessDir }
 }
 
 /** The plan rows of one materialized snapshot ([] when the doc has no plans

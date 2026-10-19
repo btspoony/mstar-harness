@@ -26,9 +26,14 @@
 # every registered command's root selection: a command that declares a
 # per-call `harness` accepts an explicit override, while the `persist` family
 # always uses the invocation's server root (the pin, or the cwd probe when
-# unpinned) and takes no per-call harness; the declared identity is a
-# connection-wide default (a per-caller identity needs an explicit `sessionId`
-# or its own scoped mount). The pin ALSO anchors the invocation workspace at
+# unpinned) and takes no per-call harness. The declared identity is the
+# connection's identity channel, and declaring it LOCKS the connection: the
+# tools publish no session selector and a caller-supplied sessionId is
+# stripped before admission (ADR dsh-native-identity-channels), so
+# per-caller identity is a per-mount fact — each caller's row carries its own
+# `--identity-env`. A connection without the flag keeps the generic behavior
+# (a per-call sessionId selects the identity). The pin ALSO anchors the
+# invocation workspace at
 # the pinned root's parent, so a command that derives paths from its working
 # directory (e.g. `audit.scaffold` deriving `{REVIEW_DIR}` without
 # `--reviews-dir`) writes under the pinned harness, not the launch cwd.

@@ -88,9 +88,17 @@ the **invocation workspace** at the pinned root's parent, so a command that
 derives paths from its working directory (`audit.scaffold` deriving
 `{REVIEW_DIR}` without `--reviews-dir`, a relative `--dir` or findings path)
 lands under the pinned harness rather than the launch cwd. `--identity-env`
-declares a connection-wide default, so per-caller identity needs an explicit
-`sessionId` or its own scoped mount. Because a patch replaces the row's whole
-`config`, such an override restates the `command` too.
+declares the connection's identity channel: the named environment variable
+supplies the session id every call on the connection runs under, and the
+connection is identity-LOCKED — the tools publish no session selector and a
+caller-supplied `sessionId` is stripped before admission (the ADR
+`dsh-native-identity-channels`), so the declared identity is the only identity
+the connection can run under. Per-caller identity is therefore a per-mount
+fact: each caller's row launches its own scoped mount with its own
+`--identity-env`. A connection launched WITHOUT the flag keeps the generic
+behavior, where a per-call `sessionId` still selects the identity. Because a
+patch replaces the row's whole `config`, such an override restates the
+`command` too.
 
 ## Config surface
 

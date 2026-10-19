@@ -237,7 +237,11 @@ function sessionStreamIdOf(session: unknown, sessionId: string): string | undefi
 /**
  * One execution target selected by the native workflow/session resolver. The
  * store identity and epoch are a single selection and travel unchanged to
- * every event write.
+ * every event write. `harnessDir` is the control root the target was resolved
+ * in — the session's SELECTED harness (the bind adoption's root), which may
+ * differ from the carrying session's workspace harness: the scan bound and
+ * the event append must act on the store the binding lives in, never on the
+ * workspace root the row was observed from.
  */
 export type WorkflowLedgerTarget = Readonly<{
   workflowId: string
@@ -245,6 +249,7 @@ export type WorkflowLedgerTarget = Readonly<{
   sessionId: string
   storeId: string
   epoch: number
+  harnessDir: string
 }>
 
 /** The resolver returns null when this session has no authorized writer. */
@@ -253,6 +258,7 @@ export type ResolveWorkflowLedgerTarget = (sessionId: string, cwd: string) => Pr
 /** A target is usable only when it is internally consistent and names this session. */
 function targetRefusal(target: WorkflowLedgerTarget, sessionId: string): string | undefined {
   if (target.sessionId !== sessionId) return `target session ${target.sessionId} does not match the carrying session`
+  if (typeof target.harnessDir !== 'string' || target.harnessDir === '') return 'target carries no harness dir'
   if (typeof target.workflowDir !== 'string' || target.workflowDir === '') return 'target carries no workflow dir'
   if (typeof target.workflowId !== 'string' || target.workflowId === '') return 'target carries no workflow id'
   if (typeof target.storeId !== 'string' || target.storeId === '') return 'target carries no store identity'
@@ -572,7 +578,6 @@ export function registerWorkflowLedger(
   const consumeWithTarget = async (
     session: unknown,
     sid: string,
-    harnessDir: string,
     workspace: string,
     row: WorkflowLedgerRow,
   ): Promise<void> => {
@@ -596,13 +601,15 @@ export function registerWorkflowLedger(
       log('debug', `workflow-ledger selected generation changed for session ${sid}; each event commits with the generation resolved for that event`)
     }
     observedGeneration.set(sid, selectedGeneration)
-    recordRow(session, sid, harnessDir, row, target.workflowId, target.workflowDir, selectedGeneration)
+    // The row is recorded in the TARGET's own root (the session's selected
+    // harness), not the workspace root the event was observed from — the scan
+    // bound and the event append live beside the binding that authorized them.
+    recordRow(session, sid, target.harnessDir, row, target.workflowId, target.workflowDir, selectedGeneration)
   }
 
   const advanceSkippedAgentEnd = async (
     session: unknown,
     sid: string,
-    harnessDir: string,
     workspace: string,
     seq: number,
   ): Promise<void> => {
@@ -624,10 +631,13 @@ export function registerWorkflowLedger(
       log('warn', `workflow-ledger scan-bound target refused for session ${sid} — ${refusal}`)
       return
     }
-    const bound = readDshScanBound({ harnessDir }, target.workflowId, sid)
+    // The same target-root rule for the skipped agent-end's scan bound: the
+    // bound lives in the target's root beside the binding, never in the
+    // workspace root.
+    const bound = readDshScanBound({ harnessDir: target.harnessDir }, target.workflowId, sid)
     if (bound?.stream === streamId && seq < bound.next) return
     const selectedGeneration = { storeId: target.storeId, epoch: target.epoch }
-    if (!advanceDshScanBound({ harnessDir }, target.workflowId, sid, seq + 1, streamId, selectedGeneration)) {
+    if (!advanceDshScanBound({ harnessDir: target.harnessDir }, target.workflowId, sid, seq + 1, streamId, selectedGeneration)) {
       log('warn', `workflow-ledger native scan bound not advanced for skipped agent-end event at ${seq}; it remains eligible for replay`)
     }
   }
@@ -660,8 +670,8 @@ export function registerWorkflowLedger(
     const floor = binding.binding?.excludedBeforeSeq ?? 0
     // The exclusion floor omits events observed while the session was unbound.
     if (sourceSeq < floor) return
-    if (row === undefined) return advanceSkippedAgentEnd(session, sid, harnessDir, workspace, sourceSeq)
-    return consumeWithTarget(session, sid, harnessDir, workspace, row)
+    if (row === undefined) return advanceSkippedAgentEnd(session, sid, workspace, sourceSeq)
+    return consumeWithTarget(session, sid, workspace, row)
   }
 
   /**
