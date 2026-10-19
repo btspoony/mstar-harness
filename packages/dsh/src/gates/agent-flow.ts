@@ -32,6 +32,13 @@
 import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
+// The scope-carrier reader of the verified upstream scoped-dispatch channel:
+// `@deepseek-ai/dsh-subagent`'s lifecycle emitter converts the live direct
+// parent into a `scopeTarget` carrier (`lib/index.js` `createLifecycleEmitter`
+// → `carrier(parent)`), and this package must read the SAME module instance —
+// the carrier registry is a module-level WeakMap, so the build keeps this
+// dependency external (package build script) instead of inlining a second copy.
+import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
@@ -1665,13 +1672,36 @@ function recordTeamStopUnresolved(ref: AgentFlowDispatchRef, childId: string, st
 }
 
 /**
+ * Resolve the live direct parent of one `subagent/end` edge from the channel
+ * the upstream emitter actually uses. Verified installed shape
+ * (`@deepseek-ai/dsh-subagent@0.2.x` `lib/index.js` `createLifecycleEmitter`
+ * + `@deepseek-ai/cordis` `EventsService.dispatch`): the emitter converts the
+ * parent into a `scopeTarget(this, parent)` carrier that rides as
+ * `dispatchArgs[0]`; cordis `dispatch` SHIFTS that first argument as the
+ * dispatch `this` and binds every listener to it, so the callback receives
+ * ONLY `(info)` — the parent is NEVER a second listener argument. The
+ * receiver therefore carries the parent: `carrierKeyOf(this)` reads the
+ * exact live parent object the carrier was keyed by (the same agent the
+ * roster read consumes). A future upstream that forwards the parent as a
+ * real second argument wins outright (forwarded guard first); anything else
+ * — a plain unscoped emit (`this` of `null`), a non-carrier receiver —
+ * reports `undefined` and the caller degrades conservatively (no gate pass,
+ * no buffer insert, never a fabricated parent).
+ */
+function parentOfSubagentEnd(receiver: unknown, forwarded: unknown): unknown {
+  if (forwarded !== undefined) return forwarded
+  return carrierKeyOf(receiver)
+}
+
+/**
  * True when `childId` is a child session the team service's roster currently
  * lists (service-level rows carry the child `SessionId` in `id`) — the
  * team-membership test that keeps a NON-team child end out of the end
  * buffer. Structural on the same roster surface `memberIdOfName` reads; the
- * upstream `subagent/end` edge carries the live direct parent as its second
- * argument and that parent is the roster read's agent. An absent roster, an
- * unreadable roster, or a non-live parent reports `false` (never a throw).
+ * upstream `subagent/end` edge travels with the live direct parent as its
+ * scoped-dispatch receiver (resolved by {@link parentOfSubagentEnd}), and
+ * that parent is the roster read's agent. An absent roster, an unreadable
+ * roster, or a non-live parent reports `false` (never a throw).
  */
 function rosterHasChildId(roster: TeamRosterRead | undefined, parent: unknown, childId: string): boolean {
   if (roster === undefined || parent === undefined || parent === null) return false
@@ -2079,18 +2109,22 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
   ctx.on(SETTLE_SEAM as never, listener as never)
   // The member-turn settlement edge (verified `@deepseek-ai/dsh-subagent`
   // event): a team member is a continuable child, so its initial turn's
-  // terminal settlement carries the child id + stop reason (the upstream
-  // emit's second argument is the live direct parent — the roster read's
-  // agent). A paired child is consumed here; an unpaired team-child end
-  // (roster-listed, service mounted) is buffered for the pairing write's
-  // reconcile; every other subagent end is ignored.
-  ctx.on('subagent/end' as never, ((info: unknown, parent: unknown): void => {
+  // terminal settlement carries the child id + stop reason. The live direct
+  // parent arrives as the scoped-dispatch RECEIVER (cordis `dispatch` shifts
+  // the emitter's `scopeTarget` carrier into the bound `this` and invokes the
+  // callback with `(info)` alone — see {@link parentOfSubagentEnd}), so the
+  // handler is a plain function expression: an arrow function would capture
+  // this module's `this` and lose the carrier. A paired child is consumed
+  // here; an unpaired team-child end (roster-listed, service mounted) is
+  // buffered for the pairing write's reconcile; every other subagent end is
+  // ignored.
+  ctx.on('subagent/end' as never, function (this: unknown, info: unknown, parent: unknown): void {
     try {
-      handleTeamChildSettled(ctx, pairing, parent, info)
+      handleTeamChildSettled(ctx, pairing, parentOfSubagentEnd(this, parent), info)
     } catch (error) {
       log('error', `team member settle failed (contained): ${errorMessage(error)}`)
     }
-  }) as never)
+  } as never)
   // The pairing trace is emitted at most ONCE per logger binding (≈ once per
   // apply): repeated registrations (tests, HMR) must not re-spam.
   if (!settleNoteLogged) {
