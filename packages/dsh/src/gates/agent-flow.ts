@@ -47,6 +47,7 @@ import {
   memberNameOfSpawnResult,
   settleOutcomeOfStopReason,
   teamRosterOf,
+  type TeamRosterRead,
   type TeamServiceContext,
 } from './team-identity.ts'
 // The SHARED ASCII-control-char strip : the ralph
@@ -71,6 +72,20 @@ export const AGENT_FLOW_CATALOG_SLOT_CAPACITY = 500
  * that dispatch, so the bound never silently drops a pairing.
  */
 export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
+/**
+ * Bounded in-memory TEAM member-child END buffer (apply-scoped, like the
+ * pairing maps). A team member's initial turn can settle BEFORE its spawn's
+ * `tools/post-execute` pairing write (I-000740): the paired path used to drop
+ * that `subagent/end` record silently, so the dispatch never settled. The
+ * record is buffered instead and reconciled when the pairing write lands.
+ * Styled after {@link AGENT_FLOW_TEAM_CHILD_CAPACITY} — which bounds the
+ * pairing MAP, not this buffer; the two bounds count independently (and by
+ * construction this one can never need more slots: an unmatched end exists
+ * only while its spawn's pairing write is still in flight). At capacity the
+ * OLDEST record is evicted with an explicit unresolved marker that names the
+ * child id, states the eviction, and states that no settle was fabricated.
+ */
+export const AGENT_FLOW_TEAM_END_BUFFER_CAPACITY = 1024
 /** Stable identity namespace for verified native workflow events. */
 export const WORKFLOW_EVENT_ID_PREFIX = 'wfe1'
 /** Stable identity namespace for live tool-call rows. */
@@ -491,6 +506,17 @@ export interface AgentFlowPairing {
    * constructors stay valid; the team branch creates it lazily.
    */
   teamDispatchByChildId?: Map<string, AgentFlowDispatchRef>
+  /**
+   * Team member child `SessionId` → the `stopReason` of the member's
+   * `subagent/end` settlement that arrived BEFORE its `spawn_teammate`
+   * pairing write (the I-000740 race). Created lazily by the end-buffer path
+   * (existing pairing constructors stay valid); the pairing write reconciles
+   * against it first — a hit settles from the buffered record and consumes
+   * the entry, so no dispatch can settle twice. Bounded by
+   * {@link AGENT_FLOW_TEAM_END_BUFFER_CAPACITY} (independent of the pairing
+   * map's own bound).
+   */
+  teamEndBuffer?: Map<string, unknown>
   /**
    * The call-window catalog join's slots: the EXACT parent Session object →
    * (RAW delegation label → candidate). A `null` slot is a consumed or
@@ -1545,13 +1571,113 @@ function recordContinuationUnresolved(ref: AgentFlowDispatchRef, reason: string)
 }
 
 /**
+ * The explicit unresolved continuation for a member end whose stop reason is
+ * outside the settled vocabulary. Shared by the paired path
+ * ({@link handleTeamChildSettled}) and the reconcile path
+ * ({@link pairTeamMemberChild}) so the two can never drift.
+ */
+function recordTeamStopUnresolved(ref: AgentFlowDispatchRef, childId: string, stopReason: unknown): void {
+  recordContinuationUnresolved(
+    ref,
+    `subagent/end for child ${childId} carried an unrecognized stop reason (${String(stopReason)}) — no settle is fabricated`,
+  )
+}
+
+/**
+ * True when `childId` is a child session the team service's roster currently
+ * lists (service-level rows carry the child `SessionId` in `id`) — the
+ * team-membership test that keeps a NON-team child end out of the end
+ * buffer. Structural on the same roster surface `memberIdOfName` reads; the
+ * upstream `subagent/end` edge carries the live direct parent as its second
+ * argument and that parent is the roster read's agent. An absent roster, an
+ * unreadable roster, or a non-live parent reports `false` (never a throw).
+ */
+function rosterHasChildId(roster: TeamRosterRead | undefined, parent: unknown, childId: string): boolean {
+  if (roster === undefined || parent === undefined || parent === null) return false
+  try {
+    const members = roster.listMembers(parent)
+    if (!Array.isArray(members)) return false
+    return members.some((entry) => asRecord(entry)?.id === childId)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Buffer one unmatched team child `subagent/end` (the I-000740 race: the
+ * member's turn settled before its spawn's pairing write). Only a
+ * roster-listed team child while the team service is mounted is buffered — a
+ * non-team child end never enters the buffer, and without the service
+ * nothing buffers and nothing throws. At capacity the OLDEST record is
+ * evicted with an explicit unresolved marker naming the child id and stating
+ * that no settle was fabricated. The marker is deliberately NOT a
+ * {@link recordContinuationUnresolved} row: an unmatched end carries NO
+ * dispatch ref — no identity to attribute and no ledger target to append to
+ * — and attributing it to any in-flight spawn would fabricate an identity,
+ * so the explicit marker rides the module warn sink with the same text
+ * contract. Contained — never throws into the `subagent/end` event.
+ */
+function bufferTeamChildEnd(ctx: TeamServiceContext, pairing: AgentFlowPairing, parent: unknown, childId: string, stopReason: unknown): void {
+  try {
+    const roster = teamRosterOf(ctx)
+    if (roster === undefined) return
+    if (!rosterHasChildId(roster, parent, childId)) return
+    const buffer = (pairing.teamEndBuffer ??= new Map<string, unknown>())
+    buffer.delete(childId) // a re-woken member's later end is the fresher record (LRU refresh)
+    if (buffer.size >= AGENT_FLOW_TEAM_END_BUFFER_CAPACITY) {
+      const oldestKey = buffer.keys().next().value
+      if (oldestKey !== undefined) {
+        buffer.delete(oldestKey)
+        log(
+          'warn',
+          `team member child end for child ${oldestKey} was evicted from the bounded end buffer (${String(AGENT_FLOW_TEAM_END_BUFFER_CAPACITY)} slots) before its spawn pairing was written — no settle is fabricated`,
+        )
+      }
+    }
+    buffer.set(childId, stopReason)
+  } catch (error) {
+    log('error', `team end buffer insert failed (contained): ${errorMessage(error)}`)
+  }
+}
+
+/**
+ * Consume the buffered end record for `childId`, when one exists. The entry
+ * is consumed on read — one end record can settle its dispatch exactly once,
+ * and the pairing write must never leave it behind.
+ */
+function consumeBufferedTeamEnd(pairing: AgentFlowPairing, childId: string): { stopReason: unknown } | undefined {
+  const buffer = pairing.teamEndBuffer
+  if (buffer === undefined || !buffer.has(childId)) return undefined
+  const stopReason = buffer.get(childId)
+  buffer.delete(childId)
+  return { stopReason }
+}
+
+/**
  * Pair one `spawn_teammate` dispatch with the member child `SessionId` the
- * roster read resolved. At capacity the OLDEST pairing is evicted with an
- * explicit unresolved-continuation row for its dispatch — a bounded map never
- * drops a pairing silently. The ref also carries the observed child id so the
- * eventual settle names the child.
+ * roster read resolved. RECONCILE FIRST: the member's end may have arrived
+ * before this pairing write and been buffered (I-000740) — on a buffer hit
+ * the dispatch settles from the buffered record through the SAME outcome
+ * mapping as the paired path (`completed→ok`, `aborted/refusal→denied`,
+ * `error/max-tokens→error`, unrecognized → explicit unresolved continuation)
+ * and NO live pairing entry is written (the buffered entry is consumed, so
+ * the dispatch can never settle twice). At capacity the OLDEST pairing is
+ * evicted with an explicit unresolved-continuation row for its dispatch — a
+ * bounded map never drops a pairing silently. The ref also carries the
+ * observed child id so the eventual settle names the child.
  */
 function pairTeamMemberChild(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
+  const buffered = consumeBufferedTeamEnd(pairing, childId)
+  if (buffered !== undefined) {
+    ref.childId = childId
+    const outcome = settleOutcomeOfStopReason(buffered.stopReason)
+    if (outcome === undefined) {
+      recordTeamStopUnresolved(ref, childId, buffered.stopReason)
+      return
+    }
+    recordSettleWithRef(ref, outcome, undefined, childId)
+    return
+  }
   const map = teamChildPairs(pairing)
   if (map.has(childId)) return // first pairing wins; a later message re-waking the member adds nothing
   if (map.size >= AGENT_FLOW_TEAM_CHILD_CAPACITY) {
@@ -1654,27 +1780,31 @@ function handleTeamPostExecute(input: {
  * completes the dispatch that spawned it. A teammate is an ordinary
  * continuable subagent child whose initial turn settlement carries the child
  * id and the terminal stop reason, so this row is a REAL completion (mapped
- * outcome) rather than a tool-return guess. An unrecognized stop reason
- * records the explicit unresolved continuation — never a guessed outcome.
+ * outcome) rather than a tool-return guess. An end whose pairing map entry is
+ * missing is the I-000740 race (the member's turn settled before the spawn's
+ * pairing write): the record is BUFFERED for the pairing write's reconcile
+ * ({@link bufferTeamChildEnd} — team children only, service mounted only)
+ * instead of the old silent drop. An unrecognized stop reason records the
+ * explicit unresolved continuation — never a guessed outcome.
  * Contained: a throwing handler never escapes the session/tool event.
  */
-function handleTeamChildSettled(pairing: AgentFlowPairing, info: unknown): void {
+function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairing, parent: unknown, info: unknown): void {
   const rec = asRecord(info)
   const childId = rec?.id
   if (typeof childId !== 'string' || childId === '') return
   const map = pairing.teamDispatchByChildId
   if (map === undefined) return
   const ref = map.get(childId)
-  if (ref === undefined) return
+  if (ref === undefined) {
+    bufferTeamChildEnd(ctx, pairing, parent, childId, rec?.stopReason)
+    return
+  }
   // Consumed once: the spawn's initial turn is the dispatch's continuation; a
   // later re-woken turn of the same member is a new (unrecorded) message.
   map.delete(childId)
   const outcome = settleOutcomeOfStopReason(rec?.stopReason)
   if (outcome === undefined) {
-    recordContinuationUnresolved(
-      ref,
-      `subagent/end for child ${childId} carried an unrecognized stop reason (${String(rec?.stopReason)}) — no settle is fabricated`,
-    )
+    recordTeamStopUnresolved(ref, childId, rec?.stopReason)
     return
   }
   recordSettleWithRef(ref, outcome, undefined, childId)
@@ -1866,12 +1996,14 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
   ctx.on(SETTLE_SEAM as never, listener as never)
   // The member-turn settlement edge (verified `@deepseek-ai/dsh-subagent`
   // event): a team member is a continuable child, so its initial turn's
-  // terminal settlement carries the child id + stop reason. Only a child that
-  // a `spawn_teammate` dispatch paired is consumed here — every other
-  // subagent end is ignored (`teamDispatchByChildId` has no entry).
-  ctx.on('subagent/end' as never, ((info: unknown): void => {
+  // terminal settlement carries the child id + stop reason (the upstream
+  // emit's second argument is the live direct parent — the roster read's
+  // agent). A paired child is consumed here; an unpaired team-child end
+  // (roster-listed, service mounted) is buffered for the pairing write's
+  // reconcile; every other subagent end is ignored.
+  ctx.on('subagent/end' as never, ((info: unknown, parent: unknown): void => {
     try {
-      handleTeamChildSettled(pairing, info)
+      handleTeamChildSettled(ctx, pairing, parent, info)
     } catch (error) {
       log('error', `team member settle failed (contained): ${errorMessage(error)}`)
     }
