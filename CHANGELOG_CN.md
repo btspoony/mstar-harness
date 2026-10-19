@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-10-18
+
+### Harness
+
+- **`dsh-llm-fallbacks` 固定版本由 `0.6.6` 升至 `0.6.7`**：两处手写字面量同步移动——`@mstar-harness/dsh` 开发依赖（`packages/dsh/package.json`）与 CLI 安装 spec 常量（`packages/cli/package.json` → `mstar.dshLlmFallbacks`，由 `init` / `doctor --target dsh` 读取）——lock 将该行重新解析为 `0.6.7`，并记录该版本在 registry 上的 integrity。`0.6.7` 的 peer 集合与 `0.6.6` 相同（`^0.2.1-rc.2` 的 dsh 走廊、`@deepseek-ai/cordis` `^4.0.5`、`@deepseek-ai/schemastery` `^3.18.5`、`react` `^18.2.0`），因此工作区 peer 线本就匹配；其服务面变化仅为追加式（一个 dispatch-role getter 与 role-projection 导出），mstar 均未消费——结构镜像及其 real → view 类型门禁无需改动。不会升级任何已安装宿主：在 `init --target dsh` 按新 pin 重新 add 之前，`doctor --target dsh` 会把旧行报为 `drifted`。工作区验证：`tests/peer-deps.spec.ts` 7 项通过，`fallbacks-*` 套件 53 项通过（限定 7 文件集合共 60 项、零跳过），两个类型门禁（`typecheck:src` 与 `typecheck:tests`）均干净退出。
+
+### Changed
+
+- **`init` 现为纯安装**：不再读取、创建或追加项目 `.gitignore`，各宿主安装路径（`.cursor/plugins/morning-star-harness`、`.codex/agents/*.toml`、`.agents/skills/<name>`、`.zcode/plugin-checkout`）保持未跟踪即可。
+- 移除随之失效的 `doctor` 检查：`cursor`、`codex`、`zcode` 的项目级忽略项检查，以及 omp 侧已不可达的忽略清单。
+- `mstar-harness harness scaffold` 行为不变，仍输出规范 `.gitignore` 片段；需要忽略 harness 产物时运行它或自行添加条目。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.0.3**。
+
 ## [4.0.2] - 2026-10-18
 
 ### Harness

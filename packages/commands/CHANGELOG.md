@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-10-18
+
+### Changed
+
+- **`init` is now a pure install:** it never reads, creates or appends the project `.gitignore`, so the host-specific install paths (`.cursor/plugins/morning-star-harness`, `.codex/agents/*.toml`, `.agents/skills/<name>`, `.zcode/plugin-checkout`) simply stay untracked.
+- Removed the `doctor` findings that demanded those ignore entries — the `cursor`, `codex` and `zcode` project checks plus the now-unreachable omp gitignore list.
+- `mstar-harness harness scaffold` is unchanged and still emits the canonical `.gitignore` snippet; run it (or add entries yourself) when you want the harness artifacts ignored.
+
+- Version alignment with harness **4.0.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.3**.
+
 ## [4.0.2] - 2026-10-18
 
 ### Harness

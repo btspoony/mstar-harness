@@ -6,6 +6,23 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-10-18
+
+### Changed
+
+- **`mstar mcp --identity-env <NAME>` declares the default session-id channel.** When the flag is present, the stdio resolver reads the named environment variable (empty/whitespace ignored), satisfies a required `sessionId` selector at admission, and supplies `resolved.sessionId`; a per-call `sessionId` still wins. Without the flag the server reads no environment identity, so the existing "ignore ambient identity" contract is unchanged. A malformed declared value is not repaired: it reaches the same safe-session-id guard as a per-call value and refuses loudly. The declared default applies to the whole connection, so per-caller identity needs an explicit `sessionId` or its own scoped mount.
+- **`mstar mcp --harness <absolute path>` pins the control root.** When the mounting process names a root, every call uses that path verbatim as `resolved.controlRoot` instead of probing `process.cwd()`; without the flag the existing cwd probe is unchanged. A relative path is a usage refusal (exit 2) whose message names the absolute requirement. This lets one installed plugin serve many repositories without hard-coding a checkout. The flag also sets the **server-owned default** root for every registered command's own root selection, not only `controlRoot`; a command that declares a per-call `harness` accepts an explicit override, while the `persist` family always uses the invocation's server root (the pin, or the cwd probe when unpinned) and takes no per-call harness; the delivery mount contract launches the MCP server with it (see `packages/dsh/bundle/README.md`). The pin also sets the invocation's **workspace root** to the pinned harness's parent directory, so commands that derive paths from their working directory — `audit.scaffold` deriving `{REVIEW_DIR}` when no `--reviews-dir` is passed, a relative `--dir` or findings path — land under the pinned harness instead of the launch cwd; unpinned keeps `process.cwd()`.
+- **`DSH_SESSION_ID` is a CLI session-identity source.** The resolver now reads the native dsh execution id between the launcher-minted `MSTAR_EXECUTION_IDENTITY` and the legacy ambient `MSTAR_HOST_SESSION_ID`: precedence is `--session-id` > minted tuple > `DSH_SESSION_ID` > `MSTAR_HOST_SESSION_ID` (empty/whitespace ignored). The native value resolves with `sessionIdSource: "env"` and carries no execution tuple, so a dsh-hosted agent reaches the CLI without the per-command `/mstar-execution` workaround; the session-identity help paragraph names the same order.
+- Identity-scrubbing test harnesses now pin the native channel out alongside the legacy ones, so their "no identity" and host-fallback cases stay hermetic on a dsh host.
+- **`dsh-llm-fallbacks` pin bumped `0.6.6` → `0.6.7`**: the two hand-written literals move together — the `@mstar-harness/dsh` devDependency (`packages/dsh/package.json`) and the CLI install-spec constant (`packages/cli/package.json` → `mstar.dshLlmFallbacks`, read by `init` / `doctor --target dsh`) — and the lock re-resolves the row to `0.6.7` with the registry integrity for that version. `0.6.7` keeps the same peer set as `0.6.6` (the `^0.2.1-rc.2` dsh cohort, `@deepseek-ai/cordis` `^4.0.5`, `@deepseek-ai/schemastery` `^3.18.5`, `react` `^18.2.0`), so the workspace peer line already matches it; its only service-surface change is additive (a dispatch-role getter plus role-projection exports), none of it consumed by mstar — the structural mirror and its real → view type gate need no change. Nothing upgrades an already-installed host: `doctor --target dsh` reports an older row `drifted` until `init --target dsh` re-adds the pinned spec. Workspace verification: `tests/peer-deps.spec.ts` 7 pass, the `fallbacks-*` suites 53 pass (60 tests across the scoped 7-file set, zero skips), and both type gates (`typecheck:src` and `typecheck:tests`) exit clean.
+- **`init` is now a pure install:** it never reads, creates or appends the project `.gitignore`, so the host-specific install paths (`.cursor/plugins/morning-star-harness`, `.codex/agents/*.toml`, `.agents/skills/<name>`, `.zcode/plugin-checkout`) simply stay untracked.
+- Removed the `doctor` findings that demanded those ignore entries — the `cursor`, `codex` and `zcode` project checks plus the now-unreachable omp gitignore list.
+- `mstar-harness harness scaffold` is unchanged and still emits the canonical `.gitignore` snippet; run it (or add entries yourself) when you want the harness artifacts ignored.
+
+- Version alignment with harness **4.0.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.3**.
+
 ## [4.0.2] - 2026-10-18
 
 ### Changed
