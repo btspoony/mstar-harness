@@ -358,14 +358,15 @@ export type AgentFlowEvent =
   | AgentFlowWorkflowEvent
 
 /**
- * The explicit UNRESOLVED-CONTINUATION marker of one team dispatch. It is a
- * DURABLE-ONLY row: it is written through the same native ledger append and
- * carries the paired dispatch identity, but it is deliberately NOT a member of
- * {@link AgentFlowEvent} — the projection union (and therefore the panel /
- * model view, whose changes are out of scope for this plan) keeps its existing
- * kinds, and no consumer can mistake the marker for a completion. It is
- * written ONLY instead of a settle when a team dispatch's continuation cannot
- * be paired: never an `ok` settle, never a fabricated outcome.
+ * The explicit UNRESOLVED-CONTINUATION marker of one team dispatch. It is
+ * written through the same native ledger append and carries the paired
+ * dispatch identity, but it is deliberately NOT a settle: it is written ONLY
+ * instead of a settle when a team dispatch's continuation cannot be paired —
+ * never an `ok` settle, never a fabricated outcome. Projected since
+ * I-000739: {@link eventFromUnknown} accepts the kind and the catalog view
+ * lists the row (its state + reason) instead of dropping it, so the panel
+ * derives a DISTINCT non-running entity state from it. Additive only — every
+ * existing event kind keeps its projected rendering.
  */
 export interface AgentFlowContinuationEvent {
   v: 1
@@ -389,7 +390,30 @@ export interface AgentFlowContinuationEvent {
   reason: string
 }
 
-/** One durable ledger row this module can append (projected events + the unprojected continuation marker). */
+/**
+ * The projected catalog view of {@link AgentFlowContinuationEvent} (I-000739).
+ * A member of {@link readAgentFlow}'s event window ADDITIVELY: every existing
+ * event view keeps its shape, and the client projection guards each field
+ * read, so the added kind is a data member of the wire — not a union break.
+ */
+export interface AgentFlowContinuationEventView {
+  readonly ts: number
+  readonly kind: 'continuation'
+  /** The dispatching session's stable id; null when the row carried none. */
+  readonly agent: string | null
+  /** The paired dispatch's Assignment `Execute as` ('' allowed — the dispatch row's grammar). */
+  readonly role: string
+  readonly planId: string | null
+  readonly taskId: string | null
+  /** Always null — the identity is the DISPATCH's (the same seat every identity-bearing row keeps). */
+  readonly taskCategory: null
+  /** The continuation state — `unresolved` is the ONLY value. */
+  readonly state: 'unresolved'
+  /** Bounded display reason (why the continuation could not be paired). */
+  readonly reason: string
+}
+
+/** One durable ledger row this module appends and the reader projects (I-000739: the continuation marker is projected, not dropped). */
 type AgentFlowLedgerEvent = AgentFlowEvent | AgentFlowContinuationEvent
 
 /**
@@ -1138,8 +1162,8 @@ export function recordWorkflowVerdict(input: WorkflowVerdictInput): void {
   }
 }
 
-/** Narrow one native JSON row to a valid v1 event (malformed rows → undefined). */
-function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
+/** Narrow one native JSON row to a valid v1 projected event (malformed rows → undefined). */
+function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
   const rec = asRecord(value)
   if (rec === undefined || rec.v !== 1 || typeof rec.ts !== 'number' || !Number.isFinite(rec.ts)) return undefined
   const kind = rec.kind
@@ -1150,7 +1174,11 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
     kind !== 'workflow-verdict' &&
     kind !== 'workflow-run' &&
     kind !== 'workflow-agent' &&
-    kind !== 'workflow-run-end'
+    kind !== 'workflow-run-end' &&
+    // The projected unresolved-continuation marker (I-000739 — previously a
+    // durable-only row the reader dropped, which left its dispatch as a
+    // phantom running entity).
+    kind !== 'continuation'
   ) {
     return undefined
   }
@@ -1220,6 +1248,30 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
       ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
       ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
+    }
+  }
+  if (kind === 'continuation') {
+    // The projected unresolved-continuation marker (I-000739): the required
+    // identity grammar is `role` ('' allowed — the dispatch row's grammar),
+    // the SINGLE state value `unresolved`, and a non-empty display `reason`
+    // (the writer always emits one — a hostile row lacking them is SKIPPED,
+    // never guessed). Optional identity fields (`agent` / `planId` /
+    // `taskId`) omit when absent; `reason` is re-capped at this read
+    // boundary (same discipline as the link label). Evaluated BEFORE the
+    // workflow narrowing below — a continuation carries no `runId`.
+    if (rec.state !== 'unresolved') return undefined
+    if (typeof rec.role !== 'string') return undefined
+    if (typeof rec.reason !== 'string' || rec.reason === '') return undefined
+    return {
+      v: 1,
+      ts: rec.ts,
+      kind: 'continuation',
+      ...(agent !== undefined ? { agent } : {}),
+      role: rec.role,
+      ...(typeof rec.planId === 'string' && rec.planId !== '' ? { planId: rec.planId } : {}),
+      ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
+      state: 'unresolved',
+      reason: truncateLedgerField(normalizeWorkflowName(rec.reason), WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
     }
   }
   if (kind === 'workflow-verdict') {
@@ -1319,7 +1371,7 @@ function eventFromUnknown(value: unknown): AgentFlowEvent | undefined {
 }
 
 /** Map one ledger event to its catalog view (settle rows carry the paired identity when present). */
-function eventView(event: AgentFlowEvent): AgentFlowEventView {
+function eventView(event: AgentFlowLedgerEvent): AgentFlowEventView | AgentFlowContinuationEventView {
   if (event.kind === 'dispatch') {
     return {
       ts: event.ts,
@@ -1411,6 +1463,23 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
       ...(event.taskRef !== undefined ? { taskRef: event.taskRef } : {}),
     }
   }
+  if (event.kind === 'continuation') {
+    // Explicit branch BEFORE the settle fallback (I-000739): a continuation
+    // is NOT a completion — it keeps the paired dispatch identity (the same
+    // fields a dispatch row rides) and carries its own facts (`state` +
+    // `reason`); no outcome, no verdict, no settle markers.
+    return {
+      ts: event.ts,
+      kind: 'continuation',
+      agent: event.agent ?? null,
+      role: event.role,
+      planId: event.planId ?? null,
+      taskId: event.taskId ?? null,
+      taskCategory: null,
+      state: event.state,
+      reason: event.reason,
+    }
+  }
   return {
     ts: event.ts,
     kind: 'settle',
@@ -1432,7 +1501,7 @@ function eventView(event: AgentFlowEvent): AgentFlowEventView {
 }
 
 /** Role × outcome counts of a bounded latest-first event window (count desc). */
-function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
+function summaryOf(events: readonly AgentFlowLedgerEvent[]): AgentFlowSummaryRow[] {
   const counts = new Map<string, number>()
   for (const event of events) {
     // Workflow kinds count as a DISTINCT bucket — a
@@ -1448,6 +1517,12 @@ function summaryOf(events: readonly AgentFlowEvent[]): AgentFlowSummaryRow[] {
     // literal `subagent-link` outcome — an identity signal that is neither a
     // dispatch nor a settle (no overlap with the dispatch-verdict or
     // settle-outcome buckets).
+    // A `continuation` row is neither a dispatch nor a settlement activity:
+    // it lands in its own literal outcome bucket under the EMPTY role — the
+    // model line folds the role×outcome summary only over dispatch/settle
+    // ACTIVITY (the `role === ''` rows are excluded there), while the
+    // structured summary keeps the row count honest (the role×outcome sum =
+    // the window's event count invariant holds).
     const role =
       event.kind === 'dispatch' || event.kind === 'subagent-link' ? event.role
       : event.kind === 'workflow-run' || event.kind === 'workflow-agent' || event.kind === 'workflow-run-end' || event.kind === 'workflow-verdict'
@@ -1476,7 +1551,7 @@ export function readAgentFlow(workflowDir: string, workflowId: string, limit?: n
   const n = limit === undefined ? AGENT_FLOW_DEFAULT_LIMIT : Math.max(0, Math.floor(limit))
   const lines = readDshLedgerWindow({ harnessDir }, workflowId, n)
   if (lines === null) return null
-  const events: AgentFlowEvent[] = []
+  const events: AgentFlowLedgerEvent[] = []
   for (const line of lines) {
     try {
       const event = eventFromUnknown(JSON.parse(line) as unknown)
@@ -1485,7 +1560,11 @@ export function readAgentFlow(workflowDir: string, workflowId: string, limit?: n
       continue
     }
   }
-  return { events: events.map(eventView), summary: summaryOf(events) }
+  // The continuation view (I-000739) is an ADDITIVE member of the catalog's
+  // event window: typed through the shared AgentFlowView shape — every
+  // client consumer guards its reads per field, so the added kind is a data
+  // member of the wire, never a union break for an existing consumer.
+  return { events: events.map(eventView), summary: summaryOf(events) } as AgentFlowView
 }
 
 /* ---------------------------------- settle (real completion pairing) ---------------------------------- */

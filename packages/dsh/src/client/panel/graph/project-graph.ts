@@ -94,7 +94,7 @@ export interface GraphViolation {
 
 /* ------------------------------ flow events (spec §3 — moved from `flow.*`) ------------------------------ */
 
-/** Event status coloring: dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/unknown rows → unknown (no gate status — honest). */
+/** Event status coloring: dispatch → dispatched|advisory|denied; settle → ok|error|denied; workflow/continuation/unknown rows → unknown (no gate status — honest). */
 export type FlowEventStatus = 'dispatched' | 'advisory' | 'denied' | 'ok' | 'error' | 'unknown'
 
 /**
@@ -112,8 +112,8 @@ export interface FlowEventView {
   /** `${ts}-${kind}-${index}` — stable id (index = position in the projected window). */
   id: string
   ts: number
-  /** The ledger kind verbatim: dispatch | settle | subagent-link | the three workflow kinds | any unknown kind string (generic row). */
-  kind: 'dispatch' | 'settle' | 'subagent-link' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
+  /** The ledger kind verbatim: dispatch | settle | subagent-link | continuation | the three workflow kinds | any unknown kind string (generic row). */
+  kind: 'dispatch' | 'settle' | 'subagent-link' | 'continuation' | 'workflow-run' | 'workflow-agent' | 'workflow-run-end' | (string & {})
   /** `Execute as`; '' for settle rows without a paired identity and for workflow/unknown rows. */
   role: string
   planId: string | null
@@ -158,6 +158,14 @@ export interface FlowEventView {
   readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end rows only). */
   readonly stopReason?: string
+  /** The continuation state — `unresolved` is the ONLY value (continuation rows only, I-000739). */
+  readonly state?: 'unresolved'
+  /**
+   * The bounded display reason a `continuation` row carries (why the
+   * dispatch's continuation could not be paired — the event log lists it
+   * with the row). Absent on every other kind.
+   */
+  readonly reason?: string
 }
 
 /* ---------------------------------- iteration zone (spec §3) ---------------------------------- */
@@ -338,10 +346,14 @@ function emphasisOf(
 /**
  * Entity status (spec §4, hardcoded priority): `denied` comes from the LATEST dispatch's
  * verdict (the only terminal verdict — settle-independent); `error`/`settled`
- * come from the settle paired with that dispatch; `running` = no paired settle
- * yet (exact identity pairing — an unpaired settle stays unpaired, honest);
- * `idle` = a KNOWN_AGENTS roster member with no dispatch evidence (spec §6.2 —
- * never guessed as running/settled). `advisory` is RETAINED as a union member
+ * come from the settle paired with that dispatch; `unresolved` (I-000739)
+ * comes from an unresolved `continuation` row naming that dispatch — the
+ * dispatch was observed but its completion cannot be paired, a DISTINCT
+ * NON-RUNNING fact (never phantom running, never counted in `executing`);
+ * `running` = no paired settle AND no paired continuation yet (exact identity
+ * pairing — an unpaired settle stays unpaired, honest); `idle` = a
+ * KNOWN_AGENTS roster member with no dispatch evidence (spec §6.2 — never
+ * guessed as running/settled). `advisory` is RETAINED as a union member
  * for backward shape, but the derivation (entityStatus) no longer emits it —
  * an advisory-verdict dispatch now falls through to its settle pair (or
  * `running`); the advisory VERDICT still renders in the event log.
@@ -351,6 +363,7 @@ export type AgentEntityStatus =
   | 'settled'
   | 'error'
   | 'denied'
+  | 'unresolved'
   /** Retained for shape compat; the derivation (entityStatus) no longer emits it. */
   | 'advisory'
   | 'idle'
@@ -800,15 +813,28 @@ function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null)
  * terminal (a soft-enforcement dispatch is a "放行" pass-through, not a final
  * state — it must not mask a real completion): the settle paired with that
  * dispatch decides — `error` → error, `ok`/`denied` → settled; no pair →
- * running (exact identity pairing — an unpaired settle stays unpaired, honest).
- * `advisory` stays a valid `AgentEntityStatus` union member for backward shape
- * but nothing projects it now; the advisory VERDICT still renders in the event
- * log via `dispatchStatus` (unchanged).
+ * the dispatch's continuation pairing decides (I-000739): an unresolved
+ * `continuation` naming the latest dispatch → `unresolved` (a DISTINCT
+ * non-running fact, never phantom running); no continuation either →
+ * running (exact identity pairing — an unpaired settle stays unpaired,
+ * honest). `advisory` stays a valid `AgentEntityStatus` union member for
+ * backward shape but nothing projects it now; the advisory VERDICT still
+ * renders in the event log via `dispatchStatus` (unchanged).
  */
-function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEventStatus>): AgentEntityStatus {
+function entityStatus(
+  acc: EntityAccum,
+  pairStatus: ReadonlyMap<number, FlowEventStatus>,
+  continuationSet: ReadonlySet<number>,
+): AgentEntityStatus {
   if (acc.verdict === 'denied') return 'denied'
   const paired = pairStatus.get(acc.latestIndex)
-  return paired === 'error' ? 'error' : paired === undefined ? 'running' : 'settled'
+  if (paired === 'error') return 'error'
+  if (paired !== undefined) return 'settled'
+  // The LATEST dispatch's unresolved continuation is the entity's newest
+  // ledger fact (I-000739): the dispatch was observed but its completion
+  // cannot be paired. A dispatch with NO events after it stays honestly
+  // running — ONLY a paired continuation row maps to the new state.
+  return continuationSet.has(acc.latestIndex) ? 'unresolved' : 'running'
 }
 
 /**
@@ -825,6 +851,7 @@ function entityStatus(acc: EntityAccum, pairStatus: ReadonlyMap<number, FlowEven
 function aggregateEntities(
   entries: readonly { view: FlowEventView }[],
   pairStatus: ReadonlyMap<number, FlowEventStatus>,
+  continuationSet: ReadonlySet<number>,
   currentStep: number | null,
 ): AgentEntityView[] {
   const acc = new Map<string, EntityAccum>()
@@ -880,7 +907,7 @@ function aggregateEntities(
     zone: e.zone,
     bucket: e.bucket,
     emphasis: emphasisOf(e.stage, currentStep),
-    status: entityStatus(e, pairStatus),
+    status: entityStatus(e, pairStatus, continuationSet),
     idle: false,
   }))
 }
@@ -1122,19 +1149,22 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   // pairing key is the EXACT identity (agent, role, planId, taskId) a paired
   // settle carries — `view.status` already carries settleStatus(outcome) for
   // settle rows, so the record values are the settle statuses directly.
-  const pairStatus = pairSettleStatus(
-    filtered.map((e) => ({
-      kind: e.view.kind,
-      agent: e.view.agent,
-      role: e.view.role,
-      planId: e.view.planId,
-      taskId: e.view.taskId,
-      ...(e.view.paired === true ? { paired: true as const } : {}),
-      status: e.view.status,
-    })),
-  )
+  // Continuation rows ride the same row list as no-ops there; the SECOND
+  // walk over the same list (I-000739) pairs each unresolved `continuation`
+  // onto the dispatch it names.
+  const pairingRows = filtered.map((e) => ({
+    kind: e.view.kind,
+    agent: e.view.agent,
+    role: e.view.role,
+    planId: e.view.planId,
+    taskId: e.view.taskId,
+    ...(e.view.paired === true ? { paired: true as const } : {}),
+    status: e.view.status,
+  }))
+  const pairStatus = pairSettleStatus(pairingRows)
+  const continuationSet = pairContinuationIndexes(pairingRows)
 
-  const lit = aggregateEntities(filtered, pairStatus, currentStep)
+  const lit = aggregateEntities(filtered, pairStatus, continuationSet, currentStep)
   // The evidence-derived key set drives the idle-twin suppression —
   // a lit `general` key (from any non-roster dispatch) never coexists with the
   // idle roster `general` card.
@@ -1210,6 +1240,7 @@ function flowEventOf(
     runId?: unknown; name?: unknown; seq?: unknown; label?: unknown; phase?: unknown; childId?: unknown
     taskRef?: unknown
     stopReason?: unknown
+    state?: unknown; reason?: unknown
   } | null | undefined
   const kind = str(row?.kind)
   if (kind === null) return null
@@ -1282,6 +1313,34 @@ function flowEventOf(
       durationMs: null,
       ...(childId !== null ? { childId } : {}),
       ...(taskRef !== null ? { taskRef } : {}),
+    }
+  }
+  if (kind === 'continuation') {
+    // Explicit branch BEFORE the generic fallback (I-000739): a continuation
+    // row is the unresolved-continuation marker of its PAIRED dispatch — it
+    // keeps the dispatch identity (role/planId/taskId/agent, the same seats
+    // a `subagent-link` keeps) and carries its own facts (`state` +
+    // `reason` — the event log lists the reason). No verdict/outcome →
+    // status `unknown` (honest, like workflow rows); an illegal `state`
+    // degrades to an absent field, never a guessed value.
+    const continuationState = str(row?.state)
+    const reason = str(row?.reason)
+    return {
+      id: `${ts}-${kind}-${index}`,
+      ts,
+      kind,
+      role,
+      planId: str(row?.planId),
+      taskId: str(row?.taskId),
+      taskCategory: null,
+      agent: str(row?.agent),
+      status: 'unknown',
+      expected: matched !== undefined,
+      stage: matched ?? null,
+      settled: false,
+      durationMs: null,
+      ...(continuationState === 'unresolved' ? { state: 'unresolved' as const } : {}),
+      ...(reason !== null ? { reason } : {}),
     }
   }
   // Workflow kinds + unknown kinds: the generic base row (no gate status —
@@ -1368,6 +1427,31 @@ function pairSettleStatus(rows: readonly PairingRow[]): Map<number, FlowEventSta
     } else if (entry.paired === true && entry.agent !== null) {
       const paired = lastDispatch.get(pairingKeyOf(entry))
       if (paired !== undefined) record.set(paired, entry.status ?? 'ok')
+    }
+  }
+  return record
+}
+
+/**
+ * The paired dispatch index set for `continuation` rows (I-000739): the SAME
+ * exact-identity walk as `pairSettleStatus`, marking each unresolved
+ * continuation onto the most recent same-identity dispatch BEFORE it in file
+ * order. A continuation WITHOUT an agent never pairs — no fallback guessing
+ * (honest, the same discipline as an unpaired settle): the dispatch keeps its
+ * honest `running` instead of a guessed unresolved. Continuation rows are
+ * no-ops in `pairSettleStatus` (no `paired` settle marker) — the two walks
+ * read the same input unchanged.
+ */
+function pairContinuationIndexes(rows: readonly PairingRow[]): ReadonlySet<number> {
+  const record = new Set<number>()
+  const lastDispatch = new Map<string, number>()
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const entry = rows[i]!
+    if (entry.kind === 'dispatch') {
+      if (entry.agent !== null) lastDispatch.set(pairingKeyOf(entry), i)
+    } else if (entry.kind === 'continuation' && entry.agent !== null) {
+      const paired = lastDispatch.get(pairingKeyOf(entry))
+      if (paired !== undefined) record.add(paired)
     }
   }
   return record

@@ -224,9 +224,20 @@ describe('team agent flow — an unpaired continuation is explicit, never an ok 
     const continuation = rows.find((row) => row.kind === 'continuation')
     expect(continuation).toMatchObject({ kind: 'continuation', state: 'unresolved', role: 'fullstack-dev' })
     expect(continuation?.reason).toContain('reviewer')
-    // Durable-only marker: the projected view keeps its existing kinds and
-    // therefore still shows the dispatch as the last recorded fact.
-    expect(readAgentFlow(workflowDir, 'wf-1')?.events.map((event) => event.kind)).toEqual(['dispatch'])
+    // I-000739: the continuation row is PROJECTED (no longer durable-only):
+    // the readAgentFlow view lists it latest-first before its dispatch,
+    // carrying the unresolved state and the display reason. The wire shape
+    // is guarded here — the shared view type gains the kind additively and
+    // every consumer reads it per field.
+    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
+      events: { kind: string; state?: string; role?: string; reason?: string }[]
+    } | null
+    expect(view?.events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
+    expect(view?.events.find((event) => event.kind === 'continuation')).toMatchObject({
+      state: 'unresolved',
+      role: 'fullstack-dev',
+      reason: expect.stringContaining('reviewer'),
+    })
   })
 
   it('records `continuation`/`unresolved` for a non-member carrier (send_message acceptance is not a completion)', async () => {
