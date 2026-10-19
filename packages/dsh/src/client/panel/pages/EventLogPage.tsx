@@ -180,6 +180,13 @@ function EventDetailsBody({
           <DetailField field="stop-reason" label={t('event-log.field.stop-reason')} value={source?.stopReason ?? ''} />
         </>
       )}
+      {/* The continuation row's reason (I-000739): the unresolved-continuation
+          marker lists WHY the dispatch's continuation could not be paired —
+          backfilled from the source row like plan/task (T1-Min-3); the state
+          is always `unresolved` (the kind line above is the honest label). */}
+      {entry.eventKind === 'continuation' && (
+        <DetailField field="reason" label={t('event-log.field.reason')} value={source?.reason ?? ''} />
+      )}
     </div>
   )
 }

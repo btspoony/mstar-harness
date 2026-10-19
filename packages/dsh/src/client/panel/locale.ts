@@ -162,6 +162,7 @@ export type PanelKey =
   | 'event-log.field.name'
   | 'event-log.field.members'
   | 'event-log.field.stop-reason'
+  | 'event-log.field.reason'
   | 'event-log.field.severity'
   | 'event-log.field.code'
   | 'event-log.field.message'
@@ -304,6 +305,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.name': '运行名称',
   'event-log.field.members': '成员数',
   'event-log.field.stop-reason': '停止原因',
+  'event-log.field.reason': '未决原因',
   'event-log.field.severity': '严重度',
   'event-log.field.code': '代码',
   'event-log.field.message': '信息',
@@ -441,6 +443,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.name': 'Run name',
   'event-log.field.members': 'Members',
   'event-log.field.stop-reason': 'Stop reason',
+  'event-log.field.reason': 'Unresolved reason',
   'event-log.field.severity': 'Severity',
   'event-log.field.code': 'Code',
   'event-log.field.message': 'Message',

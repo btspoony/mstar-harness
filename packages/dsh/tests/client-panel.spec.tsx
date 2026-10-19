@@ -2349,6 +2349,18 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('plan  not complete')
   })
 
+  it('a continuation row lists its unresolved reason (I-000739)', async () => {
+    const html = eventsHtml(flowSource([
+      { ts: 8_000, kind: 'continuation', agent: 'a-1', role: 'fullstack-dev', planId: null, taskId: null, taskCategory: null, state: 'unresolved', reason: 'the created member is not resolvable in the roster' },
+    ]))
+    // The row renders with the honest unknown status (no gate verdict/outcome).
+    expect(html).toContain('data-event-log-status="unknown"')
+    // The detail body backfills the row's reason from the source (T1-Min-3).
+    const reasonField = html.match(/data-event-log-field="reason"[\s\S]*?<\/div>/)?.[0] ?? ''
+    expect(reasonField).toContain('data-event-log-missing="false"')
+    expect(reasonField).toContain('the created member is not resolvable in the roster')
+  })
+
   it('missing fields degrade to 「—」 in the detail body — never fabricated (T1-Min-2 ts)', async () => {
     // A sparse dispatch: no role/agent/plan/task/category/stage, ts 0, no
     // duration, no child session id — every one of those detail fields must render「—」.
