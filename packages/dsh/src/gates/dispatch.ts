@@ -106,6 +106,41 @@ export const DEFAULT_DISPATCH_TOOLS = ['subagent', 'subagent_fork'] as const
  */
 export const DEFAULT_WORKFLOW_TOOLS = ['workflow', 'ralph'] as const
 
+/**
+ * The fixed dsh Agent Teams tool names the dispatch gate matches, mapped to
+ * the argument field that carries the Assignment-shaped text (the installed
+ * `@deepseek-ai/dsh-experimental-tool-agent-team` 0.2.1-rc.2 surface:
+ * `spawn_teammate.prompt`, `team_task_create.description`,
+ * `team_task_update.description`, `send_message.message`).
+ *
+ * The team tools are gated by THEIR OWN branch, never by addition to
+ * `DEFAULT_DISPATCH_TOOLS` (that list stays `['subagent', 'subagent_fork']`).
+ * `team_task_update.description` is OPTIONAL upstream — a status-only
+ * `claim`/`release`/`complete` update carries no carrier at all — so a
+ * missing (or non-string) carrier is no gate decision, exactly like a
+ * missing `prompt` on `subagent`. The tools are fixed names, so no Config
+ * key is added for them; a RENAMED instance is out of reach until its name
+ * is added here — the same documented caveat `DEFAULT_DISPATCH_TOOLS`
+ * carries for renamed subagent instances.
+ */
+export const TEAM_DISPATCH_TOOLS = {
+  spawn_teammate: 'prompt',
+  team_task_create: 'description',
+  team_task_update: 'description',
+  send_message: 'message',
+} as const
+
+/** Tool names the Agent Teams branch owns (keys of {@link TEAM_DISPATCH_TOOLS}). */
+type TeamDispatchTool = keyof typeof TEAM_DISPATCH_TOOLS
+
+/**
+ * True when `name` is one of the fixed Agent Teams carriers. `Object.hasOwn`
+ * keeps prototype keys (`constructor`, `__proto__`) out of the map read.
+ */
+function isTeamDispatchTool(name: string): name is TeamDispatchTool {
+  return Object.hasOwn(TEAM_DISPATCH_TOOLS, name)
+}
+
 /** `## Assignment` heading marker (opencode parity — shape guard only). */
 const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
 
@@ -936,6 +971,82 @@ async function gateWorkflow(
 }
 
 /**
+ * The Assignment gate core shared by the subagent and the Agent Teams
+ * branches (`gateDispatch` / {@link gateTeamDispatch}): header-region scoping,
+ * the shape guard, ONE hard resolution, the adapter's shared dispatch-gate
+ * core (lease + worktree L1/L2 + field + branch + anti-recursion), then the
+ * warn advisory or the hard veto. `exec.name` is the ACTUAL carrier tool, so
+ * both the deny reason and the advisory name the tool that carried the text
+ * rather than assuming `subagent`.
+ *
+ * `prompt` is the raw carrier text — the header slice is computed here ONCE
+ * and never fed back into the core (the adapter re-derives the same slice).
+ */
+async function gateAssignmentText(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  adapter: DshHostAdapter,
+  exec: ToolExecution,
+  prompt: string,
+  hintReadOf: () => SessionHintRead,
+): Promise<PreToolDecision | undefined> {
+  const toolName = exec.name
+  // Shape guard + advisory role read run on the header region:
+  // a `## Assignment` heading or field line quoted in the task body cannot
+  // shape a non-assignment prompt or leak into the advisory role.
+  const header = assignmentHeaderRegion(prompt)
+  if (!isAssignmentShaped(header)) return undefined
+
+  // The adapter owns the shared dispatch-gate core; the exec context is
+  // passed so the lease gate (session-id bound — see leaseGateViolations)
+  // joins the SAME verdict as the field/branch/anti-recursion checks.
+  // `hard` resolves ONCE per dispatch (
+  // : the adapter's record block and this gate decision share the
+  // single resolution instead of each re-reading the compass.
+  const hard = resolveDispatchHard(harnessDir, config, prompt)
+  const result = await adapter.dispatchGate(prompt, exec, hard, hintReadOf())
+  const verdict = applyEnforcement(result, { hard })
+  if (verdict.hardBlocked) {
+    ctx.logger(DISPATCH_LOGGER).error(
+      `subagent dispatch (${toolName}) vetoed (Enforcement: hard):\n${verdict.violations.map(formatViolation).join('\n')}`,
+    )
+    return { kind: 'deny', reason: denyReason(toolName, verdict) }
+  }
+  if (!verdict.ok) {
+    ctx.logger(DISPATCH_LOGGER).warn(
+      `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
+    )
+    const role = parseAssignmentFields(header).executeAs ?? ''
+    ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
+  }
+  return undefined
+}
+
+/**
+ * The Agent Teams gate branch: resolve the carrier field for the fixed team
+ * tools and route its text through the SAME core as `subagent`
+ * ({@link gateAssignmentText}). A tool outside the fixed map, a missing or
+ * non-string carrier (`team_task_update` status-only updates), or
+ * non-Assignment text is a pure pass-through (undefined) — ordinary team
+ * coordination text is never a false positive.
+ */
+async function gateTeamDispatch(
+  ctx: Context,
+  harnessDir: string | null,
+  config: Config,
+  adapter: DshHostAdapter,
+  exec: ToolExecution,
+  hintReadOf: () => SessionHintRead,
+): Promise<PreToolDecision | undefined> {
+  if (!isTeamDispatchTool(exec.name)) return undefined
+  const carrier = TEAM_DISPATCH_TOOLS[exec.name]
+  const text = asRecord(exec.arguments)?.[carrier]
+  if (typeof text !== 'string') return undefined
+  return gateAssignmentText(ctx, harnessDir, config, adapter, exec, text, hintReadOf)
+}
+
+/**
  * Run the dispatch gate over one delegation tool call (opencode
  * `validateDispatchAssignment` parity — the SAME engine fns, so violation
  * codes are identical). Returns the veto decision in hard mode, undefined
@@ -975,39 +1086,17 @@ async function gateDispatch(
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
   const workflowDecision = await gateWorkflow(ctx, harnessDir, config, adapter, exec, hintReadOf)
   if (workflowDecision !== undefined) return workflowDecision
+  // AGENT TEAMS BRANCH — BEFORE the subagent name match (the workflow branch
+  // above demonstrates the same pattern): the team tools carry the Assignment
+  // text in a different argument field per tool and are gated by their own
+  // fixed-name branch, never by addition to `DEFAULT_DISPATCH_TOOLS`.
+  const teamDecision = await gateTeamDispatch(ctx, harnessDir, config, adapter, exec, hintReadOf)
+  if (teamDecision !== undefined) return teamDecision
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
   const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined
   if (prompt === undefined) return undefined
-  // Shape guard + advisory role read run on the header region:
-  // a `## Assignment` heading or field line quoted in the task body cannot
-  // shape a non-assignment prompt or leak into the advisory role.
-  const header = assignmentHeaderRegion(prompt)
-  if (!isAssignmentShaped(header)) return undefined
-
-  // The adapter owns the shared dispatch-gate core; the exec context is
-  // passed so the lease gate (session-id bound — see leaseGateViolations)
-  // joins the SAME verdict as the field/branch/anti-recursion checks.
-  // `hard` resolves ONCE per dispatch (
-  // : the adapter's record block and this gate decision share the
-  // single resolution instead of each re-reading the compass.
-  const hard = resolveDispatchHard(harnessDir, config, prompt)
-  const result = await adapter.dispatchGate(prompt, exec, hard, hintReadOf())
-  const verdict = applyEnforcement(result, { hard })
-  if (verdict.hardBlocked) {
-    ctx.logger(DISPATCH_LOGGER).error(
-      `subagent dispatch (${toolName}) vetoed (Enforcement: hard):\n${verdict.violations.map(formatViolation).join('\n')}`,
-    )
-    return { kind: 'deny', reason: denyReason(toolName, verdict) }
-  }
-  if (!verdict.ok) {
-    ctx.logger(DISPATCH_LOGGER).warn(
-      `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
-    )
-    const role = parseAssignmentFields(header).executeAs ?? ''
-    ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
-  }
-  return undefined
+  return gateAssignmentText(ctx, harnessDir, config, adapter, exec, prompt, hintReadOf)
 }
 
 
