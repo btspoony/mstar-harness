@@ -10,20 +10,20 @@
 import { describe, expect, test } from "bun:test";
 import { detectHost } from "./host.js";
 
-describe("detectHost — every dsh delegation token resolves to dsh", () => {
+describe("detectHost -- every dsh delegation token resolves to dsh", () => {
   for (const signal of ["subagent", "spawn_teammate", "team_task_create"] as const) {
-    test(`${signal} → dsh`, () => {
+    test(`${signal} -> dsh`, () => {
       expect(detectHost([signal])).toBe("dsh");
     });
   }
 
-  test("a subagent + team task-board token pair → dsh", () => {
+  test("a subagent + team task-board token pair -> dsh", () => {
     expect(detectHost(["subagent", "team_task_create"])).toBe("dsh");
   });
 });
 
-describe("detectHost — the other rows keep their order", () => {
-  test("question alone → opencode", () => {
+describe("detectHost -- the other rows keep their order", () => {
+  test("question alone -> opencode", () => {
     expect(detectHost(["question"])).toBe("opencode");
   });
 
