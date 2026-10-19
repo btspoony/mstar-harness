@@ -12,7 +12,7 @@
  * `ctx.inject(['commands'], …)` so the plugin boots without the service.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { existsSync } from 'node:fs'
+import { existsSync, renameSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -29,6 +29,43 @@ afterEach(async () => {
 function packagedCommandsDir(): string | undefined {
   const dir = fileURLToPath(new URL('../harness-commands/', import.meta.url))
   return existsSync(dir) ? dir : undefined
+}
+
+/** The packaged mirror path, present or not (the plugin's own resolution). */
+function packagedMirrorPath(): string {
+  return fileURLToPath(new URL('../harness-commands', import.meta.url))
+}
+
+/** Run `run` with the packaged mirror hidden (renamed away, restored in finally). */
+async function withMirrorHidden<T>(run: () => Promise<T>): Promise<T> {
+  const mirror = packagedMirrorPath()
+  const hidden = `${mirror}.hidden-by-test`
+  const existed = existsSync(mirror)
+  if (existed) renameSync(mirror, hidden)
+  try {
+    return await run()
+  } finally {
+    if (existed) renameSync(hidden, mirror)
+  }
+}
+
+/** One cordis boot-log record (the exporter `Message` subset the assertions read). */
+interface BootLogRecord {
+  type?: unknown
+  name?: unknown
+  args?: unknown[]
+}
+
+/** Structural view of the cordis logger service (the default buffer exporter —
+ * its level cap admits ERROR records; see fallbacks-seeds-boot-order.spec.ts). */
+interface LoggerServiceView {
+  buffer: BootLogRecord[]
+}
+
+/** The boot-window ERROR records of one booted app (from the default buffer). */
+function bootErrorRecords(booted: BootResult): BootLogRecord[] {
+  const logger = booted.ctx.logger as unknown as LoggerServiceView | undefined
+  return (logger?.buffer ?? []).filter((record) => record.type === 'error')
 }
 
 /** The six mstar slash commands (repo-root `commands/` mirror). */
@@ -59,6 +96,8 @@ function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
 describe('bundled mstar commands (omp parity)', () => {
   it('executes each command: the handler steers the command body into the receiving agent as a USER message', async () => {
     const dir = packagedCommandsDir()
+    // The missing-mirror boot is covered by the fail-loud case below; this
+    // probe only guards the mirror-present steering contract.
     if (dir === undefined) return
     booted = await bootApp()
     const { agent, steered } = fakeAgent()
@@ -69,5 +108,20 @@ describe('bundled mstar commands (omp parity)', () => {
       const message = steered.at(-1)!
       expect(message.source.kind).toBe('user')
     }
+  })
+})
+
+describe('bundled mstar commands — missing mirror fails loud (I-000265)', () => {
+  it('logs an ERROR naming the mirror path and the recovery when the harness-commands mirror is absent', async () => {
+    await withMirrorHidden(async () => {
+      booted = await bootApp()
+      const errors = bootErrorRecords(booted)
+      // No silent early return: the registration path must emit an
+      // error-level record naming the missing mirror and the recovery.
+      expect(errors.length, `expected an ERROR log, got ${JSON.stringify(errors)}`).toBeGreaterThanOrEqual(1)
+      const text = errors.map((record) => (record.args ?? []).map(String).join(' ')).join('\n')
+      expect(text).toContain('harness-commands')
+      expect(text).toContain('bun run dsh:bundle-assets')
+    })
   })
 })
