@@ -16,17 +16,22 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test'
 import { execFileSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import {
   createExecutionWorkflow,
+  encodeExecutionSessionRef,
   initializeStore,
   readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
-import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@mstar-harness/engine'
+import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
+import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
+import { clearExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 import { bootApp, type BootResult } from './harness.ts'
 
 const TS = '2026-09-21T00:00:00.000Z'
@@ -72,6 +77,25 @@ function run(ctx: BootResult['ctx'], name: string, agent: unknown, args: Record<
 function envelopeOf(result: Awaited<ReturnType<BootResult['ctx']['tools']['execute']>>): Record<string, unknown> {
   if (result.isError) throw new Error(`tool call failed: ${result.error?.message ?? 'unknown error'}`)
   return result.value as Record<string, unknown>
+}
+
+/**
+ * Narrow one successful bind envelope to the engine session reference its
+ * receipt carries (both bind arms answer `ExecutionRead<ExecutionSessionRef>`
+ * as the envelope `data`).
+ */
+function bindRefOf(envelope: Record<string, unknown>): ExecutionSessionRef {
+  const receipt = envelope.data as { data?: ExecutionSessionRef } | undefined
+  const ref = receipt?.data
+  if (typeof ref !== 'object' || ref === null) throw new Error('the bind envelope carried no session reference receipt')
+  return ref
+}
+
+/** The CHILD session's stored binding slot, narrowed through the read's own discriminant. */
+function storedBinding(harnessDir: string, cwd: string): WorkflowSessionBinding | undefined {
+  const read = readWorkflowSessionBinding(harnessDir, CHILD_ID, cwd)
+  if (read.kind !== 'ok') throw new Error(`the binding slot read failed: ${read.reason}`)
+  return read.binding
 }
 
 /**
@@ -178,6 +202,11 @@ async function bootedWithFixture(): Promise<BootResult & {
   await mkdir(evidenceDir, { recursive: true })
   await writeFile(join(evidenceDir, 'qc.md'), 'qc consolidated report\n')
   await writeFile(join(evidenceDir, 'qa.md'), 'qa report\n')
+  // The ledger-attribution resolver canonicalizes the REAL dir under
+  // {WORKFLOW_DIR} (existsSync → statSync → realpathSync); the store fixture
+  // registers the lifecycle but materializes no dir, so seed it — the same
+  // idiom as the shared seedActiveWorkflow fixture.
+  await mkdir(join(app.harnessDir, 'workflows', WORKFLOW_ID), { recursive: true })
   return Object.assign(app, {
     featureWorktree: fixture.worktree,
     sourceSha: fixture.sourceSha,
@@ -372,5 +401,122 @@ describe('HMR disposal', () => {
     for (const name of TOOL_NAMES) {
       expect(app.ctx.tools.get(name)).toBeUndefined()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (e) Task 3 (#527) — binding adoption on the native path
+// ---------------------------------------------------------------------------
+
+describe('native binding adoption — a native plan bind persists the executionBinding slot', () => {
+  it('adopts the engine-minted reference after plan bind --execution, preserves the session selection, and the ledger resolves with no slash command', async () => {
+    const app = await bootedWithFixture()
+    // A pre-existing durable selection (the picker pick + exclusion floor)
+    // must survive adoption untouched.
+    expect(updateWorkflowSessionBinding(app.harnessDir, CHILD_ID, app.root, {
+      selectedWorkflowId: WORKFLOW_ID,
+      excludedBeforeSeq: 7,
+    }).kind).toBe('written')
+    const child = agentOf(CHILD_ID, app.root)
+
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+
+    const binding = storedBinding(app.harnessDir, app.root)
+    // The adopted reference is the engine's own mint — the canonical C1
+    // binding naming the carrying session, not a dsh-invented record.
+    expect(binding?.executionBinding?.version).toBe(1)
+    expect(binding?.executionBinding?.harnessRoot).toBe(app.harnessDir)
+    expect(binding?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
+    expect(binding?.executionBinding?.session.sessionId).toBe(CHILD_ID)
+    expect(binding?.executionBinding?.session.role).toBe('coordinator')
+    // The user selection is preserved: the adopted workflow becomes the
+    // stored pick and the exclusion floor is kept (merged, never reset).
+    expect(binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    expect(binding?.excludedBeforeSeq).toBe(7)
+
+    // Ledger attribution works with NO slash command: the workflow resolves
+    // from the binding slot this bind populated.
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
+    expect(target).not.toBeNull()
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+    // The F-207 boundary canonicalizes the dir (realpathSync), so the
+    // expected value is the fixture dir's own realpath.
+    expect(target?.workflowDir).toBe(realpathSync(join(app.harnessDir, 'workflows', WORKFLOW_ID)))
+    expect(target?.sessionId).toBe(CHILD_ID)
+  })
+
+  it('refuses foreign, copied and stale references and never adopts them', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    // A REAL native bind first: it mints the canonical ref the forged ones
+    // derive from, and its adoption is the baseline the clears reset.
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+    const real = bindRefOf(bound)
+
+    const forged: Array<[string, Partial<ExecutionSessionRef>]> = [
+      // A reference that names another session (the same first check the
+      // slash adoption made — the carrying session must match).
+      ['foreign', { sessionId: 'other-session' }],
+      // The right session, a foreign store: the engine resume refuses it.
+      ['copied', { storeId: '00000000-0000-4000-8000-000000000009' }],
+      // A superseded epoch: the engine resume refuses it.
+      ['stale', { epoch: real.epoch + 1 }],
+    ]
+    for (const [label, override] of forged) {
+      // Clear the adopted baseline so "nothing adopted" is observable per case.
+      expect(clearExecutionBinding(app.harnessDir, CHILD_ID, app.root)).toBe(true)
+      const result = await run(app.ctx, 'mstar_plan_bind', child, {
+        resumeRef: encodeExecutionSessionRef({ ...real, ...override }),
+      })
+      const envelope = envelopeOf(result)
+      expect(envelope.status, `${label} reference must be refused`).not.toBe('ok')
+      expect(
+        storedBinding(app.harnessDir, app.root)?.executionBinding ?? null,
+        `${label} reference must never be adopted`,
+      ).toBeNull()
+    }
+  })
+
+  it('adopts only after the engine resume succeeds — the slot write carries the resumed receipt and a refused resume writes nothing', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+    const real = bindRefOf(bound)
+
+    // Clear, then re-adopt through the RESUME arm with the engine's own
+    // reference: the slot write carries exactly the resumed receipt's ref.
+    expect(clearExecutionBinding(app.harnessDir, CHILD_ID, app.root)).toBe(true)
+    const resumed = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      resumeRef: encodeExecutionSessionRef(real),
+    }))
+    expect(resumed.status).toBe('ok')
+    const binding = storedBinding(app.harnessDir, app.root)
+    expect(binding?.executionBinding?.session).toEqual(real)
+    expect(binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+
+    // The ordering fact: a stale-epoch resume is refused BEFORE any slot
+    // write, so the adopted baseline above survives untouched.
+    const refused = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      resumeRef: encodeExecutionSessionRef({ ...real, epoch: real.epoch + 1 }),
+    }))
+    expect(refused.status).not.toBe('ok')
+    expect(storedBinding(app.harnessDir, app.root)?.executionBinding?.session).toEqual(real)
   })
 })
