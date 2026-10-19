@@ -325,6 +325,33 @@ describe("pr-review command family", () => {
     }
   });
 
+  test("an omitted coverage fact joins an invalid count and an invalid findings entry in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{}]));
+    // Omission is enforced by the family's one collection phase, not by
+    // admission, so a call that omits a fact and also carries an invalid
+    // count and payload reports all three in one refusal
+    // (packages/cli/AGENTS.md § Aggregated validation).
+    const facts = { findings, requiredDomains: "persist", openedDomains: "persist", unverified: "x" };
+
+    for (const refusal of [
+      await command("pr-review.tally").execute(facts, context),
+      await executeCommand("pr-review.tally", facts, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "omitted fact with invalid count and findings")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "diffBasis", code: "required" }),
+        expect.objectContaining({ path: "unverified", code: "invalid" }),
+        expect.objectContaining({ path: "findings", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("Rejected diffBasis: expected present; received undefined");
+      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+    }
+  });
+
   test.each([
     ["--required-domains", { openedDomains: "persist", diffBasis: "readable" }, "requiredDomains"],
     ["--opened-domains", { requiredDomains: "persist", diffBasis: "readable" }, "openedDomains"],
@@ -334,8 +361,9 @@ describe("pr-review command family", () => {
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, "[]");
 
-    // Fail-closed: no default stands in for an unreported coverage fact, so
-    // both the direct route and admission refuse the omission.
+    // Fail-closed: no default stands in for an unreported coverage fact. The
+    // family's collection phase owns the refusal, so the message names the
+    // flag the caller must add.
     for (const refusal of [
       await command("pr-review.tally").execute({ findings, ...facts }, context),
       await executeCommand("pr-review.tally", { findings, ...facts }, context),
@@ -345,8 +373,6 @@ describe("pr-review command family", () => {
         expect.objectContaining({ path: field, code: "required" }),
       ]));
     }
-    // The direct route names the flag the caller must add; admission names
-    // the field. Both refuse the omission the same way.
     const direct = await command("pr-review.tally").execute({ findings, ...facts }, context);
     expect(direct.status === "ok" ? "" : direct.message).toContain(`${flag} is required`);
   });

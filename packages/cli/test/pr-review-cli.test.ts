@@ -279,8 +279,8 @@ describe("mstar pr-review tally", () => {
       const result = runCli(["pr-review", "tally", "--findings", findings, ...remaining]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      // Admission refuses the omission before the family sees it; no default stands in.
-      expect(message(result)).toContain(`Rejected ${flag}: expected present; received undefined`);
+      // The family's collection phase refuses the omission; no default stands in.
+      expect(message(result)).toContain(`${flag} is required`);
     });
   });
 
@@ -323,6 +323,92 @@ describe("mstar pr-review tally", () => {
       const body = message(result);
       expect(body).toContain("findings file must contain valid JSON");
       expect(body).toContain("--stopped must be a single line of non-blank text");
+    });
+  });
+
+  test("a required domain that never opened derives incomplete, and an explicit empty --opened-domains is the empty list", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist,security",
+        "--opened-domains",
+        "",
+        "--diff-basis",
+        "readable",
+      ]);
+      expect(result.exitCode).toBe(0);
+      // Empty findings: the count-derived score/band stay whole; the run facts
+      // alone select `incomplete` and mark the grade partial.
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("incomplete");
+      expect(resultData.incomplete).toEqual({
+        reason: "required domain seat(s) never opened: persist, security",
+        unscanned: ["persist", "security"],
+      });
+      expect(resultData.chatHeader).toBe(
+        "incomplete \u00b7 100% (mergeable, partial)\nmust-fix=0 should-fix=0 nit=0 unverified=0\n" +
+          "cause: required domain seat(s) never opened: persist, security\nunscanned: persist, security",
+      );
+    });
+  });
+
+  test("an unreadable diff basis derives incomplete and names the basis as unscanned", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist",
+        "--opened-domains",
+        "persist",
+        "--diff-basis",
+        "unreadable",
+      ]);
+      expect(result.exitCode).toBe(0);
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("incomplete");
+      expect(resultData.incomplete).toEqual({
+        reason: "the resolved diff basis could not be read",
+        unscanned: ["the resolved diff basis"],
+      });
+      expect(resultData.chatHeader).toContain("cause: the resolved diff basis could not be read");
+      expect(resultData.chatHeader).toContain("unscanned: the resolved diff basis");
+    });
+  });
+
+  test("complete coverage stays settled: the tally-derived verdict and the two-line header", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, JSON.stringify([{ mergeClass: "should-fix" }, { mergeClass: "nit" }]));
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--required-domains",
+        "persist,security",
+        "--opened-domains",
+        "persist,security",
+        "--diff-basis",
+        "readable",
+      ]);
+      expect(result.exitCode).toBe(0);
+      // should-fix 12 + nit 2 = 14 → 86; no run fact selects `incomplete`.
+      const resultData = data(result);
+      expect(resultData.verdict).toBe("needs fixes");
+      expect(resultData.band).toBe("good");
+      expect(resultData.chatHeader).toBe("needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 nit=1 unverified=0");
+      expect(resultData.incomplete).toBeUndefined();
     });
   });
 
