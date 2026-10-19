@@ -14798,8 +14798,13 @@ function resolveReviewRunDir(opts) {
   const resolved = spec.kind === "codebase" ? { kind: "codebase", level: spec.level, round: spec.round ?? nextCodebaseRound(opts.reviewsDir, date, spec.level) } : spec;
   return join12(opts.reviewsDir, reviewRunDirName(date, resolved));
 }
-function resolveScaffoldDirs(root) {
+function resolveScaffoldDirs(root, options = {}) {
   const start = resolve8(root);
+  if (options.harnessDir !== undefined) {
+    const harnessDir2 = options.harnessDir;
+    const projectDir2 = mstarcDirOverride(harnessDir2, "projectDir") ?? join12(harnessDir2, "projects");
+    return { harnessDir: harnessDir2, projectDir: projectDir2 };
+  }
   const boundary = resolve8(start, defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   const explicit = process.env.MSTAR_HARNESS_DIR;
@@ -14808,8 +14813,8 @@ function resolveScaffoldDirs(root) {
   const projectDir = declaredProjectDir !== null ? declaredProjectDir : join12(harnessDir, "projects");
   return { harnessDir, projectDir };
 }
-async function scaffoldHarness(root) {
-  const { harnessDir, projectDir } = resolveScaffoldDirs(root);
+async function scaffoldHarness(root, options = {}) {
+  const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   for (const dir of SCAFFOLD_DIRS)
     mkdirSync4(join12(harnessDir, dir), { recursive: true });
   const defaultProjectDir = join12(projectDir, _DEFAULT_PROJECT);

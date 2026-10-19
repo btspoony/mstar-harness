@@ -55,6 +55,11 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * findings path, and `resolveProcessHarnessDir(cwd)` — so a pinned call cannot
  * write into the launch cwd's harness. Unpinned keeps today's behavior: `cwd`
  * is `process.cwd()` and the control root is its probe.
+ *
+ * The pin is also published as `harnessPin` (the exact harness dir, not its
+ * parent), so a command that owns root placement — `harness.scaffold` with no
+ * explicit path — initializes the pinned harness itself instead of
+ * re-discovering a root from the workspace anchor.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
   const resolver: ResolveContext = (_definition, _sessionId, signal, _services, effects: McpEffects) => {
@@ -62,6 +67,9 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
     return {
       cwd: options.harnessRoot === undefined ? process.cwd() : dirname(options.harnessRoot),
       controlRoot: options.harnessRoot ?? resolveProcessHarnessDir(process.cwd()),
+      // A pin is also the exact harness dir: commands that own root placement
+      // (e.g. `harness.scaffold`) must target it verbatim, not re-derive it.
+      ...(options.harnessRoot === undefined ? {} : { harnessPin: options.harnessRoot }),
       ...(sessionId === undefined ? {} : { sessionId }),
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
       signal,

@@ -97,6 +97,15 @@ export interface CommandEffects {
 export interface InvocationContext {
   readonly cwd: string;
   readonly controlRoot: string | null;
+  /**
+   * The explicit `mstar mcp --harness <absolute path>` pin, when the server was
+   * mounted with one. `controlRoot` is the admission default for commands that
+   * declare a per-call `harness`; this field carries the same pin as the exact
+   * harness dir so a command that owns root placement (e.g. `harness.scaffold`)
+   * can target it verbatim instead of re-discovering a root from `cwd`.
+   * Unpinned MCP servers and the CLI probe never set it.
+   */
+  readonly harnessPin?: string;
   readonly host?: string;
   readonly sessionId?: string;
   readonly sessionIdSource?: "flag" | "env";

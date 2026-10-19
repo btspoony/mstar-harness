@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -103,6 +103,70 @@ async function competingReviewRoots(): Promise<{
     }],
   }));
   return { harness, launch, launchHarness, findings };
+}
+
+/**
+ * Two workspaces that a scaffold can distinguish: the pinned workspace owns an
+ * initialized harness A (`<pinned>/.mstar`), while the launch workspace owns its
+ * own `.mstar` and a `.gitignore` with an author marker line. A handler that
+ * defaults the scaffold root from `process.cwd()` scaffolds the launch
+ * workspace and appends the canonical snippet to that `.gitignore`; the pinned
+ * invocation must target the pinned workspace and leave the launch files
+ * byte-identical.
+ */
+async function competingScaffoldWorkspaces(): Promise<{
+  pinnedHarness: string;
+  launch: string;
+  launchHarness: string;
+  launchGitignore: string;
+}> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const pinnedHarness = path.join(root, "pinned", ".mstar");
+  const launch = path.join(root, "launch");
+  const launchHarness = path.join(launch, ".mstar");
+  mkdirSync(pinnedHarness, { recursive: true });
+  mkdirSync(launchHarness, { recursive: true });
+  const launchGitignore = path.join(launch, ".gitignore");
+  writeFileSync(launchGitignore, "# launch workspace marker\nnode_modules/\n", "utf8");
+  (await initializeStore({ harnessDir: pinnedHarness })).close();
+  return { pinnedHarness, launch, launchHarness, launchGitignore };
+}
+
+/**
+ * A pinned harness whose basename is NOT the default `.mstar`: the pin itself
+ * (`<root>/control`) is the harness dir, and its parent `<root>` is the
+ * invocation workspace. The launch workspace owns a different `.mstar` and a
+ * `.gitignore`. A handler that re-discovers the root from the invocation
+ * workspace creates `<root>/.mstar` and appends the canonical snippet to
+ * `<root>/.gitignore`; a launch-cwd handler touches the launch workspace.
+ */
+async function customRootScaffoldWorkspace(): Promise<{
+  pinned: string;
+  workspace: string;
+  workspaceGitignore: string;
+  launch: string;
+  launchHarness: string;
+  launchGitignore: string;
+}> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const pinned = path.join(root, "control");
+  const launch = path.join(root, "launch");
+  const launchHarness = path.join(launch, ".mstar");
+  mkdirSync(pinned, { recursive: true });
+  mkdirSync(launchHarness, { recursive: true });
+  const launchGitignore = path.join(launch, ".gitignore");
+  writeFileSync(launchGitignore, "# launch workspace marker\nnode_modules/\n", "utf8");
+  (await initializeStore({ harnessDir: pinned })).close();
+  return {
+    pinned,
+    workspace: root,
+    workspaceGitignore: path.join(root, ".gitignore"),
+    launch,
+    launchHarness,
+    launchGitignore,
+  };
 }
 
 /** The fixture's own discriminator, read from a successful persist envelope. */
@@ -367,6 +431,134 @@ describe("MCP harness root", () => {
       expect(envelope.code).not.toBe("command.invalid-input");
       expect(envelope).toMatchObject({ status: "ok", code: "status.ok" });
       expect((envelope.data as { total_open: number }).total_open).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("harness.scaffold with no path scaffolds the pinned workspace, not the launch cwd", async () => {
+    const fixture = await competingScaffoldWorkspaces();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "harness.scaffold");
+    if (definition === undefined) throw new Error("missing command: harness.scaffold");
+    const server = createMcpServer(createContextResolver({ harnessRoot: fixture.pinnedHarness }), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    const launchGitignoreBefore = readFileSync(fixture.launchGitignore);
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      // `path` is optional, so an omitted value is the implicit-root case: the
+      // handler must resolve it from the invocation workspace (the pinned
+      // harness's parent), never from the launch process cwd.
+      const envelope = await toolEnvelope(client, "mstar_harness_scaffold", {});
+      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
+      const scaffolded = envelope.data as { harnessDir: string; projectDir: string; created: string[] };
+      expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinnedHarness));
+      expect(path.resolve(scaffolded.projectDir)).toBe(path.resolve(fixture.pinnedHarness, "projects"));
+      expect(existsSync(path.join(fixture.pinnedHarness, "projects", "_default"))).toBe(true);
+      expect(scaffolded.created).toContain(".mstar/AGENTS.md");
+
+      // The launch workspace is untouched: no scaffold content lands in its
+      // own `.mstar`, and its `.gitignore` keeps its bytes (a cwd-derived
+      // scaffold would append the canonical snippet here).
+      expect(readFileSync(fixture.launchGitignore)).toEqual(launchGitignoreBefore);
+      expect(existsSync(path.join(fixture.launchHarness, "projects"))).toBe(false);
+      expect(existsSync(path.join(fixture.launchHarness, "AGENTS.md"))).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("harness.scaffold targets a pinned custom harness root verbatim, not its parent workspace", async () => {
+    const fixture = await customRootScaffoldWorkspace();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.launch);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "harness.scaffold");
+    if (definition === undefined) throw new Error("missing command: harness.scaffold");
+    const server = createMcpServer(createContextResolver({ harnessRoot: fixture.pinned }), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    const launchGitignoreBefore = readFileSync(fixture.launchGitignore);
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      // The pin IS the harness dir and its basename is not `.mstar`. A handler
+      // that re-discovers the root from the invocation workspace (the pin's
+      // parent) would scaffold `<workspace>/.mstar` and report success.
+      const envelope = await toolEnvelope(client, "mstar_harness_scaffold", {});
+      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
+      const scaffolded = envelope.data as { harnessDir: string; projectDir: string; created: string[]; skipped: string[] };
+      expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinned));
+      expect(path.resolve(scaffolded.projectDir)).toBe(path.resolve(fixture.pinned, "projects"));
+      expect(existsSync(path.join(fixture.pinned, "projects", "_default"))).toBe(true);
+      expect(scaffolded.created).toContain("control/AGENTS.md");
+
+      // A custom root name takes the custom-layout branch: the parent
+      // workspace gets neither a harness dir nor the canonical ignore snippet.
+      expect(scaffolded.skipped).toContain(
+        ".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules",
+      );
+      expect(scaffolded.created.some((entry) => entry.startsWith(".gitignore"))).toBe(false);
+      expect(existsSync(path.join(fixture.workspace, ".mstar"))).toBe(false);
+      expect(existsSync(fixture.workspaceGitignore)).toBe(false);
+
+      // The launch workspace stays byte-identical.
+      expect(readFileSync(fixture.launchGitignore)).toEqual(launchGitignoreBefore);
+      expect(existsSync(path.join(fixture.launchHarness, "projects"))).toBe(false);
+      expect(existsSync(path.join(fixture.launchHarness, "AGENTS.md"))).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("a pinned harness scaffolds its own root instead of an inherited MSTAR_HARNESS_DIR", async () => {
+    const fixture = await competingScaffoldWorkspaces();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    // The env rung wins over the workspace default in discovery, so a handler
+    // that re-resolves the scaffold target would initialize this dir instead.
+    const envHarness = path.join(fixture.launch, "env-harness");
+    process.env.MSTAR_HARNESS_DIR = envHarness;
+    process.chdir(fixture.launch);
+    const definition = getCommandDefinitions().find((entry) => entry.id === "harness.scaffold");
+    if (definition === undefined) throw new Error("missing command: harness.scaffold");
+    const server = createMcpServer(createContextResolver({ harnessRoot: fixture.pinnedHarness }), [definition]);
+    const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    const launchGitignoreBefore = readFileSync(fixture.launchGitignore);
+    try {
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+
+      const envelope = await toolEnvelope(client, "mstar_harness_scaffold", {});
+      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
+      const scaffolded = envelope.data as { harnessDir: string; projectDir: string };
+      expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinnedHarness));
+      expect(existsSync(path.join(fixture.pinnedHarness, "projects", "_default"))).toBe(true);
+      // The explicit pin is not re-discovered: the env target never appears.
+      expect(existsSync(envHarness)).toBe(false);
+      expect(readFileSync(fixture.launchGitignore)).toEqual(launchGitignoreBefore);
+      expect(existsSync(path.join(fixture.launchHarness, "projects"))).toBe(false);
     } finally {
       await client.close();
       await server.close();
