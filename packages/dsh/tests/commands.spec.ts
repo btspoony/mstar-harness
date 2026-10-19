@@ -111,7 +111,7 @@ describe('bundled mstar commands (omp parity)', () => {
   })
 })
 
-describe('bundled mstar commands — missing mirror fails loud (I-000265)', () => {
+describe('bundled mstar commands — missing mirror fails loud', () => {
   it('logs an ERROR naming the mirror path and the recovery when the harness-commands mirror is absent', async () => {
     await withMirrorHidden(async () => {
       booted = await bootApp()

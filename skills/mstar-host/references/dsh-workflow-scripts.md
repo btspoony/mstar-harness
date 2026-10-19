@@ -235,7 +235,7 @@ vetting and review-report writing stay with the audit executor (main agent).
 `categories` is optional — omit it for all nine. Keep the batch at one seat per category. The seats
 resolve through the host subagent pool capped at `maxActiveSubagents` (default 8, hard reject) — a
 cap independent of the `workflow` tool's own concurrency (`min(16, cores - 2)`, which exceeds 8 on
-hosts with ≥ 10 logical CPUs) — so the script launches them in sequential chunks of
+hosts with > 10 logical CPUs) — so the script launches them in sequential chunks of
 `Math.min(8, categories.length)`, keeping in-flight children ≤ 8 on any host.
 
 **`script`**
@@ -252,7 +252,7 @@ const categories = Array.isArray(a.categories) && a.categories.length > 0 ? a.ca
 // Child seats resolve through the host subagent pool, capped at maxActiveSubagents
 // (default 8; an over-cap activation is hard-rejected as a fatal AGENT_START that kills
 // the whole run). The workflow tool's own concurrency — min(16, cores - 2) — is an
-// independent cap and exceeds 8 on hosts with >= 10 logical CPUs, so a single
+// independent cap and exceeds 8 on hosts with > 10 logical CPUs, so a single
 // parallel() over all nine categories would exceed the pool there. Launching
 // CHUNK seats per sequential batch keeps in-flight children <= 8 on any host.
 const CHUNK = Math.min(8, categories.length)
