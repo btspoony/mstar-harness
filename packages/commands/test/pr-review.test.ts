@@ -51,7 +51,10 @@ describe("pr-review command family", () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
-    const tally = await command("pr-review.tally").execute({ findings }, context);
+    const tally = await command("pr-review.tally").execute(
+      { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" },
+      context,
+    );
     expect(tally.status).toBe("ok");
     expect(tally.data).toMatchObject({ verdict: "blocked", scorePct: 53, band: "fail", tally: { mustFix: 1, nit: 1 } });
 
@@ -251,7 +254,7 @@ describe("pr-review command family", () => {
     writeFileSync(findings, JSON.stringify([{ mergeClass: "must-fix" }, { mergeClass: "nit" }]));
 
     const partial = await command("pr-review.tally").execute(
-      { findings, requiredDomains: "persist,security", openedDomains: "persist" },
+      { findings, requiredDomains: "persist,security", openedDomains: "persist", diffBasis: "readable" },
       context,
     );
     expect(partial.status).toBe("ok");
@@ -271,14 +274,20 @@ describe("pr-review command family", () => {
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, "[]");
 
-    const stopped = await command("pr-review.tally").execute({ findings, stopped: "cancelled before synthesis" }, context);
+    const stopped = await command("pr-review.tally").execute(
+      { findings, stopped: "cancelled before synthesis", requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" },
+      context,
+    );
     expect(stopped.status).toBe("ok");
     expect(stopped.data).toMatchObject({
       verdict: "incomplete",
       incomplete: { reason: "the run stopped before synthesis \u2014 cancelled before synthesis", unscanned: [] },
     });
 
-    const unreadable = await command("pr-review.tally").execute({ findings, diffBasis: "unreadable" }, context);
+    const unreadable = await command("pr-review.tally").execute(
+      { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "unreadable" },
+      context,
+    );
     expect(unreadable.status).toBe("ok");
     expect(unreadable.data).toMatchObject({
       verdict: "incomplete",
@@ -292,7 +301,7 @@ describe("pr-review command family", () => {
     writeFileSync(findings, "[]");
     const facts = {
       findings, stopped: " ", requiredDomains: "persist,, security",
-      openedDomains: "persist, ", unverified: "x",
+      openedDomains: "persist, ", diffBasis: "readable", unverified: "x",
     };
 
     // The run-fact checks and the count checks share one collection phase, so
@@ -316,13 +325,57 @@ describe("pr-review command family", () => {
     }
   });
 
+  test.each([
+    ["--required-domains", { openedDomains: "persist", diffBasis: "readable" }, "requiredDomains"],
+    ["--opened-domains", { requiredDomains: "persist", diffBasis: "readable" }, "openedDomains"],
+    ["--diff-basis", { requiredDomains: "persist", openedDomains: "persist" }, "diffBasis"],
+  ])("tally refuses a run that omits %s instead of inferring coverage", async (flag, facts, field) => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+
+    // Fail-closed: no default stands in for an unreported coverage fact, so
+    // both the direct route and admission refuse the omission.
+    for (const refusal of [
+      await command("pr-review.tally").execute({ findings, ...facts }, context),
+      await executeCommand("pr-review.tally", { findings, ...facts }, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, `omitted ${flag}`)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: field, code: "required" }),
+      ]));
+    }
+    // The direct route names the flag the caller must add; admission names
+    // the field. Both refuse the omission the same way.
+    const direct = await command("pr-review.tally").execute({ findings, ...facts }, context);
+    expect(direct.status === "ok" ? "" : direct.message).toContain(`${flag} is required`);
+  });
+
+  test("tally reports every omitted coverage fact in one refusal", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+
+    for (const refusal of [
+      await command("pr-review.tally").execute({ findings }, context),
+      await executeCommand("pr-review.tally", { findings }, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "every omitted fact")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "requiredDomains", code: "required" }),
+        expect.objectContaining({ path: "openedDomains", code: "required" }),
+        expect.objectContaining({ path: "diffBasis", code: "required" }),
+      ]));
+    }
+  });
+
   test("a multi-line stop and a non-boolean diff basis are caller errors", async () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, "[]");
 
     const refused = await command("pr-review.tally").execute(
-      { findings, stopped: "cancelled\nbefore synthesis" },
+      { findings, stopped: "cancelled\nbefore synthesis", requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" },
       context,
     );
     expect(refused).toMatchObject({
@@ -331,12 +384,19 @@ describe("pr-review command family", () => {
     });
     // The admitted route rejects the value at admission (declared allowed
     // values); the direct route keeps its own message for the same refusal.
-    const badBasis = await command("pr-review.tally").execute({ findings, diffBasis: "maybe" }, context);
+    const badBasis = await command("pr-review.tally").execute(
+      { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "maybe" },
+      context,
+    );
     expect(badBasis).toMatchObject({
       status: "usage", code: "command.invalid-input", exitCode: 2,
       message: "--diff-basis must be readable or unreadable",
     });
-    const admittedBasis = await executeCommand("pr-review.tally", { findings, diffBasis: "maybe" }, context);
+    const admittedBasis = await executeCommand(
+      "pr-review.tally",
+      { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "maybe" },
+      context,
+    );
     expect(admittedBasis).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(diagnosticsOf(admittedBasis, "invalid diff basis")).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "diffBasis", code: "not_allowed" }),
@@ -347,7 +407,7 @@ describe("pr-review command family", () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([{}]));
-    const facts = { findings, stopped: " " };
+    const facts = { findings, stopped: " ", requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" };
 
     // The findings payload is validated in the same collection phase as the
     // run facts, so one call reports both the invalid mergeClass and the blank
@@ -370,7 +430,7 @@ describe("pr-review command family", () => {
     // A missing findings file is the same caller-correctable class (usage, exit
     // 2), not a failed execution, and joins the same refusal.
     const missing = await command("pr-review.tally").execute(
-      { findings: path.join(cwd, "absent.json"), stopped: " " },
+      { findings: path.join(cwd, "absent.json"), stopped: " ", requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" },
       context,
     );
     expect(missing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
@@ -386,7 +446,7 @@ describe("pr-review command family", () => {
     const malformedFile = path.join(cwd, "malformed.json");
     writeFileSync(malformedFile, '[{"mergeClass": "must-fix",}');
     const malformed = await command("pr-review.tally").execute(
-      { findings: malformedFile, stopped: " " },
+      { findings: malformedFile, stopped: " ", requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable" },
       context,
     );
     expect(malformed).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });

@@ -32,7 +32,7 @@ const inputSchema = z.object({
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Comma-separated domains the resolved tier's seat plan required." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Comma-separated domains whose seat returned evidence." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, defaultValue: "readable", help: "Whether the resolved diff basis could be read; defaults to readable." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; the incomplete verdict is derived from the run facts (--stopped, --required-domains/--opened-domains, --diff-basis), never elapsed time; all counts default to zero and are limited to 0–50." },
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true, help: "Required; path to a JSON array of {mergeClass: must-fix | should-fix | nit}." }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Optional; non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: true, help: "Required; comma-separated non-empty single-line domains the resolved tier's seat plan required (at least one); omitted is refused, never inferred." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: true, help: "Required; comma-separated single-line domains whose seat returned evidence; an explicitly empty value means none, omission is refused." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: true, help: "Required; one of readable | unreadable; omitted is refused, never defaulted." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; the incomplete verdict is derived from the run facts (--stopped, --required-domains/--opened-domains, --diff-basis), never elapsed time; the three coverage/basis facts are required, so a run that does not report its coverage is refused; the count options default to zero and are limited to 0–50." },
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
@@ -149,18 +149,34 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (input.stopped !== undefined && (input.stopped.trim() === "" || /[\r\n]/.test(input.stopped))) {
         diagnostics.push({ path: "stopped", code: "invalid", message: "--stopped must be a single line of non-blank text" });
       }
-      const domains = (raw: string | undefined, path: "requiredDomains" | "openedDomains", flag: string): readonly string[] | undefined => {
-        if (raw === undefined) return undefined;
+      // The three coverage/basis facts are required: an omitted one is
+      // reported as `required`, never defaulted, so a run that does not state
+      // its coverage cannot settle (the engine refuses the same omission).
+      const missing = (flag: string, path: string) => {
+        diagnostics.push({ path, code: "required", message: `${flag} is required`, expected: "present", received: "undefined" });
+      };
+      const domains = (raw: string | undefined, path: "requiredDomains" | "openedDomains", flag: string): readonly string[] => {
+        if (raw === undefined) {
+          missing(flag, path);
+          return [];
+        }
+        // An explicitly empty value is the empty list (a legal "nothing
+        // opened"); a partly blank list stays a fault.
+        if (raw.trim() === "") return [];
         const entries = raw.split(",").map((entry) => entry.trim());
         if (entries.some((entry) => entry === "" || /[\r\n]/.test(entry))) {
           diagnostics.push({ path, code: "invalid", message: `${flag} must be a comma-separated list of single-line non-blank entries` });
-          return undefined;
+          return [];
         }
         return entries;
       };
       const requiredDomains = domains(input.requiredDomains, "requiredDomains", "--required-domains");
+      if (requiredDomains.length === 0 && input.requiredDomains !== undefined) {
+        diagnostics.push({ path: "requiredDomains", code: "invalid", message: "--required-domains must name at least one domain" });
+      }
       const openedDomains = domains(input.openedDomains, "openedDomains", "--opened-domains");
-      if (input.diffBasis !== undefined && input.diffBasis !== "readable" && input.diffBasis !== "unreadable") {
+      if (input.diffBasis === undefined) missing("--diff-basis", "diffBasis");
+      else if (input.diffBasis !== "readable" && input.diffBasis !== "unreadable") {
         diagnostics.push({ path: "diffBasis", code: "invalid", message: "--diff-basis must be readable or unreadable" });
       }
       const count = (raw: string | undefined, label: string, path: string) => {
@@ -180,9 +196,9 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       // the unchanged `incomplete` field of the tally envelope.
       const settlement = resolvePrReviewSettlement({
         ...(input.stopped === undefined ? {} : { stopped: input.stopped }),
-        ...(requiredDomains === undefined ? {} : { requiredDomains }),
-        ...(openedDomains === undefined ? {} : { openedDomains }),
-        diffBasisReadable: input.diffBasis !== "unreadable",
+        requiredDomains,
+        openedDomains,
+        diffBasisReadable: input.diffBasis === "readable",
       });
       const result = computePrTally({
         findings,
@@ -313,9 +329,9 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
       ...contract.options.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
       ...(verb === "tally" ? [
         { name: "stopped", ownership: "caller" as const, route, required: false, constraint: "non-blank single line; presence derives the incomplete verdict" },
-        { name: "requiredDomains", ownership: "caller" as const, route, required: false, constraint: "comma-separated domain names the tier required" },
-        { name: "openedDomains", ownership: "caller" as const, route, required: false, constraint: "comma-separated domains whose seat returned evidence" },
-        { name: "diffBasis", ownership: "caller" as const, route, required: false, allowedValues: ["readable", "unreadable"] },
+        { name: "requiredDomains", ownership: "caller" as const, route, required: true, constraint: "comma-separated non-empty domain names the tier required; required, never inferred" },
+        { name: "openedDomains", ownership: "caller" as const, route, required: true, constraint: "comma-separated domains whose seat returned evidence; an empty list is legal, omission is not" },
+        { name: "diffBasis", ownership: "caller" as const, route, required: true, allowedValues: ["readable", "unreadable"] },
       ] : []),
       ...(verb === "report-path" ? [
         { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },

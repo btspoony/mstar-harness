@@ -497,15 +497,14 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
  * coverage stays settled and declares the overrun under `- notes:`.
  */
 export type PrReviewRunFacts = {
-  /** Declared detail when the run stopped before synthesis completed
-   *  (cancelled / interrupted / killed). Present = the run did not finish. */
+  /** REQUIRED: domains the resolved tier's seat plan required (non-empty). */
+  requiredDomains: readonly string[];
+  /** REQUIRED: domains whose seat returned evidence (may be empty). */
+  openedDomains: readonly string[];
+  /** REQUIRED: the resolved diff basis was readable and complete. */
+  diffBasisReadable: boolean;
+  /** Optional: why the run stopped before synthesis (cancelled / interrupted / killed). */
   stopped?: string;
-  /** Domains the resolved tier's seat plan required. */
-  requiredDomains?: readonly string[];
-  /** Domains whose seat returned evidence (findings or a declared empty result). */
-  openedDomains?: readonly string[];
-  /** The resolved diff basis was readable and complete. Default true. */
-  diffBasisReadable?: boolean;
 };
 
 /** Settled, or not settled with the derived cause + unscanned scope. */
@@ -518,14 +517,23 @@ export type PrReviewSettlement =
  * plus the scope it never scanned (pr-review.md § Verdict synthesis). This
  * is the only implementation of the trigger list.
  *
+ * Fail-closed: every coverage fact is required, so a caller that reports
+ * nothing is refused instead of being read as complete coverage. Only a run
+ * that states its required domains, its opened domains and a readable diff
+ * basis can settle.
+ *
  * Precedence: a stop before synthesis wins, then required domains whose
  * seat never opened, then an unreadable resolved diff basis; otherwise the
  * run settled. `unscanned` already carries the union, so it is complete for
  * whichever cause wins. An `openedDomains` entry outside `requiredDomains`
  * is ignored — a seat the tier never asked for cannot fail the run.
  */
-export function resolvePrReviewSettlement(facts?: PrReviewRunFacts): PrReviewSettlement {
-  if (facts === undefined) return { settled: true };
+export function resolvePrReviewSettlement(facts: PrReviewRunFacts): PrReviewSettlement {
+  if (facts === null || typeof facts !== "object") {
+    throw new TypeError(
+      `resolvePrReviewSettlement: run facts are required - got ${JSON.stringify(facts)}`,
+    );
+  }
   if (facts.stopped !== undefined && !isSingleLineFact(facts.stopped)) {
     throw new TypeError(
       `resolvePrReviewSettlement: stopped must be a non-empty single-line string - got ${JSON.stringify(facts.stopped)}`,
@@ -536,19 +544,24 @@ export function resolvePrReviewSettlement(facts?: PrReviewRunFacts): PrReviewSet
     ["openedDomains", facts.openedDomains],
   ] as const;
   for (const [field, value] of domainFields) {
-    if (value !== undefined && (!Array.isArray(value) || !value.every(isSingleLineFact))) {
+    if (!Array.isArray(value) || !value.every(isSingleLineFact)) {
       throw new TypeError(
         `resolvePrReviewSettlement: ${field} must be an array of non-empty single-line strings - got ${JSON.stringify(value)}`,
       );
     }
   }
-  if (facts.diffBasisReadable !== undefined && typeof facts.diffBasisReadable !== "boolean") {
+  if (facts.requiredDomains.length === 0) {
+    throw new TypeError(
+      "resolvePrReviewSettlement: requiredDomains must be an array of non-empty single-line strings and must not be empty - got []",
+    );
+  }
+  if (typeof facts.diffBasisReadable !== "boolean") {
     throw new TypeError(
       `resolvePrReviewSettlement: diffBasisReadable must be a boolean - got ${JSON.stringify(facts.diffBasisReadable)}`,
     );
   }
-  const missing = (facts.requiredDomains ?? []).filter((domain) => !(facts.openedDomains ?? []).includes(domain));
-  const unreadableBasis = facts.diffBasisReadable === false;
+  const missing = facts.requiredDomains.filter((domain) => !facts.openedDomains.includes(domain));
+  const unreadableBasis = !facts.diffBasisReadable;
   const unscanned = [...missing, ...(unreadableBasis ? ["the resolved diff basis"] : [])];
 
   if (facts.stopped !== undefined) {
