@@ -64,7 +64,7 @@
     "typecheck:tests": "bunx tsc --noEmit -p tests/tsconfig.json",
     "typecheck:src": "bunx tsc --noEmit -p tsconfig.json",
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-scope --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm && bun run build-client && bunx tsc",
+    "build": "bun run bundle-assets && rm -rf dist && bun build src/index.ts src/invariant.ts --target node --outdir dist --external @deepseek-ai/cordis --external @deepseek-ai/dsh-scope --external @deepseek-ai/dsh-skill-filesystem --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-llm --external @mstar-harness/commands --external @mstar-harness/engine && bun run build-client && bunx tsc",
     "build-client": "bun run scripts/build-client-bundle.ts",
     "prepublishOnly": "bun run build"
   },
@@ -136,7 +136,9 @@
     "@deepseek-ai/dsh-util-values": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-util-workspace-path": "^0.2.1-rc.2",
     "@deepseek-ai/dsh-workspace": "^0.2.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@mstar-harness/commands": "^4.0.3",
+    "@mstar-harness/engine": "^4.0.3"
   },
   "publishConfig": {
     "access": "public"
@@ -144,8 +146,6 @@
   "devDependencies": {
     "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.1-rc.2",
     "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.2",
-    "@mstar-harness/commands": "workspace:*",
-    "@mstar-harness/engine": "workspace:*",
     "@shikijs/langs": "^4.5.0",
     "@tanstack/react-virtual": "3.14.19",
     "@types/node": "^26.6.4",
