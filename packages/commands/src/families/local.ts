@@ -52,8 +52,9 @@ import { compareSemver } from "../host-health/version-compare.js";
 
 const doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"] as const;
 const hostSignals = [
-  "subagent_type", "question", "task_subagent", "task_agent_batch", "ask", "hub", "Agent", "AgentSwarm",
-  "AskUserQuestion", "EnterPlanMode", "TodoWrite", "plan_slash", "goal", "functions.*", "tool_search",
+  "subagent_type", "question", "task_subagent", "task_agent_batch", "ask", "hub", "subagent", "spawn_teammate",
+  "team_task_create", "Agent", "AgentSwarm", "AskUserQuestion", "EnterPlanMode", "TodoWrite", "plan_slash", "goal",
+  "functions.*", "tool_search",
 ] as const;
 const hostIds = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"] as const;
 const harnessRepoPath = path.join(os.homedir(), ".mstar", "harness");

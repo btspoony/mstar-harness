@@ -34,7 +34,7 @@ Detect from **session tool shapes and available commands** — not from plugin m
 | **`subagent_type`** param on the Task tool (plus **CreatePlan**/**SwitchMode** when Plan mode is active) | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
 | **`question`** tool, or **`task`** tool with **`subagent`** (singular) — no `tasks[]` batch | `opencode` | `references/opencode.md` |
 | **`task`** tool with **`agent`** / **`tasks[]`** batch, **`ask`**, **`hub`** (omp also exposes `/goal`; goal rule is host-agnostic per below) | `omp` | `references/omp.md`; Plan mode also `references/omp-plan-mode-bridge.md` |
-| **`subagent`** tool (dsh's model-facing delegation tool — `@deepseek-ai/dsh-tool-subagent` default `toolName`) | `dsh` | `references/dsh.md` |
+| **`subagent`** tool (dsh's model-facing delegation tool — `@deepseek-ai/dsh-tool-subagent` default `toolName`), **`spawn_teammate`** / **`team_task_create`** (dsh Agent Teams tools — `@deepseek-ai/dsh-experimental-tool-agent-team`) | `dsh` | `references/dsh.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** + **`AgentSwarm`** (Kimi-only) | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** / **`TodoWrite`**, **no `AgentSwarm`** | `zcode` | `references/zcode.md`; Plan mode also `references/zcode-plan-mode-bridge.md` |
 | `/plan`, `/goal` slash commands; **Goal tools**; `functions.*` / `codex_app.*` tool namespaces; `tool_search`; Browser plugin tools | `codex` | `references/codex.md`; Plan mode also `references/_shared/plan-mode-bridge-core.md` |
