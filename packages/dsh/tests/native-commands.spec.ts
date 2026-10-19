@@ -275,6 +275,88 @@ describe('native command tool registration', () => {
 })
 
 // ---------------------------------------------------------------------------
+// (F) mstar_issue_close — the root-union parameter contract. `issue.close`
+// validates through a z.union (one branch per terminal disposition), so its
+// published schema has no top-level `properties`: the parameter spec must
+// project the union's object branches into callable parameters instead of
+// publishing an empty table.
+// ---------------------------------------------------------------------------
+
+/** One captured-issue payload with the registry's own required field set. */
+const capturePayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  projectId: 'issue-close-spec',
+  title: 'Stale chunk bound in the workflow script',
+  kind: 'bug',
+  severity: 'medium',
+  impact: 'the pool bound can silently regress',
+  acceptance: 'the bound is pinned by a host-independent check',
+  sourceIdentity: 'issue-close-spec/stale-chunk',
+  rootCauseKey: 'chunk-root-cause',
+  acceptanceKey: 'chunk-acceptance',
+  occurrenceKey: 'chunk-occ-1',
+  sourceKind: 'qc',
+  location: 'skills/mstar-host/references/dsh-workflow-scripts.md',
+  observedBehavior: 'observed by the spec fixture',
+  evidence: ['fixture evidence'],
+  discoveredAt: '2026-10-19T00:00:00Z',
+  ...overrides,
+})
+
+describe('mstar_issue_close parameter contract (root union projection)', () => {
+  const propertiesOf = (tool: { parameters?: unknown }): Record<string, { required?: boolean; description?: string }> => {
+    const parameters = tool.parameters as { properties?: Record<string, { required?: boolean; description?: string }> } | undefined
+    return parameters?.properties ?? {}
+  }
+
+  it('publishes id/actor/expect from the anyOf branches, with branch requirements as description text', async () => {
+    const app = booted = await bootApp()
+    const tool = app.ctx.tools.get('mstar_issue_close')!
+    const properties = propertiesOf(tool)
+    // The compiled registry tool collects per-property `required: true` into
+    // the schema's top-level required list — the same projection the model
+    // face sees.
+    const required = ((tool.parameters as { required?: string[] }).required ?? [])
+    for (const field of ['id', 'actor', 'expect']) {
+      expect(properties[field], `${field} must be published`).toBeDefined()
+      expect(required, `${field} must be required`).toContain(field)
+    }
+    // The payload field carries the complete ClosureEvidence contract through
+    // the payload-summary path.
+    expect(properties.payload?.description).toContain('reason')
+    // Branch-specific requirements carry as description text, never as a
+    // second validation layer: the disposition names the const branches that
+    // require it versus the default branch that omits it.
+    const disposition = properties.disposition?.description ?? ''
+    expect(disposition).toContain('required on')
+    expect(disposition).toContain('resolved')
+    expect(disposition).toContain('default')
+    // A field every branch requires gains no union text (the required mark
+    // already says it).
+    expect(properties.id?.description ?? '').not.toContain('required on')
+  })
+
+  it('a valid close built from the published contract reaches the shared execution path', async () => {
+    const app = booted = await bootApp()
+    ;(await initializeStore({ harnessDir: app.harnessDir })).close()
+    const child = agentOf(CHILD_ID, app.root)
+    const added = envelopeOf(await run(app.ctx, 'mstar_issue_add', child, {
+      actor: 'project-manager',
+      payload: capturePayload(),
+    }))
+    expect(added.status).toBe('ok')
+    const receipt = added.data as { issueId: string; revision: number }
+    const closed = envelopeOf(await run(app.ctx, 'mstar_issue_close', child, {
+      id: receipt.issueId,
+      actor: 'project-manager',
+      expect: receipt.revision,
+      payload: { reason: 'verified fixed by the fixture', references: ['docs/fixture.md'], alignmentRef: 'plan-fixture' },
+    }))
+    expect(closed.status).toBe('ok')
+    expect(closed.command).toBe('issue.close')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // (a) plan lifecycle from native tools alone
 // ---------------------------------------------------------------------------
 

@@ -77,12 +77,22 @@ export function scopedMountEnvFor(sessionId: string): Record<string, string> {
  * The args one scoped instance launches its server child with: the base
  * args with the identity-env declaration appended — the per-agent `env`
  * only delivers the value if the server is TOLD to read that variable.
- * A base row that already declares `--identity-env` (or a config whose
- * `args` is not an array) is passed through untouched.
+ * A base row that already declares `--identity-env` is NORMALIZED to the
+ * per-agent variable (the mount injects exactly `MSTAR_HOST_SESSION_ID`,
+ * so a row carrying another name would keep reading an env the mount
+ * never sets); a config whose `args` is not an array is passed through
+ * untouched.
  */
 export function scopedMountArgsFor(args: unknown): unknown {
   if (!Array.isArray(args)) return args
-  if (args.includes(IDENTITY_ENV_FLAG)) return args
+  const declared = args.indexOf(IDENTITY_ENV_FLAG)
+  if (declared >= 0 && declared + 1 < args.length) {
+    const normalized = [...args]
+    normalized[declared + 1] = MSTAR_HOST_SESSION_ID
+    return normalized
+  }
+  // No declaration (or a dangling flag with no value slot): append the
+  // full declaration pair.
   return [...args, IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID]
 }
 
@@ -260,13 +270,19 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
     // the same posture as a failed mount; never an unhandled rejection.
     log('warn', `scoped MCP module probe failed (contained — per-agent mounts stay try/catch-contained): ${errorMessage(error)}`)
   })
-  // Per-apply mount table: agent id → its retained scoped fiber (a claim
-  // lands before the module await; the fiber follows once the mount runs).
+  // Per-apply mount table: agent id → its mount claim. A claim lands before
+  // the module await and carries a per-mount token; the fiber follows once
+  // the mount runs. The `agent/disposed` edge deletes the claim whether or
+  // not the fiber exists, and only the continuation still holding the
+  // CURRENT token mounts — so a disposal during the await leaves no fiber
+  // behind and frees the id immediately, while a same-id re-creation inside
+  // the window re-claims with a fresh token and mounts alone.
   // The apply-scoped lifetime is the HMR story — a reloaded fiber starts a
   // fresh set and re-mounts only the agents created after the swap — while
   // the `agent/disposed` edge below tears one agent's child process down
   // early.
-  const mounted = new Map<string, ScopedPluginFiber | undefined>()
+  const mounted = new Map<string, { token: number; fiber?: ScopedPluginFiber }>()
+  let claimSeq = 0
 
   const mount = async (agent: unknown): Promise<void> => {
     try {
@@ -281,12 +297,21 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
       // Claim BEFORE the await: concurrent `agent/created` events for the
       // same id must never double-mount (both handlers resume after the
       // shared module promise settles — only the claimant proceeds).
-      mounted.set(id, undefined)
+      const token = ++claimSeq
+      mounted.set(id, { token })
       const mod = await modulePromise
       if (mod === undefined) {
         mounted.delete(id)
         return
       }
+      // Post-await claim re-check: the agent may have been disposed while
+      // this mount awaited the shared module (the disposal edge deletes the
+      // claim whether or not a fiber exists), or the freed id may have been
+      // re-claimed by a re-created agent. Only the continuation still
+      // holding the CURRENT token mounts — a stale claim creates no fiber
+      // for a closed agent and never consumes its id.
+      const claim = mounted.get(id)
+      if (claim === undefined || claim.token !== token) return
       // The scoped instance: one cordis child fiber per agent, RETAINED so
       // the `agent/disposed` edge can dispose it when the agent closes. The
       // config is the row-config base (deployment row when readable, else
@@ -298,7 +323,7 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
         args: scopedMountArgsFor(base.args),
         env: { ...((base.env as Record<string, string> | undefined) ?? {}), ...scopedMountEnvFor(id) },
       }
-      mounted.set(id, ctx.plugin(mod as unknown as Parameters<Context['plugin']>[0], config))
+      claim.fiber = ctx.plugin(mod as unknown as Parameters<Context['plugin']>[0], config)
     } catch (error) {
       // Contained: a dead context (post-dispose mount attempt during an HMR
       // swap) or a plugin startup failure logs one warn — the agent proceeds
@@ -316,14 +341,19 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
 
   // Per-agent teardown edge: a closed agent's retained fiber disposes (its
   // MCP stdio child process dies with it), its id frees for a re-created
-  // agent, and every other agent's mount is untouched. Contained like the
-  // mount: a disposal failure logs one warn, never a session failure.
+  // agent, and every other agent's mount is untouched. The claim is deleted
+  // whether or not the fiber exists — a disposal that lands while the mount
+  // still awaits the shared module invalidates the pending claim, so the
+  // post-await continuation never mounts for the closed agent. Contained
+  // like the mount: a disposal failure logs one warn, never a session
+  // failure.
   ctx.events.on('agent/disposed', (payload: { agent?: unknown }) => {
     const id = (payload.agent as { id?: unknown } | null | undefined)?.id
     if (typeof id !== 'string') return
-    const fiber = mounted.get(id)
-    if (fiber === undefined) return
+    const claim = mounted.get(id)
+    if (claim === undefined) return
     mounted.delete(id)
+    const fiber = claim.fiber
     if (fiber === undefined) return
     void Promise.resolve(fiber).then((instance) => instance.dispose()).catch((error: unknown) => {
       log('warn', `scoped MCP mount disposal failed for one agent (contained — the session close proceeds): ${errorMessage(error)}`)

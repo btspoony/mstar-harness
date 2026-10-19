@@ -40,6 +40,12 @@ type UnpinnedProbe = { root: string; cause: null } | { root: null; cause: string
  * probe's verdict instead of collapsing it: a null answer and a refusing probe
  * (`coordination.not-in-git`) are distinct named causes for the resolver's
  * refusal, never a root to hand a command.
+ *
+ * The probe runs through the engine's own resolution, which honours a
+ * non-blank `MSTAR_HARNESS_DIR` — the recovery the refusal advertises — as the
+ * explicit root BEFORE Git discovery, so the variable answers in every
+ * probe-failure case, including a linked checkout whose main worktree cannot
+ * be read.
  */
 function probeUnpinnedControlRoot(cwd: string): UnpinnedProbe {
   try {
@@ -90,10 +96,14 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * below is this factory with no options, so the unparameterized server keeps
  * reading no ambient identity and probing `process.cwd()` for its harness root.
  *
- * A declared identity is only a default: `registerMcpCommands` merges a
- * per-call `sessionId` ahead of `resolved.sessionId`. A malformed declared value
- * is not repaired here — it reaches the same safe-session-id guard as a per-call
- * value, which refuses loudly.
+ * A declared identity LOCKS the connection: `registerMcpCommands` publishes no
+ * session selector on such a connection and strips a caller-supplied selector
+ * before admission, so every call runs under the declared identity — a caller
+ * can never choose one (`identityLocked` below). A malformed declared value is
+ * not repaired here — it reaches the same safe-session-id guard as any other
+ * identity, which refuses loudly. An UNDECLARED channel leaves the connection
+ * generic: there the per-call `sessionId` selector stays the documented
+ * identity channel.
  *
  * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
  * rebased or discovered, because the mounting process owns the root. The same
@@ -119,9 +129,10 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * supplied the one fact the refusal says is missing, so that call's
  * `controlRoot` is the named root (the same semantics a pinned launch has for
  * every call) and the handler validates it. The `MSTAR_HARNESS_DIR` recovery
- * the refusal names is real: the unpinned probe runs through the engine's own
- * resolution (`resolveProcessHarnessDir` → `resolveHarnessDir`), which reads
- * the variable before any cwd walk.
+ * the refusal names is real for every probe-failure cause: the engine's own
+ * resolution honours a non-blank variable as the explicit root BEFORE Git
+ * discovery, so even a linked checkout whose main worktree cannot be read
+ * resolves the pinned root instead of refusing.
  *
  * The pin is also published as `harnessPin` (the exact harness dir, not its
  * parent), so a command that owns root placement — `harness.scaffold` with no
@@ -165,15 +176,20 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
     };
   };
   // Admission reads these before the handler resolves the context, so a
-  // launcher-declared default satisfies a required session selector and fills an
-  // unset root input. Getters keep them live reads of the launch options, not
-  // construction snapshots.
+  // launcher-declared default satisfies a required session selector, fills an
+  // unset root input, and — on a declared channel — strips a caller-supplied
+  // selector before admission (the connection identity is locked). Getters
+  // keep them live reads of the launch options, not construction snapshots.
   Object.defineProperty(resolver, "defaultSessionId", {
     get: () => declaredSessionId(options.identityEnv),
     enumerable: true,
   });
   Object.defineProperty(resolver, "defaultHarness", {
     get: () => options.harnessRoot,
+    enumerable: true,
+  });
+  Object.defineProperty(resolver, "identityLocked", {
+    get: () => options.identityEnv !== undefined,
     enumerable: true,
   });
   return resolver;

@@ -43,6 +43,10 @@ export function createMcpServer(
     get: () => resolveContext.defaultHarness,
     enumerable: true,
   });
+  Object.defineProperty(createRequestContext, "identityLocked", {
+    get: () => resolveContext.identityLocked === true,
+    enumerable: true,
+  });
   registerMcpCommands(server, definitions, createRequestContext, services, onToolsRegistered);
   return server;
 }

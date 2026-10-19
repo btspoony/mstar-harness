@@ -102,8 +102,16 @@ async function registeredMcpCall(
     await client.connect(clientEnd);
     const { tools } = await client.listTools();
     const tool = tools.find((entry) => entry.name === `mstar_${commandId.replace(/[.-]/g, "_")}`);
-    expect(tool?.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
-    expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
+    const published = (tool?.inputSchema.properties ?? {}) as Record<string, unknown>;
+    if (resolver.identityLocked === true) {
+      // A locked connection publishes no session selector: the identity is
+      // the connection's, never model-choosable.
+      expect(published.sessionId).toBeUndefined();
+      expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
+    } else {
+      expect(published).toMatchObject({ sessionId: { type: "string" } });
+      expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
+    }
     const result = await client.callTool({ name: `mstar_${commandId.replace(/[.-]/g, "_")}`, arguments: payload });
     if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
     const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
@@ -277,7 +285,15 @@ describe("MCP session identity", () => {
     }
   });
 
-  test("a per-call sessionId overrides a malformed declared identity", async () => {
+  /**
+   * A locked connection (a declared channel) strips a caller-supplied
+   * selector BEFORE admission, so the declared identity governs every call.
+   * The declared value here is malformed on purpose: it makes the outcome
+   * prove WHOSE identity carried the call. The stripped caller id
+   * ("main-session", valid) never reaches the engine — the declared value
+   * reaches the shared safe-id guard and refuses specifically.
+   */
+  test("a locked connection strips a per-call sessionId — the declared identity governs even a malformed one", async () => {
     const previous = process.env[DECLARED_IDENTITY];
     process.env[DECLARED_IDENTITY] = "../declared-session";
     try {
@@ -288,7 +304,36 @@ describe("MCP session identity", () => {
         context(fixture.root),
         createContextResolver({ identityEnv: DECLARED_IDENTITY }),
       );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+      expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-session-id" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  /**
+   * SEC-01 regression on the production MCP path (the assembly the real
+   * `mstar mcp` process installs): a cross-identity override attempt through
+   * the declared-connection tools is refused — the caller-supplied DIFFERENT
+   * valid session id is stripped before admission while the declared
+   * (malformed) value reaches the identity guard, so a caller can never run
+   * the call under its own id. The generic unbound connection keeps the
+   * per-call selector (the cases above).
+   */
+  test("the production server strips a cross-identity sessionId on a locked connection", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "../declared-session";
+    try {
+      const fixture = await initializedHarness();
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
+        context(fixture.root),
+        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        "server",
+      );
+      // The declared identity reached the guard — never the caller's valid id.
+      expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-session-id" });
     } finally {
       if (previous === undefined) delete process.env[DECLARED_IDENTITY];
       else process.env[DECLARED_IDENTITY] = previous;

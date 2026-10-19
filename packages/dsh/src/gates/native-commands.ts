@@ -228,6 +228,74 @@ function capPayloadSummary(summary: string): string {
 }
 
 /**
+ * The object branches of a published root schema's `anyOf` union, or
+ * `undefined` when the schema is not a union of objects. Read mechanically
+ * from the published JSON Schema — the same source every transport serves.
+ */
+function unionObjectBranches(jsonSchema: Record<string, unknown> | null | undefined): Array<Record<string, unknown>> | undefined {
+  if (jsonSchema === null || typeof jsonSchema !== "object") return undefined;
+  const branches = jsonSchema.anyOf;
+  if (!Array.isArray(branches) || branches.length === 0) return undefined;
+  const objects = branches.filter((branch): branch is Record<string, unknown> =>
+    branch !== null && typeof branch === "object" && !Array.isArray(branch) &&
+    branch.properties !== null && typeof branch.properties === "object",
+  );
+  return objects.length === branches.length ? objects : undefined;
+}
+
+/**
+ * The fields every object branch of a root union declares, typed from the
+ * first branch's own nodes (the mechanical projection of a union schema
+ * into one callable parameter table — `issue.close`'s terminal dispositions
+ * share one field set and differ only in which fields each branch
+ * requires).
+ */
+function unionPropertiesOf(branches: Array<Record<string, unknown>>): Record<string, Record<string, unknown>> {
+  if (branches.length === 0) return {};
+  const first = branches[0]!.properties as Record<string, Record<string, unknown>>;
+  let common = Object.keys(first);
+  for (const branch of branches.slice(1)) {
+    const keys = Object.keys(branch.properties as Record<string, unknown>);
+    common = common.filter((key) => keys.includes(key));
+  }
+  return Object.fromEntries(common.map((key) => [key, first[key]!]));
+}
+
+/** The branch labels of a union: the const-valued property naming the branch (`disposition=resolved`), else `default`. */
+function unionBranchLabel(branch: Record<string, unknown>): string {
+  for (const property of Object.values(branch.properties as Record<string, unknown>)) {
+    if (property !== null && typeof property === "object" && !Array.isArray(property)) {
+      const value = (property as Record<string, unknown>).const;
+      if (typeof value === "string") return value;
+    }
+  }
+  return "default";
+}
+
+/** The branch-required names of one union object branch. */
+function unionBranchRequired(branch: Record<string, unknown>): string[] {
+  return Array.isArray(branch.required)
+    ? branch.required.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+/**
+ * The branch-varying requirement text for one projected union field: the
+ * branches that require it (labeled by their const value) versus the
+ * branches that leave it optional. A field every branch requires — or none —
+ * is already covered by the top-level required table and gains no text, so
+ * the description stays help-first and the union text only fills the
+ * per-branch gap a flat table cannot express.
+ */
+function unionFieldRequirement(branches: Array<Record<string, unknown>>, field: string): string | undefined {
+  const requiring = branches.filter((branch) => unionBranchRequired(branch).includes(field));
+  if (requiring.length === 0 || requiring.length === branches.length) return undefined;
+  const rest = branches.filter((branch) => !requiring.includes(branch));
+  const labels = (list: Array<Record<string, unknown>>): string => [...new Set(list.map(unionBranchLabel))].join("|");
+  return `required on ${labels(requiring)}; optional on ${labels(rest)}`;
+}
+
+/**
  * The dsh parameter spec for one command, mirrored MECHANICALLY from the
  * command's own published JSON Schema (the single source both transports
  * already serve) with the `sessionId` context selector removed. Scalars keep
@@ -236,11 +304,19 @@ function capPayloadSummary(summary: string): string {
  * admission's, never duplicated here. A `json` node whose published schema is
  * an object with members (or a oneOf) gains a mechanically derived
  * `description` naming those members and their types, so a caller can
- * construct a valid payload without guessing at the flattened shape.
+ * construct a valid payload without guessing at the flattened shape. A root
+ * schema that is a UNION of objects (`issue.close`'s terminal dispositions —
+ * no top-level `properties`) projects the fields every branch declares into
+ * the same table, with each branch's own required set carried as description
+ * text instead of a second validation layer.
  */
 function parameterSpecOf(descriptor: CommandSchemaDescriptor): Record<string, import('@deepseek-ai/dsh-tools').ParameterPropertySpec> {
-  const jsonSchema = descriptor.input as { properties?: Record<string, { type?: string }> } | null | undefined
-  const properties = jsonSchema?.properties ?? {}
+  const jsonSchema = descriptor.input as Record<string, unknown> | null | undefined;
+  const branches = unionObjectBranches(jsonSchema);
+  const rootProperties = jsonSchema !== null && typeof jsonSchema === "object" &&
+      jsonSchema.properties !== null && typeof jsonSchema.properties === "object"
+    ? jsonSchema.properties as Record<string, Record<string, unknown>>
+    : unionPropertiesOf(branches ?? []);
   // The Map generics are anchored on the imported `CommandRequirement` (the
   // real export), not inferred through the constructor: an unparameterized
   // `new Map(...)` falls back to `{}` when the entry-tuple inference fails,
@@ -251,20 +327,22 @@ function parameterSpecOf(descriptor: CommandSchemaDescriptor): Record<string, im
       .map((entry): [string, CommandRequirement] => [entry.name, entry]),
   )
   const spec: Record<string, import('@deepseek-ai/dsh-tools').ParameterPropertySpec> = {}
-  for (const [field, node] of Object.entries(properties)) {
+  for (const [field, node] of Object.entries(rootProperties)) {
     // The session selector is transport-resolved (exec.agent.id here), never
     // a published tool parameter (ADR constraints 1–3).
     if (field === 'sessionId') continue
-    const scalar = node.type === 'string' ? { type: 'string' as const }
-      : node.type === 'integer' ? { type: 'integer' as const }
-      : node.type === 'number' ? { type: 'number' as const }
-      : node.type === 'boolean' ? { type: 'boolean' as const }
+    const nodeType = typeof node.type === "string" ? node.type : undefined;
+    const scalar = nodeType === 'string' ? { type: 'string' as const }
+      : nodeType === 'integer' ? { type: 'integer' as const }
+      : nodeType === 'number' ? { type: 'number' as const }
+      : nodeType === 'boolean' ? { type: 'boolean' as const }
       : { type: 'json' as const }
     const help = helpByName.get(field)?.help
     const summary = scalar.type === 'json'
       ? compactPayloadSummary(Object.hasOwn(descriptor.payloadSchemas, field) ? descriptor.payloadSchemas[field] : node)
       : undefined
-    const description = [help, summary === undefined ? undefined : `Payload: ${summary}.`]
+    const branchText = branches === undefined ? undefined : unionFieldRequirement(branches, field)
+    const description = [help, branchText, summary === undefined ? undefined : `Payload: ${summary}.`]
       .filter((part): part is string => part !== undefined)
       .join(' — ')
     spec[field] = {

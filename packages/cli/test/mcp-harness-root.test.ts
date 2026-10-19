@@ -284,15 +284,20 @@ async function plainForeignCwd(): Promise<{ cwd: string }> {
 /**
  * A linked-checkout cwd whose main worktree cannot be read: the `.git` file
  * points at a gitdir that does not exist, so the process-root probe refuses
- * (`coordination.not-in-git`) instead of answering a root.
+ * (`coordination.not-in-git`) instead of answering a root. The sibling
+ * harness owns an initialized store, so the refusal's advertised
+ * `MSTAR_HARNESS_DIR` recovery has a real root to pin.
  */
-async function linkedForeignCwd(): Promise<{ cwd: string }> {
+async function linkedForeignCwd(): Promise<{ cwd: string; harness: string }> {
   const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
   roots.push(root);
   const cwd = path.join(root, "linked");
+  const harness = path.join(root, "control", ".mstar");
   mkdirSync(cwd, { recursive: true });
+  mkdirSync(harness, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
   writeFileSync(path.join(cwd, ".git"), `gitdir: ${path.join(root, "absent")}\n`, "utf8");
-  return { cwd };
+  return { cwd, harness };
 }
 
 /** Drive one real command call and return the raw MCP tool result. */
@@ -731,6 +736,29 @@ describe("MCP harness root", () => {
       expect(text).toContain("linked checkout");
       expect(text).toContain("--harness");
       expect(text).not.toContain("store.not-initialized");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("the advertised MSTAR_HARNESS_DIR recovery works in the linked-checkout refusal's own case", async () => {
+    const fixture = await linkedForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The same linked checkout whose main worktree cannot be read: the
+      // refusal above names MSTAR_HARNESS_DIR as the way out, so a valid
+      // absolute value MUST pin the root here. The probe honours a non-blank
+      // variable as the explicit root BEFORE Git discovery — the engine's
+      // resolution alone would refuse (coordination.not-in-git) before ever
+      // reading the variable.
+      process.env.MSTAR_HARNESS_DIR = fixture.harness;
+      const envelope = await callCatalogList(createContextResolver());
+      expect(envelope).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+      expect((envelope.data as { items: unknown[] }).items).toEqual([]);
     } finally {
       process.chdir(previousCwd);
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
