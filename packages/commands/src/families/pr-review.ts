@@ -335,7 +335,10 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
         // (packages/cli/AGENTS.md § Aggregated validation).
         { name: "requiredDomains", ownership: "caller" as const, route, required: false, constraint: "required at execution; comma-separated non-empty domain names the tier required, never inferred - an omission is refused beside the other field diagnostics" },
         { name: "openedDomains", ownership: "caller" as const, route, required: false, constraint: "required at execution; comma-separated domains whose seat returned evidence - an empty list is legal, an omission is refused beside the other field diagnostics" },
-        { name: "diffBasis", ownership: "caller" as const, route, required: false, allowedValues: ["readable", "unreadable"], constraint: "required at execution; an omission is refused beside the other field diagnostics" },
+        // Deliberately no `allowedValues`: admission would short-circuit the
+        // collection phase and hide the other tally faults. The family's own
+        // check is the single validator for the accepted values.
+        { name: "diffBasis", ownership: "caller" as const, route, required: false, constraint: "required at execution; one of readable | unreadable - an omission or an unaccepted value is refused beside the other field diagnostics" },
       ] : []),
       ...(verb === "report-path" ? [
         { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },

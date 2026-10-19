@@ -395,7 +395,37 @@ describe("pr-review command family", () => {
     }
   });
 
-  test("a multi-line stop and a non-boolean diff basis are caller errors", async () => {
+  test("an invalid diff basis joins the other tally faults instead of being short-circuited at admission", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{}]));
+    const flags = { findings, openedDomains: "persist", diffBasis: "maybe", unverified: "x" };
+
+    // Admission must not reject the basis on its own: the family's collection
+    // phase is the single validator, so one call reports the invalid basis
+    // beside the omitted --required-domains, the invalid count and the invalid
+    // findings entry (packages/cli/AGENTS.md § Aggregated validation). The
+    // direct execute route and the admitted one agree.
+    for (const refusal of [
+      await command("pr-review.tally").execute(flags, context),
+      await executeCommand("pr-review.tally", flags, context),
+    ]) {
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, "combined tally faults")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "diffBasis", code: "invalid" }),
+        expect.objectContaining({ path: "requiredDomains", code: "required" }),
+        expect.objectContaining({ path: "unverified", code: "invalid" }),
+        expect.objectContaining({ path: "findings", code: "invalid" }),
+      ]));
+      const text = refusal.status === "ok" ? "" : refusal.message;
+      expect(text).toContain("--diff-basis must be readable or unreadable");
+      expect(text).toContain("Rejected requiredDomains: expected present; received undefined");
+      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+    }
+  });
+
+  test("a multi-line stop and an unaccepted diff basis are caller errors", async () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, "[]");
@@ -408,25 +438,27 @@ describe("pr-review command family", () => {
       status: "usage", code: "command.invalid-input", exitCode: 2,
       message: "--stopped must be a single line of non-blank text",
     });
-    // The admitted route rejects the value at admission (declared allowed
-    // values); the direct route keeps its own message for the same refusal.
-    const badBasis = await command("pr-review.tally").execute(
-      { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "maybe" },
-      context,
-    );
-    expect(badBasis).toMatchObject({
-      status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: "--diff-basis must be readable or unreadable",
-    });
-    const admittedBasis = await executeCommand(
-      "pr-review.tally",
-      { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "maybe" },
-      context,
-    );
-    expect(admittedBasis).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(diagnosticsOf(admittedBasis, "invalid diff basis")).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "diffBasis", code: "not_allowed" }),
-    ]));
+    // Both routes report the same family diagnostic: admission declares no
+    // accepted values for the basis, so the collection phase validates it.
+    for (const badBasis of [
+      await command("pr-review.tally").execute(
+        { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "maybe" },
+        context,
+      ),
+      await executeCommand(
+        "pr-review.tally",
+        { findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "maybe" },
+        context,
+      ),
+    ]) {
+      expect(badBasis).toMatchObject({
+        status: "usage", code: "command.invalid-input", exitCode: 2,
+        message: "--diff-basis must be readable or unreadable",
+      });
+      expect(diagnosticsOf(badBasis, "invalid diff basis")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "diffBasis", code: "invalid" }),
+      ]));
+    }
   });
 
   test("findings-payload errors join the run-fact diagnostics in one refusal", async () => {

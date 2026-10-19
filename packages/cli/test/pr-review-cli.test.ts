@@ -239,6 +239,35 @@ describe("mstar pr-review tally", () => {
     },
   );
 
+  test("an unaccepted --diff-basis joins the other tally faults in one response (aggregated validation)", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[{}]");
+      // The basis is validated by the family, never at admission, so it is
+      // reported beside the omitted fact, the invalid count and the invalid
+      // findings entry in the same refusal.
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        "--opened-domains",
+        "persist",
+        "--diff-basis",
+        "maybe",
+        "--unverified",
+        "x",
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const body = message(result);
+      expect(body).toContain("--diff-basis must be readable or unreadable");
+      expect(body).toContain("Rejected requiredDomains: expected present; received undefined");
+      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
+    });
+  });
+
   test("both an invalid run fact and an invalid count are refused in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
