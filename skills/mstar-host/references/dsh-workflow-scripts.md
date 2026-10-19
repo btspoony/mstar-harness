@@ -47,7 +47,8 @@ return everything in the result payload.
 Three independent read-only QC seats over one review range; each returns a verdict envelope. The
 returned envelopes are the seat reports' content source: the caller persists
 `{SDD_DIR}/review/qc1.md` … `qc3.md` from them (a seat may also write its own file best-effort when
-its sandbox permits).
+its sandbox permits). Three seats are within the child pool (`maxActiveSubagents`, default 8) by
+construction — no chunking needed.
 
 **`meta`**
 
@@ -231,8 +232,11 @@ vetting and review-report writing stay with the audit executor (main agent).
 }
 ```
 
-`categories` is optional — omit it for all nine. Keep the batch at one seat per category (concurrency
-caps apply above the fan-out width).
+`categories` is optional — omit it for all nine. Keep the batch at one seat per category. The seats
+resolve through the host subagent pool capped at `maxActiveSubagents` (default 8, hard reject) — a
+cap independent of the `workflow` tool's own concurrency (`min(16, cores - 2)`, which exceeds 8 on
+hosts with > 10 logical CPUs) — so the script launches them in sequential chunks of
+`Math.min(8, categories.length)`, keeping in-flight children ≤ 8 on any host.
 
 **`script`**
 
@@ -244,6 +248,17 @@ if (missing.length > 0) throw new Error('mstar-audit-fanout missing args: ' + mi
 
 const ALL = ['bug', 'security', 'perf', 'tests', 'tech-debt', 'migration', 'dx', 'docs', 'direction']
 const categories = Array.isArray(a.categories) && a.categories.length > 0 ? a.categories : ALL
+
+// Child seats resolve through the host subagent pool, capped at maxActiveSubagents
+// (default 8; an over-cap activation is hard-rejected as a fatal AGENT_START that kills
+// the whole run). The workflow tool's own concurrency — min(16, cores - 2) — is an
+// independent cap and exceeds 8 on hosts with > 10 logical CPUs, so a single
+// parallel() over all nine categories would exceed the pool there. Launching
+// CHUNK seats per sequential batch keeps in-flight children <= 8 on any host.
+const CHUNK = Math.min(8, categories.length)
+const chunks = Array.from(
+  { length: Math.ceil(categories.length / CHUNK) },
+  (_, index) => categories.slice(index * CHUNK, (index + 1) * CHUNK))
 
 const FINDING = {
   type: 'object',
@@ -291,8 +306,12 @@ Report only what you can evidence: exact file:line anchors, a concrete impact, a
 
 Return ONLY the JSON object matching the provided schema (category, findings, notes). Put the truncated-coverage declaration and any non-finding leads in notes.`
 
-const seats = await parallel(categories.map((category) => () =>
-  agent(seatPrompt(category), { label: category, phase: category, schema: FINDING })))
+const seats = []
+for (const chunk of chunks) {
+  const chunkSeats = await parallel(chunk.map((category) => () =>
+    agent(seatPrompt(category), { label: category, phase: category, schema: FINDING })))
+  seats.push(...chunkSeats)
+}
 
 // A null entry is a category whose seat failed — the caller reports the uncollected
 // category as such; it is never reported as "no findings".
@@ -304,7 +323,8 @@ return seats
 Domain seats (2–3) plus an optional independent cross-domain security seat, all read-only, all
 returning findings with a merge class and **no verdict** — synthesis (dedupe, tiered vet, tally,
 verdict, posting) stays with the main agent, exactly as the `pr` variant requires. Do not use this
-script for the `default` tier (two seats → `subagent`) or `quick` (one seat).
+script for the `default` tier (two seats → `subagent`) or `quick` (one seat). Its 3–4 seats are
+within the child pool (`maxActiveSubagents`, default 8) by construction.
 
 **`meta`**
 

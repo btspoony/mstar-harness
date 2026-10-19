@@ -234,6 +234,9 @@ function packagedCommandsDir(): string | undefined {
   }
 }
 
+/** The bundled-commands logger (the `mstar/<topic>` logger-name convention). */
+const COMMANDS_LOGGER = 'mstar/commands'
+
 /** Static value shape after a frontmatter label: `[ \t]*` spaces, colon, non-empty value. */
 const FRONTMATTER_FIELD_RE = /^[ \t]*:[ \t]*(.+)$/
 
@@ -310,13 +313,24 @@ function parseCommandMarkdown(content: string): { name: string; description: str
  * /advisor interaction); user-typed args are appended to the steered text.
  * The registration is deferred with `ctx.inject(['commands'], …)` — the same
  * optional-unit pattern as the tools — so the plugin boots without the
- * commands service. Absent mirror (no `bundle-assets` run) → no
- * registrations.
+ * commands service. Absent mirror (no `bundle-assets` run) → no registrations
+ * and an ERROR log naming the missing mirror path plus the recovery
+ * (`bun run dsh:bundle-assets`) — a silent boot must not mask the lost
+ * slash-command surface.
  * @param ctx - registrant context carrying the commands service.
  */
 function registerMstarCommands(ctx: Context): void {
   const dir = packagedCommandsDir()
-  if (dir === undefined) return
+  if (dir === undefined) {
+    // Fail loud: resolve the EXPECTED package-relative mirror path for the
+    // message (the absent dir carries no path of its own), then emit at
+    // error level so a missing bundle is visible in the boot log.
+    const expected = fileURLToPath(new URL('../harness-commands', import.meta.url))
+    ctx.logger(COMMANDS_LOGGER).error(
+      `mstar bundled commands not registered: the packaged 'harness-commands/' mirror is missing (expected ${expected}); run \`bun run dsh:bundle-assets\` in packages/dsh to sync it, then rebuild/reload the plugin`,
+    )
+    return
+  }
   ctx.inject(['commands'], (commandsCtx) => {
     for (const file of readdirSync(dir).sort()) {
       if (!file.endsWith('.md')) continue
