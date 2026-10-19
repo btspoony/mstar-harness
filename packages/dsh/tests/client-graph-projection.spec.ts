@@ -967,7 +967,7 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
 })
 
 /* ---------------------------------------------------------------------------
- * Agents zone unresolved continuation (I-000739): an Assignment-shaped team
+ * Agents zone unresolved continuation: an Assignment-shaped team
  * dispatch (`team_task_create` / `team_task_update` / `send_message`) whose
  * latest ledger fact is the explicit `continuation`/`unresolved` row renders
  * the DISTINCT non-running `unresolved` state — never phantom running, never
@@ -997,7 +997,7 @@ function continuationRow(over: {
   }
 }
 
-describe('projectGraph — agents zone unresolved continuation (I-000739)', () => {
+describe('projectGraph — agents zone unresolved continuation', () => {
   it('(a) a team_task_create dispatch whose latest fact is an unresolved continuation → status unresolved, NOT executing', () => {
     const view = projectGraph(flowSource([
       continuationRow({ ts: 8, agent: 'a1', role: 'fullstack-dev', reason: 'the created member is not resolvable in the roster' }),
@@ -1032,7 +1032,7 @@ describe('projectGraph — agents zone unresolved continuation (I-000739)', () =
     expect(row.role).toBe('fullstack-dev')
     // A continuation carries no gate verdict/outcome — honest unknown status.
     expect(row.status).toBe('unknown')
-    // The 事件记录 entry assembly passes the row through as a generic event.
+    // The event log entry assembly passes the row through as a generic event.
     const entry = eventLogEntries(view).find((entry) => entry.kind === 'event' && entry.eventKind === 'continuation')
     expect(entry).toMatchObject({ kind: 'event', role: 'fullstack-dev', agent: 'a1', status: 'unknown' })
   })

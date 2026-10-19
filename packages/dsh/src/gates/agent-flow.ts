@@ -75,7 +75,7 @@ export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
 /**
  * Bounded in-memory TEAM member-child END buffer (apply-scoped, like the
  * pairing maps). A team member's initial turn can settle BEFORE its spawn's
- * `tools/post-execute` pairing write (I-000740): the paired path used to drop
+ * `tools/post-execute` pairing write (the early-end reconcile race): the paired path used to drop
  * that `subagent/end` record silently, so the dispatch never settled. The
  * record is buffered instead and reconciled when the pairing write lands.
  * Styled after {@link AGENT_FLOW_TEAM_CHILD_CAPACITY} — which bounds the
@@ -362,8 +362,8 @@ export type AgentFlowEvent =
  * written through the same native ledger append and carries the paired
  * dispatch identity, but it is deliberately NOT a settle: it is written ONLY
  * instead of a settle when a team dispatch's continuation cannot be paired —
- * never an `ok` settle, never a fabricated outcome. Projected since
- * I-000739: {@link eventFromUnknown} accepts the kind and the catalog view
+ * never an `ok` settle, never a fabricated outcome. Projected — the
+ * unresolved-continuation projection: {@link eventFromUnknown} accepts the kind and the catalog view
  * lists the row (its state + reason) instead of dropping it, so the panel
  * derives a DISTINCT non-running entity state from it. Additive only — every
  * existing event kind keeps its projected rendering.
@@ -391,7 +391,8 @@ export interface AgentFlowContinuationEvent {
 }
 
 /**
- * The projected catalog view of {@link AgentFlowContinuationEvent} (I-000739).
+ * The projected catalog view of {@link AgentFlowContinuationEvent} (the
+ * unresolved-continuation projection).
  * A member of {@link readAgentFlow}'s event window ADDITIVELY: every existing
  * event view keeps its shape, and the client projection guards each field
  * read, so the added kind is a data member of the wire — not a union break.
@@ -413,7 +414,7 @@ export interface AgentFlowContinuationEventView {
   readonly reason: string
 }
 
-/** One durable ledger row this module appends and the reader projects (I-000739: the continuation marker is projected, not dropped). */
+/** One durable ledger row this module appends and the reader projects (the continuation marker is projected, not dropped). */
 type AgentFlowLedgerEvent = AgentFlowEvent | AgentFlowContinuationEvent
 
 /**
@@ -533,7 +534,7 @@ export interface AgentFlowPairing {
   /**
    * Team member child `SessionId` → the `stopReason` of the member's
    * `subagent/end` settlement that arrived BEFORE its `spawn_teammate`
-   * pairing write (the I-000740 race). Created lazily by the end-buffer path
+   * pairing write (the early-end reconcile race). Created lazily by the end-buffer path
    * (existing pairing constructors stay valid); the pairing write reconciles
    * against it first — a hit settles from the buffered record and consumes
    * the entry, so no dispatch can settle twice. Bounded by
@@ -1175,7 +1176,7 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
     kind !== 'workflow-run' &&
     kind !== 'workflow-agent' &&
     kind !== 'workflow-run-end' &&
-    // The projected unresolved-continuation marker (I-000739 — previously a
+    // The projected unresolved-continuation marker (previously a
     // durable-only row the reader dropped, which left its dispatch as a
     // phantom running entity).
     kind !== 'continuation'
@@ -1251,7 +1252,7 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
     }
   }
   if (kind === 'continuation') {
-    // The projected unresolved-continuation marker (I-000739): the required
+    // The projected unresolved-continuation marker: the required
     // identity grammar is `role` ('' allowed — the dispatch row's grammar),
     // the SINGLE state value `unresolved`, and a non-empty display `reason`
     // (the writer always emits one — a hostile row lacking them is SKIPPED,
@@ -1464,7 +1465,8 @@ function eventView(event: AgentFlowLedgerEvent): AgentFlowEventView | AgentFlowC
     }
   }
   if (event.kind === 'continuation') {
-    // Explicit branch BEFORE the settle fallback (I-000739): a continuation
+    // Explicit branch BEFORE the settle fallback (the unresolved-continuation
+    // projection): a continuation
     // is NOT a completion — it keeps the paired dispatch identity (the same
     // fields a dispatch row rides) and carries its own facts (`state` +
     // `reason`); no outcome, no verdict, no settle markers.
@@ -1560,7 +1562,7 @@ export function readAgentFlow(workflowDir: string, workflowId: string, limit?: n
       continue
     }
   }
-  // The continuation view (I-000739) is an ADDITIVE member of the catalog's
+  // The continuation view (the unresolved-continuation projection) is an ADDITIVE member of the catalog's
   // event window: typed through the shared AgentFlowView shape — every
   // client consumer guards its reads per field, so the added kind is a data
   // member of the wire, never a union break for an existing consumer.
@@ -1683,7 +1685,8 @@ function rosterHasChildId(roster: TeamRosterRead | undefined, parent: unknown, c
 }
 
 /**
- * Buffer one unmatched team child `subagent/end` (the I-000740 race: the
+ * Buffer one unmatched team child `subagent/end` (the early-end reconcile
+ * race: the
  * member's turn settled before its spawn's pairing write). Only a
  * roster-listed team child while the team service is mounted is buffered — a
  * non-team child end never enters the buffer, and without the service
@@ -1735,7 +1738,8 @@ function consumeBufferedTeamEnd(pairing: AgentFlowPairing, childId: string): { s
 /**
  * Pair one `spawn_teammate` dispatch with the member child `SessionId` the
  * roster read resolved. RECONCILE FIRST: the member's end may have arrived
- * before this pairing write and been buffered (I-000740) — on a buffer hit
+ * before this pairing write and been buffered (the early-end reconcile
+ * buffer) — on a buffer hit
  * the dispatch settles from the buffered record through the SAME outcome
  * mapping as the paired path (`completed→ok`, `aborted/refusal→denied`,
  * `error/max-tokens→error`, unrecognized → explicit unresolved continuation)
@@ -1860,7 +1864,7 @@ function handleTeamPostExecute(input: {
  * continuable subagent child whose initial turn settlement carries the child
  * id and the terminal stop reason, so this row is a REAL completion (mapped
  * outcome) rather than a tool-return guess. An end whose pairing map entry is
- * missing is the I-000740 race (the member's turn settled before the spawn's
+ * missing is the early-end reconcile race (the member's turn settled before the spawn's
  * pairing write): the record is BUFFERED for the pairing write's reconcile
  * ({@link bufferTeamChildEnd} — team children only, service mounted only)
  * instead of the old silent drop. An unrecognized stop reason records the

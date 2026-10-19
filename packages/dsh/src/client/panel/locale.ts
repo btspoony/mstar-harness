@@ -118,7 +118,7 @@
  * legend copy drops them). `zone.legend.agent-running` / `agent-settled` /
  * `agent-idle` remain.
  *
- * (I-000739 continuation state): the entity-status union gains `unresolved` —
+ * (the unresolved continuation state): the entity-status union gains `unresolved` —
  * an Assignment-shaped team dispatch whose latest ledger fact is the explicit
  * `continuation`/`unresolved` row is a DISTINCT non-running entity, never
  * phantom running and never counted in `executing`.

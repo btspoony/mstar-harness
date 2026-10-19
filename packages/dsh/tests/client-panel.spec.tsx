@@ -74,7 +74,7 @@
  *   tab the real EventLogPage (`data-mstar-page-*` + the `data-event-log-*`
  *   anchor family).
  * - event-log page (spec panel-tabs §5
- *   Task 2): the 事件记录 tab is a non-canvas log page — the Agent 流转事件 /
+ *   Task 2): the event log tab is a non-canvas log page — the Agent 流转事件 /
  *   违规记录 partitions (`data-event-log-section`), per-row expandable
  *   `<details>` rows (`data-event-log-details` / `data-event-log-field`
  *   full-catalog detail bodies — missing fields render「—», never fabricated),
@@ -2142,7 +2142,7 @@ describe('workflow panel — 「更多」 interaction ', () => {
  * T6 tabs-shell Task 1 (spec panel-tabs §2/§6.1
  * shell): the panel is re-laid-out as Tabs + Content — a resident right
  * sidebar shared by every tab, a fixed header nav (TabNav) with the 3
- * MenuTabs (任务迭代 / 代理执行 / 事件记录) and a content region that
+ * MenuTabs (任务迭代 / 代理执行 / event log) and a content region that
  * switches per tab. `data-mstar-graph` now anchors the CONTENT container
  * (spec §6.1 — previously the canvas container). Default tab = 任务迭代 (D1);
  * the tasks tab renders the IterationTaskPage (Task 2 — Content Head +
@@ -2267,7 +2267,7 @@ describe('workflow panel — T6 tabs-shell: section nav + content switching + in
 
 /* ---------------------------------------------------------------------------
  * T9 event-log page (spec panel-tabs §5
- * Task 2): the 事件记录 tab is a NON-canvas log page — the Agent 流转事件 /
+ * Task 2): the event log tab is a NON-canvas log page — the Agent 流转事件 /
  * 违规记录 partitions (`data-event-log-section` + counts), per-row
  * expandable native `<details>` rows (`data-event-log-details` — the summary
  * IS the row; the body carries the FULL catalog fields via the T1-Min-3
@@ -2349,7 +2349,7 @@ describe('workflow panel — T9 event-log page: partitions + rows + details + em
     expect(html).toContain('plan  not complete')
   })
 
-  it('a continuation row lists its unresolved reason (I-000739)', async () => {
+  it('a continuation row lists its unresolved reason', async () => {
     const html = eventsHtml(flowSource([
       { ts: 8_000, kind: 'continuation', agent: 'a-1', role: 'fullstack-dev', planId: null, taskId: null, taskCategory: null, state: 'unresolved', reason: 'the created member is not resolvable in the roster' },
     ]))

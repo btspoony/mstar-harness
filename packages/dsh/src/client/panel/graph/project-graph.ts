@@ -158,7 +158,7 @@ export interface FlowEventView {
   readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end rows only). */
   readonly stopReason?: string
-  /** The continuation state — `unresolved` is the ONLY value (continuation rows only, I-000739). */
+  /** The continuation state — `unresolved` is the ONLY value (continuation rows only; the unresolved-continuation projection). */
   readonly state?: 'unresolved'
   /**
    * The bounded display reason a `continuation` row carries (why the
@@ -346,8 +346,8 @@ function emphasisOf(
 /**
  * Entity status (spec §4, hardcoded priority): `denied` comes from the LATEST dispatch's
  * verdict (the only terminal verdict — settle-independent); `error`/`settled`
- * come from the settle paired with that dispatch; `unresolved` (I-000739)
- * comes from an unresolved `continuation` row naming that dispatch — the
+ * come from the settle paired with that dispatch; `unresolved` (the
+ * unresolved-continuation projection) comes from an unresolved `continuation` row naming that dispatch — the
  * dispatch was observed but its completion cannot be paired, a DISTINCT
  * NON-RUNNING fact (never phantom running, never counted in `executing`);
  * `running` = no paired settle AND no paired continuation yet (exact identity
@@ -813,7 +813,8 @@ function roleZone(role: string, stage: { phase: PhaseId; stage: string } | null)
  * terminal (a soft-enforcement dispatch is a "放行" pass-through, not a final
  * state — it must not mask a real completion): the settle paired with that
  * dispatch decides — `error` → error, `ok`/`denied` → settled; no pair →
- * the dispatch's continuation pairing decides (I-000739): an unresolved
+ * the dispatch's continuation pairing decides (the unresolved-continuation
+ * projection): an unresolved
  * `continuation` naming the latest dispatch → `unresolved` (a DISTINCT
  * non-running fact, never phantom running); no continuation either →
  * running (exact identity pairing — an unpaired settle stays unpaired,
@@ -831,7 +832,7 @@ function entityStatus(
   if (paired === 'error') return 'error'
   if (paired !== undefined) return 'settled'
   // The LATEST dispatch's unresolved continuation is the entity's newest
-  // ledger fact (I-000739): the dispatch was observed but its completion
+  // ledger fact (the unresolved-continuation projection): the dispatch was observed but its completion
   // cannot be paired. A dispatch with NO events after it stays honestly
   // running — ONLY a paired continuation row maps to the new state.
   return continuationSet.has(acc.latestIndex) ? 'unresolved' : 'running'
@@ -1150,7 +1151,7 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
   // settle carries — `view.status` already carries settleStatus(outcome) for
   // settle rows, so the record values are the settle statuses directly.
   // Continuation rows ride the same row list as no-ops there; the SECOND
-  // walk over the same list (I-000739) pairs each unresolved `continuation`
+  // walk over the same list (the unresolved-continuation projection) pairs each unresolved `continuation`
   // onto the dispatch it names.
   const pairingRows = filtered.map((e) => ({
     kind: e.view.kind,
@@ -1316,7 +1317,8 @@ function flowEventOf(
     }
   }
   if (kind === 'continuation') {
-    // Explicit branch BEFORE the generic fallback (I-000739): a continuation
+    // Explicit branch BEFORE the generic fallback (the unresolved-continuation
+    // projection): a continuation
     // row is the unresolved-continuation marker of its PAIRED dispatch — it
     // keeps the dispatch identity (role/planId/taskId/agent, the same seats
     // a `subagent-link` keeps) and carries its own facts (`state` +
@@ -1433,7 +1435,8 @@ function pairSettleStatus(rows: readonly PairingRow[]): Map<number, FlowEventSta
 }
 
 /**
- * The paired dispatch index set for `continuation` rows (I-000739): the SAME
+ * The paired dispatch index set for `continuation` rows (the unresolved-
+ * continuation projection): the SAME
  * exact-identity walk as `pairSettleStatus`, marking each unresolved
  * continuation onto the most recent same-identity dispatch BEFORE it in file
  * order. A continuation WITHOUT an agent never pairs — no fallback guessing

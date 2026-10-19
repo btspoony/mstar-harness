@@ -224,7 +224,8 @@ describe('team agent flow — an unpaired continuation is explicit, never an ok 
     const continuation = rows.find((row) => row.kind === 'continuation')
     expect(continuation).toMatchObject({ kind: 'continuation', state: 'unresolved', role: 'fullstack-dev' })
     expect(continuation?.reason).toContain('reviewer')
-    // I-000739: the continuation row is PROJECTED (no longer durable-only):
+    // The unresolved-continuation projection: the continuation row is
+    // PROJECTED (no longer durable-only):
     // the readAgentFlow view lists it latest-first before its dispatch,
     // carrying the unresolved state and the display reason. The wire shape
     // is guarded here — the shared view type gains the kind additively and
@@ -607,9 +608,9 @@ describe('team agent flow — the bounded end buffer reconciles a turn that ende
   })
 })
 
-/* ------------------------------ carried edge paths pinned (I-000738) ------------------------------ */
+/* ------------------------------ carried edge paths pinned ------------------------------ */
 
-describe('team agent flow — carried edge paths pinned (I-000738)', () => {
+describe('team agent flow — carried edge paths pinned', () => {
   it('records the explicit unresolved continuation when the team carrier returns no result payload (no settle)', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const ctx = new Context()
