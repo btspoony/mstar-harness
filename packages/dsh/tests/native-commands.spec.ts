@@ -1,0 +1,376 @@
+/**
+ * Task 2 (#526) — the native writable command surface.
+ *
+ * The seven writable mstar commands (plan bind/prepare/progress/complete +
+ * workflow register + issue add/close) are registered as native dsh tools over
+ * `ctx.tools.register`. Each tool calls the shared `@mstar-harness/commands`
+ * implementation through its programmatic entry (`executeCommand`), and
+ * injects `sessionId` from `exec.agent.id` — NEVER from model arguments.
+ *
+ * Every case boots the REAL-composition harness (the same plugin the dsh app
+ * loads) and drives the tools through the REAL registry, while the execution
+ * authority is a SYNTHETIC store fixture built by the engine's own producers
+ * (initializeStore → catalog registration → createExecutionWorkflow, the
+ * `execution-session.spec.ts` idiom) — the real control-root store in
+ * `.mstar/` is never touched.
+ */
+import { afterEach, describe, expect, it } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import {
+  createExecutionWorkflow,
+  initializeStore,
+  readExecutionState,
+  registerCatalogEntity,
+} from '@mstar-harness/engine'
+import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
+import { bootApp, type BootResult } from './harness.ts'
+
+const TS = '2026-09-21T00:00:00.000Z'
+const WORKFLOW_ID = 'wf-native-commands'
+const PLAN_ID = 'plan-native-commands'
+const PARENT_ID = 'session-native-parent'
+const CHILD_ID = 'session-native-child'
+
+/** The named writable set (issue AC) — every tool the module must register. */
+const TOOL_NAMES = [
+  'mstar_plan_bind',
+  'mstar_plan_prepare',
+  'mstar_plan_progress',
+  'mstar_plan_complete',
+  'mstar_workflow_register',
+  'mstar_issue_add',
+  'mstar_issue_close',
+] as const
+
+let booted: BootResult | undefined
+const roots: string[] = []
+
+afterEach(async () => {
+  await booted?.dispose()
+  booted = undefined
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
+})
+
+const callId = 'native-commands.spec' as ToolCallId
+const signal = new AbortController().signal
+
+/** The caller identity the tool must observe: `exec.agent.id` IS the session id (ADR constraint 1). */
+function agentOf(id: string, cwd: string): unknown {
+  return { id, session: { id, header: { id, cwd } } }
+}
+
+/** Run one tool call through the composed registry as one specific agent. */
+function run(ctx: BootResult['ctx'], name: string, agent: unknown, args: Record<string, unknown>) {
+  return ctx.tools.execute({ callId, name, arguments: args, agent: agent as never, signal })
+}
+
+/** Narrow one successful tool result to its canonical value (the command envelope). */
+function envelopeOf(result: Awaited<ReturnType<BootResult['ctx']['tools']['execute']>>): Record<string, unknown> {
+  if (result.isError) throw new Error(`tool call failed: ${result.error?.message ?? 'unknown error'}`)
+  return result.value as Record<string, unknown>
+}
+
+/**
+ * The REAL execution authority at `harnessDir`: an initialized store, one
+ * registered catalog plan, and one created lifecycle whose CREATING identity
+ * is `coordinatorSessionId` — deliberately NOT bound, so the native
+ * `mstar_plan_bind` call is the bind the lifecycle actually uses.
+ */
+async function seedUnboundWorkflow(harnessDir: string, coordinatorSessionId: string): Promise<void> {
+  await mkdir(harnessDir, { recursive: true })
+  const handle = await initializeStore({ harnessDir })
+  handle.close()
+  const rootToken = (await readExecutionState({ harnessDir })).token
+  await registerCatalogEntity(
+    { harnessDir },
+    { kind: 'plan', id: PLAN_ID, title: `${PLAN_ID} title`, rootKind: 'plans', relativePath: `plans/${PLAN_ID}.md` },
+    { operationId: `register-${PLAN_ID}`, actor: 'native-commands.spec' },
+  )
+  const created = await createExecutionWorkflow(
+    {
+      harnessDir,
+      caller: { sessionId: coordinatorSessionId, role: 'coordinator', workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
+    } satisfies ExecutionContext,
+    {
+      entry: { id: WORKFLOW_ID, type: 'plan', started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
+      snapshot: {
+        schema_version: 1,
+        id: WORKFLOW_ID,
+        type: 'plan',
+        status: 'running',
+        started_at: TS,
+        updated_at: TS,
+        plans: [{ id: PLAN_ID, title: `${PLAN_ID} title`, file: `plans/${PLAN_ID}.md`, status: 'Todo' }],
+        delivery_kind: 'development',
+        // The registered delivery source is the fixture feature branch — the
+        // same branch the completion proof pins (complete re-checks the pair).
+        branch: { source: 'feature/native-surface', target: 'main' },
+      } as never,
+      expected: rootToken,
+      operationId: `create-${WORKFLOW_ID}`,
+    },
+  )
+  if (created.data.workflows[0] === undefined) throw new Error('the fixture workflow was not created')
+}
+
+/** Run fixture Git with process-local signing and identity overrides; returns stdout (for rev-parse). */
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: 'commit.gpgsign',
+      GIT_CONFIG_VALUE_0: 'false',
+      GIT_CONFIG_KEY_1: 'user.name',
+      GIT_CONFIG_VALUE_1: 'Fixture User',
+      GIT_CONFIG_KEY_2: 'user.email',
+      GIT_CONFIG_VALUE_2: 'fixture@example.test',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  })
+}
+
+/**
+ * A REAL Git fixture root: the root itself is the `main` control checkout (the
+ * engine's control root is the harness dir's parent, so the harness must live
+ * INSIDE a Git checkout), plus one linked feature worktree carrying one real
+ * commit — `plan.prepare` validates the checkout/branch pair and
+ * `plan.complete` verifies actual Git proof (HEAD sha, branch tip, review
+ * ancestry) against that worktree.
+ */
+async function gitFixtureRoot(): Promise<{ root: string; worktree: string; sourceSha: string; baseSha: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'native-commands-git-'))
+  roots.push(root)
+  const worktree = join(root, 'feature')
+  git(['init', '-q', '-b', 'main'], root)
+  await writeFile(join(root, 'seed.txt'), 'seed\n')
+  git(['add', 'seed.txt'], root)
+  git(['commit', '-q', '-m', 'fixture'], root)
+  git(['worktree', 'add', '-q', worktree, '-b', 'feature/native-surface'], root)
+  // One real commit on the feature branch: the completion proof pins it.
+  await writeFile(join(worktree, 'change.txt'), 'change\n')
+  git(['add', 'change.txt'], worktree)
+  git(['commit', '-q', '-m', 'feature change'], worktree)
+  const sourceSha = git(['rev-parse', 'HEAD'], worktree).trim()
+  const baseSha = git(['rev-parse', 'main'], root).trim()
+  return { root, worktree, sourceSha, baseSha }
+}
+
+/** Boot the composed app and seed the synthetic lifecycle for the CHILD session. */
+async function bootedWithFixture(): Promise<BootResult & {
+  featureWorktree: string
+  sourceSha: string
+  baseSha: string
+  evidenceDir: string
+}> {
+  const fixture = await gitFixtureRoot()
+  const app = booted = await bootApp({ root: fixture.root })
+  await seedUnboundWorkflow(app.harnessDir, CHILD_ID)
+  // The evidence files live in the plan's own SDD area (the engine accepts
+  // only absolute evidence paths inside {PLAN_DIR} / {SDD_DIR}/<plan-id>).
+  const evidenceDir = join(app.harnessDir, 'sdd', PLAN_ID)
+  await mkdir(evidenceDir, { recursive: true })
+  await writeFile(join(evidenceDir, 'qc.md'), 'qc consolidated report\n')
+  await writeFile(join(evidenceDir, 'qa.md'), 'qa report\n')
+  return Object.assign(app, {
+    featureWorktree: fixture.worktree,
+    sourceSha: fixture.sourceSha,
+    baseSha: fixture.baseSha,
+    evidenceDir,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Registration surface
+// ---------------------------------------------------------------------------
+
+describe('native command tool registration', () => {
+  it('registers exactly the named writable set on ctx.tools', async () => {
+    const app = booted = await bootApp()
+    for (const name of TOOL_NAMES) {
+      expect(app.ctx.tools.get(name)).toBeDefined()
+    }
+  })
+
+  it('publishes no session-id parameter (identity is never model-supplied)', async () => {
+    const app = booted = await bootApp()
+    for (const name of TOOL_NAMES) {
+      const tool = app.ctx.tools.get(name)
+      expect(tool).toBeDefined()
+      // ADR constraints 1–2: identity flows from exec.agent.id; the model face
+      // carries no session selector a call could spoof.
+      expect(Object.keys(tool!.parameters ?? {})).not.toContain('sessionId')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (a) plan lifecycle from native tools alone
+// ---------------------------------------------------------------------------
+
+describe('native plan lifecycle — bind → prepare → progress → complete', () => {
+  it('completes the lifecycle shell-free with the caller identity, ignoring a model-supplied session id', async () => {
+    const app = await bootedWithFixture()
+    // The session cwd is the control checkout; the prepare gate validates the
+    // linked feature worktree + branch pair.
+    const child = agentOf(CHILD_ID, app.root)
+    const worktree = app.featureWorktree
+
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      // A model MUST NOT be able to choose the identity: this argument is
+      // stripped before admission and the caller's own id is injected.
+      sessionId: 'model-spoofed-session',
+    }))
+    expect(bound.status).toBe('ok')
+
+    const prepared = envelopeOf(await run(app.ctx, 'mstar_plan_prepare', child, {
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+      worktreePath: worktree,
+      workingBranch: 'feature/native-surface',
+    }))
+    expect(prepared.status).toBe('ok')
+
+    const progressed = envelopeOf(await run(app.ctx, 'mstar_plan_progress', child, {
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+      progress: { status: 'InProgress', summary: 'native surface progress', evidence_paths: [] },
+    }))
+    expect(progressed.status).toBe('ok')
+
+    const completed = envelopeOf(await run(app.ctx, 'mstar_plan_complete', child, {
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+      // The REAL Git proof the engine verifies: the feature worktree's pinned
+      // HEAD (review_head = source_sha), with main as the review base.
+      evidence: {
+        source_sha: app.sourceSha,
+        review_base: app.baseSha,
+        review_head: app.sourceSha,
+        qc: {
+          decision: 'Approve',
+          reports: [join(app.evidenceDir, 'qc.md')],
+          consolidated: join(app.evidenceDir, 'qc.md'),
+        },
+        qa: { gate: 'mandatory', decision: 'pass', report: join(app.evidenceDir, 'qa.md') },
+      },
+    }))
+    expect(completed.status).toBe('ok')
+
+    // The lifecycle's coordinator binding is the CALLER's id — not the spoofed
+    // argument, not the parent's.
+    const state = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(state.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (b) leaf-vs-parent identity
+// ---------------------------------------------------------------------------
+
+describe('native identity — a leaf call carries its own id, never the parent id', () => {
+  it('binds the child session and refuses the parent on the same workflow', async () => {
+    const app = await bootedWithFixture()
+    expect(CHILD_ID).not.toEqual(PARENT_ID)
+    const child = agentOf(CHILD_ID, app.root)
+    const parent = agentOf(PARENT_ID, app.root)
+
+    // The CHILD binds with its own id: the engine's owner check accepts it.
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+    const state = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(state.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
+
+    // The PARENT's call arrives with the parent's id (if the tool leaked the
+    // child's id here, the engine could not tell the callers apart) and the
+    // engine refuses the second coordinator on the bound workflow.
+    const parentResult = await run(app.ctx, 'mstar_plan_bind', parent, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    })
+    const parentEnvelope = envelopeOf(parentResult)
+    expect(parentEnvelope.status).not.toBe('ok')
+    // The binding is unchanged: still the child's, never the parent's.
+    const after = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(after.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (c) engine refusal envelope surfaces verbatim
+// ---------------------------------------------------------------------------
+
+describe('engine refusal surface', () => {
+  it('surfaces a stale-token CAS refusal verbatim, with no second validation layer', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    expect(envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    })).status).toBe('ok')
+
+    const refused = envelopeOf(await run(app.ctx, 'mstar_plan_progress', child, {
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+      // A forged/stale CAS token: only the ENGINE can judge this — the tool
+      // must not pre-validate it away.
+      expect: 'mstar-forged-stale-token',
+      progress: { status: 'InProgress', summary: 'stale token call', evidence_paths: [] },
+    }))
+    expect(refused.version).toBe(1)
+    expect(refused.command).toBe('plan.progress')
+    expect(refused.status).toBe('refused')
+    // The message is the engine's own refusal text, not a dsh-side paraphrase.
+    expect(typeof refused.message).toBe('string')
+    expect(refused.message).toMatch(/coordination\.|token|revision|expect/i)
+    // The exit code and envelope code travel through untouched.
+    expect(refused.exitCode).not.toBe(0)
+  })
+
+  it('surfaces an admission usage refusal verbatim for a missing required field', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    const refused = envelopeOf(await run(app.ctx, 'mstar_plan_prepare', child, {
+      // workflow + plan + worktreePath + workingBranch are required by the
+      // engine path; an empty call is a usage refusal from the shared
+      // admission, verbatim.
+    }))
+    expect(refused.status).toBe('usage')
+    expect(refused.command).toBe('plan.prepare')
+    expect(typeof refused.message).toBe('string')
+    expect(Array.isArray(refused.details)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (d) HMR disposal
+// ---------------------------------------------------------------------------
+
+describe('HMR disposal', () => {
+  it('unregisters the native tools on fiber.dispose (a post-dispose get finds none)', async () => {
+    const app = booted = await bootApp()
+    for (const name of TOOL_NAMES) {
+      expect(app.ctx.tools.get(name)).toBeDefined()
+    }
+    expect(app.pluginFiber).toBeDefined()
+    await app.pluginFiber!.dispose()
+    for (const name of TOOL_NAMES) {
+      expect(app.ctx.tools.get(name)).toBeUndefined()
+    }
+  })
+})

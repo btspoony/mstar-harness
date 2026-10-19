@@ -45,6 +45,7 @@ import type { SkillLintAdvisory } from './gates/skill-lint.ts'
 import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
+import { registerNativeCommandTools } from './gates/native-commands.ts'
 import { registerExecutionSessionCommand } from './gates/execution-session.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
@@ -901,4 +902,8 @@ export function apply(ctx: Context, config: Config): void {
   // v2 seams and canonical command tools share the native tools registry.
   registerSddIterationTools(ctx, resolver)
   registerSeamTools(ctx, resolver)
+  // The native writable command surface (#526): the named mstar command set as
+  // dsh tools, identity-injected from exec.agent.id — registration and its HMR
+  // disposal both live in the module.
+  registerNativeCommandTools(ctx, resolver)
 }
