@@ -184,7 +184,7 @@ habit.
 
 | Channel | Surface | Use when | Not for |
 |---|---|---|---|
-| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | one self-contained Assignment of any category — including writable work behind the dispatch/lease gates; `subagent_fork` when the child must inherit the completed conversation | coordination that must stay addressable across many turns, or read-only fan-out of N≥3 |
+| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | one self-contained Assignment of any category — including writable work behind the dispatch/lease gates; `subagent_fork` when the child must inherit the completed conversation | coordination that must stay addressable across many turns, or read-only N≥3 fan-out while `workflow` is mounted (when it is not mounted, this path is the documented fallback — § QC default) |
 | **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; every member works in ONE shared working directory; a teammate is a continuable subagent child, and any root session is the implicit Lead | multi-seat, multi-round, role-persistent work that must stay addressable across turns — e.g. a tracked implementer/reviewer pair over one worktree | isolated writable tracks, one-shot lookups, read-only N≥3 fan-out |
 | **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width | writable fan-out — it has no per-child pre-start veto seam |
 
@@ -568,10 +568,13 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   `workflow` tool): one run, three concurrent children, one conversation
   `workflow-run` node. When the tool is not mounted (the `ptc` preset hides it),
   fall back to the `subagent` path below. **The `subagent` path emits all three
-  invokes in ONE message**: each returns at activation start, so the seats run
-  CONCURRENTLY (wall ≈ single seat). Re-dispatching one invoke per message runs
-  them serially and is not parallel tri. A seat that cannot be started at all →
-  **`Blocked`**.
+  invokes in ONE message**: the host admits every dispatch before any
+  settlement, so all N are admitted before the first seat settles and the seats
+  run CONCURRENTLY (wall ≈ single seat). There is no serialization promise
+  either way — a PM that waits for each settlement before emitting the next
+  invoke is what spaces the batch out and costs the wall time. The call return
+  (`started subagent <id>`) is an activation, never a completion. A seat that
+  cannot be started at all → **`Blocked`**.
 - **`inline`**: **N=1**.
 
 ### SDD implement

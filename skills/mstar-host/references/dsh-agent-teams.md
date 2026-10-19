@@ -32,11 +32,12 @@ interruption, task owners — and it is immutable for the Team's lifetime.
 |---|---|---|
 | One seat for a role | `architect` | the role slug alone |
 | Additional seat for one role | `architect-2`, `architect-3` | role slug + seat ordinal |
-| Reserved | `lead` | the implicit Lead is always addressable as `lead` |
+| Reserved | `lead` | the implicit Lead is always addressable as `lead`; a teammate named `lead` is refused (`TEAM_INVALID_MEMBER_NAME`) |
 
-- Names must be **lower-kebab-case**: lowercase letters and digits in
-  hyphen-separated segments. `Architect`, `architect_2`, and `architect/qc`
-  are refused by the name grammar.
+- Names must be **lower-kebab-case** and **at most 64 characters**: lowercase
+  letters and digits in hyphen-separated segments. `Architect`, `architect_2`,
+  `architect/qc`, a name longer than 64 characters, and `lead` are all refused
+  by the name grammar (`TEAM_INVALID_MEMBER_NAME`).
 - Names are **unique for the Team's lifetime** — a name used by a creation that
   later failed is still taken (`TEAM_MEMBER_NAME_TAKEN`), so retries use the
   next free seat ordinal.
@@ -59,10 +60,11 @@ task id.
 
 - **Task ids are Team-local generated values.** The plan id and task number
   live in `subject`, never in the opaque id.
-- **Every board mutation is a compare-and-set.** Read the task with
-  `team_task_get` (or `team_task_list`), then pass its current `revision` as
-  `expected_revision`; an outdated edit is rejected instead of overwriting
-  newer work.
+- **Every mutation of an existing task is a compare-and-set.**
+  `team_task_create` takes no revision — it creates the row; every later action
+  reads the task with `team_task_get` (or `team_task_list`) and passes its
+  current `revision` as `expected_revision`, so an outdated edit is rejected
+  instead of overwriting newer work.
 - **Cover the transitions the plan row needs:** `claim` → `in_progress` +
   owner, `complete` (keeps the owner), `release` / `reopen` (clears the owner
   and returns the task to pending), `set_dependencies`, `edit`, `reassign`,
@@ -135,7 +137,7 @@ stays idle until someone messages it.
 
 | Not provided | Consequence / where it lives instead |
 |---|---|
-| worktrees or per-member checkouts | one shared cwd; isolated writable tracks use the `subagent` channel's per-dispatch `cwd` or the repository's worktree procedure |
+| worktrees or per-member checkouts | every member shares ONE cwd and the channel has no per-member `cwd`; isolated writable seats therefore come from the repository's worktree procedure, one writable seat per worktree |
 | locks | `write_scopes` warns; concurrent writes can still interleave |
 | merges, rebases, or review gates | the Lead integrates and verifies; no tool merges member work |
 | automatic ownership release | `complete` keeps the owner; `release`, `reopen`, and `reassign` are explicit calls |
