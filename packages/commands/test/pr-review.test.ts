@@ -383,6 +383,28 @@ describe("pr-review command family", () => {
     }
   });
 
+  test("--required-domains reports exactly one diagnostic per supplied value", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+    const base = { findings, openedDomains: "persist", diffBasis: "readable" };
+
+    // An explicitly empty value asks for the "at least one" repair; a
+    // malformed list reports its parse fault and nothing else — the two
+    // repairs are opposite, so one field never carries both.
+    const cases = [
+      ["", ["--required-domains must name at least one domain"]],
+      ["persist,,", ["--required-domains must be a comma-separated list of single-line non-blank entries"]],
+    ] as const;
+    for (const [requiredDomains, messages] of cases) {
+      const refusal = await command("pr-review.tally").execute({ ...base, requiredDomains }, context);
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(diagnosticsOf(refusal, `--required-domains ${JSON.stringify(requiredDomains)}`)).toEqual(
+        messages.map((message) => ({ path: "requiredDomains", code: "invalid", message })),
+      );
+    }
+  });
+
   test("an omitted coverage fact joins an invalid count and an invalid findings entry in one refusal", async () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");

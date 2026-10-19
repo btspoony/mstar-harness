@@ -171,7 +171,10 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         return entries;
       };
       const requiredDomains = domains(input.requiredDomains, "requiredDomains", "--required-domains");
-      if (requiredDomains.length === 0 && input.requiredDomains !== undefined) {
+      // One field, one diagnostic: only an explicitly empty value (no parse
+      // fault reported) asks for the "at least one" repair; a malformed list
+      // already reports its own fault and must not claim nothing was given.
+      if (input.requiredDomains !== undefined && input.requiredDomains.trim() === "") {
         diagnostics.push({ path: "requiredDomains", code: "invalid", message: "--required-domains must name at least one domain" });
       }
       const openedDomains = domains(input.openedDomains, "openedDomains", "--opened-domains");

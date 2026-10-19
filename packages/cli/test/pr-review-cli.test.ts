@@ -239,6 +239,38 @@ describe("mstar pr-review tally", () => {
     },
   );
 
+  test.each([
+    ["", ["--required-domains must name at least one domain"]],
+    ["persist,,", ["--required-domains must be a comma-separated list of single-line non-blank entries"]],
+  ])(
+    "--required-domains %p reports exactly one diagnostic for the field",
+    (domains, messages) => {
+      withTempDir((dir) => {
+        const findings = join(dir, "findings.json");
+        writeFileSync(findings, "[]");
+        const result = runCli([
+          "pr-review",
+          "tally",
+          "--findings",
+          findings,
+          "--required-domains",
+          domains,
+          "--opened-domains",
+          "persist",
+          "--diff-basis",
+          "readable",
+        ]);
+        expect(result.exitCode).toBe(2);
+        expect(envelope(result).status).toBe("usage");
+        // One field, one diagnostic: a malformed list must not also claim the
+        // caller supplied no domain at all.
+        expect(envelope(result).details?.diagnostics).toEqual(
+          messages.map((message) => ({ path: "requiredDomains", code: "invalid", message })),
+        );
+      });
+    },
+  );
+
   test("an unaccepted --diff-basis joins the other tally faults in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
