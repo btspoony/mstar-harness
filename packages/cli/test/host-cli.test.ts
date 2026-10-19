@@ -13,6 +13,7 @@ describe("mstar host detect — tool-shape host matrix", () => {
     { signals: "question", host: "opencode" },
     { signals: "task_subagent", host: "opencode" },
     { signals: "task_agent_batch,ask,hub", host: "omp" },
+    { signals: "spawn_teammate", host: "dsh" },
     { signals: "Agent,AgentSwarm", host: "kimi" },
     { signals: "Agent,EnterPlanMode,TodoWrite", host: "zcode" },
     { signals: "plan_slash,goal", host: "codex" },

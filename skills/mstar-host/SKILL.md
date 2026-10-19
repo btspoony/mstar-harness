@@ -34,13 +34,13 @@ Detect from **session tool shapes and available commands** — not from plugin m
 | **`subagent_type`** param on the Task tool (plus **CreatePlan**/**SwitchMode** when Plan mode is active) | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
 | **`question`** tool, or **`task`** tool with **`subagent`** (singular) — no `tasks[]` batch | `opencode` | `references/opencode.md` |
 | **`task`** tool with **`agent`** / **`tasks[]`** batch, **`ask`**, **`hub`** (omp also exposes `/goal`; goal rule is host-agnostic per below) | `omp` | `references/omp.md`; Plan mode also `references/omp-plan-mode-bridge.md` |
-| **`subagent`** tool (dsh's model-facing delegation tool — `@deepseek-ai/dsh-tool-subagent` default `toolName`) | `dsh` | `references/dsh.md` |
+| **`subagent`** tool (dsh's model-facing delegation tool — `@deepseek-ai/dsh-tool-subagent` default `toolName`), **`spawn_teammate`** / **`team_task_create`** (dsh Agent Teams tools — `@deepseek-ai/dsh-experimental-tool-agent-team`) | `dsh` | `references/dsh.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** + **`AgentSwarm`** (Kimi-only) | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** / **`TodoWrite`**, **no `AgentSwarm`** | `zcode` | `references/zcode.md`; Plan mode also `references/zcode-plan-mode-bridge.md` |
 | `/plan`, `/goal` slash commands; **Goal tools**; `functions.*` / `codex_app.*` tool namespaces; `tool_search`; Browser plugin tools | `codex` | `references/codex.md`; Plan mode also `references/_shared/plan-mode-bridge-core.md` |
 | Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, **`omp.md`**, and **`dsh.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
-Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. `subagent_type` (Cursor) vs `subagent` (OpenCode) vs `agent`/`tasks[]` (omp) is the sharpest split among the Task-based hosts; dsh's `subagent` tool collides with no other row, so it sits with the agent-tool hosts.
+Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. The four Task-shaped tokens are distinct: `subagent_type` (Cursor), `task_subagent` (OpenCode's `subagent` parameter on the `task` tool), `agent`/`tasks[]` (omp), and `subagent` (dsh's own delegation tool). No row shares another's token, so the dsh row collides with none and sits with the agent-tool hosts.
 
 > **Engine check (when available):** run `mstar host detect --signals <comma-list>` (or `import { detectHost } from "@mstar-harness/engine"` in a host hook) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 

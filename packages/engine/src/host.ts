@@ -44,10 +44,14 @@ export type ToolSignal =
   | "task_agent_batch"
   | "ask"
   | "hub"
-  // dsh's model-facing delegation tool (dsh-private packages/subagent,
-  // default toolName `subagent`) — distinct from opencode's `task_subagent`
-  // task-tool param shape (roadmap §4 D5).
+  // dsh's model-facing delegation channels (roadmap §4 D5): the `subagent`
+  // tool (dsh-private packages/subagent, default toolName `subagent`) and the
+  // Agent Teams tools `spawn_teammate` / `team_task_create`
+  // (`@deepseek-ai/dsh-experimental-tool-agent-team`) — distinct from
+  // opencode's `task_subagent` task-tool param shape.
   | "subagent"
+  | "spawn_teammate"
+  | "team_task_create"
   | "Agent"
   | "AgentSwarm"
   | "AskUserQuestion"
@@ -67,18 +71,21 @@ export type ToolSignal =
  * | `subagent_type` (Task param; plan mode + CreatePlan/SwitchMode) | cursor |
  * | `question`, or `task_subagent` (task tool, singular subagent, no batch) | opencode |
  * | `task_agent_batch` (task tool, agent/tasks[] batch), `ask`, `hub` | omp |
- * | `subagent` (dsh's model-facing delegation tool) | dsh |
+ * | `subagent` (dsh's model-facing delegation tool), `spawn_teammate` /
+ *   `team_task_create` (dsh Agent Teams tools) | dsh |
  * | `Agent`/`AskUserQuestion`/`EnterPlanMode` + `AgentSwarm` (Kimi-only) | kimi |
  * | `Agent`/`AskUserQuestion`/`EnterPlanMode`/`TodoWrite`, no `AgentSwarm` | zcode |
  * | `/plan`, `/goal`; Goal tools; `functions.*` namespaces; `tool_search` | codex |
  *
  * Order matters: cursor → opencode → omp → dsh → kimi → zcode → codex — the
  * sharpest Task-based split is `subagent_type` (Cursor) vs `task_subagent`
- * (OpenCode) vs `agent`/`tasks[]` (omp); dsh's `subagent` tool (roadmap §4
- * D5) collides with no other row, so it sits with the agent-tool hosts.
- * (`mstar-host` skill prose still says colloquial `subagent` for OpenCode —
- * disambiguate it to `task_subagent` in the same upstream PR that carries
- * this row, together with the CLI `HOST_SIGNALS` list.)
+ * (OpenCode) vs `agent`/`tasks[]` (omp); dsh's `subagent` / Agent Teams
+ * tools (roadmap §4 D5) collide with no other row, so they sit with the
+ * agent-tool hosts. (`mstar-host` describes OpenCode's row as the `task`
+ * tool with `subagent` (singular) while this enum spells that token
+ * `task_subagent`; the paired CLI list is `hostSignals` in
+ * `packages/commands/src/families/local.ts`, which already carries the same
+ * tokens — change the row and that list together.)
  * Still ambiguous → `"ambiguous"` (prompt judgment stays in the skill).
  */
 export function detectHost(signals: readonly ToolSignal[]): DetectResult {
@@ -86,7 +93,7 @@ export function detectHost(signals: readonly ToolSignal[]): DetectResult {
   if (s.has("subagent_type")) return "cursor";
   if (s.has("question") || s.has("task_subagent")) return "opencode";
   if (s.has("task_agent_batch") || s.has("ask") || s.has("hub")) return "omp";
-  if (s.has("subagent")) return "dsh";
+  if (s.has("subagent") || s.has("spawn_teammate") || s.has("team_task_create")) return "dsh";
   if (s.has("AgentSwarm")) return "kimi";
   if (s.has("Agent") || s.has("AskUserQuestion") || s.has("EnterPlanMode") || s.has("TodoWrite")) return "zcode";
   if (s.has("plan_slash") || s.has("goal") || s.has("functions.*") || s.has("tool_search")) return "codex";

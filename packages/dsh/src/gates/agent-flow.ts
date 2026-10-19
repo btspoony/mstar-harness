@@ -39,7 +39,16 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
-import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS } from './dispatch.ts'
+import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
+import {
+  isTeamDispatchToolName,
+  memberFailedOfSpawnResult,
+  memberIdOfName,
+  memberNameOfSpawnResult,
+  settleOutcomeOfStopReason,
+  teamRosterOf,
+  type TeamServiceContext,
+} from './team-identity.ts'
 // The SHARED ASCII-control-char strip : the ralph
 // `objective` — model-controlled display text, like the workflow name —
 // is routed through the same normalization at the verdict-row WRITE
@@ -52,6 +61,16 @@ import { normalizeWorkflowName } from './workflow-policy.ts'
 export const AGENT_FLOW_DEFAULT_LIMIT = 50
 /** Bounded in-memory call-window candidate slots per parent Session. */
 export const AGENT_FLOW_CATALOG_SLOT_CAPACITY = 500
+/**
+ * Bounded in-memory TEAM member-child pairing slots (apply-scoped, like the
+ * call/job pairing maps). A `spawn_teammate` dispatch is paired to its
+ * member's child `SessionId` and consumed by the member's `subagent/end`
+ * settlement; a member whose settlement never arrives (service disposal, HMR,
+ * an upstream shape change) must not grow the map forever. At capacity the
+ * OLDEST entry is evicted with an explicit unresolved-continuation row for
+ * that dispatch, so the bound never silently drops a pairing.
+ */
+export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
 /** Stable identity namespace for verified native workflow events. */
 export const WORKFLOW_EVENT_ID_PREFIX = 'wfe1'
 /** Stable identity namespace for live tool-call rows. */
@@ -324,6 +343,41 @@ export type AgentFlowEvent =
   | AgentFlowWorkflowEvent
 
 /**
+ * The explicit UNRESOLVED-CONTINUATION marker of one team dispatch. It is a
+ * DURABLE-ONLY row: it is written through the same native ledger append and
+ * carries the paired dispatch identity, but it is deliberately NOT a member of
+ * {@link AgentFlowEvent} — the projection union (and therefore the panel /
+ * model view, whose changes are out of scope for this plan) keeps its existing
+ * kinds, and no consumer can mistake the marker for a completion. It is
+ * written ONLY instead of a settle when a team dispatch's continuation cannot
+ * be paired: never an `ok` settle, never a fabricated outcome.
+ */
+export interface AgentFlowContinuationEvent {
+  v: 1
+  ts: number
+  kind: 'continuation'
+  /** The dispatching session's stable id (the paired dispatch ref's agent; absent when it carried none). */
+  agent?: string
+  /** The paired dispatch's Assignment `Execute as` ('' allowed — the dispatch row's grammar). */
+  role: string
+  /** The paired dispatch's `planIdOf(header)`. */
+  planId?: string
+  /** The paired dispatch's Assignment `Task N` tag. */
+  taskId?: string
+  /**
+   * The continuation state. `unresolved` is the ONLY value: the dispatch was
+   * observed but its continuation cannot be paired (member/child identity
+   * unresolvable, no attributable member turn, pairing window ended).
+   */
+  state: 'unresolved'
+  /** Bounded display reason (normalized; why the continuation could not be paired). */
+  reason: string
+}
+
+/** One durable ledger row this module can append (projected events + the unprojected continuation marker). */
+type AgentFlowLedgerEvent = AgentFlowEvent | AgentFlowContinuationEvent
+
+/**
  * The identity of one recorded dispatch, carried by the pairing store so a
  * later completion (post-execute settle / settled jobs event) can record a
  * settle carrying the SAME identity fields as its dispatch event.
@@ -417,7 +471,7 @@ export interface AgentFlowCatalogJoin {
 export interface AgentFlowPairing {
   /**
    * The agent-namespaced call key → the dispatch it recorded (populated by
-   * `recordDispatch` when an exec is present). Key = `${sessionId}\u0000${callId}`
+   * `recordDispatch` when an exec is present). Key = `${sessionId}\u0000${toolName}\u0000${callId}`
    * : a raw `ToolExecution.callId` is NOT globally unique
    * in one process — dsh runs many sessions concurrently and upstream mints
    * per-message ids (`call-${index}`), so the dispatching session id must
@@ -428,6 +482,15 @@ export interface AgentFlowPairing {
   dispatchByCallId: Map<string, AgentFlowDispatchRef>
   /** Registry background-job id (`JobSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordJobSettle`). */
   dispatchByJobId: Map<string, AgentFlowDispatchRef>
+  /**
+   * Team member child `SessionId` → the `spawn_teammate` dispatch that created
+   * it (populated by the team post-execute branch once the roster read
+   * resolves the model-facing member name; consumed by the member's
+   * `subagent/end` settlement, or evicted at
+   * {@link AGENT_FLOW_TEAM_CHILD_CAPACITY}). Optional so existing pairing
+   * constructors stay valid; the team branch creates it lazily.
+   */
+  teamDispatchByChildId?: Map<string, AgentFlowDispatchRef>
   /**
    * The call-window catalog join's slots: the EXACT parent Session object →
    * (RAW delegation label → candidate). A `null` slot is a consumed or
@@ -559,9 +622,16 @@ function callIdOf(exec: unknown): string | undefined {
   return typeof callId === 'string' && callId !== '' ? callId : undefined
 }
 
+/** The tool NAME of an exec, when the seam exposes one (structural read). */
+function execToolName(exec: unknown): string | undefined {
+  const name = asRecord(exec)?.name
+  return typeof name === 'string' && name !== '' ? name : undefined
+}
+
 /**
- * The AGENT-NAMESPACED pairing key of one exec :
- * `${sessionIdOf(exec) ?? ''}\u0000${callId}`. A raw `callId` alone is NOT
+ * The AGENT- AND TOOL-NAMESPACED pairing key of one exec:
+ * `${sessionIdOf(exec) ?? ''}\u0000${toolName}\u0000${callId}`. A raw
+ * `callId` alone is NOT
  * globally unique in one process — dsh runs many sessions concurrently and
  * upstream mints per-message ids (`call-${index}`; model-supplied
  * `toolCallId`s are commonly `call_0`-style per message too) — so the key
@@ -571,13 +641,19 @@ function callIdOf(exec: unknown): string | undefined {
  * prevents). Both `recordDispatch` (registration) and `registerSettleListener`
  * (lookup + consumption) derive the key identically from the SAME exec, so an
  * agent-less exec (`sessionIdOf` → '') still pairs to its own registration.
+ * The tool NAME is part of the key on top of the session: upstream reuses
+ * `call-${index}` per MESSAGE, so the same raw call id recurs across messages
+ * and across channels. Without the name, a later non-gated `subagent` call
+ * whose per-message id collides with an in-flight/leaked TEAM call's id could
+ * pair into that team dispatchRef and record a false settle; with it, a
+ * pairing is only ever consumed by the SAME tool name that registered it.
  * @param exec - the tool-execution record (structural read).
  * @returns the namespaced key, or undefined when the exec carries no callId.
  */
 function callPairingKey(exec: unknown): string | undefined {
   const callId = callIdOf(exec)
   if (callId === undefined) return undefined
-  return `${sessionIdOf(exec as ToolExecution) ?? ''}\u0000${callId}`
+  return `${sessionIdOf(exec as ToolExecution) ?? ''}\u0000${execToolName(exec) ?? ''}\u0000${callId}`
 }
 
 
@@ -636,7 +712,7 @@ export function workflowEventId(event: AgentFlowWorkflowEvent, source: AgentFlow
  * never collide with another session's call. The carrying session namespaces
  * the call id because a raw `callId` is not globally unique in one process.
  */
-export function callIdentity(kind: AgentFlowEvent['kind'], sessionId: string | undefined, callId: string | undefined): AgentFlowRecordIdentity | undefined {
+export function callIdentity(kind: AgentFlowLedgerEvent['kind'], sessionId: string | undefined, callId: string | undefined): AgentFlowRecordIdentity | undefined {
   if (sessionId === undefined || sessionId === '' || callId === undefined || callId === '') return undefined
   return { eventId: `${CALL_EVENT_ID_PREFIX}:${sessionId}:${callId}:${kind}` }
 }
@@ -655,7 +731,7 @@ function validEventSource(source: AgentFlowEventSource): boolean {
 }
 
 /** JSON representation of one event and its optional native identity metadata. */
-function ledgerLineOf(event: AgentFlowEvent, identity?: AgentFlowRecordIdentity): string {
+function ledgerLineOf(event: AgentFlowLedgerEvent, identity?: AgentFlowRecordIdentity): string {
   const row = identity === undefined ? event : { ...event, eventId: identity.eventId, ...(identity.source !== undefined ? { source: identity.source } : {}) }
   return JSON.stringify(row)
 }
@@ -673,7 +749,7 @@ export function digestOfLedgerLine(line: string): string {
  */
 function appendEvent(
   workflowId: string,
-  event: AgentFlowEvent,
+  event: AgentFlowLedgerEvent,
   identity: AgentFlowRecordIdentity | undefined,
   harnessDir: string,
   selectedGeneration: DshSelectedGeneration,
@@ -701,11 +777,12 @@ function appendEvent(
  *
  * Pairing: when the input
  * carries an `exec` AND the apply-scoped `pairing` store, the successful
- * record registers the agent-namespaced key `${sessionId}\u0000${callId}` →
- * dispatchRef (the full dispatch identity), so a later
- * `tools/post-execute` for the same call can settle with the SAME identity
- * (the session id namespaces the key — a raw callId is
- * not globally unique across sessions in one process). The pairing registers
+ * record registers the session- and tool-namespaced key
+ * `${sessionId}\u0000${toolName}\u0000${callId}` → dispatchRef (the full
+ * dispatch identity), so a later `tools/post-execute` for the same call can
+ * settle with the SAME identity (the session id namespaces the key — a raw
+ * callId is not globally unique across sessions in one process — and the tool
+ * name keeps two channels' per-message ids from colliding). The pairing registers
  * only after the ledger append SUCCEEDED — a failed record never pairs to a
  * phantom dispatch. An exec-less record (host-hook path) has no callId → no
  * pairing. The pairing sub-path has its OWN catch scope: a `Map.set` throw must not log "record
@@ -713,12 +790,20 @@ function appendEvent(
  * pairing the dispatch's call-window catalog candidate is RESERVED (the
  * first RAW-label slot under the live parent Session, when the exec carries
  * one) — the child-identity join's step 1; admission is all-or-nothing and
- * never affects the dispatch, the pairing, or a later settle.
+ * never affects the dispatch, the pairing, or a later settle. TEAM carriers
+ * are the ONE exception to both the unconditional record and the catalog
+ * reservation: with the experimental team service absent they record nothing
+ * at all, and when present they never reserve a call-window slot (the
+ * `spawn_teammate` member identity comes from the roster read, not the raw
+ * label), so a team call cannot permanently consume one of the 500 slots.
  * @param input - the harness dir; the dispatching exec's agent id; the
  * Assignment text; the gate's violations; the hard-enforcement resolution;
  * the apply-scoped pairing store (the adapter passes its own; direct callers
  * may omit it); the carrying session's `hint` (the adapter derives it — this
- * module never reads the picker store).
+ * module never reads the picker store); whether the optional team service is
+ * mounted; the tool names the settle seam can pair (the adapter passes its
+ * Config-resolved set; omitted → the documented defaults, so an unknown
+ * exec-bound name still records its dispatch but leaves NO pairing entry).
  */
 export function recordDispatch(input: {
   harnessDir: string
@@ -731,6 +816,20 @@ export function recordDispatch(input: {
   /** ACTIVE execution graph directory target resolved by the asynchronous host gate. */
   resolvedWorkflowDir: string
   selectedGeneration: DshSelectedGeneration
+  /**
+   * Whether the experimental Agent Teams service is mounted. Team carriers
+   * record NOTHING while this is not `true` (the plugin keeps working on a
+   * composition that mounts no team bundle); non-team carriers ignore it.
+   */
+  teamPresent?: boolean
+  /**
+   * The tool names the settle listener can pair (Config `dispatchTools` plus
+   * the fixed team carriers). An exec-bound record whose name is not in this
+   * set still writes its dispatch row but registers NO pairing entry and NO
+   * catalog candidate — a name the settle seam declines can never leak
+   * in-memory state.
+   */
+  pairingTools?: readonly string[]
 }): void {
   try {
     // v3 write path: the ACTIVE workflow dir BOUND to this session (root v2
@@ -743,6 +842,12 @@ export function recordDispatch(input: {
       log('warn', 'agent-flow dispatch record refused — the ACTIVE workflow target was omitted; resolve it from the ACTIVE execution workflow source before recording')
       return
     }
+    const toolName = input.exec !== undefined ? execToolName(input.exec) : undefined
+    const teamTool = toolName !== undefined && isTeamDispatchToolName(toolName)
+    // Team channel absent → the team tools record nothing (the experimental
+    // service is the ONLY source of member identity the ledger can pair on;
+    // without it a team row would be an unpaired, unexplained dispatch).
+    if (teamTool && input.teamPresent !== true) return
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)
     const planId = planIdOf(header)
@@ -775,9 +880,16 @@ export function recordDispatch(input: {
     } catch (error) {
       log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
     }
-    // callId pairing — only for exec-bound records after a successful database append.
+    // callId pairing — only for exec-bound records after a successful database append,
+    // and only for a tool name the settle seam can actually resolve. A name the
+    // seam declines (an unknown/custom name) records its dispatch row but
+    // registers NO pairing entry — holding a ref nothing will ever consume would
+    // leak the map for the apply lifetime (and a later same-id call could
+    // mis-settle it).
     try {
-      if (input.pairing !== undefined && input.exec !== undefined) {
+      const pairingTools = input.pairingTools ?? [...DEFAULT_DISPATCH_TOOLS, ...Object.keys(TEAM_DISPATCH_TOOLS)]
+      const pairEligible = toolName !== undefined && pairingTools.includes(toolName)
+      if (input.pairing !== undefined && input.exec !== undefined && pairEligible) {
         const key = callPairingKey(input.exec)
         if (key !== undefined) {
           const ref: AgentFlowDispatchRef = {
@@ -796,11 +908,16 @@ export function recordDispatch(input: {
           // and paired, so the ref exists to own the slot. Own catch scope —
           // a candidate-admission throw must not claim the (already
           // successful) pairing registration failed, and a missing live
-          // Session / label simply admits no candidate.
-          try {
-            reserveCatalogCandidate(input.pairing, ref, input.exec)
-          } catch (error) {
-            log('error', `catalog candidate reservation failed (contained — the dispatch record and pairing stand): ${errorMessage(error)}`)
+          // Session / label simply admits no candidate. TEAM carriers are
+          // excluded: their member identity comes from the roster read and
+          // their post-execute branch never marks a call-window candidate, so
+          // a reservation would sit inert and permanently consume a slot.
+          if (!teamTool) {
+            try {
+              reserveCatalogCandidate(input.pairing, ref, input.exec)
+            } catch (error) {
+              log('error', `catalog candidate reservation failed (contained — the dispatch record and pairing stand): ${errorMessage(error)}`)
+            }
           }
         }
       }
@@ -1381,12 +1498,196 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
 }
 
 /**
+ * The team member-child pairing map, created LAZILY on the apply-scoped
+ * pairing store (existing pairing constructors keep working unchanged). It is
+ * consumed by the `subagent/end` settlement of the member's initial turn and
+ * bounded by {@link AGENT_FLOW_TEAM_CHILD_CAPACITY}.
+ */
+function teamChildPairs(pairing: AgentFlowPairing): Map<string, AgentFlowDispatchRef> {
+  return (pairing.teamDispatchByChildId ??= new Map())
+}
+
+/**
+ * Record one EXPLICIT unresolved-continuation row for a team dispatch whose
+ * completion cannot be paired. This is a NONTERMINAL ledger row (kind
+ * `continuation`, state `unresolved`): it carries the paired dispatch identity
+ * so a reader can attribute it, and it is NEVER a settle — no outcome, no
+ * verdict, no fabricated completion. `reason` is display text and therefore
+ * normalized (ASCII control chars stripped) and capped at the ledger label
+ * bound. Contained: a failing append logs and never escapes the tool seam.
+ */
+function recordContinuationUnresolved(ref: AgentFlowDispatchRef, reason: string): void {
+  try {
+    const normalized = truncateLedgerField(normalizeWorkflowName(reason), WORKFLOW_LEDGER_MAX_LABEL_LENGTH)
+    const displayReason = normalized === '' ? 'unresolved continuation' : normalized
+    const event: AgentFlowContinuationEvent = {
+      v: 1,
+      ts: Date.now(),
+      kind: 'continuation',
+      ...(ref.agent !== undefined && ref.agent.trim() !== '' ? { agent: ref.agent } : {}),
+      role: ref.role,
+      ...(ref.planId !== undefined && ref.planId !== '' ? { planId: ref.planId } : {}),
+      ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
+      state: 'unresolved',
+      reason: displayReason,
+    }
+    if (appendEvent(ref.workflowId, event, callIdentity('continuation', ref.agent, ref.callId), ref.harnessDir, ref.selectedGeneration)) {
+      try {
+        invalidator?.(ref.harnessDir)
+      } catch (error) {
+        log('error', `catalog invalidation failed (contained): ${errorMessage(error)}`)
+      }
+      log('warn', `team dispatch continuation unresolved (${ref.agent ?? 'no session'}): ${displayReason} — no settle is fabricated`)
+    }
+  } catch (error) {
+    log('error', `continuation record failed (contained): ${errorMessage(error)}`)
+  }
+}
+
+/**
+ * Pair one `spawn_teammate` dispatch with the member child `SessionId` the
+ * roster read resolved. At capacity the OLDEST pairing is evicted with an
+ * explicit unresolved-continuation row for its dispatch — a bounded map never
+ * drops a pairing silently. The ref also carries the observed child id so the
+ * eventual settle names the child.
+ */
+function pairTeamMemberChild(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
+  const map = teamChildPairs(pairing)
+  if (map.has(childId)) return // first pairing wins; a later message re-waking the member adds nothing
+  if (map.size >= AGENT_FLOW_TEAM_CHILD_CAPACITY) {
+    const oldestKey = map.keys().next().value
+    if (oldestKey !== undefined) {
+      const evicted = map.get(oldestKey)
+      map.delete(oldestKey)
+      if (evicted !== undefined) {
+        recordContinuationUnresolved(
+          evicted,
+          `team member child pairing capacity reached (${String(AGENT_FLOW_TEAM_CHILD_CAPACITY)} slots) — the oldest pairing was evicted before its member turn completed`,
+        )
+      }
+    }
+  }
+  map.set(childId, ref)
+  ref.childId = childId
+}
+
+/**
+ * The Agent Teams half of the `tools/post-execute` seam. A team carrier that
+ * produced a dispatch record is NEVER settled at tool return: the spawn's
+ * return only means the member was CREATED (upstream `spawn_teammate` returns
+ * as soon as the member is durable `active`, without waiting for its turn),
+ * `send_message` only means the target inbox ACCEPTED the message, and the
+ * task-board writes are not delegation completions at all. The branch:
+ *
+ * - consumes the agent-namespaced call key in EVERY path (the map holds only
+ *   in-flight calls), so team calls cannot grow it without bound and a later
+ *   same-id call from another channel can never settle this ref (the key also
+ *   carries the tool name);
+ * - a failed call (the upstream tool throws on creation failure) settles
+ *   `error` — the member is provably gone;
+ * - a `spawn_teammate` success whose member is resolvable in the roster pairs
+ *   the member child id for the member's `subagent/end` settlement;
+ * - every other shape records the explicit unresolved continuation instead of
+ *   a fabricated completion.
+ *
+ * Fully contained — the post-execute waterfall must always reach `next()`.
+ */
+function handleTeamPostExecute(input: {
+  ctx: TeamServiceContext
+  pairing: AgentFlowPairing
+  exec: unknown
+  name: string
+  result: unknown
+}): void {
+  const { pairing, name } = input
+  const key = callPairingKey(input.exec)
+  if (key === undefined) return
+  const dispatchRef = pairing.dispatchByCallId.get(key)
+  try {
+    if (dispatchRef === undefined) return
+    const resultRec = asRecord(input.result)
+    if (resultRec === undefined) {
+      recordContinuationUnresolved(dispatchRef, `the ${name} call returned no result payload — its continuation cannot be paired`)
+      return
+    }
+    if (resultRec.isError === true || resultRec.error !== undefined) {
+      // The call itself failed (a failed spawn leaves a durable `failed`
+      // member upstream): a REAL terminal, not a fabricated `ok`.
+      recordSettleWithRef(dispatchRef, 'error', undefined)
+      return
+    }
+    const value = resultRec.value
+    if (name !== 'spawn_teammate') {
+      recordContinuationUnresolved(
+        dispatchRef,
+        `the ${name} carrier completed without an attributable member turn — inbox acceptance and task-board writes are not delegation completions`,
+      )
+      return
+    }
+    if (memberFailedOfSpawnResult(value)) {
+      recordSettleWithRef(dispatchRef, 'error', undefined)
+      return
+    }
+    const memberName = memberNameOfSpawnResult(value)
+    if (memberName === undefined) {
+      recordContinuationUnresolved(dispatchRef, 'spawn_teammate returned no member name — the member child session cannot be resolved')
+      return
+    }
+    const childId = memberIdOfName(teamRosterOf(input.ctx), asRecord(input.exec)?.agent, memberName)
+    if (childId === undefined) {
+      recordContinuationUnresolved(
+        dispatchRef,
+        `team member "${memberName}" is not resolvable in the live roster — its child session and turn completion are unknown`,
+      )
+      return
+    }
+    pairTeamMemberChild(pairing, childId, dispatchRef)
+  } finally {
+    // The call is CONSUMED on every team path — never leave a team ref in the
+    // call map (unbounded growth / false cross-call settle).
+    pairing.dispatchByCallId.delete(key)
+  }
+}
+
+/**
+ * The member-turn settlement half: `subagent/end` for a paired member child
+ * completes the dispatch that spawned it. A teammate is an ordinary
+ * continuable subagent child whose initial turn settlement carries the child
+ * id and the terminal stop reason, so this row is a REAL completion (mapped
+ * outcome) rather than a tool-return guess. An unrecognized stop reason
+ * records the explicit unresolved continuation — never a guessed outcome.
+ * Contained: a throwing handler never escapes the session/tool event.
+ */
+function handleTeamChildSettled(pairing: AgentFlowPairing, info: unknown): void {
+  const rec = asRecord(info)
+  const childId = rec?.id
+  if (typeof childId !== 'string' || childId === '') return
+  const map = pairing.teamDispatchByChildId
+  if (map === undefined) return
+  const ref = map.get(childId)
+  if (ref === undefined) return
+  // Consumed once: the spawn's initial turn is the dispatch's continuation; a
+  // later re-woken turn of the same member is a new (unrecorded) message.
+  map.delete(childId)
+  const outcome = settleOutcomeOfStopReason(rec?.stopReason)
+  if (outcome === undefined) {
+    recordContinuationUnresolved(
+      ref,
+      `subagent/end for child ${childId} carried an unrecognized stop reason (${String(rec?.stopReason)}) — no settle is fabricated`,
+    )
+    return
+  }
+  recordSettleWithRef(ref, outcome, undefined, childId)
+}
+
+/**
  * The `tools/post-execute` settle pairing : the VERIFIED
  * dsh-tools registry dispatches this seam for every tool call
  * (`runPostExecute` → `postExecute`, upstream source), so the listener only
  * decides whether a completion signal exists for the PAIRED dispatch:
  *
- * - non-dispatch tool (`exec.name` ∉ Config `dispatchTools`) → nothing;
+ * - non-dispatch tool (`exec.name` ∉ Config `dispatchTools` and ∉ the fixed
+ *   {@link TEAM_DISPATCH_TOOLS} carriers) → nothing;
  * - dispatch tool whose agent-namespaced call key
  *   (the exact call identity) is not in the pairing
  *   store (HMR reset, host-hook dispatch, non-gate path) → nothing (warned
@@ -1429,14 +1730,28 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
  * without calling `next` bails the chain and breaks every tool call. A
  * throwing record never propagates.
  *
+ * - a TEAM carrier ({@link TEAM_DISPATCH_TOOLS}) → the team branch
+ *   ({@link handleTeamPostExecute}): never settled at tool return; the
+ *   `spawn_teammate` member is paired to its child session and settled by the
+ *   member's `subagent/end`, every other shape records an explicit unresolved
+ *   continuation, and the call key is always consumed.
+ *
+ * The SAME registration also observes `subagent/end` (the verified
+ * continuable-child settlement edge) for the member-child pairing: a
+ * `spawn_teammate` dispatch completes when its member's initial turn settles,
+ * not when the creation call returns. An untagged registration at the plugin
+ * apply observes every scoped child edge upstream.
+ *
  * Cordis typing note: `ctx.on` only accepts declared event keys and
- * `tools/post-execute` is undeclared — the registration casts through the
- * runtime-accepted event-name string (the event bus dispatches any name).
- * @param ctx - registrant context (fiber disposal unwinds the listener).
+ * `tools/post-execute` / `subagent/end` are not declared by this package's
+ * imports — the registrations cast through the runtime-accepted event-name
+ * string (the event bus dispatches any name).
+ * @param ctx - registrant context (fiber disposal unwinds the listeners).
  * @param config - the plugin Config (dispatch-tool matching).
  * @param pairing - the apply-scoped pairing store (dispatchByCallId read,
  * dispatchByJobId written by the background branch, catalogBySession
- * advanced/retired here).
+ * advanced/retired here, teamDispatchByChildId written/consumed by the team
+ * branch).
  */
 export function registerSettleListener(ctx: Context, config: Config, pairing: AgentFlowPairing): void {
   const dispatchTools = config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]
@@ -1445,7 +1760,13 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
     try {
       const execRec = asRecord(exec)
       const name = execRec === undefined ? undefined : execRec.name
-      if (typeof name !== 'string' || !dispatchTools.includes(name)) {
+      if (typeof name === 'string' && isTeamDispatchToolName(name)) {
+        // Team carrier: its tool return is NOT a completion (member creation /
+        // inbox acceptance / task-board write). The branch consumes the call
+        // key on every path and either pairs the member child or records the
+        // explicit unresolved continuation.
+        handleTeamPostExecute({ ctx, pairing, exec, name, result })
+      } else if (typeof name !== 'string' || !dispatchTools.includes(name)) {
         // Non-dispatch tool call → no record (the waterfall still delegates below).
       } else {
         // Agent-namespaced call key : a raw callId is not
@@ -1543,6 +1864,18 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
     return next === undefined ? undefined : next()
   }
   ctx.on(SETTLE_SEAM as never, listener as never)
+  // The member-turn settlement edge (verified `@deepseek-ai/dsh-subagent`
+  // event): a team member is a continuable child, so its initial turn's
+  // terminal settlement carries the child id + stop reason. Only a child that
+  // a `spawn_teammate` dispatch paired is consumed here — every other
+  // subagent end is ignored (`teamDispatchByChildId` has no entry).
+  ctx.on('subagent/end' as never, ((info: unknown): void => {
+    try {
+      handleTeamChildSettled(pairing, info)
+    } catch (error) {
+      log('error', `team member settle failed (contained): ${errorMessage(error)}`)
+    }
+  }) as never)
   // The pairing trace is emitted at most ONCE per logger binding (≈ once per
   // apply): repeated registrations (tests, HMR) must not re-spam.
   if (!settleNoteLogged) {

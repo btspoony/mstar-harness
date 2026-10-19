@@ -21768,7 +21768,7 @@ function detectHost(signals) {
     return "opencode";
   if (s.has("task_agent_batch") || s.has("ask") || s.has("hub"))
     return "omp";
-  if (s.has("subagent"))
+  if (s.has("subagent") || s.has("spawn_teammate") || s.has("team_task_create"))
     return "dsh";
   if (s.has("AgentSwarm"))
     return "kimi";

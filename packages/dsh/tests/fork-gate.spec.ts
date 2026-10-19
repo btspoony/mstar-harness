@@ -300,7 +300,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
         selectedGeneration: selectedGenerationFor(harnessDir),
         pairing,
       })
-      expect(pairing.dispatchByCallId.get('sess-1\u0000fork-c1')).toBeDefined()
+      expect(pairing.dispatchByCallId.get('sess-1\u0000subagent_fork\u0000fork-c1')).toBeDefined()
 
       // The fork post-execute settles with the PAIRED identity — the
       // listener's DEFAULT dispatchTools include `subagent_fork`.
