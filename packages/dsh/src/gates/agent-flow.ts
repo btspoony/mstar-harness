@@ -70,10 +70,12 @@ export const AGENT_FLOW_DEFAULT_LIMIT = 50
 /** Bounded in-memory call-window candidate slots per parent Session. */
 export const AGENT_FLOW_CATALOG_SLOT_CAPACITY = 500
 /**
- * Bounded in-memory TEAM member-child pairing slots (apply-scoped, like the
- * call/job pairing maps). A `spawn_teammate` dispatch is paired to its
- * member's child `SessionId` and consumed by the member's `subagent/end`
- * settlement; a member whose settlement never arrives (service disposal, HMR,
+ * Bounded in-memory child pairing slots (apply-scoped, like the call/job
+ * pairing maps) — keyed by the child `SessionId` and shared by the TEAM
+ * spawn pairing and the subagent activation pairing (one settlement
+ * channel). A `spawn_teammate` dispatch is paired to its member's child
+ * `SessionId` and consumed by the member's `subagent/end` settlement; a
+ * member whose settlement never arrives (service disposal, HMR,
  * an upstream shape change) must not grow the map forever. At capacity the
  * OLDEST entry is evicted with an explicit unresolved-continuation row for
  * that dispatch, so the bound never silently drops a pairing.
@@ -530,12 +532,13 @@ export interface AgentFlowPairing {
   /** Registry background-job id (`JobSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordJobSettle`). */
   dispatchByJobId: Map<string, AgentFlowDispatchRef>
   /**
-   * Team member child `SessionId` → the `spawn_teammate` dispatch that created
-   * it (populated by the team post-execute branch once the roster read
-   * resolves the model-facing member name; consumed by the member's
-   * `subagent/end` settlement, or evicted at
-   * {@link AGENT_FLOW_TEAM_CHILD_CAPACITY}). Optional so existing pairing
-   * constructors stay valid; the team branch creates it lazily.
+   * Child `SessionId` → the dispatch that started it. Populated by the team
+   * post-execute branch once the roster read resolves the model-facing member
+   * name (`spawn_teammate`), and by the subagent activation branch for the
+   * `{ kind: 'activation', subagentId }` return (started, not settled);
+   * consumed by the child's `subagent/end` settlement, or evicted at
+   * {@link AGENT_FLOW_TEAM_CHILD_CAPACITY}. Optional so existing pairing
+   * constructors stay valid; both branches create it lazily.
    */
   teamDispatchByChildId?: Map<string, AgentFlowDispatchRef>
   /**
@@ -1612,9 +1615,9 @@ function recordSettleWithRef(ref: AgentFlowDispatchRef, outcome: SettleOutcome, 
 }
 
 /**
- * The team member-child pairing map, created LAZILY on the apply-scoped
- * pairing store (existing pairing constructors keep working unchanged). It is
- * consumed by the `subagent/end` settlement of the member's initial turn and
+ * The child pairing map (team spawn + subagent activation), created LAZILY on
+ * the apply-scoped pairing store (existing pairing constructors keep working
+ * unchanged). It is consumed by the child's `subagent/end` settlement and
  * bounded by {@link AGENT_FLOW_TEAM_CHILD_CAPACITY}.
  */
 function teamChildPairs(pairing: AgentFlowPairing): Map<string, AgentFlowDispatchRef> {
@@ -1778,6 +1781,14 @@ function consumeBufferedTeamEnd(pairing: AgentFlowPairing, childId: string): { s
  * evicted with an explicit unresolved-continuation row for its dispatch — a
  * bounded map never drops a pairing silently. The ref also carries the
  * observed child id so the eventual settle names the child.
+ *
+ * Also the pairing producer for the `subagent` ACTIVATION result: the
+ * installed tool returns `{ kind: 'activation', subagentId }` — started, not
+ * settled — so the SAME keyed-by-child map and `subagent/end` settlement
+ * pair that dispatch too (one settlement channel, two pairing producers). An
+ * activation child is never roster-buffered: its pairing write IS the
+ * synchronous tool-return seam, so the early-end reconcile stays a
+ * team-only path.
  */
 function pairTeamMemberChild(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
   const buffered = consumeBufferedTeamEnd(pairing, childId)
@@ -1946,6 +1957,12 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
  * - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
  *   no settle (documented limit — the child owns its turns), and NOTHING is
  *   copied from its value onto any row;
+ * - `{ kind: 'activation', subagentId }` (the installed dsh `subagent`
+ *   return — STARTED, not settled) → no settle at tool return; the dispatch
+ *   stays open and is paired to the returned child id, settled later by the
+ *   child's `subagent/end` through the SAME keyed-by-child pairing and
+ *   outcome mapping the team spawn uses; a result without a usable
+ *   `subagentId` → nothing mappable (no settle, no pairing);
  * - any other successful value (foreground `{ kind: 'foreground', … }`
  *   included) → settle `ok` (the call completed synchronously).
  * Child identity: a returned foreground `runId` becomes the settle's
@@ -1959,8 +1976,9 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
  * Catalog candidate (steps 2–3 of the child-identity join): the SAME branch
  * decides the dispatch's reserved call-window catalog candidate — a valid
  * background result makes it eligible expecting the job's `one-shot` catalog
- * (after the job pairing + `taskRef` are in place), a valid continuable
- * result makes it eligible for exactly the returned `subagentId`, and every
+ * (after the job pairing + `taskRef` are in place), a valid continuable OR
+ * activation result makes it eligible for exactly the returned `subagentId`,
+ * and every
  * other outcome (other success / foreground, tool error, missing result
  * payload, malformed result, invalid background job id) retires it to its
  * tombstone. Eligibility then runs the catch-up walk over
@@ -2077,6 +2095,26 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
               if (subagentId !== undefined) {
                 advanceCatalogCandidate(pairing, dispatchRef, { kind: 'continuable', subagentId })
               } else {
+                retireCatalogCandidate(pairing, dispatchRef)
+              }
+            } else if (value !== undefined && value.kind === 'activation') {
+              // Activation child (the installed dsh `subagent` shape
+              // `{ kind: 'activation', subagentId }`): the tool return means
+              // STARTED, not settled — the child is still running. NO settle
+              // at tool return (the false-settle defect): the dispatch stays
+              // open and is paired to the returned child id, settled later by
+              // the child's `subagent/end` through the SAME keyed-by-child
+              // pairing and outcome mapping the team spawn uses (one
+              // settlement channel — no second one is invented here). The
+              // identity join mirrors `continuable`: the catalog candidate is
+              // eligible for exactly the returned subagentId.
+              const subagentId = optionalLedgerId(value.subagentId)
+              if (subagentId !== undefined) {
+                advanceCatalogCandidate(pairing, dispatchRef, { kind: 'continuable', subagentId })
+                pairTeamMemberChild(pairing, subagentId, dispatchRef)
+              } else {
+                // No usable child identity → nothing mappable: no settle, no
+                // pairing (never a fabricated ok).
                 retireCatalogCandidate(pairing, dispatchRef)
               }
             } else {
