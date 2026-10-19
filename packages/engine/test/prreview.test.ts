@@ -1139,6 +1139,28 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
     expect(codes(validateMstarReviewV1(nonString))).toContain("review.tally-malformed");
   });
 
+  test("tally-only declaredScopes is not an envelope key — a stray copy is ignored, never carried", () => {
+    // `mstar pr-review tally` echoes a settled run's truncated seat scopes as
+    // `declaredScopes` (packages/commands/src/families/pr-review.ts). It is a
+    // tally-output fact feeding the report's `- unverified:` / `- notes:`; the
+    // envelope has no such key. This pins the exposure: the validator ignores
+    // unknown keys, so a copy persists silently and reads as nothing. If a
+    // future change makes the name meaningful (refusal or carry), this flips.
+    const topLevel = reviewDoc({ declaredScopes: ["docs"] });
+    const inTally = reviewDoc();
+    (inTally.tally as Record<string, unknown>).declaredScopes = ["docs"];
+
+    for (const doc of [topLevel, inTally]) {
+      const gate = validateMstarReviewV1(doc);
+      expect(gate.ok).toBe(true);
+      expect(gate.violations).toEqual([]);
+    }
+
+    // The documented contract in pr-review.md: not part of mstar.review/v1.
+    const synthesized = synthesizeReview({ findings: [] });
+    expect(Object.keys(synthesized).sort()).toEqual(["findings", "schema", "summary_md", "tally", "verdict"]);
+  });
+
   test("genuine computePrTally output round-trips for every check-table fixture (greptile P1)", () => {
     for (const row of CHECK_TABLE) {
       const direct = computePrTally(row.input);
