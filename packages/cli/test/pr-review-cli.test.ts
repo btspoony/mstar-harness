@@ -90,11 +90,14 @@ function withTempDir(fn: (dir: string) => void): void {
 }
 
 describe("mstar pr-review tally", () => {
+  /** The three required run facts of a run that covered its plan and read its diff. */
+  const settled = ["--required-domains", "persist", "--opened-domains", "persist", "--diff-basis", "readable"];
+
   test("happy path prints the two-line chat header + structured tally (exit 0)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, JSON.stringify([{ mergeClass: "should-fix" }, { mergeClass: "nit" }, { mergeClass: "nit" }]));
-      const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", "1"]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unverified", "1"]);
       expect(result.exitCode).toBe(0);
       // § Display contract verbatim two-liner: should-fix 12 + nit (2+1) + unverified 5 = 20 → 80.
       const resultData = data(result);
@@ -114,6 +117,7 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
+        ...settled,
         "--unmet-ac-unsafe",
         "1",
         "--unmet-ac-safe",
@@ -132,7 +136,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass":"blocker"}]');
-      const result = runCli(["pr-review", "tally", "--findings", findings]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
     });
@@ -140,7 +144,7 @@ describe("mstar pr-review tally", () => {
 
   test("missing findings file is a usage refusal (exit 2)", () => {
     withTempDir((dir) => {
-      const result = runCli(["pr-review", "tally", "--findings", join(dir, "absent.json")]);
+      const result = runCli(["pr-review", "tally", "--findings", join(dir, "absent.json"), ...settled]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(message(result)).toContain("not found");
@@ -151,7 +155,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "{");
-      const result = runCli(["pr-review", "tally", "--findings", findings]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(message(result)).toContain("findings file must contain valid JSON");
@@ -162,7 +166,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '{"mergeClass":"must-fix"}');
-      const result = runCli(["pr-review", "tally", "--findings", findings]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("must be a JSON array");
     });
@@ -172,7 +176,7 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
-      const result = runCli(["pr-review", "tally", "--findings", findings, "--unverified", raw]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unverified", raw]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("--unverified must be a non-negative integer");
     });
@@ -182,15 +186,15 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
-      const result = runCli(["pr-review", "tally", "--findings", findings, "--unmet-ac-unsafe", "51"]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unmet-ac-unsafe", "51"]);
       expect(result.exitCode).toBe(2);
       expect(message(result)).toContain("must be a non-negative integer no greater than 50");
     });
   });
 
   test.each([" ", "budget spent\nsecurity domain still unopened"])(
-    "a blank or multi-line --incomplete-reason (%p) is refused as usage (exit 2), not an engine failure",
-    (reason) => {
+    "a blank or multi-line --stopped (%p) is refused as usage (exit 2), not an engine failure",
+    (stopped) => {
       withTempDir((dir) => {
         const findings = join(dir, "findings.json");
         writeFileSync(findings, "[]");
@@ -199,21 +203,20 @@ describe("mstar pr-review tally", () => {
           "tally",
           "--findings",
           findings,
-          "--incomplete-reason",
-          reason,
-          "--unscanned",
-          "src/auth.ts",
+          ...settled,
+          "--stopped",
+          stopped,
         ]);
         expect(result.exitCode).toBe(2);
         expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-        expect(message(result)).toContain("single line");
+        expect(message(result)).toContain("--stopped must be a single line of non-blank text");
       });
     },
   );
 
-  test.each(["src/auth.ts\npackages/engine", "src/auth.ts,,packages/engine"])(
-    "a blank or multi-line --unscanned entry (%p) is refused as usage (exit 2), not an engine failure",
-    (scope) => {
+  test.each(["persist,,security", "persist\nsecurity"])(
+    "a blank or multi-line --required-domains entry (%p) is refused as usage (exit 2), not an engine failure",
+    (domains) => {
       withTempDir((dir) => {
         const findings = join(dir, "findings.json");
         writeFileSync(findings, "[]");
@@ -222,19 +225,21 @@ describe("mstar pr-review tally", () => {
           "tally",
           "--findings",
           findings,
-          "--incomplete-reason",
-          "budget spent before the security domain",
-          "--unscanned",
-          scope,
+          "--required-domains",
+          domains,
+          "--opened-domains",
+          "persist",
+          "--diff-basis",
+          "readable",
         ]);
         expect(result.exitCode).toBe(2);
         expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-        expect(message(result)).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
+        expect(message(result)).toContain("--required-domains must be a comma-separated list of single-line non-blank entries");
       });
     },
   );
 
-  test("both invalid incomplete flags are refused in one response (aggregated validation)", () => {
+  test("both an invalid run fact and an invalid count are refused in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
@@ -243,44 +248,43 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
+        "--required-domains",
+        "persist",
+        "--opened-domains",
+        "persist,,security",
+        "--diff-basis",
+        "readable",
+        "--stopped",
         " ",
-        "--unscanned",
-        "src/a.ts,,src/b.ts",
-      ]);
-      expect(result.exitCode).toBe(2);
-      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      const body = message(result);
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
-      expect(body).toContain("--unscanned must be a comma-separated list of single-line non-blank entries");
-    });
-  });
-
-  test("a new-flag error and a count error are refused in one response (aggregated validation)", () => {
-    withTempDir((dir) => {
-      const findings = join(dir, "findings.json");
-      writeFileSync(findings, "[]");
-      const result = runCli([
-        "pr-review",
-        "tally",
-        "--findings",
-        findings,
-        "--incomplete-reason",
-        " ",
-        "--unscanned",
-        "src/auth.ts",
         "--unverified",
         "x",
       ]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--stopped must be a single line of non-blank text");
+      expect(body).toContain("--opened-domains must be a comma-separated list of single-line non-blank entries");
       expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
     });
   });
 
-  test("a findings-payload error and a blank incomplete flag are refused in one response (aggregated validation)", () => {
+  test.each([
+    ["--required-domains", ["--opened-domains", "persist", "--diff-basis", "readable"]],
+    ["--opened-domains", ["--required-domains", "persist", "--diff-basis", "readable"]],
+    ["--diff-basis", ["--required-domains", "persist", "--opened-domains", "persist"]],
+  ])("an omitted %s is refused instead of inferred (fail-closed)", (flag, remaining) => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...remaining]);
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      // Admission refuses the omission before the family sees it; no default stands in.
+      expect(message(result)).toContain(`Rejected ${flag}: expected present; received undefined`);
+    });
+  });
+
+  test("a findings-payload error and a blank run fact are refused in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[{}]");
@@ -289,20 +293,19 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
+        ...settled,
+        "--stopped",
         " ",
-        "--unscanned",
-        "src/auth.ts",
       ]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
       expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | nit");
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--stopped must be a single line of non-blank text");
     });
   });
 
-  test("a malformed findings file and a blank incomplete flag are refused in one response (aggregated validation)", () => {
+  test("a malformed findings file and a blank run fact are refused in one response (aggregated validation)", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass": "must-fix",}');
@@ -311,20 +314,19 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
+        ...settled,
+        "--stopped",
         " ",
-        "--unscanned",
-        "src/auth.ts",
       ]);
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       const body = message(result);
       expect(body).toContain("findings file must contain valid JSON");
-      expect(body).toContain("--incomplete-reason must be a single line of non-blank text");
+      expect(body).toContain("--stopped must be a single line of non-blank text");
     });
   });
 
-  test("a lone --unscanned none declares the engine's empty scope", () => {
+  test("a stopped run with full coverage declares the empty scope", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, '[{"mergeClass":"must-fix"},{"mergeClass":"nit"}]');
@@ -333,14 +335,16 @@ describe("mstar pr-review tally", () => {
         "tally",
         "--findings",
         findings,
-        "--incomplete-reason",
-        "budget spent before the security domain",
-        "--unscanned",
-        "none",
+        ...settled,
+        "--stopped",
+        "operator cancelled the run",
       ]);
       expect(result.exitCode).toBe(0);
       const resultData = data(result);
-      expect(resultData.incomplete).toEqual({ reason: "budget spent before the security domain", unscanned: [] });
+      expect(resultData.incomplete).toEqual({
+        reason: "the run stopped before synthesis \u2014 operator cancelled the run",
+        unscanned: [],
+      });
       expect(resultData.chatHeader).toContain("unscanned: none");
     });
   });
