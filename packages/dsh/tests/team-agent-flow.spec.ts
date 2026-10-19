@@ -606,3 +606,119 @@ describe('team agent flow — the bounded end buffer reconciles a turn that ende
     expect(ledgerRows(harnessDir)).toEqual([])
   })
 })
+
+/* ------------------------------ carried edge paths pinned (I-000738) ------------------------------ */
+
+describe('team agent flow — carried edge paths pinned (I-000738)', () => {
+  it('records the explicit unresolved continuation when the team carrier returns no result payload (no settle)', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-1', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = spawnExec('call-nopayload')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    // The post-execute result is not a record at all: no member can be
+    // resolved from it, so the dispatch gets the EXPLICIT unresolved
+    // continuation naming the reason — never a settle, never a silent drop.
+    emit(ctx, SETTLE_SEAM, exec, undefined)
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.some((row) => row.kind === 'settle')).toBe(false)
+    expect(rows.filter((row) => row.kind === 'continuation')).toEqual([
+      expect.objectContaining({
+        kind: 'continuation',
+        state: 'unresolved',
+        role: 'fullstack-dev',
+        reason: expect.stringContaining('spawn_teammate call returned no result payload'),
+      }),
+    ])
+    // The projection lists the unresolved continuation latest-first, carrying
+    // the state and display reason (same wire shape as the roster-orphan row).
+    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
+      events: { kind: string; state?: string; reason?: string }[]
+    } | null
+    expect(view?.events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
+    expect(view?.events.find((event) => event.kind === 'continuation')).toMatchObject({
+      state: 'unresolved',
+      reason: expect.stringContaining('returned no result payload'),
+    })
+  })
+
+  it('reconciles the end-to-end orphan race in one sequence: buffered, no settle, then settled from the buffer at pairing', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-orphan', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = spawnExec('call-orphan-e2e')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    // 1. The member's turn ends BEFORE the spawn post-execute: buffered only,
+    //    and the window holds dispatch-only rows (no settle yet).
+    emit(ctx, 'subagent/end', { id: 'child-orphan', stopReason: 'completed' }, leadAgent)
+    expect(pairing.teamEndBuffer?.get('child-orphan')).toBe('completed')
+    expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['dispatch'])
+    // 2. The pairing write lands: reconcile-first consumes the buffer and
+    //    settles the mapped outcome as the window's only extra row.
+    emit(ctx, SETTLE_SEAM, exec, spawnResult())
+    // The durable window reads latest-first, so the settle precedes its dispatch.
+    expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['settle', 'dispatch'])
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    expect(pairing.teamEndBuffer?.size).toBe(0)
+    const rows = ledgerRows(harnessDir)
+    expect(rows.filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-orphan', role: 'fullstack-dev' }),
+    ])
+    expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
+    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
+      events: { kind: string; outcome?: string; childId?: string }[]
+    } | null
+    expect(view?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
+    expect(view?.events.find((event) => event.kind === 'settle')).toMatchObject({ outcome: 'ok', childId: 'child-orphan' })
+  })
+
+  it('keeps the first pairing on a duplicate child id: the second dispatch is consumed silently (pinned as-is)', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-dup', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const first = spawnExec('call-dup-a')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec: first, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emit(ctx, SETTLE_SEAM, first, spawnResult())
+    expect(pairing.teamDispatchByChildId?.get('child-dup')?.callId).toBe('call-dup-a')
+    // The second spawn resolves the SAME child id: the early return keeps the
+    // first pairing untouched. PINNED AS-IS: the second dispatch records no
+    // continuation row either (the code documents "first pairing wins; a later
+    // message re-waking the member adds nothing") — the carried minor assumed
+    // an explicit unresolved continuation for the second dispatch, so this
+    // test pins the documented current behavior for PM to revisit.
+    const second = spawnExec('call-dup-b')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec: second, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emit(ctx, SETTLE_SEAM, second, spawnResult())
+    expect(state(pairing)).toEqual({ call: 0, child: 1 })
+    expect(pairing.teamDispatchByChildId?.get('child-dup')?.callId).toBe('call-dup-a')
+    expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['dispatch', 'dispatch'])
+    // The first pairing still owns the settlement; the duplicate never settles.
+    emit(ctx, 'subagent/end', { id: 'child-dup', stopReason: 'completed' }, leadAgent)
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-dup', role: 'fullstack-dev' }),
+    ])
+    expect(rows).toHaveLength(3) // dispatch, dispatch, settle — nothing else
+    expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
+  })
+})
