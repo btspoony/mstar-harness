@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, engine
+packages: root, engine, commands
 ---
 
 - **PR-review `incomplete` derives from run facts, never from the wall clock.** The token no longer fires on a maxed tier budget: it fires on exactly three conditions — the run stopped before synthesis, a required domain seat never opened, or the resolved diff basis could not be read — and a run that exceeded its budget with full coverage stays settled, publishes its tally-derived verdict (`ship it` / `needs fixes` / `blocked`) and declares the overrun under `- notes:`.
