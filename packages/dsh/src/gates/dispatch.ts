@@ -1030,6 +1030,11 @@ async function gateAssignmentText(
  * non-string carrier (`team_task_update` status-only updates), or
  * non-Assignment text is a pure pass-through (undefined) — ordinary team
  * coordination text is never a false positive.
+ *
+ * The caller invokes this ONLY for a name {@link isTeamDispatchTool} owns, and
+ * treats its result — `undefined` included — as TERMINAL for that name, so a
+ * team name that also appears in `Config.dispatchTools` is never re-gated by
+ * the subagent branch (one decision, one ledger record per call).
  */
 async function gateTeamDispatch(
   ctx: Context,
@@ -1086,12 +1091,17 @@ async function gateDispatch(
   // by their own branch, never by `DEFAULT_DISPATCH_TOOLS` addition.
   const workflowDecision = await gateWorkflow(ctx, harnessDir, config, adapter, exec, hintReadOf)
   if (workflowDecision !== undefined) return workflowDecision
-  // AGENT TEAMS BRANCH — BEFORE the subagent name match (the workflow branch
-  // above demonstrates the same pattern): the team tools carry the Assignment
-  // text in a different argument field per tool and are gated by their own
-  // fixed-name branch, never by addition to `DEFAULT_DISPATCH_TOOLS`.
-  const teamDecision = await gateTeamDispatch(ctx, harnessDir, config, adapter, exec, hintReadOf)
-  if (teamDecision !== undefined) return teamDecision
+  // AGENT TEAMS BRANCH — BEFORE and TERMINAL FOR the names it owns (the
+  // workflow branch above demonstrates the same placement): the team tools
+  // carry the Assignment text in a different argument field per tool and are
+  // gated by their own fixed-name branch, never by addition to
+  // `DEFAULT_DISPATCH_TOOLS`. Returning the branch result UNCONDITIONALLY —
+  // `undefined` included — is what makes the ownership terminal: a team name
+  // a caller also added to `Config.dispatchTools` can no longer fall through
+  // into the subagent match below and be gated (and ledger-recorded) twice.
+  if (isTeamDispatchTool(exec.name)) {
+    return gateTeamDispatch(ctx, harnessDir, config, adapter, exec, hintReadOf)
+  }
   if (!(config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]).includes(toolName)) return undefined
   const args = asRecord(exec.arguments)
   const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined

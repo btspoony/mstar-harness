@@ -44,9 +44,12 @@ import {
   assignmentTextFromFields,
   isAssignmentShaped,
   resolveDispatchHard,
+  DEFAULT_DISPATCH_TOOLS,
+  TEAM_DISPATCH_TOOLS,
 } from './dispatch.ts'
 import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
+import { teamServicePresent } from './team-identity.ts'
 // P-c first-seen ask cache :
 // apply-scoped, owned here (constructed with the adapter) so the dispatch
 // gate and tests share ONE instance per plugin apply. workflow-policy
@@ -307,6 +310,14 @@ export class DshHostAdapter extends Service implements HostAdapter {
             workflowId: source.workflowId,
             resolvedWorkflowDir: join(harnessDir, source.dir),
             selectedGeneration: { storeId: source.storeId, epoch: source.epoch },
+            // Team carriers record only while the optional experimental team
+            // service is mounted (member identity has no other verified
+            // source); both channels' names are pairing-eligible, an
+            // unknown/custom exec-bound name records its row but registers no
+            // pairing entry (item: a name the settle seam declines leaves no
+            // in-memory state behind).
+            teamPresent: teamServicePresent(this.ctx),
+            pairingTools: [...(this.config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]), ...Object.keys(TEAM_DISPATCH_TOOLS)],
           })
         } catch (error) {
           this.ctx.logger(AGENT_FLOW_LOGGER).error(

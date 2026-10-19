@@ -399,6 +399,10 @@ export function apply(ctx: Context, config: Config): void {
   const pairing: AgentFlowPairing = {
     dispatchByCallId: new Map(),
     dispatchByJobId: new Map(),
+    // Team member child SessionId → the `spawn_teammate` dispatch that created
+    // it, consumed by the member's `subagent/end` settlement (the tool return
+    // is NOT a completion). Bounded by the agent-flow module.
+    teamDispatchByChildId: new Map(),
     catalogBySession: new WeakMap(),
   }
   // The host-facing HostAdapter facade — the fs-intent / pre-execute gates

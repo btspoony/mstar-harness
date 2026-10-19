@@ -329,3 +329,81 @@ describe('team dispatch gate — renamed team tools are out of reach (documented
     expect(advisories).toHaveLength(0)
   })
 })
+
+/* ---------------------------------- terminal ownership ---------------------------------- */
+
+describe('team dispatch gate — the team branch is TERMINAL for the names it owns', () => {
+  it('a team name also configured in Config.dispatchTools is gated ONCE (no fall-through double gate)', async () => {
+    // `spawn_teammate` also carries `args.prompt`, so without a terminal team
+    // branch the warn-mode pass used to fall through into the subagent match
+    // and run the whole core a second time — two decisions, two advisories and
+    // (on an ACTIVE workflow) two dispatch rows for one call.
+    const app = booted = await bootApp({ dispatchTools: ['subagent', 'spawn_teammate'] })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', spawnTeammateExec({ prompt: MISSING_EXECUTE_AS }), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.tool).toBe('spawn_teammate')
+    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+  })
+})
+
+/* ---------------------------------- non-string / empty carriers ---------------------------------- */
+
+describe('team dispatch gate — non-string and empty carriers produce no decision and never throw', () => {
+  it('spawn_teammate with a non-string prompt (42) is a silent pass-through', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('spawn_teammate', {
+      name: 'reviewer', description: 'Review.', context: 'fresh', prompt: 42,
+    }), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('team_task_create with a null description is a silent pass-through', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('team_task_create', {
+      subject: 'Review the change', description: null,
+    }), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('send_message with an empty message is a silent pass-through', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', sendMessageExec(''), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('team_task_update without a description carrier is a silent pass-through', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskUpdateClaimExec(), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('a non-object arguments payload is a silent pass-through and never throws', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('spawn_teammate', null), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+})
