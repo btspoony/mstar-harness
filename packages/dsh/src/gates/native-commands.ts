@@ -52,6 +52,7 @@ import type {
   CommandDefinition,
   CommandEffects,
   CommandEnvelope,
+  CommandRequirement,
   CommandSchemaDescriptor,
   InvocationContext,
 } from '@mstar-harness/commands'
@@ -178,8 +179,14 @@ function invocationContextOf(exec: ToolExecution, resolver: { forAgent(agent: un
 function parameterSpecOf(descriptor: CommandSchemaDescriptor): Record<string, import('@deepseek-ai/dsh-tools').ParameterPropertySpec> {
   const jsonSchema = descriptor.input as { properties?: Record<string, { type?: string }> } | null | undefined
   const properties = jsonSchema?.properties ?? {}
-  const helpByName = new Map(
-    descriptor.requirements.filter((entry) => entry.ownership === 'caller').map((entry) => [entry.name, entry]),
+  // The Map generics are anchored on the imported `CommandRequirement` (the
+  // real export), not inferred through the constructor: an unparameterized
+  // `new Map(...)` falls back to `{}` when the entry-tuple inference fails,
+  // which untypes `.help` below.
+  const helpByName = new Map<string, CommandRequirement>(
+    descriptor.requirements
+      .filter((entry) => entry.ownership === 'caller')
+      .map((entry): [string, CommandRequirement] => [entry.name, entry]),
   )
   const spec: Record<string, import('@deepseek-ai/dsh-tools').ParameterPropertySpec> = {}
   for (const [field, node] of Object.entries(properties)) {
@@ -496,7 +503,7 @@ export function registerNativeCommandTools(ctx: Context, resolver: { forAgent(ag
     const definitions = getCommandDefinitions()
     const disposers: Array<() => void> = []
     for (const commandId of NATIVE_COMMAND_IDS) {
-      const definition = definitions.find((candidate) => candidate.id === commandId)
+      const definition = definitions.find((candidate: CommandDefinition) => candidate.id === commandId)
       if (definition === undefined) throw new Error(`no shared command definition for the native tool: ${commandId}`)
       disposers.push(toolsCtx.tools.register(nativeCommandTool(definition, resolver)))
     }
