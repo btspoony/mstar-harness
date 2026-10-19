@@ -3,14 +3,15 @@
  * scoped `@deepseek-ai/dsh-mcp-client` instance (a cordis `ctx.plugin` child
  * fiber) whose stdio `env` carries that agent's own id as
  * `MSTAR_HOST_SESSION_ID`, so two concurrent agents calling mstar MCP tools
- * are attributed to their own ids. Known leaf seats (the execution-session
- * leaf contract: `header.origin === 'subagent'` or `delegationDepth > 0`)
- * can never own a binding and get NO mount — a subagent never inherits the
- * parent's id. The mount is optional-by-presence: with
- * `@deepseek-ai/dsh-mcp-client` not installed it registers nothing, logs ONE
- * debug line and never throws. Disposal: each mount is a child fiber of the
- * registering context, so an HMR fiber swap tears down every scoped instance
- * (and its MCP child process) with the plugin.
+ * are attributed to their own ids. Known leaf seats (the shared leaf-seat
+ * contract `isLeafSeatHeader` in `leaf-seat.ts` — ADR
+ * `docs/adr/dsh-native-identity-channels.md`: `header.origin === 'subagent'`
+ * or `delegationDepth > 0`) can never own a binding and get NO mount — a
+ * subagent never inherits the parent's id. The mount is optional-by-presence:
+ * with `@deepseek-ai/dsh-mcp-client` not installed it registers nothing, logs
+ * ONE debug line and never throws. Disposal: each mount is a child fiber of
+ * the registering context, so an HMR fiber swap tears down every scoped
+ * instance (and its MCP child process) with the plugin.
  *
  * The `dsh-mcp-client` package is not a dependency of this plugin (same
  * posture as `dsh-llm-fallbacks`), so the tests drive the module seam through
@@ -22,17 +23,18 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import {
   MSTAR_HOST_SESSION_ID,
   SCOPED_MCP_MOUNT_LOGGER,
-  isLeafSeatHeader,
   registerScopedMcpMount,
   setScopedMcpMountLogger,
 } from '../src/gates/scoped-mcp-mount.ts'
 import { FakeLoaderRegistry } from './harness.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
+import type { McpClientModuleView } from '../src/gates/scoped-mcp-mount.ts'
+import { isLeafSeatHeader } from '../src/gates/leaf-seat.ts'
 
 /** A root-like agent (no `header.parentSession`, no leaf markers). */
 const rootAgent = (id: string): unknown => ({ id, session: { header: { id, cwd: '/tmp/ws' } } })
 
-/** A leaf seat by origin (`header.origin === 'subagent'` — execution-session contract). */
+/** A leaf seat by origin (`header.origin === 'subagent'` — the shared leaf-seat contract). */
 const subagentLeaf = (id: string, parentSession?: string): unknown => ({
   id,
   session: { header: { id, cwd: '/tmp/ws', origin: 'subagent', ...(parentSession === undefined ? {} : { parentSession }) } },
@@ -251,7 +253,7 @@ describe('scoped MCP mount — leaf-seat skip list', () => {
     }
   })
 
-  it('isLeafSeatHeader mirrors the execution-session leaf contract shape', () => {
+  it('isLeafSeatHeader keeps the shared leaf-seat contract shape (leaf-seat.ts / ADR)', () => {
     expect(isLeafSeatHeader({ origin: 'subagent' })).toBe(true)
     expect(isLeafSeatHeader({ origin: 'main', delegationDepth: 1 })).toBe(true)
     expect(isLeafSeatHeader({ origin: 'main' })).toBe(false)
@@ -276,6 +278,38 @@ describe('scoped MCP mount — optional-by-presence degrade', () => {
       expect(debugs).toHaveLength(1)
       expect(debugs[0]).toContain('@deepseek-ai/dsh-mcp-client')
       expect(lines.filter((line) => line.startsWith('warn:'))).toHaveLength(0)
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a rejecting injected provider → ONE contained warn, no mount, no unhandled rejection', async () => {
+    const ctx = new Context()
+    // The production default provider is catch-all and never rejects; the
+    // seam accepts an injected one, so the probe branch must contain a
+    // rejection the same way a failed mount is contained (one warn — never
+    // an unhandled rejection, which would fail this very test).
+    const rejectingProvider = async (): Promise<McpClientModuleView> => {
+      throw new Error('injected provider rejected')
+    }
+    const { lines, restore } = captureLogs()
+    try {
+      expect(() => registerScopedMcpMount(ctx, { provider: rejectingProvider })).not.toThrow()
+      await settle()
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+
+      const warns = lines.filter((line) => line.startsWith('warn:'))
+      // TWO contained warns, each naming its own branch: the one-time probe
+      // and the agent mount that awaited the same rejected promise. Both are
+      // the documented one-warn posture — never an unhandled rejection
+      // (which would fail this very test).
+      expect(warns.filter((line) => line.includes('probe failed'))).toHaveLength(1)
+      expect(warns.find((line) => line.includes('probe failed'))).toContain('injected provider rejected')
+      expect(warns.filter((line) => line.includes('mount failed'))).toHaveLength(1)
+      // The rejection stays contained: no mount was attempted either.
+      expect(lines.filter((line) => line.startsWith('debug:'))).toHaveLength(0)
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})

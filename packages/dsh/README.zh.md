@@ -227,7 +227,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 ## Native command surface
 
-插件把具名的可写 mstar 命令注册为原生 dsh 工具（`mstar_plan_bind`、`mstar_plan_prepare`、`mstar_plan_progress`、`mstar_plan_complete`、`mstar_workflow_register`、`mstar_issue_add`、`mstar_issue_close`）：每个工具在进程内调用共享的 `@mstar-harness/commands` 实现（路径中无任何 shell），并从 `exec.agent.id` 注入调用者身份——session id 参数在准入前被剥离，身份永远不可由模型选择——成功的原生 `plan bind` 还会持久化 workflow ledger 用于归因的持久执行绑定。在该映射之外，这个表面恰好再带一个 dsh 原生工具 `mstar_execution_clear`：它完全不带参数，清除调用会话自己已采纳的执行绑定（身份来自 `exec.agent.id`）并保留用户选择，无可清除绑定时以 `no clearable execution binding` 命名拒绝——它是 bind/clear 配对的清除半边，路径中没有任何斜杠命令。
+插件把具名的可写 mstar 命令注册为原生 dsh 工具（`mstar_plan_bind`、`mstar_plan_prepare`、`mstar_plan_progress`、`mstar_plan_complete`、`mstar_workflow_register`、`mstar_issue_add`、`mstar_issue_close`）：每个工具在进程内调用共享的 `@mstar-harness/commands` 实现（路径中无任何 shell），并从 `exec.agent.id` 注入调用者身份——session id 参数在准入前被剥离，身份永远不可由模型选择——成功的原生 `plan bind` 还会持久化 workflow ledger 用于归因的持久执行绑定。在该映射之外，这个表面恰好再带一个 dsh 原生工具 `mstar_execution_clear`：它完全不带参数，清除调用会话自己已采纳的执行绑定（身份来自 `exec.agent.id`）并保留用户选择，无可清除绑定时以 `no clearable execution binding` 命名拒绝——它是 bind/clear 配对的清除半边，路径中没有任何斜杠命令。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
 
 ### Scoped MCP mounts（每 agent 身份）
 

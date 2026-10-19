@@ -67,9 +67,9 @@ afterEach(async () => {
 const callId = 'native-commands.spec' as ToolCallId
 const signal = new AbortController().signal
 
-/** The caller identity the tool must observe: `exec.agent.id` IS the session id (ADR constraint 1). */
-function agentOf(id: string, cwd: string): unknown {
-  return { id, session: { id, header: { id, cwd } } }
+/** The caller identity the tool must observe: `exec.agent.id` IS the session id (ADR constraint 1). Extra header facts (leaf markers) ride `session.header` unchanged. */
+function agentOf(id: string, cwd: string, header: Record<string, unknown> = {}): unknown {
+  return { id, session: { id, header: { id, cwd, ...header } } }
 }
 
 /** Run one tool call through the composed registry as one specific agent. */
@@ -344,6 +344,59 @@ describe('native identity — a leaf call carries its own id, never the parent i
 })
 
 // ---------------------------------------------------------------------------
+// (b2) the fail-closed leaf-seat guard — a known leaf can never mint a
+// coordinator seat (the guard #530 deleted, restored on the native surface)
+// ---------------------------------------------------------------------------
+
+describe('native leaf-seat refusal — a known leaf can never mint a coordinator seat', () => {
+  it('refuses a REAL subagent-origin leaf on plan bind: named error, no binding, no engine seat', async () => {
+    const app = await bootedWithFixture()
+    // A REAL leaf header (origin: 'subagent') — not merely a second session.
+    const leaf = agentOf(CHILD_ID, app.root, { origin: 'subagent' })
+    const refused = envelopeOf(await run(app.ctx, 'mstar_plan_bind', leaf, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(refused.status).toBe('refused')
+    expect(refused.code).toBe('plan.bind.leaf-seat')
+    // The named error the removed execution-session guard threw.
+    expect(String(refused.message).split('\n')[0]).toBe('known leaf sessions cannot adopt, clear, or run on any operation')
+    expect(refused.exitCode).not.toBe(0)
+    // No durable binding was written…
+    expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
+    // …and the engine holds no coordinator seat for the leaf's id.
+    const state = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(state.data.workflows[0]?.coordinator ?? null).toBeNull()
+  })
+
+  it('delegation depth alone marks a leaf: bind, complete and clear all refuse fail-closed', async () => {
+    const app = await bootedWithFixture()
+    const leaf = agentOf(CHILD_ID, app.root, { delegationDepth: 2 })
+    const bindRefused = envelopeOf(await run(app.ctx, 'mstar_plan_bind', leaf, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bindRefused.status).toBe('refused')
+    expect(bindRefused.code).toBe('plan.bind.leaf-seat')
+    const completeRefused = envelopeOf(await run(app.ctx, 'mstar_plan_complete', leaf, {
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+    }))
+    expect(completeRefused.status).toBe('refused')
+    expect(completeRefused.code).toBe('plan.complete.leaf-seat')
+    const clearRefused = envelopeOf(await run(app.ctx, 'mstar_execution_clear', leaf, {}))
+    expect(clearRefused.status).toBe('refused')
+    expect(clearRefused.code).toBe('execution.clear.leaf-seat')
+    // None of the three refused calls wrote a binding or a seat.
+    expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
+    const state = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(state.data.workflows[0]?.coordinator ?? null).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // (c) engine refusal envelope surfaces verbatim
 // ---------------------------------------------------------------------------
 
@@ -475,6 +528,10 @@ describe('native binding adoption — a native plan bind persists the executionB
       ['copied', { storeId: '00000000-0000-4000-8000-000000000009' }],
       // A superseded epoch: the engine resume refuses it.
       ['stale', { epoch: real.epoch + 1 }],
+      // A reference whose scope names a DIFFERENT workflow (the fourth
+      // refused class of the AC): the engine's session read refuses it, and
+      // the dsh-side resumed-receipt re-check below never sees an ok.
+      ['scope-mismatched', { workflowId: 'wf-other-scope' }],
     ]
     for (const [label, override] of forged) {
       // Clear the adopted baseline so "nothing adopted" is observable per case.

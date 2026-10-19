@@ -32,8 +32,15 @@
  * Module boundary: self-contained for the native adoption (Task 3 bind) and
  * the Task 5 clear — the only imports are the cordis context type, the
  * dsh-tools seam, `@mstar-harness/commands`, the engine's execution-session
- * primitives, the execution-session clear internals, and the shared cwd
- * reader / workflow-selection resolvers.
+ * primitives, the execution-session clear internals, the shared leaf-seat
+ * predicate (`leaf-seat.ts`), and the shared cwd reader / workflow-selection
+ * resolvers.
+ *
+ * Leaf guard: the coordinator-seat-capable tools (`mstar_plan_bind`,
+ * `mstar_plan_complete`, `mstar_execution_clear`) refuse a known leaf seat
+ * FAIL-CLOSED before any admission or engine round-trip — the named guard the
+ * removed execution-session command enforced, restored on this surface (the
+ * engine has no leaf concept, so this dsh-side check is the sole enforcement).
  */
 import { type Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -49,6 +56,7 @@ import type {
   InvocationContext,
 } from '@mstar-harness/commands'
 import { sessionCwdOf } from './_shared.ts'
+import { isLeafSeatHeader } from './leaf-seat.ts'
 import { adoptExecutionBinding, refusalOf } from './workflow-selection.ts'
 import { clearExecutionSessionBinding } from './execution-session.ts'
 
@@ -79,6 +87,42 @@ function callerSessionIdOf(exec: ToolExecution): string {
   }
   return id
 }
+
+/**
+ * The session header the leaf-seat contract reads — the same agent shape the
+ * scoped MCP mount consumes (`agent.session.header`).
+ */
+function sessionHeaderOf(exec: ToolExecution): unknown {
+  return (exec.agent as { session?: { header?: unknown } } | null | undefined)?.session?.header
+}
+
+/**
+ * The fail-closed leaf-seat refusal (the shared `leaf-seat.ts` contract): a
+ * known leaf seat can never own a coordinator seat or an execution binding —
+ * the named guard the removed execution-session command enforced, restored on
+ * this surface before any admission or engine round-trip. The recovery names
+ * the actual cause and the supported way out (run it as the coordinating
+ * session; a leaf seat never needs a binding).
+ */
+function leafSeatRefusal(command: string): CommandEnvelope<never> {
+  return refusalEnvelope({
+    command,
+    status: 'refused',
+    code: `${command}.leaf-seat`,
+    exitCode: 1,
+    message: 'known leaf sessions cannot adopt, clear, or run on any operation',
+    recovery:
+      'This seat is a leaf (session header origin "subagent" or a delegationDepth > 0); coordinator seats and execution bindings belong to non-leaf sessions — run the operation as the coordinating session itself, or continue without an execution binding.',
+  })
+}
+
+/**
+ * The commands whose success mints or exercises a coordinator seat: `plan
+ * bind` binds one, `plan complete` is the Done write behind it. These refuse a
+ * leaf seat fail-closed; the remaining commands run under the caller's own
+ * identity and cannot mint a seat.
+ */
+const COORDINATOR_SEAT_COMMANDS: ReadonlySet<string> = new Set(['plan.bind', 'plan.complete'])
 
 /**
  * Effects for the native surface: none. The shared implementation owns every
@@ -329,6 +373,12 @@ function nativeCommandTool(
     // parallel with siblings), matching the read-only tools' registry default.
     isConcurrencySafe: () => false,
     async execute(args, exec) {
+      // Fail-closed leaf guard FIRST: a known leaf seat can never own a
+      // coordinator seat, and these are the commands that would mint one —
+      // refuse before any admission or engine round-trip.
+      if (COORDINATOR_SEAT_COMMANDS.has(commandId) && isLeafSeatHeader(sessionHeaderOf(exec))) {
+        return toCanonicalValue(leafSeatRefusal(commandId))
+      }
       const input = args as Record<string, unknown>
       // Identity is never model-supplied: strip the session selector before
       // admission so the shared admission resolves it from the injected
@@ -398,6 +448,11 @@ function executionClearTool(
     // the command tools above.
     isConcurrencySafe: () => false,
     async execute(_args, exec) {
+      // The same fail-closed leaf guard: a leaf seat holds no execution
+      // binding and can never hold one — refuse before reading the store.
+      if (isLeafSeatHeader(sessionHeaderOf(exec))) {
+        return toCanonicalValue(leafSeatRefusal(EXECUTION_CLEAR_COMMAND))
+      }
       const harnessDir = resolver.forAgent(exec.agent)
       const cwd = sessionCwdOf(exec.agent)
       if (harnessDir === null || cwd === undefined) {

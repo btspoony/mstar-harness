@@ -10,8 +10,8 @@
  * channel): the scoped mount exists BECAUSE a child process can only be
  * attributed by the environment it is launched with — per-agent env is the
  * one per-caller identity channel the stdio MCP route has. The leaf-seat
- * skip list mirrors the execution-session leaf contract
- * (`header.origin === 'subagent'` / `delegationDepth > 0` ⇒ no mount): a
+ * skip list is the shared leaf-seat contract (`isLeafSeatHeader` in
+ * `leaf-seat.ts`; ADR `docs/adr/dsh-native-identity-channels.md`): a
  * known leaf can never own a binding, so it never gets a child process.
  *
  * Optional-by-presence (the degradation posture of the rest of the plugin):
@@ -29,6 +29,7 @@
  * process — with the plugin. No explicit disposer is kept here.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { isLeafSeatHeader } from './leaf-seat.ts'
 
 /** Logger label for the scoped MCP mount (dsh logger naming: `<scope>/<subject>`). */
 export const SCOPED_MCP_MOUNT_LOGGER = 'mstar/scoped-mcp-mount'
@@ -50,18 +51,6 @@ const DEFAULT_ROW_CONFIG: Record<string, unknown> = {
   transport: 'stdio',
   command: 'npx',
   args: ['-y', '@mstar-harness/cli', 'mcp'],
-}
-
-/**
- * The leaf predicate of the execution-session contract — SAME shape as
- * `execution-session.ts` `nativeFacts` (`header.origin === 'subagent'` or a
- * numeric `delegationDepth > 0`). A known leaf seat can never own an
- * execution binding, so it never gets an identity-bearing child process.
- */
-export function isLeafSeatHeader(header: unknown): boolean {
-  if (typeof header !== 'object' || header === null) return false
-  const view = header as { origin?: unknown; delegationDepth?: unknown }
-  return view.origin === 'subagent' || (typeof view.delegationDepth === 'number' && view.delegationDepth > 0)
 }
 
 /**
@@ -227,6 +216,11 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
         `${MCP_CLIENT_PACKAGE} not installed — scoped per-agent MCP mounts disabled (one debug per apply; no tools change)`,
       )
     }
+  }).catch((error: unknown) => {
+    // Contained: an injected provider may reject (tests, future callers — the
+    // production default is catch-all). The probe branch dies with ONE warn,
+    // the same posture as a failed mount; never an unhandled rejection.
+    log('warn', `scoped MCP module probe failed (contained — per-agent mounts stay try/catch-contained): ${errorMessage(error)}`)
   })
   // Per-apply dedupe: agent ids already mounted by THIS context. The
   // apply-scoped lifetime is the HMR story — a reloaded fiber starts a fresh
@@ -235,7 +229,7 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
 
   const mount = async (agent: unknown): Promise<void> => {
     try {
-      // Leaf seats first (cheap + synchronous): the execution-session leaf
+      // Leaf seats first (cheap + synchronous): the shared leaf-seat
       // contract — a known leaf never owns a binding, never gets a mount.
       const header = (agent as { session?: { header?: unknown } } | null | undefined)?.session?.header
       if (isLeafSeatHeader(header)) return
