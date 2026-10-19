@@ -1462,7 +1462,9 @@ export type PrReviewTier = "quick" | "default" | "deep";
  * - `wallClockMinutes`: prompt-discipline target for the whole review,
  * measured worktree-setup → local report saved by the main agent.
  * Overruns are declared in the report `- notes:` — budgets are never a
- * host-level hard kill.
+ * host-level hard kill, and never a settlement fact: exceeding one with
+ * complete coverage publishes the tally-derived verdict, so elapsed time
+ * never selects the `incomplete` token (pr-review.md § Verdict synthesis).
  * - `maxSeats`: review seats only — Stage 2 domain seats + the independent
  * cross-domain security seat; NOT Stage 1 collect seats (collect fan-out
  * stays governed by pr-review.md § Scale-driven fan-out).

@@ -1560,6 +1560,11 @@ describe("prReviewSeatPrompt — collectFolded option (collect-wave fold)", () =
 // ---------------------------------------------------------------------------
 
 describe("computePrTally — incomplete verdict", () => {
+  // The settled path is the whole boundary: the overrun boundary lives here too.
+  // A run that exceeded its tier wall clock but opened every required domain and
+  // read the resolved diff basis declares nothing, so this tally-derived verdict
+  // is what gets published — time is not a settlement fact, and the overrun is
+  // declared under `- notes:` instead.
   test("omitting incomplete leaves the derived verdict and the two-line header unchanged", () => {
     const result = computePrTally({ findings: [{ mergeClass: "must-fix" }, { mergeClass: "nit" }] });
     expect(result.verdict).toBe("blocked");
