@@ -1,0 +1,11 @@
+---
+category: Harness
+packages: dsh
+---
+
+- **Fast team members no longer lose their settle row.** A teammate whose first turn finishes before the spawn call's post-execute runs used to have its `subagent/end` dropped (the pairing map was not populated yet), leaving the dispatch without an outcome until capacity eviction. Unmatched team-child endings now land in a bounded LRU buffer (`1024`, independent of the pairing-map bound) and the spawn pairing reconciles against it first: a buffered end settles the dispatch through the normal stop-reason mapping (`completed → ok`, `aborted`/`refusal → denied`, `error`/`max-tokens → error`), and eviction records the child id with an explicit no-settle-fabricated warn instead of a fabricated row. Non-team children never enter the buffer; without the experimental team service nothing buffers and nothing throws.
+- **Coordination writes no longer render as phantom running work.** Assignment-shaped `team_task_create` / `team_task_update` / `send_message` dispatches always recorded an explicit `continuation`/`unresolved` row, but the panel projected any dispatch without a paired settle as `running`. The row is now projected: an entity whose latest fact is the unresolved continuation renders a distinct `unresolved` state (grey legend entry, excluded from the executing count), the event log shows the row's reason, and a dispatch with no events after it stays honestly `running`. The shared wire view keeps its existing event vocabulary (a contained cast at the read boundary; extending `AgentFlowEventView` is deliberate follow-up work).
+
+<!-- CN -->
+- **快速完成的团队成员不再丢失结算行。** 此前成员首轮 turn 在 spawn 调用的 post-execute 之前结束时，其 `subagent/end` 会被丢弃（配对映射尚未写入），该派发将一直没有结果行，直到容量淘汰。未匹配的 team child end 现在进入有界 LRU 缓冲（`1024`，与配对映射上限独立），spawn 配对写入时先与缓冲 reconcile：命中的 end 按既有 stop-reason 映射结算派发（`completed → ok`、`aborted`/`refusal → denied`、`error`/`max-tokens → error`）；淘汰时记录 child id 并写显式的"未伪造结算" warn，绝不伪造行。非 team 子代理不进缓冲；未挂载实验性 team 服务时不缓冲、不抛错。
+- **协调写入不再被渲染成幻影执行。** Assignment 形态的 `team_task_create` / `team_task_update` / `send_message` 派发一直会写显式 `continuation`/`unresolved` 行，但面板把"没有配对 settle 的派发"一律渲染为 `running`。现在该行会被投影：最新事实为 unresolved continuation 的实体呈现独立的 `unresolved` 状态（灰色图例项，不计入执行中数量），事件日志显示该行的原因，而没有后续事件的派发仍诚实显示 `running`。共享 wire 视图保持既有事件词表（读取边界一处受控断言；扩展 `AgentFlowEventView` 是有意的后续工作）。

@@ -26,12 +26,14 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test'
 import { Context } from '@deepseek-ai/cordis'
+import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readDshLedgerWindow } from '@mstar-harness/engine'
 import {
   AGENT_FLOW_TEAM_CHILD_CAPACITY,
+  AGENT_FLOW_TEAM_END_BUFFER_CAPACITY,
   readAgentFlow,
   recordDispatch,
   registerSettleListener,
@@ -94,7 +96,10 @@ async function activeFixture() {
 }
 
 function newPairing(): AgentFlowPairing {
-  return { dispatchByCallId: new Map(), dispatchByJobId: new Map(), catalogBySession: new WeakMap() }
+  // `teamDispatchByChildId` mirrors the production pairing store (the entry
+  // apply always initializes it); the team end buffer stays LAZY — the team
+  // branch creates it only when a team child end actually misses the map.
+  return { dispatchByCallId: new Map(), dispatchByJobId: new Map(), teamDispatchByChildId: new Map(), catalogBySession: new WeakMap() }
 }
 
 /** Mount the optional service on the given context (a bare test Context or the booted app root). */
@@ -104,6 +109,31 @@ function provideTeamRoster(ctx: Context, members: readonly unknown[]): void {
 
 const emit = (ctx: Context, event: string, ...args: unknown[]): void =>
   (ctx as unknown as { emit(name: string, ...rest: unknown[]): void }).emit(event, ...args)
+
+/**
+ * Drive one `subagent/end` edge through the REAL upstream emission shape.
+ *
+ * The verified lifecycle emitter (`@deepseek-ai/dsh-subagent` `lib/index.js`
+ * `createLifecycleEmitter`) converts the live direct parent into a
+ * `scopeTarget` carrier riding as `dispatchArgs[0]`, and cordis `dispatch`
+ * (`@deepseek-ai/cordis` `lib/index.js`) SHIFTS that carrier as the dispatch
+ * `this` and invokes every listener with `(info)` ALONE — the parent is never
+ * a second callback argument. This helper mirrors exactly that: dispatch the
+ * `[carrier, name, info]` shape through `ctx.events.dispatch('emit', …)` and
+ * call each returned (already `this`-bound) callback with one argument. A
+ * plain `ctx.emit(event, payload, parent)` would instead forward BOTH
+ * arguments to the listener (`cb(payload, parent)`) — a convention the real
+ * host does not use, which is how the original parent-argument contract gap
+ * stayed invisible. With no parent the dispatch carries `[name, info]` and
+ * the listener's `this` is `null`, matching the parentless upstream edge.
+ */
+const emitLifecycleEnd = (ctx: Context, info: unknown, parent?: unknown): void => {
+  const dispatchArgs = parent === undefined
+    ? ['subagent/end', info]
+    : [scopeTarget({} as object, parent as object), 'subagent/end', info]
+  const events = (ctx as unknown as { events: { dispatch(type: string, args: unknown[]): ((...args: unknown[]) => unknown)[] } }).events
+  for (const callback of events.dispatch('emit', dispatchArgs)) callback(info)
+}
 
 interface LedgerRow {
   kind?: string
@@ -146,7 +176,7 @@ describe('team agent flow — spawn_teammate is never settled at tool return', (
     expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['dispatch'])
     expect(state(pairing)).toEqual({ call: 0, child: 1 })
 
-    emit(ctx, 'subagent/end', { id: 'child-1', stopReason: 'completed' })
+    emitLifecycleEnd(ctx, { id: 'child-1', stopReason: 'completed' })
     expect(state(pairing)).toEqual({ call: 0, child: 0 })
     const rows = ledgerRows(harnessDir)
     expect(rows.filter((row) => row.kind === 'settle')).toEqual([
@@ -173,8 +203,8 @@ describe('team agent flow — spawn_teammate is never settled at tool return', (
       emit(ctx, SETTLE_SEAM, exec, spawnResult(name))
     }
     expect(state(pairing)).toEqual({ call: 0, child: 2 })
-    emit(ctx, 'subagent/end', { id: 'child-aborted', stopReason: 'aborted' })
-    emit(ctx, 'subagent/end', { id: 'child-errored', stopReason: 'error' })
+    emitLifecycleEnd(ctx, { id: 'child-aborted', stopReason: 'aborted' })
+    emitLifecycleEnd(ctx, { id: 'child-errored', stopReason: 'error' })
     const settles = ledgerRows(harnessDir).filter((row) => row.kind === 'settle')
     expect(settles).toContainEqual(expect.objectContaining({ outcome: 'denied', childId: 'child-aborted' }))
     expect(settles).toContainEqual(expect.objectContaining({ outcome: 'error', childId: 'child-errored' }))
@@ -220,9 +250,21 @@ describe('team agent flow — an unpaired continuation is explicit, never an ok 
     const continuation = rows.find((row) => row.kind === 'continuation')
     expect(continuation).toMatchObject({ kind: 'continuation', state: 'unresolved', role: 'fullstack-dev' })
     expect(continuation?.reason).toContain('reviewer')
-    // Durable-only marker: the projected view keeps its existing kinds and
-    // therefore still shows the dispatch as the last recorded fact.
-    expect(readAgentFlow(workflowDir, 'wf-1')?.events.map((event) => event.kind)).toEqual(['dispatch'])
+    // The unresolved-continuation projection: the continuation row is
+    // PROJECTED (no longer durable-only):
+    // the readAgentFlow view lists it latest-first before its dispatch,
+    // carrying the unresolved state and the display reason. The wire shape
+    // is guarded here — the shared view type gains the kind additively and
+    // every consumer reads it per field.
+    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
+      events: { kind: string; state?: string; role?: string; reason?: string }[]
+    } | null
+    expect(view?.events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
+    expect(view?.events.find((event) => event.kind === 'continuation')).toMatchObject({
+      state: 'unresolved',
+      role: 'fullstack-dev',
+      reason: expect.stringContaining('reviewer'),
+    })
   })
 
   it('records `continuation`/`unresolved` for a non-member carrier (send_message acceptance is not a completion)', async () => {
@@ -260,7 +302,7 @@ describe('team agent flow — an unpaired continuation is explicit, never an ok 
       exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
     })
     emit(ctx, SETTLE_SEAM, exec, spawnResult())
-    emit(ctx, 'subagent/end', { id: 'child-1', stopReason: 'something-new' })
+    emitLifecycleEnd(ctx, { id: 'child-1', stopReason: 'something-new' })
     expect(state(pairing)).toEqual({ call: 0, child: 0 })
     const rows = ledgerRows(harnessDir)
     expect(rows.some((row) => row.kind === 'settle')).toBe(false)
@@ -309,7 +351,7 @@ describe('team agent flow — bounded pairing state and cross-call safety', () =
 
     emit(ctx, SETTLE_SEAM, teamExec, spawnResult())
     expect(state(pairing)).toEqual({ call: 0, child: 1 })
-    emit(ctx, 'subagent/end', { id: 'child-1', stopReason: 'completed' })
+    emitLifecycleEnd(ctx, { id: 'child-1', stopReason: 'completed' })
     expect(ledgerRows(harnessDir).filter((row) => row.kind === 'settle')).toContainEqual(
       expect.objectContaining({ outcome: 'ok', childId: 'child-1' }),
     )
@@ -436,7 +478,7 @@ describe('team agent flow — an ACTIVE-workflow-seeded team call resolves or is
     emit(app.ctx, SETTLE_SEAM, exec, spawnResult())
     expect(ledgerRows(app.harnessDir, 'wf-team').map((row) => row.kind)).toEqual(['dispatch'])
 
-    emit(app.ctx, 'subagent/end', { id: 'child-live', stopReason: 'completed' })
+    emitLifecycleEnd(app.ctx, { id: 'child-live', stopReason: 'completed' })
     const rows = ledgerRows(app.harnessDir, 'wf-team')
     expect(rows.filter((row) => row.kind === 'settle')).toContainEqual(
       expect.objectContaining({ outcome: 'ok', childId: 'child-live', role: 'fullstack-dev' }),
@@ -456,5 +498,290 @@ describe('team agent flow — an ACTIVE-workflow-seeded team call resolves or is
     const rows = ledgerRows(app.harnessDir, 'wf-team-orphan')
     expect(rows.some((row) => row.kind === 'settle')).toBe(false)
     expect(rows.find((row) => row.kind === 'continuation')).toMatchObject({ state: 'unresolved', role: 'fullstack-dev' })
+  })
+})
+
+/* ------------------------------ bounded end buffer reconciles early child endings ------------------------------ */
+
+/** The Lead agent the upstream `subagent/end` edge carries as its scoped-dispatch parent. */
+const leadAgent = { id: 'session-1' }
+
+describe('team agent flow — the bounded end buffer reconciles a turn that ended before its spawn pairing', () => {
+  it('settles from the buffered end on reconcile (completed → ok), consumes the entry, and leaves no live pairing', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-early', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = spawnExec('call-early')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    // The member's initial turn settles BEFORE the spawn post-execute runs:
+    // the pairing map misses, so the end record lands in the bounded buffer.
+    emitLifecycleEnd(ctx, { id: 'child-early', stopReason: 'completed' }, leadAgent)
+    expect(pairing.teamEndBuffer?.get('child-early')).toBe('completed')
+    expect(ledgerRows(harnessDir).some((row) => row.kind === 'settle')).toBe(false)
+    // The spawn post-execute now writes the pairing: reconcile-first consumes
+    // the buffered end, settles the dispatch, and leaves NO live pairing entry.
+    emit(ctx, SETTLE_SEAM, exec, spawnResult())
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-early', role: 'fullstack-dev' }),
+    ])
+    expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
+    expect(pairing.teamEndBuffer?.size).toBe(0)
+  })
+
+  it('admits the early end when the listener receives no second argument — parent resolution comes from the scoped-dispatch receiver', async () => {
+    // REGRESSION: the real upstream delivers `(info)` ALONE with the live
+    // direct parent bound as the dispatch `this` (the `scopeTarget` carrier).
+    // A handler that reads a second argument receives `undefined` on every
+    // real invocation, the roster gate never passes, and the buffer stays
+    // inert. This case pins the single-argument callback shape AND proves the
+    // buffer admits through the receiver-resolved parent.
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-scope', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const received: unknown[][] = []
+    ctx.on('subagent/end' as never, ((...args: unknown[]): void => {
+      received.push(args)
+    }) as never)
+    const exec = spawnExec('call-scope')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emitLifecycleEnd(ctx, { id: 'child-scope', stopReason: 'completed' }, leadAgent)
+    // Every listener — the ledger's and this spy — saw EXACTLY one argument.
+    expect(received).toEqual([[{ id: 'child-scope', stopReason: 'completed' }]])
+    // The receiver-carried parent passed the roster gate: the early end is
+    // buffered, then reconciled into a settle when the pairing write lands.
+    expect(pairing.teamEndBuffer?.get('child-scope')).toBe('completed')
+    emit(ctx, SETTLE_SEAM, exec, spawnResult())
+    expect(ledgerRows(harnessDir).filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-scope', role: 'fullstack-dev' }),
+    ])
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toContainEqual(
+      expect.objectContaining({ kind: 'settle', outcome: 'ok', childId: 'child-scope' }),
+    )
+  })
+
+  it('maps buffered terminal stop reasons truthfully (aborted → denied, error → error; never ok)', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-aborted', 'a'), rosterRow('child-errored', 'b')])
+    registerSettleListener(ctx, {}, pairing)
+    for (const [callId, name, childId, stopReason] of [
+      ['call-a', 'a', 'child-aborted', 'aborted'],
+      ['call-b', 'b', 'child-errored', 'error'],
+    ] as const) {
+      const exec = spawnExec(callId)
+      recordDispatch({
+        harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+        exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+      })
+      emitLifecycleEnd(ctx, { id: childId, stopReason }, leadAgent)
+      emit(ctx, SETTLE_SEAM, exec, spawnResult(name))
+    }
+    const settles = ledgerRows(harnessDir).filter((row) => row.kind === 'settle')
+    expect(settles).toContainEqual(expect.objectContaining({ outcome: 'denied', childId: 'child-aborted' }))
+    expect(settles).toContainEqual(expect.objectContaining({ outcome: 'error', childId: 'child-errored' }))
+    expect(settles.some((row) => row.outcome === 'ok')).toBe(false)
+  })
+
+  it('records the explicit unresolved continuation when a buffered end carries an unrecognized stop reason', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-1', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = spawnExec('call-1')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emitLifecycleEnd(ctx, { id: 'child-1', stopReason: 'something-new' }, leadAgent)
+    emit(ctx, SETTLE_SEAM, exec, spawnResult())
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.some((row) => row.kind === 'settle')).toBe(false)
+    expect(rows.find((row) => row.kind === 'continuation')).toMatchObject({ state: 'unresolved', role: 'fullstack-dev' })
+    expect(rows.find((row) => row.kind === 'continuation')?.reason).toContain('something-new')
+    expect(pairing.teamEndBuffer?.size).toBe(0)
+  })
+
+  it('evicts the oldest buffered end at the cap with an explicit unresolved marker naming the child', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-new', 'new')])
+    registerSettleListener(ctx, {}, pairing)
+    const warnings: string[] = []
+    const previous = setAgentFlowLogger((level, message) => {
+      if (level === 'warn') warnings.push(message)
+    })
+    try {
+      const filled = new Map<string, unknown>()
+      for (let index = 0; index < AGENT_FLOW_TEAM_END_BUFFER_CAPACITY; index += 1) {
+        filled.set(`old-${index}`, 'completed')
+      }
+      pairing.teamEndBuffer = filled
+      emitLifecycleEnd(ctx, { id: 'child-new', stopReason: 'completed' }, leadAgent)
+      expect(pairing.teamEndBuffer?.size).toBe(AGENT_FLOW_TEAM_END_BUFFER_CAPACITY)
+      expect(pairing.teamEndBuffer?.has('child-new')).toBe(true)
+      expect(pairing.teamEndBuffer?.has('old-0')).toBe(false)
+      const marker = warnings.find((message) => message.includes('old-0'))
+      expect(marker).toContain('evicted')
+      expect(marker).toContain('no settle is fabricated')
+    } finally {
+      setAgentFlowLogger(previous)
+    }
+  })
+
+  it('never buffers an end for a child that is not a team member', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-1', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec: spawnExec('call-1'), pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emitLifecycleEnd(ctx, { id: 'ordinary-child', stopReason: 'completed' }, leadAgent)
+    expect(pairing.teamEndBuffer?.size ?? 0).toBe(0)
+    expect(ledgerRows(harnessDir).some((row) => row.kind === 'settle' || row.kind === 'continuation')).toBe(false)
+  })
+
+  it('buffers nothing and never throws without the team service', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    registerSettleListener(ctx, {}, pairing) // no agentTeams service mounted
+    expect(() => emitLifecycleEnd(ctx, { id: 'child-x', stopReason: 'completed' }, leadAgent)).not.toThrow()
+    expect(pairing.teamEndBuffer).toBeUndefined()
+    expect(ledgerRows(harnessDir)).toEqual([])
+  })
+})
+
+/* ------------------------------ carried edge paths pinned ------------------------------ */
+
+describe('team agent flow — carried edge paths pinned', () => {
+  it('records the explicit unresolved continuation when the team carrier returns no result payload (no settle)', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-1', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = spawnExec('call-nopayload')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    // The post-execute result is not a record at all: no member can be
+    // resolved from it, so the dispatch gets the EXPLICIT unresolved
+    // continuation naming the reason — never a settle, never a silent drop.
+    emit(ctx, SETTLE_SEAM, exec, undefined)
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.some((row) => row.kind === 'settle')).toBe(false)
+    expect(rows.filter((row) => row.kind === 'continuation')).toEqual([
+      expect.objectContaining({
+        kind: 'continuation',
+        state: 'unresolved',
+        role: 'fullstack-dev',
+        reason: expect.stringContaining('spawn_teammate call returned no result payload'),
+      }),
+    ])
+    // The projection lists the unresolved continuation latest-first, carrying
+    // the state and display reason (same wire shape as the roster-orphan row).
+    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
+      events: { kind: string; state?: string; reason?: string }[]
+    } | null
+    expect(view?.events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
+    expect(view?.events.find((event) => event.kind === 'continuation')).toMatchObject({
+      state: 'unresolved',
+      reason: expect.stringContaining('returned no result payload'),
+    })
+  })
+
+  it('reconciles the end-to-end orphan race in one sequence: buffered, no settle, then settled from the buffer at pairing', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-orphan', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = spawnExec('call-orphan-e2e')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    // 1. The member's turn ends BEFORE the spawn post-execute: buffered only,
+    //    and the window holds dispatch-only rows (no settle yet).
+    emitLifecycleEnd(ctx, { id: 'child-orphan', stopReason: 'completed' }, leadAgent)
+    expect(pairing.teamEndBuffer?.get('child-orphan')).toBe('completed')
+    expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['dispatch'])
+    // 2. The pairing write lands: reconcile-first consumes the buffer and
+    //    settles the mapped outcome as the window's only extra row.
+    emit(ctx, SETTLE_SEAM, exec, spawnResult())
+    // The durable window reads latest-first, so the settle precedes its dispatch.
+    expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['settle', 'dispatch'])
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    expect(pairing.teamEndBuffer?.size).toBe(0)
+    const rows = ledgerRows(harnessDir)
+    expect(rows.filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-orphan', role: 'fullstack-dev' }),
+    ])
+    expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
+    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
+      events: { kind: string; outcome?: string; childId?: string }[]
+    } | null
+    expect(view?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
+    expect(view?.events.find((event) => event.kind === 'settle')).toMatchObject({ outcome: 'ok', childId: 'child-orphan' })
+  })
+
+  it('keeps the first pairing on a duplicate child id: the second dispatch is consumed silently (pinned as-is)', async () => {
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamRoster(ctx, [rosterRow('child-dup', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    const first = spawnExec('call-dup-a')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec: first, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emit(ctx, SETTLE_SEAM, first, spawnResult())
+    expect(pairing.teamDispatchByChildId?.get('child-dup')?.callId).toBe('call-dup-a')
+    // The second spawn resolves the SAME child id: the early return keeps the
+    // first pairing untouched. PINNED AS-IS: the second dispatch records no
+    // continuation row either (the code documents "first pairing wins; a later
+    // message re-waking the member adds nothing") — the carried minor assumed
+    // an explicit unresolved continuation for the second dispatch, so this
+    // test pins the documented current behavior for PM to revisit.
+    const second = spawnExec('call-dup-b')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec: second, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emit(ctx, SETTLE_SEAM, second, spawnResult())
+    expect(state(pairing)).toEqual({ call: 0, child: 1 })
+    expect(pairing.teamDispatchByChildId?.get('child-dup')?.callId).toBe('call-dup-a')
+    expect(ledgerRows(harnessDir).map((row) => row.kind)).toEqual(['dispatch', 'dispatch'])
+    // The first pairing still owns the settlement; the duplicate never settles.
+    emitLifecycleEnd(ctx, { id: 'child-dup', stopReason: 'completed' }, leadAgent)
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-dup', role: 'fullstack-dev' }),
+    ])
+    expect(rows).toHaveLength(3) // dispatch, dispatch, settle — nothing else
+    expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
   })
 })

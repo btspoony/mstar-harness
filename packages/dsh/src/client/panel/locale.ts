@@ -117,6 +117,12 @@
  * entries; the canvas itself keeps the edges / ports / partitions — only the
  * legend copy drops them). `zone.legend.agent-running` / `agent-settled` /
  * `agent-idle` remain.
+ *
+ * (the unresolved continuation state): the entity-status union gains `unresolved` —
+ * an Assignment-shaped team dispatch whose latest ledger fact is the explicit
+ * `continuation`/`unresolved` row is a DISTINCT non-running entity, never
+ * phantom running and never counted in `executing`.
+ * `zone.legend.agent-unresolved` is its legend-family label (zh + en).
  */
 
 import type { LocaleDictOf } from '@deepseek-ai/dsh-client-ui-slots'
@@ -156,6 +162,7 @@ export type PanelKey =
   | 'event-log.field.name'
   | 'event-log.field.members'
   | 'event-log.field.stop-reason'
+  | 'event-log.field.reason'
   | 'event-log.field.severity'
   | 'event-log.field.code'
   | 'event-log.field.message'
@@ -177,6 +184,7 @@ export type PanelKey =
   | 'zone.legend.title'
   | 'zone.legend.agent-running'
   | 'zone.legend.agent-settled'
+  | 'zone.legend.agent-unresolved'
   | 'zone.legend.agent-idle'
   | 'zone.iteration.step-label'
   | 'zone.iteration.step-badge'
@@ -297,6 +305,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.name': '运行名称',
   'event-log.field.members': '成员数',
   'event-log.field.stop-reason': '停止原因',
+  'event-log.field.reason': '未决原因',
   'event-log.field.severity': '严重度',
   'event-log.field.code': '代码',
   'event-log.field.message': '信息',
@@ -318,6 +327,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': '图例',
   'zone.legend.agent-running': '执行中实体（发光）',
   'zone.legend.agent-settled': '已完成实体（独立绿框 + ✓；off 阶段不显示）',
+  'zone.legend.agent-unresolved': '未决实体（派发已被记录，但其延续无法配对；灰点，不计执行中）',
   'zone.legend.agent-idle': '未工作实体（虚线）',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
@@ -433,6 +443,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'event-log.field.name': 'Run name',
   'event-log.field.members': 'Members',
   'event-log.field.stop-reason': 'Stop reason',
+  'event-log.field.reason': 'Unresolved reason',
   'event-log.field.severity': 'Severity',
   'event-log.field.code': 'Code',
   'event-log.field.message': 'Message',
@@ -454,6 +465,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'zone.legend.title': 'Legend',
   'zone.legend.agent-running': 'agent running (glow)',
   'zone.legend.agent-settled': 'settled agent (green done frame + ✓; off-tier roles show neither)',
+  'zone.legend.agent-unresolved': 'unresolved agent (dispatch observed, its continuation unpaired; muted dot, not executing)',
   'zone.legend.agent-idle': 'idle agent (dashed)',
   'zone.iteration.step-label': '{n}/{total}',
   'zone.iteration.step-badge': '{n}',
