@@ -1,9 +1,12 @@
 /**
- * Task 2 (#526) — the native writable command surface.
+ * Task 2 (#526) — the native writable command surface — plus Task 5 (#530)'s
+ * `mstar_execution_clear`, the dsh-native tool beyond the shared-command
+ * mapping.
  *
  * The seven writable mstar commands (plan bind/prepare/progress/complete +
  * workflow register + issue add/close) are registered as native dsh tools over
- * `ctx.tools.register`. Each tool calls the shared `@mstar-harness/commands`
+ * `ctx.tools.register`, alongside the one dsh-native clear tool. Each command
+ * tool calls the shared `@mstar-harness/commands`
  * implementation through its programmatic entry (`executeCommand`), and
  * injects `sessionId` from `exec.agent.id` — NEVER from model arguments.
  *
@@ -40,7 +43,7 @@ const PLAN_ID = 'plan-native-commands'
 const PARENT_ID = 'session-native-parent'
 const CHILD_ID = 'session-native-child'
 
-/** The named writable set (issue AC) — every tool the module must register. */
+/** The named writable set (issue AC) — every tool the module must register: the 7 shared-command tools + the dsh-native clear (#530). */
 const TOOL_NAMES = [
   'mstar_plan_bind',
   'mstar_plan_prepare',
@@ -49,6 +52,7 @@ const TOOL_NAMES = [
   'mstar_workflow_register',
   'mstar_issue_add',
   'mstar_issue_close',
+  'mstar_execution_clear',
 ] as const
 
 let booted: BootResult | undefined
@@ -518,5 +522,49 @@ describe('native binding adoption — a native plan bind persists the executionB
     }))
     expect(refused.status).not.toBe('ok')
     expect(storedBinding(app.harnessDir, app.root)?.executionBinding?.session).toEqual(real)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// (f) Task 5 (#530) — the native clear (the slash command's replacement)
+// ---------------------------------------------------------------------------
+
+describe('native execution clear — the replacement reachability for clearExecutionBinding', () => {
+  it('clears the adopted binding after a native bind, preserving the selection and detaching the ledger attribution', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(bound.status).toBe('ok')
+    expect(storedBinding(app.harnessDir, app.root)?.executionBinding).not.toBeNull()
+
+    const cleared = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(cleared.status).toBe('ok')
+    expect(cleared.command).toBe('execution.clear')
+    const binding = storedBinding(app.harnessDir, app.root)
+    expect(binding?.executionBinding ?? null).toBeNull()
+    // The user selection survives the clear (the same fact the slash clear
+    // guaranteed).
+    expect(binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    // The ledger's explicit route required the binding: after the clear this
+    // session is no longer attributed.
+    expect(await resolveExecutionLedgerTarget(CHILD_ID, app.root)).toBeNull()
+  })
+
+  it('refuses with the named error when there is nothing to clear', async () => {
+    const app = await bootedWithFixture()
+    const child = agentOf(CHILD_ID, app.root)
+    const refused = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(refused.status).toBe('refused')
+    expect(refused.code).toBe('execution.clear.no-binding')
+    // The existing named error text of the removed slash arm, surfaced as the
+    // refusal message's first line (the envelope appends Help/Recovery lines).
+    expect(String(refused.message).split('\n')[0]).toBe('no clearable execution binding')
+    const details = refused.details as { recovery?: string; helpRoute?: string } | undefined
+    expect(typeof details?.recovery).toBe('string')
+    expect((details?.recovery ?? '').length).toBeGreaterThan(0)
   })
 })

@@ -1,144 +1,66 @@
-import { spawn } from 'node:child_process'
-import {
-  decodeExecutionSessionRef,
-  executionContextFor,
-  resumeExecutionSession,
-  serializeExecutionValue,
-  type ExecutionBinding,
-  type ExecutionCaller,
-} from '@mstar-harness/engine'
-import type { Context } from '@deepseek-ai/cordis'
-import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import { adoptExecutionBinding, clearExecutionBinding, readExecutionWorkflowSource } from './workflow-selection.ts'
-import type { HarnessResolver } from './_shared.ts'
-const SPOOF_KEYS = [
-  'MSTAR_EXECUTION_IDENTITY',
-  'MSTAR_EXECUTION_SESSION_ID',
-  'MSTAR_HOST_SESSION_ID',
-  'MSTAR_HARNESS_DIR',
-  'MSTAR_SESSION_ID',
-  'MSTAR_CALLER_ID',
-] as const
+/**
+ * The durable execution binding's clear internals (#530).
+ *
+ * The slash command that used to host the clear arm is removed (#530) —
+ * the native path is its replacement: `mstar_plan_bind` adopts (the Task 3
+ * native adoption in `native-commands.ts`), and the `mstar_execution_clear`
+ * tool wraps {@link clearExecutionSessionBinding} — the readable-record guard,
+ * the nothing-to-clear guard, and the slash clear's `selectedGeneration` read,
+ * kept together here so the native clear validates exactly what the slash
+ * clear validated.
+ */
+import { clearExecutionBinding, readExecutionWorkflowSource } from './workflow-selection.ts'
+import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 
-type SessionScope = Omit<ExecutionCaller, 'sessionId'>
-type AdoptRequest = { operation: 'adopt'; sessionRef: string }
-type ClearRequest = { operation: 'clear' }
-type RunRequest = { operation: 'run'; workflowId: string; role: 'coordinator'; argv: string[] }
-type ExecutionRequest = AdoptRequest | ClearRequest | RunRequest
+/**
+ * One clear attempt's terminal answer: `cleared` (the durable slot no longer
+ * carries an execution binding), `no-binding` (nothing to clear — the session
+ * holds no adopted execution binding), or `refused` with the store's own
+ * reason (an unreadable/cwd-mismatched record or a refused write is never
+ * reported as a clear).
+ */
+export type ExecutionClearOutcome =
+  | { kind: 'cleared' }
+  | { kind: 'no-binding' }
+  | { kind: 'refused'; reason: string }
 
-type NativeSession = {
-  id?: unknown
-  header?: { id?: unknown; cwd?: unknown; origin?: unknown; delegationDepth?: unknown; parentSession?: unknown }
-}
-
-function nativeSessionOf(invocation: CommandInvocation): NativeSession {
-  return invocation.agent.session as unknown as NativeSession
-}
-
-function nativeFacts(invocation: CommandInvocation): { sessionId: string; cwd: string; leaf: boolean } {
-  const session = nativeSessionOf(invocation)
-  const header = session.header
-  const sessionId = typeof header?.id === 'string' && header.id.trim() !== '' ? header.id : undefined
-  const cwd = typeof header?.cwd === 'string' && header.cwd.trim() !== '' ? header.cwd : undefined
-  if (sessionId === undefined || cwd === undefined) throw new Error('native session identity and cwd are required')
-  const leaf = header?.origin === 'subagent' || (typeof header?.delegationDepth === 'number' && header.delegationDepth > 0)
-  return { sessionId, cwd, leaf }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-export function parseExecutionRequest(raw: string): ExecutionRequest {
-  let value: unknown
-  try { value = JSON.parse(raw) } catch { throw new Error('execution command input must be JSON') }
-  if (!isRecord(value) || typeof value.operation !== 'string') throw new Error('execution command input must be a closed JSON object')
-  if (value.operation === 'clear') {
-    if (Object.keys(value).length !== 1) throw new Error('clear does not accept extra fields')
-    return { operation: 'clear' }
-  }
-  if (value.operation === 'adopt') {
-    if (Object.keys(value).length !== 2 || typeof value.sessionRef !== 'string' || value.sessionRef === '') throw new Error('adopt requires only a canonical sessionRef')
-    return { operation: 'adopt', sessionRef: value.sessionRef }
-  }
-  if (value.operation === 'run') {
-    if (Object.keys(value).length !== 4 || typeof value.workflowId !== 'string' || value.workflowId === '' || value.role !== 'coordinator' || !Array.isArray(value.argv) || value.argv.length === 0 || value.argv.some((arg) => typeof arg !== 'string' || arg === '')) {
-      throw new Error('run requires workflowId, role coordinator, and a non-empty argv')
-    }
-    return { operation: 'run', workflowId: value.workflowId, role: value.role, argv: value.argv as string[] }
-  }
-  throw new Error('unknown execution operation')
-}
-function identityEnv(base: NodeJS.ProcessEnv, scope: { sessionId: string } & SessionScope): NodeJS.ProcessEnv {
-  const env = { ...base }
-  for (const key of SPOOF_KEYS) delete env[key]
-  env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue({ source: 'host', ...scope })
-  return env
-}
-
-export function runExecutionCommand(argv: readonly string[], env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<{ code: number; stdout: string; stderr: string }> {
-  if (argv.length === 0 || argv.some((arg) => arg === '')) return Promise.reject(new Error('execution argv must be non-empty'))
-  return new Promise((resolve, reject) => {
-    const child = spawn(argv[0]!, argv.slice(1), { env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''; let stderr = ''
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    const abort = () => child.kill('SIGTERM')
-    signal.addEventListener('abort', abort, { once: true })
-    child.once('error', (error) => { signal.removeEventListener('abort', abort); reject(error) })
-    child.once('close', (code, signalName) => {
-      signal.removeEventListener('abort', abort)
-      if (signal.aborted) reject(new Error(`execution child cancelled (${signalName ?? 'SIGTERM'})`))
-      else resolve({ code: code ?? 1, stdout, stderr })
-    })
-  })
-}
-
-async function handleExecutionCommand(invocation: CommandInvocation, resolver: HarnessResolver): Promise<CommandResult> {
-  const facts = nativeFacts(invocation)
-  // Fail closed before ANY operation (and before the harness probe): a known
-  // leaf/subagent seat may never adopt, clear or launch an execution, so it can
-  // never obtain a writer seat or hand a coordinator identity to a child.
-  if (facts.leaf) {
-    throw new Error('known leaf sessions cannot adopt, clear, or launch execution')
-  }
-  const request = parseExecutionRequest(invocation.rawInput.trim())
-  const harnessDir = resolver.forWorkspace(facts.cwd)
-  if (harnessDir === null) throw new Error('execution harness is unavailable for this native session')
-  if (request.operation === 'clear') {
-    const source = await readExecutionWorkflowSource({ harnessDir }, { sessionId: facts.sessionId, cwd: facts.cwd })
-    if (!clearExecutionBinding(
-      harnessDir,
-      facts.sessionId,
-      facts.cwd,
-      source.kind === 'unavailable' || source.storeId === undefined || source.epoch === undefined
-        ? undefined
-        : { storeId: source.storeId, epoch: source.epoch },
-    )) throw new Error('no clearable execution binding')
-    return { kind: 'success', text: 'execution binding cleared' }
-  }
-  if (request.operation === 'adopt') {
-    const ref = decodeExecutionSessionRef(request.sessionRef)
-    if (ref.sessionId !== facts.sessionId) throw new Error('session reference does not match the native carrying session')
-    const binding: ExecutionBinding = { version: 1, harnessRoot: harnessDir, session: ref }
-    const resumed = await resumeExecutionSession(executionContextFor({ harnessDir }, { source: 'host', sessionId: ref.sessionId, workflowId: ref.workflowId, role: 'coordinator' }), ref)
-    if (resumed.data.sessionId !== facts.sessionId || resumed.data.workflowId !== ref.workflowId) throw new Error('current execution session admission did not match the native session')
-    if (!adoptExecutionBinding(harnessDir, facts.sessionId, facts.cwd, binding, { storeId: resumed.storeId, epoch: resumed.epoch })) throw new Error('execution binding adoption refused')
-    return { kind: 'success', text: `execution binding adopted for ${ref.workflowId}` }
-  }
-  const scope = { workflowId: request.workflowId, role: request.role }
-  executionContextFor({ harnessDir }, { source: 'host', sessionId: facts.sessionId, ...scope })
-  const result = await runExecutionCommand(request.argv, identityEnv(process.env, { sessionId: facts.sessionId, ...scope }), invocation.signal)
-  return { kind: result.code === 0 ? 'success' : 'error', text: result.code === 0 ? result.stdout : result.stderr || `execution exited with code ${result.code}` }
-}
-
-export function registerExecutionSessionCommand(ctx: Context, resolver: HarnessResolver): void {
-  ctx.inject(['commands'], (commandsCtx) => {
-    commandsCtx.commands.register({
-      name: 'mstar-execution',
-      description: 'Adopt, clear, or run an execution session using native identity',
-      input: { hint: '{operation JSON}' },
-      handler: (invocation) => handleExecutionCommand(invocation, resolver),
-    })
-  })
+/**
+ * Clear the calling session's own durable execution binding — the validation
+ * and adoption internals the native `mstar_execution_clear` tool imports,
+ * replacing the removed slash command's `clear` arm. The order replicates the
+ * slash clear, with one explicit no-op guard the tool turns into its named
+ * refusal:
+ *
+ * 1. the durable record must be READABLE for this exact `(sessionId, cwd)` —
+ *    an unreadable or cwd-mismatched record is a refusal, never a blind write
+ *    against an untrusted slot;
+ * 2. a record WITHOUT a durable `executionBinding` has nothing to clear —
+ *    reported instead of writing an empty row;
+ * 3. the active-set source read supplies the optional `selectedGeneration`
+ *    (the observed store id + epoch) exactly as the slash arm computed it —
+ *    absent when the source read is unavailable — so the durable-selection
+ *    rung validates the clear against the generation this call observed.
+ *
+ * `clearExecutionBinding` itself preserves the user selection and merges the
+ * exclusion floor by max; a refused write comes back as `refused` with the
+ * store's reason.
+ */
+export async function clearExecutionSessionBinding(
+  harnessDir: string,
+  sessionId: string,
+  cwd: string,
+): Promise<ExecutionClearOutcome> {
+  const read = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  if (read.kind !== 'ok') return { kind: 'refused', reason: read.reason }
+  if (read.binding === undefined || read.binding.executionBinding === null) return { kind: 'no-binding' }
+  const source = await readExecutionWorkflowSource({ harnessDir }, { sessionId, cwd })
+  const cleared = clearExecutionBinding(
+    harnessDir,
+    sessionId,
+    cwd,
+    source.kind === 'unavailable' || source.storeId === undefined || source.epoch === undefined
+      ? undefined
+      : { storeId: source.storeId, epoch: source.epoch },
+  )
+  return cleared ? { kind: 'cleared' } : { kind: 'refused', reason: 'the durable binding write refused the clear' }
 }

@@ -46,7 +46,6 @@ import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
 import { registerNativeCommandTools } from './gates/native-commands.ts'
-import { registerExecutionSessionCommand } from './gates/execution-session.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
@@ -699,7 +698,7 @@ export function apply(ctx: Context, config: Config): void {
   // THIS context) whose stdio `env` carries that agent's own id as
   // `MSTAR_HOST_SESSION_ID` — the per-caller identity channel the stdio MCP
   // route has (ADR: teams' name-target addressing is not a shell identity
-  // channel). Known leaf seats (the execution-session leaf contract) get no
+  // channel). Known leaf seats (the scoped-mount leaf contract) get no
   // mount. Optional-by-presence: the package absent → ONE debug line, no
   // registrations, boot unaffected. Disposal: the listener is a fiber-scoped
   // effect and each mount is a child fiber of this context, so the HMR fiber
@@ -747,7 +746,6 @@ export function apply(ctx: Context, config: Config): void {
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
   // registered from `harness-commands/` when the commands service exists.
   registerMstarCommands(ctx)
-  registerExecutionSessionCommand(ctx, resolver)
 
   // Skills mount — single canonical mount: register configured
   // skill roots with the dsh skill-filesystem provider contract. The object form

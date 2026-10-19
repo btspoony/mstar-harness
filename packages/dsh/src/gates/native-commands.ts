@@ -12,6 +12,13 @@
  * the tool arguments is STRIPPED before admission — identity is never
  * model-choosable on this surface.
  *
+ * Beyond that mapping the surface carries exactly ONE dsh-native tool:
+ * `mstar_execution_clear` (Task 5) — the replacement reachability for the
+ * durable execution binding's clear after the slash command that hosted it was
+ * removed. It wraps the dsh-side clear internals directly (there is no shared
+ * `execution.clear` command to map through) and takes no parameters at all —
+ * identity comes from `exec.agent.id` the same way.
+ *
  * No shell anywhere in the path: `executeCommand` runs in-process, and the
  * injected `effects` carry no process/browser/dashboard implementation, so an
  * effect-taking command can only refuse.
@@ -22,10 +29,11 @@
  * returns the `CommandEnvelope` it received as the canonical value — no
  * second validation layer, no paraphrase.
  *
- * Module boundary: self-contained for the Task 3 adoption (native bind) and
- * the Task 5 removal — the only imports are the cordis context type, the
+ * Module boundary: self-contained for the native adoption (Task 3 bind) and
+ * the Task 5 clear — the only imports are the cordis context type, the
  * dsh-tools seam, `@mstar-harness/commands`, the engine's execution-session
- * primitives, and the shared cwd reader / workflow-selection resolvers.
+ * primitives, the execution-session clear internals, and the shared cwd
+ * reader / workflow-selection resolvers.
  */
 import { type Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -42,8 +50,9 @@ import type {
 } from '@mstar-harness/commands'
 import { sessionCwdOf } from './_shared.ts'
 import { adoptExecutionBinding, refusalOf } from './workflow-selection.ts'
+import { clearExecutionSessionBinding } from './execution-session.ts'
 
-/** The named writable set (issue AC) — command ids, in registration order. */
+/** The named writable set (issue AC) — the shared command ids that map 1:1 onto tools, in registration order. The surface gains exactly one tool beyond this list: the dsh-native `mstar_execution_clear` (Task 5). */
 const NATIVE_COMMAND_IDS = [
   'plan.bind',
   'plan.prepare',
@@ -207,8 +216,8 @@ function adoptionRefusal(code: string, message: string, recovery: string): Comma
 
 /**
  * Task 3 (#527): persist the durable `executionBinding` slot after a native
- * `plan bind` succeeds — the adoption the /mstar-execution slash command
- * performed, moved onto the native path. The binding order's durable-selection
+ * `plan bind` succeeds — the adoption the removed slash command performed,
+ * kept on the native path. The binding order's durable-selection
  * rung and the workflow ledger's explicit route
  * (`resolveExecutionLedgerTarget`) read exactly this slot, so ledger
  * attribution works with no slash command.
@@ -338,6 +347,86 @@ function nativeCommandTool(
 }
 
 /**
+ * The logical command id the native clear reports in its envelope. There is
+ * no shared `execution.clear` command to map through `nativeCommandTool` —
+ * the clear is a dsh-native tool wrapping the dsh-side binding internals, so
+ * its envelope is assembled here with the same shape the shared commands
+ * answer.
+ */
+const EXECUTION_CLEAR_COMMAND = 'execution.clear'
+
+/** The ok envelope of a completed clear (the shared commands' ok shape). */
+function executionClearOk(): CommandEnvelope {
+  return { version: 1, command: EXECUTION_CLEAR_COMMAND, status: 'ok', code: 'execution.clear.ok', exitCode: 0, data: null }
+}
+
+/**
+ * Task 5 (#530): the native `mstar_execution_clear` tool — the replacement
+ * reachability for `clearExecutionBinding` after the removal of the slash
+ * command whose `clear` arm was its only caller. It wraps
+ * `clearExecutionSessionBinding` (the slash clear's validation set: readable
+ * record guard, nothing-to-clear guard, and the observed-generation
+ * `selectedGeneration` read) with the identity from `exec.agent.id` — the
+ * parameter face is EMPTY, so identity is never model-choosable. The named
+ * outcomes surface as envelopes: `cleared` → ok, `no-binding` → the named
+ * refusal the slash arm threw, an unreadable/refused store → refusal carrying
+ * the store's own reason.
+ */
+function executionClearTool(
+  resolver: { forAgent(agent: unknown): string | null },
+) {
+  return defineTool({
+    name: 'mstar_execution_clear',
+    description:
+      "Clear the calling session's own durable mstar execution binding (the one the native mstar_plan_bind tool adopted). " +
+      'The session id comes from the calling agent identity (exec.agent.id) — there are no parameters and identity is never model-choosable; ' +
+      "the user's workflow selection and exclusion floor are preserved. " +
+      'Clearing a session with no adopted binding is a named refusal (no clearable execution binding), ' +
+      'and an unreadable or refused binding record is a refusal carrying the store reason, never a silent no-op.',
+    parameters: {},
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [{ type: 'text', text: envelopeSummary(EXECUTION_CLEAR_COMMAND, value as CommandEnvelope) }],
+    },
+    presentCall: args => ({
+      card: 'generic',
+      title: `Command ${EXECUTION_CLEAR_COMMAND}`,
+      kind: 'other',
+      rawInput: JSON.stringify(args)?.slice(0, 160) ?? '',
+    }),
+    // Mutates the execution authority's binding slot — exclusive, matching
+    // the command tools above.
+    isConcurrencySafe: () => false,
+    async execute(_args, exec) {
+      const harnessDir = resolver.forAgent(exec.agent)
+      const cwd = sessionCwdOf(exec.agent)
+      if (harnessDir === null || cwd === undefined) {
+        return toCanonicalValue(refusalEnvelope({
+          command: EXECUTION_CLEAR_COMMAND,
+          status: 'refused',
+          code: 'execution.clear.no-harness',
+          exitCode: 1,
+          message: 'the carrying session has no resolved harness dir or workspace — the execution binding could not be read for the clear',
+          recovery: 'Open the session in the workspace that declares the control harness (.mstar/ or .mstarc) and re-run the clear.',
+        }))
+      }
+      const outcome = await clearExecutionSessionBinding(harnessDir, callerSessionIdOf(exec), cwd)
+      if (outcome.kind === 'cleared') return toCanonicalValue(executionClearOk())
+      return toCanonicalValue(refusalEnvelope({
+        command: EXECUTION_CLEAR_COMMAND,
+        status: 'refused',
+        code: outcome.kind === 'no-binding' ? 'execution.clear.no-binding' : 'execution.clear.store-refused',
+        exitCode: 1,
+        message: outcome.kind === 'no-binding' ? 'no clearable execution binding' : `no clearable execution binding (${outcome.reason})`,
+        recovery: outcome.kind === 'no-binding'
+          ? 'This session has no durable execution binding to clear — adopt one first with the native mstar_plan_bind tool if a binding was expected; otherwise no action is needed.'
+          : 'Resolve the store refusal named in the message (the durable binding record must be readable and writable for this session and its exact cwd), then re-run the clear.',
+      }))
+    },
+  })
+}
+
+/**
  * Register the native writable command tools. The registrations are deferred
  * with `ctx.inject(['tools'], …)` (the optional-unit pattern, as in
  * `tools.ts`) and each registration's disposer is returned as the inject
@@ -356,6 +445,9 @@ export function registerNativeCommandTools(ctx: Context, resolver: { forAgent(ag
       if (definition === undefined) throw new Error(`no shared command definition for the native tool: ${commandId}`)
       disposers.push(toolsCtx.tools.register(nativeCommandTool(definition, resolver)))
     }
+    // Task 5 (#530): the one dsh-native tool beyond the shared-command mapping
+    // — the surface's total is these 7 command tools + mstar_execution_clear.
+    disposers.push(toolsCtx.tools.register(executionClearTool(resolver)))
     return () => {
       for (const dispose of disposers.splice(0)) dispose()
     }
