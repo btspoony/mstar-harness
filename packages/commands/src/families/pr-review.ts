@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, unlinkSync, openSync, fstatSync, 
 import path from "node:path";
 import {
   computePrTally, planReviewPost, prReviewReportPath, prReviewSeatPrompt, prReviewSizing,
-  resolvePrReviewTier, resolveReviewDir, PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS, validatePrReviewReport,
+  resolvePrReviewSettlement, resolvePrReviewTier, resolveReviewDir, PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS, validatePrReviewReport,
   type MergeClass, type PrReportTarget, type ReviewPostPlan,
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
@@ -16,7 +16,8 @@ import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../t
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
 type Verb = (typeof verbs)[number];
 type Input = {
-  findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string; incompleteReason?: string; unscanned?: string;
+  findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string;
+  stopped?: string; requiredDomains?: string; openedDomains?: string; diffBasis?: string;
   reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
   pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
   base?: string; head?: string; largestFileTotal?: string;
@@ -24,14 +25,14 @@ type Input = {
 };
 const inputSchema = z.object({
   findings: z.string().optional(), unverified: z.string().optional(), unmetAcUnsafe: z.string().optional(), unmetAcSafe: z.string().optional(),
-  incompleteReason: z.string().optional(), unscanned: z.string().optional(),
+  stopped: z.string().optional(), requiredDomains: z.string().optional(), openedDomains: z.string().optional(), diffBasis: z.string().optional(),
   reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
   pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }, { key: "incompleteReason", flags: "--incomplete-reason <text>", required: false, help: "Declares the run incomplete with this cause; requires --unscanned." }, { key: "unscanned", flags: "--unscanned <csv>", required: false, help: "Comma-separated scope the run never scanned; a lone none (case-insensitive) declares nothing left unscanned; requires --incomplete-reason." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; all counts default to zero and are limited to 0–50." },
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Comma-separated domains the resolved tier's seat plan required." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Comma-separated domains whose seat returned evidence." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, defaultValue: "readable", help: "Whether the resolved diff basis could be read; defaults to readable." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; the incomplete verdict is derived from the run facts (--stopped, --required-domains/--opened-domains, --diff-basis), never elapsed time; all counts default to zero and are limited to 0–50." },
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
@@ -105,19 +106,13 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
   try {
     if (verb === "tally") {
       const file = abs(context.cwd, need(input.findings, "--findings"));
- // One collection phase for every tally input: the findings payload, the two
- // incomplete flags and the three counts all append diagnostics, and a single
+ // One collection phase for every tally input: the findings payload, the
+ // four run facts and the three counts all append diagnostics, and a single
  // refusal carries all of them, so one call reports every invalid field
  // instead of costing the caller a second rerun (packages/cli/AGENTS.md
- // § Aggregated validation).
- // A marked-incomplete run is all-or-nothing: the token without its cause
- // and unscanned scope is unreadable, so the two flags travel together. The
- // cause renders on one header line (`cause: <reason>`) and the scope entries
- // join the single `unscanned:` line, so a blank or multi-line value in
- // either flag is a caller error refused here as usage (exit 2) rather than
- // surfacing as the engine guard's internal failure (exit 1). A lone
- // `--unscanned none` (case-insensitive) is the documented sentinel for an
- // empty scope, which the engine renders as `none`.
+ // § Aggregated validation). The run facts feed the derivation in
+ // `resolvePrReviewSettlement`; nothing about elapsed time is an input, so a
+ // run past its tier clock with complete coverage still settles.
       const diagnostics: RefusalDiagnostic[] = [];
       const allowed: readonly string[] = ["must-fix", "should-fix", "nit"];
       let findings: { mergeClass: MergeClass }[] = [];
@@ -151,18 +146,22 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
           });
         }
       }
-      if ((input.incompleteReason === undefined) !== (input.unscanned === undefined)) {
-        diagnostics.push({
-          path: input.incompleteReason === undefined ? "incompleteReason" : "unscanned",
-          code: "required",
-          message: "--incomplete-reason and --unscanned go together",
-        });
+      if (input.stopped !== undefined && (input.stopped.trim() === "" || /[\r\n]/.test(input.stopped))) {
+        diagnostics.push({ path: "stopped", code: "invalid", message: "--stopped must be a single line of non-blank text" });
       }
-      if (input.incompleteReason !== undefined && (input.incompleteReason.trim() === "" || /[\r\n]/.test(input.incompleteReason))) {
-        diagnostics.push({ path: "incompleteReason", code: "invalid", message: "--incomplete-reason must be a single line of non-blank text" });
-      }
-      if (input.unscanned !== undefined && input.unscanned.split(",").some((entry) => entry.trim() === "" || /[\r\n]/.test(entry))) {
-        diagnostics.push({ path: "unscanned", code: "invalid", message: "--unscanned must be a comma-separated list of single-line non-blank entries" });
+      const domains = (raw: string | undefined, path: "requiredDomains" | "openedDomains", flag: string): readonly string[] | undefined => {
+        if (raw === undefined) return undefined;
+        const entries = raw.split(",").map((entry) => entry.trim());
+        if (entries.some((entry) => entry === "" || /[\r\n]/.test(entry))) {
+          diagnostics.push({ path, code: "invalid", message: `${flag} must be a comma-separated list of single-line non-blank entries` });
+          return undefined;
+        }
+        return entries;
+      };
+      const requiredDomains = domains(input.requiredDomains, "requiredDomains", "--required-domains");
+      const openedDomains = domains(input.openedDomains, "openedDomains", "--opened-domains");
+      if (input.diffBasis !== undefined && input.diffBasis !== "readable" && input.diffBasis !== "unreadable") {
+        diagnostics.push({ path: "diffBasis", code: "invalid", message: "--diff-basis must be readable or unreadable" });
       }
       const count = (raw: string | undefined, label: string, path: string) => {
         if (raw === undefined) return 0;
@@ -176,19 +175,20 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const unmetAcUnsafe = count(input.unmetAcUnsafe, "--unmet-ac-unsafe", "unmetAcUnsafe");
       const unmetAcSafe = count(input.unmetAcSafe, "--unmet-ac-safe", "unmetAcSafe");
       if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics);
-      const rawScope = input.unscanned ?? "";
-      const incomplete = input.incompleteReason === undefined ? undefined : {
-        reason: need(input.incompleteReason, "--incomplete-reason"),
-        // A lone `none` (case-insensitive, surrounding whitespace ignored) is
-        // the documented sentinel for the engine's empty scope; every other
-        // list maps to its trimmed non-empty entries.
-        unscanned: /^none$/i.test(rawScope.trim()) ? [] : rawScope.split(",").map((entry) => entry.trim()).filter((entry) => entry !== ""),
-      };
+      // The trigger list lives in the engine (one implementation): the CLI
+      // only reports the run's facts, and the derived cause/scope travels in
+      // the unchanged `incomplete` field of the tally envelope.
+      const settlement = resolvePrReviewSettlement({
+        ...(input.stopped === undefined ? {} : { stopped: input.stopped }),
+        ...(requiredDomains === undefined ? {} : { requiredDomains }),
+        ...(openedDomains === undefined ? {} : { openedDomains }),
+        diffBasisReadable: input.diffBasis !== "unreadable",
+      });
       const result = computePrTally({
         findings,
         unverifiedCount,
         unmetAc: [...Array.from({ length: unmetAcUnsafe }, () => ({ unsafeToShip: true })), ...Array.from({ length: unmetAcSafe }, () => ({ unsafeToShip: false }))],
-        ...(incomplete === undefined ? {} : { incomplete }),
+        ...(settlement.settled ? {} : { incomplete: settlement.incomplete }),
       });
       return ok(id, result);
     }
@@ -312,8 +312,10 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
       ...contract.args.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
       ...contract.options.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
       ...(verb === "tally" ? [
-        { name: "incompleteReason", ownership: "caller" as const, route, required: true, condition: { field: "unscanned", present: true }, constraint: "incompleteReason and unscanned must be supplied together" },
-        { name: "unscanned", ownership: "caller" as const, route, required: true, condition: { field: "incompleteReason", present: true }, constraint: "incompleteReason and unscanned must be supplied together" },
+        { name: "stopped", ownership: "caller" as const, route, required: false, constraint: "non-blank single line; presence derives the incomplete verdict" },
+        { name: "requiredDomains", ownership: "caller" as const, route, required: false, constraint: "comma-separated domain names the tier required" },
+        { name: "openedDomains", ownership: "caller" as const, route, required: false, constraint: "comma-separated domains whose seat returned evidence" },
+        { name: "diffBasis", ownership: "caller" as const, route, required: false, allowedValues: ["readable", "unreadable"] },
       ] : []),
       ...(verb === "report-path" ? [
         { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },

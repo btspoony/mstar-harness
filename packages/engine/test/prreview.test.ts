@@ -22,7 +22,7 @@
  * budgets, finding lint.
  */
 import { describe, expect, test } from "bun:test";
-import { computePrTally, PR_SCORE_BANDS, scoreBand, synthesizeReview } from "../src/prreview.js";
+import { computePrTally, PR_SCORE_BANDS, resolvePrReviewSettlement, scoreBand, synthesizeReview } from "../src/prreview.js";
 import type { GateResult } from "../src/core.js";
 import type { MstarReviewFinding, PrScoreBand, PrTallyInput, PrTallyResult, PrVerdict } from "../src/prreview.js";
 
@@ -1558,6 +1558,141 @@ describe("prReviewSeatPrompt — collectFolded option (collect-wave fold)", () =
 // the token is overridden, the count-derived score/band stay (labelled
 // `partial`), and the cause + unscanned scope travel with it.
 // ---------------------------------------------------------------------------
+
+describe("resolvePrReviewSettlement — settled vs incomplete from run facts (pr-review.md § Verdict synthesis)", () => {
+  // The boundary this block exists for: a run past its tier wall clock with
+  // complete coverage stays settled. Overrun is not an input — there is no
+  // time field to pass — so the verdict publishes its tally-derived token and
+  // the overrun is declared under `- notes:`.
+  test("complete coverage settles regardless of elapsed time", () => {
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["persist", "security"],
+      openedDomains: ["persist", "security"],
+      diffBasisReadable: true,
+    })).toEqual({ settled: true });
+  });
+
+  test("absent or empty facts settle", () => {
+    expect(resolvePrReviewSettlement()).toEqual({ settled: true });
+    expect(resolvePrReviewSettlement({})).toEqual({ settled: true });
+  });
+
+  test("a stop before synthesis derives the stop as the cause", () => {
+    expect(resolvePrReviewSettlement({ stopped: "cancelled before synthesis" })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "the run stopped before synthesis \u2014 cancelled before synthesis",
+        unscanned: [],
+      },
+    });
+    // An empty scope is legal: the display renders it as `none`.
+    expect(resolvePrReviewSettlement({
+      stopped: "killed by the operator",
+      requiredDomains: ["persist", "security"],
+      openedDomains: ["persist"],
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "the run stopped before synthesis \u2014 killed by the operator",
+        unscanned: ["security"],
+      },
+    });
+  });
+
+  test("a required domain whose seat never opened is the cause", () => {
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["persist", "security"],
+      openedDomains: ["persist"],
+      diffBasisReadable: true,
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "required domain seat(s) never opened: security",
+        unscanned: ["security"],
+      },
+    });
+  });
+
+  test("an unreadable resolved diff basis is the cause", () => {
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["persist"],
+      openedDomains: ["persist"],
+      diffBasisReadable: false,
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "the resolved diff basis could not be read",
+        unscanned: ["the resolved diff basis"],
+      },
+    });
+  });
+
+  test("with several conditions the stop wins and the scope is the union", () => {
+    expect(resolvePrReviewSettlement({
+      stopped: "context exhausted",
+      requiredDomains: ["persist", "security", "performance"],
+      openedDomains: ["persist"],
+      diffBasisReadable: false,
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "the run stopped before synthesis \u2014 context exhausted",
+        unscanned: ["security", "performance", "the resolved diff basis"],
+      },
+    });
+    // Without the stop, the missing domain wins over the unreadable basis and
+    // still carries both in its scope.
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["security"],
+      openedDomains: [],
+      diffBasisReadable: false,
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "required domain seat(s) never opened: security",
+        unscanned: ["security", "the resolved diff basis"],
+      },
+    });
+  });
+
+  test("an opened domain outside the required set is ignored", () => {
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["persist"],
+      openedDomains: ["persist", "docs"],
+    })).toEqual({ settled: true });
+  });
+
+  test.each([
+    ["", "stopped"],
+    ["   ", "stopped"],
+    ["cancelled\nbefore synthesis", "stopped"],
+    [42 as unknown as string, "stopped"],
+  ])("a blank, multi-line or non-string stop %p is rejected naming %s", (stopped, field) => {
+    expect(() => resolvePrReviewSettlement({ stopped })).toThrow(TypeError);
+    expect(() => resolvePrReviewSettlement({ stopped })).toThrow(new RegExp(`${field} must be a non-empty single-line string`));
+  });
+
+  test.each([
+    ["requiredDomains", "persist" as unknown as string[]],
+    ["requiredDomains", [""]],
+    ["requiredDomains", ["persist\nsecurity"]],
+    ["requiredDomains", [7 as unknown as string]],
+    ["openedDomains", "persist" as unknown as string[]],
+    ["openedDomains", ["persist", "  "]],
+  ])("%s rejects %p as a domain list", (field, value) => {
+    const facts = field === "requiredDomains" ? { requiredDomains: value } : { openedDomains: value };
+    expect(() => resolvePrReviewSettlement(facts)).toThrow(TypeError);
+    expect(() => resolvePrReviewSettlement(facts)).toThrow(
+      new RegExp(`${field} must be an array of non-empty single-line strings`),
+    );
+  });
+
+  test("a non-boolean diffBasisReadable is rejected", () => {
+    expect(() => resolvePrReviewSettlement({ diffBasisReadable: "unreadable" as unknown as boolean })).toThrow(
+      /diffBasisReadable must be a boolean/,
+    );
+  });
+});
 
 describe("computePrTally — incomplete verdict", () => {
   // The settled path is the whole boundary: the overrun boundary lives here too.
