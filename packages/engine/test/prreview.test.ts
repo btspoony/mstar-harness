@@ -1140,12 +1140,15 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
   });
 
   test("tally-only declaredScopes is not an envelope key — a stray copy is ignored, never carried", () => {
+    // Compatibility record, not a field-exclusion guard: this pins what the
+    // validator currently tolerates, so a future unknown-key policy change
+    // (rejection) is a deliberate decision rather than a silent drift. The
+    // missing unknown-key policy itself is tracked separately.
+    //
     // `mstar pr-review tally` echoes a settled run's truncated seat scopes as
     // `declaredScopes` (packages/commands/src/families/pr-review.ts). It is a
     // tally-output fact feeding the report's `- unverified:` / `- notes:`; the
-    // envelope has no such key. This pins the exposure: the validator ignores
-    // unknown keys, so a copy persists silently and reads as nothing. If a
-    // future change makes the name meaningful (refusal or carry), this flips.
+    // envelope has no such key, and tolerance is not permission.
     const topLevel = reviewDoc({ declaredScopes: ["docs"] });
     const inTally = reviewDoc();
     (inTally.tally as Record<string, unknown>).declaredScopes = ["docs"];
@@ -1156,9 +1159,15 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
       expect(gate.violations).toEqual([]);
     }
 
-    // The documented contract in pr-review.md: not part of mstar.review/v1.
+    // The documented contract in pr-review.md: not part of mstar.review/v1 —
+    // the default synthesis carries no such key at either level.
     const synthesized = synthesizeReview({ findings: [] });
-    expect(Object.keys(synthesized).sort()).toEqual(["findings", "schema", "summary_md", "tally", "verdict"]);
+    expect("declaredScopes" in synthesized).toBe(false);
+    expect("declaredScopes" in synthesized.tally).toBe(false);
+    expect(synthesized.schema).toBe("mstar.review/v1");
+    expect(synthesized.findings).toEqual([]);
+    expect(synthesized.tally.tally).toEqual({ mustFix: 0, shouldFix: 0, nit: 0, unverified: 0 });
+    expect(typeof synthesized.summary_md).toBe("string");
   });
 
   test("genuine computePrTally output round-trips for every check-table fixture (greptile P1)", () => {
