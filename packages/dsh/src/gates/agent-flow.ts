@@ -43,7 +43,10 @@ import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/en
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import type { AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
+import type { AgentFlowContinuationEventView, AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
+
+/** The projected continuation view lives in the shared types module (it is a member of the exported {@link AgentFlowView} union) — re-exported here for the module's existing import surface. */
+export type { AgentFlowContinuationEventView }
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
@@ -280,6 +283,14 @@ export type AgentFlowEvent =
       verdict: DispatchVerdict
       /** resolveDispatchHard result (recorded unconditionally, incl. hard denies). */
       hard: boolean
+      /**
+       * The live tool-call id the dispatch seam observed (the SAME id the
+       * settle / continuation row carries), when the exec supplied one — the
+       * call-scoped pairing identity that keeps two concurrent same-identity
+       * dispatches distinct. Omitted when the seam supplied none — never
+       * fabricated.
+       */
+      callId?: string
     }
   | {
       v: 1
@@ -313,6 +324,12 @@ export type AgentFlowEvent =
        * `Task N` tag (`taskId`).
        */
       taskRef?: string
+      /**
+       * The paired dispatch's live tool-call id — the settle row's call-scoped
+       * pairing identity (the SAME id the dispatch row carries). Omitted when
+       * the pairing ref carried none — never fabricated.
+       */
+      callId?: string
     }
   | {
       v: 1
@@ -397,30 +414,13 @@ export interface AgentFlowContinuationEvent {
   state: 'unresolved'
   /** Bounded display reason (normalized; why the continuation could not be paired). */
   reason: string
-}
-
-/**
- * The projected catalog view of {@link AgentFlowContinuationEvent} (the
- * unresolved-continuation projection).
- * A member of {@link readAgentFlow}'s event window ADDITIVELY: every existing
- * event view keeps its shape, and the client projection guards each field
- * read, so the added kind is a data member of the wire — not a union break.
- */
-export interface AgentFlowContinuationEventView {
-  readonly ts: number
-  readonly kind: 'continuation'
-  /** The dispatching session's stable id; null when the row carried none. */
-  readonly agent: string | null
-  /** The paired dispatch's Assignment `Execute as` ('' allowed — the dispatch row's grammar). */
-  readonly role: string
-  readonly planId: string | null
-  readonly taskId: string | null
-  /** Always null — the identity is the DISPATCH's (the same seat every identity-bearing row keeps). */
-  readonly taskCategory: null
-  /** The continuation state — `unresolved` is the ONLY value. */
-  readonly state: 'unresolved'
-  /** Bounded display reason (why the continuation could not be paired). */
-  readonly reason: string
+  /**
+   * The paired dispatch's live tool-call id, when the dispatch seam supplied
+   * one — the call-scoped pairing identity a reader pairs this row with
+   * (two concurrent same-identity dispatches stay distinct). Omitted when the
+   * ref carried none — never fabricated.
+   */
+  callId?: string
 }
 
 /** One durable ledger row this module appends and the reader projects (the continuation marker is projected, not dropped). */
@@ -934,6 +934,10 @@ export function recordDispatch(input: {
       ...(taskCategory !== undefined && taskCategory.trim() !== '' ? { taskCategory } : {}),
       verdict: verdictOf(input.violations, input.hard),
       hard: input.hard,
+      // The call-scoped pairing identity rides the DURABLE row: a reader can
+      // pair a settle/continuation onto THIS dispatch (not merely the most
+      // recent same-identity one) even across concurrent same-identity calls.
+      ...(callId !== undefined && callId.trim() !== '' ? { callId } : {}),
     }
     if (!appendEvent(input.workflowId, event, callIdentity('dispatch', agent, callId), input.harnessDir, input.selectedGeneration)) return
     try {
@@ -1025,6 +1029,7 @@ export function recordSettle(input: {
     }
     const childId = optionalLedgerId(input.childId)
     const taskRef = optionalLedgerId(input.taskRef)
+    const callId = optionalLedgerId(input.callId)
     const event: AgentFlowEvent = {
       v: 1,
       ts: Date.now(),
@@ -1037,6 +1042,9 @@ export function recordSettle(input: {
       ...(input.taskId !== undefined && input.taskId !== '' ? { taskId: input.taskId } : {}),
       ...(childId !== undefined ? { childId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
+      // The call-scoped pairing identity rides the DURABLE row (the same id
+      // the paired dispatch row carries) — exact pairing, not most-recent.
+      ...(callId !== undefined ? { callId } : {}),
     }
     if (appendEvent(input.workflowId, event, callIdentity('settle', input.agent, input.callId), input.harnessDir, input.selectedGeneration)) {
       try {
@@ -1198,6 +1206,7 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
     if (typeof rec.role !== 'string' || typeof rec.hard !== 'boolean') return undefined
     const verdict = rec.verdict
     if (verdict !== 'ok' && verdict !== 'advisory' && verdict !== 'denied') return undefined
+    const callId = optionalLedgerId(rec.callId)
     return {
       v: 1,
       ts: rec.ts,
@@ -1209,6 +1218,9 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
       ...(typeof rec.taskCategory === 'string' && rec.taskCategory !== '' ? { taskCategory: rec.taskCategory } : {}),
       verdict,
       hard: rec.hard,
+      // The call-scoped pairing identity follows the OMIT discipline (a
+      // malformed/empty value drops, the row stays readable).
+      ...(callId !== undefined ? { callId } : {}),
     }
   }
   if (kind === 'settle') {
@@ -1222,6 +1234,7 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
     // settle row itself stays readable (the row is defined by its outcome).
     const childId = optionalLedgerId(rec.childId)
     const taskRef = optionalLedgerId(rec.taskRef)
+    const callId = optionalLedgerId(rec.callId)
     return {
       v: 1,
       ts: rec.ts,
@@ -1234,6 +1247,7 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
       ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
       ...(childId !== undefined ? { childId } : {}),
       ...(taskRef !== undefined ? { taskRef } : {}),
+      ...(callId !== undefined ? { callId } : {}),
     }
   }
   if (kind === 'subagent-link') {
@@ -1273,6 +1287,7 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
     if (rec.state !== 'unresolved') return undefined
     if (typeof rec.role !== 'string') return undefined
     if (typeof rec.reason !== 'string' || rec.reason === '') return undefined
+    const callId = optionalLedgerId(rec.callId)
     return {
       v: 1,
       ts: rec.ts,
@@ -1283,6 +1298,8 @@ function eventFromUnknown(value: unknown): AgentFlowLedgerEvent | undefined {
       ...(typeof rec.taskId === 'string' && rec.taskId !== '' ? { taskId: rec.taskId } : {}),
       state: 'unresolved',
       reason: truncateLedgerField(normalizeWorkflowName(rec.reason), WORKFLOW_LEDGER_MAX_LABEL_LENGTH),
+      // The paired dispatch's call-scoped identity follows the OMIT discipline.
+      ...(callId !== undefined ? { callId } : {}),
     }
   }
   if (kind === 'workflow-verdict') {
@@ -1394,6 +1411,7 @@ function eventView(event: AgentFlowLedgerEvent): AgentFlowEventView | AgentFlowC
       taskCategory: event.taskCategory ?? null,
       ...(event.verdict !== undefined ? { verdict: event.verdict } : {}),
       ...(event.hard !== undefined ? { hard: event.hard } : {}),
+      ...(event.callId !== undefined ? { callId: event.callId } : {}),
     }
   }
   if (event.kind === 'workflow-run') {
@@ -1488,6 +1506,7 @@ function eventView(event: AgentFlowLedgerEvent): AgentFlowEventView | AgentFlowC
       planId: event.planId ?? null,
       taskId: event.taskId ?? null,
       taskCategory: null,
+      callId: event.callId ?? null,
       state: event.state,
       reason: event.reason,
     }
@@ -1509,6 +1528,7 @@ function eventView(event: AgentFlowLedgerEvent): AgentFlowEventView | AgentFlowC
     // completion carried none.
     ...(event.childId !== undefined ? { childId: event.childId } : {}),
     ...(event.taskRef !== undefined ? { taskRef: event.taskRef } : {}),
+    ...(event.callId !== undefined ? { callId: event.callId } : {}),
   }
 }
 
@@ -1572,11 +1592,12 @@ export function readAgentFlow(workflowDir: string, workflowId: string, limit?: n
       continue
     }
   }
-  // The continuation view (the unresolved-continuation projection) is an ADDITIVE member of the catalog's
-  // event window: typed through the shared AgentFlowView shape — every
-  // client consumer guards its reads per field, so the added kind is a data
-  // member of the wire, never a union break for an existing consumer.
-  return { events: events.map(eventView), summary: summaryOf(events) } as AgentFlowView
+  // The continuation view (the unresolved-continuation projection) is a member
+  // of the exported union: `AgentFlowView.events` carries the full projected
+  // element union (dispatch/settle/workflow/link AND `continuation`), so this
+  // return type-checks WITHOUT a cast — the compiler itself pins the contract
+  // that the runtime emission never outruns the exported shape.
+  return { events: events.map(eventView), summary: summaryOf(events) }
 }
 
 /* ---------------------------------- settle (real completion pairing) ---------------------------------- */
@@ -1647,6 +1668,10 @@ function recordContinuationUnresolved(ref: AgentFlowDispatchRef, reason: string)
       ...(ref.taskId !== undefined && ref.taskId !== '' ? { taskId: ref.taskId } : {}),
       state: 'unresolved',
       reason: displayReason,
+      // The paired dispatch's call id rides the durable row — the call-scoped
+      // pairing identity a reader attributes this row with (a continuation of
+      // an EARLIER same-identity dispatch is never attributed to the later one).
+      ...(ref.callId !== undefined && ref.callId.trim() !== '' ? { callId: ref.callId } : {}),
     }
     if (appendEvent(ref.workflowId, event, callIdentity('continuation', ref.agent, ref.callId), ref.harnessDir, ref.selectedGeneration)) {
       try {
@@ -1905,7 +1930,9 @@ function handleTeamPostExecute(input: {
  * continuable subagent child whose initial turn settlement carries the child
  * id and the terminal stop reason, so this row is a REAL completion (mapped
  * outcome) rather than a tool-return guess. An end whose pairing map entry is
- * missing is the early-end reconcile race (the member's turn settled before the spawn's
+ * pairs it. An end whose pairing map entry is missing — or whose pairing MAP
+ * does not exist yet (no spawn-pairing write ever happened) — is the early-end
+ * reconcile race (the member's turn settled before the spawn's
  * pairing write): the record is BUFFERED for the pairing write's reconcile
  * ({@link bufferTeamChildEnd} — team children only, service mounted only)
  * instead of the old silent drop. An unrecognized stop reason records the
@@ -1917,9 +1944,13 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
   const childId = rec?.id
   if (typeof childId !== 'string' || childId === '') return
   const map = pairing.teamDispatchByChildId
-  if (map === undefined) return
-  const ref = map.get(childId)
-  if (ref === undefined) {
+  const ref = map?.get(childId)
+  if (map === undefined || ref === undefined) {
+    // The end-buffer admission is ROSTER-gated, never pairing-map-gated: the
+    // team map may not exist yet (a store before its first spawn-pairing
+    // write), and an end arriving that early must still be BUFFERED so the
+    // later FIRST pairing write reconciles and settles it — never silently
+    // dropped because a lazily-created map was absent.
     bufferTeamChildEnd(ctx, pairing, parent, childId, rec?.stopReason)
     return
   }

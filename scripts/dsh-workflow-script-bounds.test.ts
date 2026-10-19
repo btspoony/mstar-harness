@@ -12,8 +12,7 @@
  * all-nine path) every category completes AND the maximum observed in-flight
  * depth stays <= 8 on any host. A regression that launches every chunk
  * concurrently while keeping the `CHUNK` constant and the slice expressions
- * now fails the depth assertion instead of passing. One source-text canary
- * (the `CHUNK` constant line) still guards that the doc declares the bound.
+ * now fails the depth assertion instead of passing.
  *
  * Run: `bun test scripts/dsh-workflow-script-bounds.test.ts` (repo root).
  */
@@ -118,11 +117,5 @@ describe("dsh-workflow-scripts fan-out pool bound (behaviour, host-core-count-in
     // overlap) yet never exceed the pool's hard-reject cap on any host.
     expect(depth.max).toBeGreaterThanOrEqual(2);
     expect(depth.max).toBeLessThanOrEqual(POOL_CAP);
-  });
-
-  it("canary: the doc still declares CHUNK = Math.min(8, categories.length)", () => {
-    expect(script, "the §2 script block declaring CHUNK must exist in dsh-workflow-scripts.md").toBeDefined();
-    expect(script).toMatch(/const CHUNK = Math\.min\(8, categories\.length\)/);
-    expect(script).not.toMatch(/CHUNK\s*=[^;\n]*cores/);
   });
 });

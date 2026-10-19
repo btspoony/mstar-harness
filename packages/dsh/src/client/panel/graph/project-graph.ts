@@ -158,6 +158,13 @@ export interface FlowEventView {
   readonly taskRef?: string
   /** Terminal workflow run reason (workflow-run-end rows only). */
   readonly stopReason?: string
+  /**
+   * The live tool-call id the row's own seam observed (dispatch and settle
+   * rows), or the paired dispatch's call id (continuation rows): the
+   * call-scoped pairing identity that keeps two concurrent same-identity
+   * dispatches distinct. Absent when the row carried none — never fabricated.
+   */
+  readonly callId?: string
   /** The continuation state — `unresolved` is the ONLY value (continuation rows only; the unresolved-continuation projection). */
   readonly state?: 'unresolved'
   /**
@@ -1147,8 +1154,8 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
 
   // Shared settle→dispatch pairing (one walk, spec §4): the settle status per paired
   // dispatch index; entity status looks up its latest dispatch's pair. The
-  // pairing key is the EXACT identity (agent, role, planId, taskId) a paired
-  // settle carries — `view.status` already carries settleStatus(outcome) for
+  // pairing key is the EXACT identity (agent, role, planId, taskId, callId) a
+  // paired settle carries — `view.status` already carries settleStatus(outcome) for
   // settle rows, so the record values are the settle statuses directly.
   // Continuation rows ride the same row list as no-ops there; the SECOND
   // walk over the same list (the unresolved-continuation projection) pairs each unresolved `continuation`
@@ -1159,6 +1166,9 @@ export function projectAgents(source: MstarEngineStatusPayload | null, currentSt
     role: e.view.role,
     planId: e.view.planId,
     taskId: e.view.taskId,
+    // The call-scoped identity: a settle/continuation pairs onto ITS dispatch
+    // (same call id), never onto a later same-identity dispatch.
+    callId: e.view.callId ?? null,
     ...(e.view.paired === true ? { paired: true as const } : {}),
     status: e.view.status,
   }))
@@ -1237,7 +1247,7 @@ function flowEventOf(
   const row = raw as {
     ts?: unknown; kind?: unknown; role?: unknown; planId?: unknown; taskId?: unknown
     taskCategory?: unknown; agent?: unknown; verdict?: unknown; outcome?: unknown; durationMs?: unknown
-    paired?: unknown
+    paired?: unknown; callId?: unknown
     runId?: unknown; name?: unknown; seq?: unknown; label?: unknown; phase?: unknown; childId?: unknown
     taskRef?: unknown
     stopReason?: unknown
@@ -1246,6 +1256,7 @@ function flowEventOf(
   const kind = str(row?.kind)
   if (kind === null) return null
   const role = str(row?.role) ?? ''
+  const callId = str(row?.callId)
   const matched = stageIndex.get(role)
   const ts = count(row?.ts) ?? 0
   if (kind === 'dispatch') {
@@ -1263,6 +1274,7 @@ function flowEventOf(
       stage: matched ?? null,
       settled: false,
       durationMs: count(row?.durationMs),
+      ...(callId !== null ? { callId } : {}),
     }
   }
   if (kind === 'settle') {
@@ -1289,6 +1301,7 @@ function flowEventOf(
       durationMs: count(row?.durationMs),
       ...(childId !== null ? { childId } : {}),
       ...(taskRef !== null ? { taskRef } : {}),
+      ...(callId !== null ? { callId } : {}),
     }
   }
   if (kind === 'subagent-link') {
@@ -1343,6 +1356,7 @@ function flowEventOf(
       durationMs: null,
       ...(continuationState === 'unresolved' ? { state: 'unresolved' as const } : {}),
       ...(reason !== null ? { reason } : {}),
+      ...(callId !== null ? { callId } : {}),
     }
   }
   // Workflow kinds + unknown kinds: the generic base row (no gate status —
@@ -1390,14 +1404,24 @@ interface PairingRow {
   role?: string
   planId?: string | null
   taskId?: string | null
+  /** The row's call-scoped identity (dispatch/settle: the seam's call id; continuation: the paired dispatch's) — null when the row carried none. */
+  callId?: string | null
   /** Settle rows only: true → the settle carries the paired dispatch's identity (exact pairing). */
   paired?: boolean
   status?: FlowEventStatus
 }
 
-/** The exact pairing key: `(agent, role, planId, taskId)` — the settle identity matches the dispatch identity field-for-field. */
+/**
+ * The exact pairing key: `(agent, role, planId, taskId, callId)` — the settle
+ * identity matches the dispatch identity field-for-field, and the CALL-SCOPED
+ * component keeps two concurrent same-identity dispatches distinct: a
+ * continuation/settle whose row carries the call id pairs onto ITS dispatch,
+ * never onto the later same-identity dispatch that merely follows it. A row
+ * without a call id (legacy rows, an exec that supplied none) contributes the
+ * empty component on BOTH sides, so such pairings keep working unchanged.
+ */
 function pairingKeyOf(row: PairingRow): string {
-  return [row.agent ?? '', row.role ?? '', row.planId ?? '', row.taskId ?? ''].join('\u0000')
+  return [row.agent ?? '', row.role ?? '', row.planId ?? '', row.taskId ?? '', row.callId ?? ''].join('\u0000')
 }
 
 /**
@@ -1408,10 +1432,12 @@ function pairingKeyOf(row: PairingRow): string {
  * Input rows are in FILE order (the catalog is latest-first, so the pairing
  * walks reversed) keeping the most recent same-identity dispatch; each
  * PAIRED settle (`paired === true`) pairs with it. Pairing key = the EXACT
- * `(agent, role, planId, taskId)` identity — an upgrade from the old
+ * `(agent, role, planId, taskId, callId)` identity — an upgrade from the old
  * most-recent-same-AGENT guess: with N concurrent dispatches from one
  * session, every settle used to land on the latest dispatch; the identity
- * key lets each settle land on ITS dispatch. A settle WITHOUT
+ * key lets each settle land on ITS dispatch, and the call component keeps two
+ * concurrent SAME-identity dispatches distinct (the settle carries its own
+ * dispatch's call id). A settle WITHOUT
  * identity (legacy rows / unpaired) stays independent — NO fallback guessing
  * (honest, spec R1); a settle with no prior same-identity dispatch (agent
  * null, truncated window, missed record) stays independent too. Output:
@@ -1439,7 +1465,10 @@ function pairSettleStatus(rows: readonly PairingRow[]): Map<number, FlowEventSta
  * continuation projection): the SAME
  * exact-identity walk as `pairSettleStatus`, marking each unresolved
  * continuation onto the most recent same-identity dispatch BEFORE it in file
- * order. A continuation WITHOUT an agent never pairs — no fallback guessing
+ * order. The key carries the call-scoped component: a continuation whose row
+ * names its dispatch's call id pairs onto THAT dispatch, never onto a later
+ * same-identity dispatch — two concurrent same-identity calls each keep their
+ * own continuation attribution. A continuation WITHOUT an agent never pairs — no fallback guessing
  * (honest, the same discipline as an unpaired settle): the dispatch keeps its
  * honest `running` instead of a guessed unresolved. Continuation rows are
  * no-ops in `pairSettleStatus` (no `paired` settle marker) — the two walks
@@ -1554,6 +1583,7 @@ export function projectFlowEvents(
     role: e.view.role,
     planId: e.view.planId,
     taskId: e.view.taskId,
+    callId: e.view.callId ?? null,
     ...(e.view.paired === true ? { paired: true as const } : {}),
   })))) {
     entries[i]!.view.settled = true

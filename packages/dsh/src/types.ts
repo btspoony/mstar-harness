@@ -429,6 +429,40 @@ export interface AgentFlowEventView {
   readonly mode?: 'off' | 'warn' | 'ask' | 'hard'
   /** The policy violation code (workflow-verdict events only, non-ok verdicts). */
   readonly code?: string
+  /**
+   * The live tool-call id the row's own seam observed (dispatch and settle
+   * rows only): the call-scoped pairing identity that keeps two concurrent
+   * same-identity dispatches distinct. Absent when the seam supplied none —
+   * never fabricated.
+   */
+  readonly callId?: string
+}
+
+/**
+ * The projected catalog view of the explicit unresolved-continuation marker
+ * (the unresolved-continuation projection): a NONTERMINAL `continuation` row —
+ * NOT a settle. A member of {@link AgentFlowView}'s event window ADDITIVELY:
+ * every existing event view keeps its shape, and the client projection guards
+ * each field read, so the added kind is a data member of the wire — not a
+ * union break.
+ */
+export interface AgentFlowContinuationEventView {
+  readonly ts: number
+  readonly kind: 'continuation'
+  /** The dispatching session's stable id; null when the row carried none. */
+  readonly agent: string | null
+  /** The paired dispatch's Assignment `Execute as` ('' allowed — the dispatch row's grammar). */
+  readonly role: string
+  readonly planId: string | null
+  readonly taskId: string | null
+  /** Always null — the identity is the DISPATCH's (the same seat every identity-bearing row keeps). */
+  readonly taskCategory: null
+  /** The live tool-call id of the dispatch this continuation names; null when the row carried none. */
+  readonly callId: string | null
+  /** The continuation state — `unresolved` is the ONLY value. */
+  readonly state: 'unresolved'
+  /** Bounded display reason (why the continuation could not be paired). */
+  readonly reason: string
 }
 
 /** One role × outcome count of the agent-flow summary (count desc). */
@@ -438,8 +472,8 @@ export interface AgentFlowSummaryRow {
   readonly count: number
 }
 
-/** The catalog's agent-flow evidence: latest events first (≤ limit) + summary. */
+/** The catalog's agent-flow evidence: latest events first (≤ limit) + summary. The event element is the FULL projected union — dispatch/settle/workflow/link rows AND the nonterminal `continuation` rows the runtime emits (a typed consumer narrows per kind; no cast, no unsafe reads). */
 export interface AgentFlowView {
-  readonly events: readonly AgentFlowEventView[]
+  readonly events: readonly (AgentFlowEventView | AgentFlowContinuationEventView)[]
   readonly summary: readonly AgentFlowSummaryRow[]
 }

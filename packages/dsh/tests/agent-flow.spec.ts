@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { appendDshLedgerRow, openStore, readDshLedgerWindow } from '@mstar-harness/engine'
 import { callIdentity, readAgentFlow as readSelectedAgentFlow, recordDispatch, recordJobSettle, recordSettle, registerSettleListener, registerSubagentCatalogListener, SETTLE_SEAM, setAgentFlowInvalidator, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
+import type { AgentFlowView } from '../src/types.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 
@@ -90,6 +91,74 @@ describe('agent-flow native event rows', () => {
     const persisted = readDshLedgerWindow({ harnessDir }, 'wf-1', 10)?.map((line) => JSON.parse(line) as { kind: string; eventId?: string }) ?? []
     const settle = persisted.find((event) => event.kind === 'settle')
     expect(settle?.eventId).toBe(callIdentity('settle', 'session-1', 'call-1')?.eventId)
+  })
+
+  it('carries the call-scoped identity on the durable dispatch and settle rows (exact concurrent pairing)', async () => {
+    // The pairing identity must be readable from the DURABLE rows themselves
+    // (not only the in-memory pairing map): a reader pairs a settle onto ITS
+    // dispatch by the call id, so two concurrent same-identity dispatches stay
+    // distinct even across a projection restart.
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    const pairing: AgentFlowPairing = {
+      dispatchByCallId: new Map(),
+      dispatchByJobId: new Map(),
+      catalogBySession: new WeakMap(),
+    }
+    registerSettleListener(ctx, {}, pairing)
+    const exec = { callId: 'call-scoped-1', name: 'subagent', agent: { id: 'session-1' } }
+    recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: workflowDir,
+      selectedGeneration,
+      exec,
+      pairing,
+      prompt: `## Assignment
+
+**Execute as**: fullstack-dev
+`,
+      violations: [],
+      hard: false,
+    })
+    const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
+    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'foreground', runId: 'child-scoped' } })
+    const persisted = (readDshLedgerWindow({ harnessDir }, 'wf-1', 10) ?? []).map((line) => JSON.parse(line) as { kind: string; callId?: string })
+    expect(persisted.find((row) => row.kind === 'dispatch')?.callId).toBe('call-scoped-1')
+    expect(persisted.find((row) => row.kind === 'settle')?.callId).toBe('call-scoped-1')
+    // The projected views carry the same call identity per field.
+    const view = readFlow(workflowDir)
+    expect(view?.events.find((event) => event.kind === 'dispatch')).toMatchObject({ callId: 'call-scoped-1' })
+    expect(view?.events.find((event) => event.kind === 'settle')).toMatchObject({ callId: 'call-scoped-1' })
+  })
+
+  it('the exported event union carries the continuation member (typed consumer pin, no cast)', () => {
+    // COMPILE-TIME pin: this literal type-checks against the exported
+    // AgentFlowView — the union genuinely contains the `continuation` member —
+    // and the continuation-only fields (`state`/`reason`) are readable through
+    // plain kind narrowing, never an unsafe cast.
+    const view: AgentFlowView = {
+      events: [{
+        ts: 1,
+        kind: 'continuation',
+        agent: null,
+        role: 'fullstack-dev',
+        planId: null,
+        taskId: null,
+        taskCategory: null,
+        callId: 'call-pin',
+        state: 'unresolved',
+        reason: 'fixture reason',
+      }],
+      summary: [],
+    }
+    const continuation = view.events.find((event) => event.kind === 'continuation')
+    expect(continuation).toBeDefined()
+    if (continuation?.kind === 'continuation') {
+      expect(continuation.state).toBe('unresolved')
+      expect(continuation.reason).toBe('fixture reason')
+      expect(continuation.callId).toBe('call-pin')
+    }
   })
 
   it('preserves duplicate live evidence rows in the native store', async () => {
@@ -436,9 +505,9 @@ Catalog correlation regression.
     emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', subagentId: 'sub-child-fail' } })
     expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['dispatch'])
     emitLifecycleEnd(ctx, { id: 'sub-child-fail', stopReason: 'error' })
-    const settles = (readFlow(workflowDir)?.events ?? []).filter((event) => event.kind === 'settle')
-    expect(settles).toContainEqual(expect.objectContaining({ kind: 'settle', outcome: 'error', childId: 'sub-child-fail' }))
-    expect(settles.some((event) => event.outcome === 'ok')).toBe(false)
+    const events = readFlow(workflowDir)?.events ?? []
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'settle', outcome: 'error', childId: 'sub-child-fail' }))
+    expect(events.some((event) => event.kind === 'settle' && event.outcome === 'ok')).toBe(false)
   })
 
   it('leaves a malformed activation result (no usable subagentId) unsettled and unpaired', async () => {

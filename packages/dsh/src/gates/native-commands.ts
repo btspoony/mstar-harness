@@ -424,7 +424,10 @@ function adoptionRefusal(code: string, message: string, recovery: string): Comma
  * succeed BEFORE the slot write (a foreign, copied, stale-epoch or
  * scope-mismatched reference is refused and never adopted), and the write
  * goes through `adoptExecutionBinding` — the session's user selection is
- * preserved and the exclusion floor merges by max. An adoption failure
+ * preserved and the exclusion floor merges by max. The adoption target is the
+ * harness the bind selected (the explicit per-call `harness` when present, the
+ * workspace harness otherwise), so a bind naming a different control root
+ * resumes and persists its slot in THAT root. An adoption failure
  * returns a refused envelope carrying the engine's own code/message verbatim
  * plus the recovery; the command itself already committed engine-side.
  */
@@ -453,7 +456,16 @@ async function adoptNativeExecutionBinding(
       'Re-run the bind; if it repeats, run `mstar plan bind --execution true --coordinator true --workflow <workflow-id>` through the CLI and report the envelope.',
     )
   }
-  const harnessDir = resolver.forAgent(exec.agent)
+  // The adoption target is the harness the bind ACTUALLY selected (the
+  // must-fix review finding): the shared admission executes a call carrying an
+  // explicit `harness` in that named root — the engine bind commits THERE — so
+  // the adoption's engine resume and the durable slot write MUST resolve the
+  // same root. The workspace harness only backs a call without an explicit
+  // selector. The non-blank gate mirrors the shared admission's own
+  // `callHarness` narrowing (definitions.ts).
+  const callHarness = input.harness
+  const explicitHarness = typeof callHarness === 'string' && callHarness.trim() !== '' ? callHarness : undefined
+  const harnessDir = explicitHarness ?? resolver.forAgent(exec.agent)
   const cwd = sessionCwdOf(exec.agent)
   if (harnessDir === null || cwd === undefined) {
     return adoptionRefusal(

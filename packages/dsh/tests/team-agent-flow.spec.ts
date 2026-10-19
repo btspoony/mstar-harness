@@ -142,6 +142,7 @@ interface LedgerRow {
   role?: string
   childId?: string
   outcome?: string
+  callId?: string
   eventId?: string
 }
 
@@ -250,20 +251,23 @@ describe('team agent flow — an unpaired continuation is explicit, never an ok 
     const continuation = rows.find((row) => row.kind === 'continuation')
     expect(continuation).toMatchObject({ kind: 'continuation', state: 'unresolved', role: 'fullstack-dev' })
     expect(continuation?.reason).toContain('reviewer')
+    // The call-scoped attribution identity: the durable row carries the paired
+    // dispatch's live call id, so a reader pairs this continuation onto ITS
+    // dispatch (never onto a later same-identity one).
+    expect(continuation?.callId).toBe('call-orphan')
     // The unresolved-continuation projection: the continuation row is
     // PROJECTED (no longer durable-only):
     // the readAgentFlow view lists it latest-first before its dispatch,
-    // carrying the unresolved state and the display reason. The wire shape
-    // is guarded here — the shared view type gains the kind additively and
-    // every consumer reads it per field.
-    const view = readAgentFlow(workflowDir, 'wf-1') as unknown as {
-      events: { kind: string; state?: string; role?: string; reason?: string }[]
-    } | null
+    // carrying the unresolved state and the display reason — read through the
+    // EXPORTED union member, no cast (the typed-consumer pin for the union).
+    const view = readAgentFlow(workflowDir, 'wf-1')
     expect(view?.events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
-    expect(view?.events.find((event) => event.kind === 'continuation')).toMatchObject({
+    const continuationView = view?.events.find((event) => event.kind === 'continuation')
+    expect(continuationView).toMatchObject({
       state: 'unresolved',
       role: 'fullstack-dev',
       reason: expect.stringContaining('reviewer'),
+      callId: 'call-orphan',
     })
   })
 
@@ -530,6 +534,41 @@ describe('team agent flow — the bounded end buffer reconciles a turn that ende
     const rows = ledgerRows(harnessDir)
     expect(rows.filter((row) => row.kind === 'settle')).toEqual([
       expect.objectContaining({ outcome: 'ok', childId: 'child-early', role: 'fullstack-dev' }),
+    ])
+    expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
+    expect(pairing.teamEndBuffer?.size).toBe(0)
+  })
+
+  it('buffers an end arriving before ANY pairing write (no team map yet) and the first pairing write reconciles it', async () => {
+    // REGRESSION (the early-end structural gap): the pairing map is created
+    // lazily on the first spawn-pairing write, so an end whose store has no
+    // team map AT ALL used to return before reaching the buffer — the terminal
+    // event was silently lost. The admission is roster-gated, never
+    // pairing-map-gated: the end is buffered, and the later FIRST pairing
+    // write reconciles and settles through the same outcome mapping.
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const ctx = new Context()
+    // A store with NO teamDispatchByChildId — exactly the shape before any
+    // pairing write created it.
+    const pairing: AgentFlowPairing = { dispatchByCallId: new Map(), dispatchByJobId: new Map(), catalogBySession: new WeakMap() }
+    provideTeamRoster(ctx, [rosterRow('child-first', 'reviewer')])
+    registerSettleListener(ctx, {}, pairing)
+    // The member's initial turn settles BEFORE any pairing write exists.
+    emitLifecycleEnd(ctx, { id: 'child-first', stopReason: 'completed' }, leadAgent)
+    expect(pairing.teamDispatchByChildId).toBeUndefined()
+    expect(pairing.teamEndBuffer?.get('child-first')).toBe('completed')
+    expect(ledgerRows(harnessDir).some((row) => row.kind === 'settle')).toBe(false)
+    // The FIRST spawn pairing write arrives: the buffered record reconciles.
+    const exec = spawnExec('call-first')
+    recordDispatch({
+      harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration,
+      exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false, teamPresent: true,
+    })
+    emit(ctx, SETTLE_SEAM, exec, spawnResult())
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+    const rows = ledgerRows(harnessDir)
+    expect(rows.filter((row) => row.kind === 'settle')).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-first', role: 'fullstack-dev' }),
     ])
     expect(rows.some((row) => row.kind === 'continuation')).toBe(false)
     expect(pairing.teamEndBuffer?.size).toBe(0)

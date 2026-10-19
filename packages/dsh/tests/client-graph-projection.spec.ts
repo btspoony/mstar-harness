@@ -654,6 +654,7 @@ function dispatchRow(over: {
   agent?: string
   planId?: string
   taskId?: string
+  callId?: string
   verdict?: 'ok' | 'advisory' | 'denied'
 }): AgentFlowEventView {
   return {
@@ -664,6 +665,7 @@ function dispatchRow(over: {
     planId: over.planId ?? null,
     taskId: over.taskId ?? null,
     taskCategory: null,
+    ...(over.callId !== undefined ? { callId: over.callId } : {}),
     ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
   }
 }
@@ -677,6 +679,7 @@ function settleRow(over: {
   role?: string
   planId?: string
   taskId?: string
+  callId?: string
   childId?: string
   taskRef?: string
 }): AgentFlowEventView {
@@ -695,6 +698,7 @@ function settleRow(over: {
     ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
     ...(over.childId !== undefined ? { childId: over.childId } : {}),
     ...(over.taskRef !== undefined ? { taskRef: over.taskRef } : {}),
+    ...(over.callId !== undefined ? { callId: over.callId } : {}),
   }
 }
 
@@ -982,6 +986,7 @@ function continuationRow(over: {
   role: string
   planId?: string
   taskId?: string
+  callId?: string
   reason: string
 }) {
   return {
@@ -992,6 +997,7 @@ function continuationRow(over: {
     planId: over.planId ?? null,
     taskId: over.taskId ?? null,
     taskCategory: null,
+    ...(over.callId !== undefined ? { callId: over.callId } : {}),
     state: 'unresolved',
     reason: over.reason,
   }
@@ -1050,6 +1056,20 @@ describe('projectGraph — agents zone unresolved continuation', () => {
     const view = projectGraph(flowSource([
       continuationRow({ ts: 8, role: 'fullstack-dev', reason: 'no attributable member turn' }),
       dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
+  })
+
+  it('two concurrent same-identity dispatches: a continuation pairs onto ITS OWN call (call-scoped key), never the later same-identity dispatch', () => {
+    // The continuation belongs to the EARLIER call (call-a); the later
+    // same-identity dispatch (call-b) is the entity's LATEST fact. Under the
+    // old identity-only key the continuation landed on call-b and the entity
+    // read unresolved; the call-scoped key keeps the attribution exact, so the
+    // entity stays honestly running (call-b carries no terminal fact).
+    const view = projectGraph(flowSource([
+      continuationRow({ ts: 10, agent: 'a1', role: 'fullstack-dev', reason: 'pairing window ended', callId: 'call-a' }),
+      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1', callId: 'call-b' }),
+      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', callId: 'call-a' }),
     ]))
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
   })
@@ -2276,6 +2296,21 @@ describe('projectGraph — settle pairing (identity-based)', () => {
       dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
     ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
+  })
+
+  it('two concurrent same-identity calls (distinct call ids): each settle lands on ITS OWN dispatch (call-scoped key)', () => {
+    // Two dispatches share agent/role/plan/task but carry DIFFERENT live call
+    // ids; each settle carries its own dispatch's call id. The old
+    // identity-only key landed BOTH settles on the latest dispatch, leaving
+    // the earlier one phantom-running; the call-scoped key pairs each exactly.
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 12, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', callId: 'call-b' }),
+      settleRow({ ts: 11, agent: 'a1', outcome: 'denied', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', callId: 'call-a' }),
+      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2', callId: 'call-b' }),
+      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2', callId: 'call-a' }),
+    ]))
+    expect(view.events.filter((e) => e.kind === 'dispatch').every((d) => d.settled)).toBe(true)
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
   })
 })

@@ -732,6 +732,45 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(refused.status).not.toBe('ok')
     expect(storedBinding(app.harnessDir, app.root)?.executionBinding?.session).toEqual(real)
   })
+
+  it('adopts into the harness the bind itself selected (explicit per-call harness), never the workspace harness', async () => {
+    // REGRESSION (the must-fix review finding): the bind's explicit `harness`
+    // names the control root the engine bind commits in — the adoption's
+    // engine resume and the durable slot write MUST land in THAT root. The old
+    // behavior derived the adoption target from the workspace resolver only,
+    // so the resume ran against (or the slot landed under) the wrong root.
+    const app = await bootedWithFixture()
+    // Root B: a second, distinct control harness with its own store + lifecycle.
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    // The carrying session's workspace IS root A (app.root); the bind names root B.
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+
+    // The slot lands BESIDE the bind it adopted — root B, never the workspace root.
+    const bindingB = storedBinding(harnessB, app.root)
+    expect(bindingB?.executionBinding?.version).toBe(1)
+    expect(bindingB?.executionBinding?.harnessRoot).toBe(harnessB)
+    expect(bindingB?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
+    expect(bindingB?.executionBinding?.session.sessionId).toBe(CHILD_ID)
+    expect(storedBinding(app.harnessDir, app.root)?.executionBinding ?? null).toBeNull()
+
+    // The engine coordinator seat lives in root B's store, not root A's.
+    const stateB = await readExecutionState({ harnessDir: harnessB })
+    expect(stateB.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
+    const stateA = await readExecutionState({ harnessDir: app.harnessDir })
+    expect(stateA.data.workflows[0]?.coordinator ?? null).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
