@@ -22006,9 +22006,23 @@ function resolvePrReviewSettlement(facts) {
   if (typeof facts.diffBasisReadable !== "boolean") {
     throw new TypeError(`resolvePrReviewSettlement: diffBasisReadable must be a boolean - got ${JSON.stringify(facts.diffBasisReadable)}`);
   }
-  const missing = facts.requiredDomains.filter((domain2) => !facts.openedDomains.includes(domain2));
+  if (facts.partialSeatScopes !== undefined && (!Array.isArray(facts.partialSeatScopes) || !facts.partialSeatScopes.every(isSingleLineFact))) {
+    throw new TypeError(`resolvePrReviewSettlement: partialSeatScopes must be an array of non-empty single-line strings - got ${JSON.stringify(facts.partialSeatScopes)}`);
+  }
+  const unconsumed = [...facts.openedDomains];
+  const missing = facts.requiredDomains.filter((domain2) => {
+    const at = unconsumed.indexOf(domain2);
+    if (at < 0)
+      return true;
+    unconsumed.splice(at, 1);
+    return false;
+  });
   const unreadableBasis = !facts.diffBasisReadable;
-  const unscanned = [...missing, ...unreadableBasis ? ["the resolved diff basis"] : []];
+  const unscanned = [...new Set([
+    ...missing,
+    ...unreadableBasis ? ["the resolved diff basis"] : [],
+    ...facts.partialSeatScopes ?? []
+  ])];
   if (facts.stopped !== undefined) {
     return { settled: false, incomplete: { reason: `the run stopped before synthesis — ${facts.stopped}`, unscanned } };
   }

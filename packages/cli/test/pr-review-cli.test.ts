@@ -463,6 +463,58 @@ describe("mstar pr-review tally", () => {
       expect(resultData.chatHeader).toContain("unscanned: none");
     });
   });
+
+  test("a stopped run with a declared partial seat scope names it as unscanned", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        ...settled,
+        "--stopped",
+        "operator cancelled the run",
+        "--partial-scope",
+        "dashboard HTTP server",
+      ]);
+      expect(result.exitCode).toBe(0);
+      const resultData = data(result);
+      expect(resultData.incomplete).toEqual({
+        reason: "the run stopped before synthesis \u2014 operator cancelled the run",
+        unscanned: ["dashboard HTTP server"],
+      });
+      expect(resultData.chatHeader).toContain("unscanned: dashboard HTTP server");
+    });
+  });
+
+  test("a blank --partial-scope entry joins the other tally faults in one response", () => {
+    withTempDir((dir) => {
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "[]");
+      const result = runCli([
+        "pr-review",
+        "tally",
+        "--findings",
+        findings,
+        ...settled,
+        "--partial-scope",
+        "dashboard HTTP server",
+        "   ",
+        "--unverified",
+        "x",
+      ]);
+      expect(result.exitCode).toBe(2);
+      const body = message(result);
+      expect(body).toContain("--partial-scope entries must be single lines of non-blank text");
+      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(envelope(result).details?.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "partialScope", code: "invalid" }),
+        expect.objectContaining({ path: "unverified", code: "invalid" }),
+      ]));
+    });
+  });
 });
 
 describe("mstar pr-review report-path", () => {

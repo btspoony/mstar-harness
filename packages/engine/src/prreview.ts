@@ -497,14 +497,19 @@ function checkProvidedTallyShape(tally: Record<string, unknown>, violations: Val
  * coverage stays settled and declares the overrun under `- notes:`.
  */
 export type PrReviewRunFacts = {
-  /** REQUIRED: domains the resolved tier's seat plan required (non-empty). */
+  /**
+   * REQUIRED: one entry per required seat, so a domain with two seats
+   * (a normal seat plus a same-domain security-lens seat) appears twice.
+   */
   requiredDomains: readonly string[];
-  /** REQUIRED: domains whose seat returned evidence (may be empty). */
+  /** REQUIRED: one entry per seat whose domain returned evidence (may be empty). */
   openedDomains: readonly string[];
   /** REQUIRED: the resolved diff basis was readable and complete. */
   diffBasisReadable: boolean;
   /** Optional: why the run stopped before synthesis (cancelled / interrupted / killed). */
   stopped?: string;
+  /** Optional: scope entries seats declared as truncated coverage in their payload tails. */
+  partialSeatScopes?: readonly string[];
 };
 
 /** Settled, or not settled with the derived cause + unscanned scope. */
@@ -519,14 +524,21 @@ export type PrReviewSettlement =
  *
  * Fail-closed: every coverage fact is required, so a caller that reports
  * nothing is refused instead of being read as complete coverage. Only a run
- * that states its required domains, its opened domains and a readable diff
+ * that states its required seats, its opened seats and a readable diff
  * basis can settle.
  *
- * Precedence: a stop before synthesis wins, then required domains whose
- * seat never opened, then an unreadable resolved diff basis; otherwise the
- * run settled. `unscanned` already carries the union, so it is complete for
- * whichever cause wins. An `openedDomains` entry outside `requiredDomains`
- * is ignored — a seat the tier never asked for cannot fail the run.
+ * Seat-occurrence accounting: `requiredDomains` and `openedDomains` are
+ * multisets, so each required entry consumes one matching opened entry. A
+ * domain that needs two seats therefore needs two opened entries; one seat's
+ * evidence never satisfies its same-domain sibling.
+ *
+ * Precedence: a stop before synthesis wins, then required seats that never
+ * opened, then an unreadable resolved diff basis; otherwise the run settled.
+ * `unscanned` carries the deduplicated union — each required seat that never
+ * opened, then the resolved diff basis when unreadable, then every scope a
+ * seat declared as truncated coverage — so it is complete for whichever
+ * cause wins. An `openedDomains` entry outside `requiredDomains` is ignored —
+ * a seat the tier never asked for cannot fail the run.
  */
 export function resolvePrReviewSettlement(facts: PrReviewRunFacts): PrReviewSettlement {
   if (facts === null || typeof facts !== "object") {
@@ -560,9 +572,27 @@ export function resolvePrReviewSettlement(facts: PrReviewRunFacts): PrReviewSett
       `resolvePrReviewSettlement: diffBasisReadable must be a boolean - got ${JSON.stringify(facts.diffBasisReadable)}`,
     );
   }
-  const missing = facts.requiredDomains.filter((domain) => !facts.openedDomains.includes(domain));
+  if (facts.partialSeatScopes !== undefined && (!Array.isArray(facts.partialSeatScopes) || !facts.partialSeatScopes.every(isSingleLineFact))) {
+    throw new TypeError(
+      `resolvePrReviewSettlement: partialSeatScopes must be an array of non-empty single-line strings - got ${JSON.stringify(facts.partialSeatScopes)}`,
+    );
+  }
+  // Seat-occurrence accounting: consume one opened entry per required entry,
+  // so a second seat in the same domain is never satisfied by its sibling's
+  // evidence.
+  const unconsumed = [...facts.openedDomains];
+  const missing = facts.requiredDomains.filter((domain) => {
+    const at = unconsumed.indexOf(domain);
+    if (at < 0) return true;
+    unconsumed.splice(at, 1);
+    return false;
+  });
   const unreadableBasis = !facts.diffBasisReadable;
-  const unscanned = [...missing, ...(unreadableBasis ? ["the resolved diff basis"] : [])];
+  const unscanned = [...new Set([
+    ...missing,
+    ...(unreadableBasis ? ["the resolved diff basis"] : []),
+    ...(facts.partialSeatScopes ?? []),
+  ])];
 
   if (facts.stopped !== undefined) {
     return { settled: false, incomplete: { reason: `the run stopped before synthesis \u2014 ${facts.stopped}`, unscanned } };

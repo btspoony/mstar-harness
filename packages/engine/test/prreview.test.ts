@@ -1681,6 +1681,89 @@ describe("resolvePrReviewSettlement — settled vs incomplete from run facts (pr
     })).toEqual({ settled: true });
   });
 
+  // Seat-occurrence accounting: the `default` tier puts two seats in one domain
+  // (a normal seat plus a same-domain security lens), so one seat's evidence
+  // must not satisfy its sibling.
+  test("a second required seat in one domain needs its own opened entry", () => {
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["api", "api"],
+      openedDomains: ["api"],
+      diffBasisReadable: true,
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "required domain seat(s) never opened: api",
+        unscanned: ["api"],
+      },
+    });
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["api", "api"],
+      openedDomains: ["api", "api"],
+      diffBasisReadable: true,
+    })).toEqual({ settled: true });
+    // Only the unconsumed seat is missing, not the whole domain.
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["api", "api", "security"],
+      openedDomains: ["api", "security"],
+      diffBasisReadable: true,
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "required domain seat(s) never opened: api",
+        unscanned: ["api"],
+      },
+    });
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["api", "api", "security"],
+      openedDomains: ["api", "api", "security"],
+      diffBasisReadable: true,
+    })).toEqual({ settled: true });
+  });
+
+  test("a declared truncated seat scope joins the derived unscanned scope", () => {
+    // Complete coverage plus a truncated seat: `missing` is empty, but the
+    // scope the seat named and never reached must still reach the report.
+    expect(resolvePrReviewSettlement({
+      stopped: "cancelled before synthesis",
+      requiredDomains: ["dashboard"],
+      openedDomains: ["dashboard"],
+      diffBasisReadable: true,
+      partialSeatScopes: ["dashboard HTTP server"],
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "the run stopped before synthesis \u2014 cancelled before synthesis",
+        unscanned: ["dashboard HTTP server"],
+      },
+    });
+    // A missing seat and a truncated scope both land, deduped in order.
+    expect(resolvePrReviewSettlement({
+      requiredDomains: ["dashboard", "security"],
+      openedDomains: ["dashboard"],
+      diffBasisReadable: true,
+      partialSeatScopes: ["security authz", "security"],
+    })).toEqual({
+      settled: false,
+      incomplete: {
+        reason: "required domain seat(s) never opened: security",
+        unscanned: ["security", "security authz"],
+      },
+    });
+  });
+
+  test.each([
+    ["a non-array", "dashboard" as unknown as string[]],
+    ["a blank entry", [""]],
+    ["a multi-line entry", ["dashboard\nserver"]],
+    ["a non-string entry", [7 as unknown as string]],
+  ])("partialSeatScopes rejects %s naming the field", (_label, value) => {
+    const facts = { requiredDomains: ["persist"], openedDomains: ["persist"], diffBasisReadable: true, partialSeatScopes: value };
+    expect(() => resolvePrReviewSettlement(facts as unknown as PrReviewRunFacts)).toThrow(TypeError);
+    expect(() => resolvePrReviewSettlement(facts as unknown as PrReviewRunFacts)).toThrow(
+      /partialSeatScopes must be an array of non-empty single-line strings/,
+    );
+  });
+
   test.each([
     ["", "stopped"],
     ["   ", "stopped"],

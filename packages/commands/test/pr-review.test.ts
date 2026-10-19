@@ -295,6 +295,64 @@ describe("pr-review command family", () => {
     });
   });
 
+  test("tally counts seats, not domains, and widens a stopped run with declared partial scope", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+
+    // Two seats in one domain: the single opened entry leaves the second
+    // required seat unaccounted.
+    const oneSeat = await command("pr-review.tally").execute(
+      { findings, requiredDomains: "api,api", openedDomains: "api", diffBasis: "readable" },
+      context,
+    );
+    expect(oneSeat.data).toMatchObject({
+      verdict: "incomplete",
+      incomplete: { reason: "required domain seat(s) never opened: api", unscanned: ["api"] },
+    });
+
+    const bothSeats = await command("pr-review.tally").execute(
+      { findings, requiredDomains: "api,api", openedDomains: "api,api", diffBasis: "readable" },
+      context,
+    );
+    expect(bothSeats.data).toMatchObject({ verdict: "ship it" });
+
+    // Complete coverage plus a truncated seat scope: the scope still travels.
+    const truncated = await command("pr-review.tally").execute(
+      {
+        findings, stopped: "cancelled before synthesis", requiredDomains: "dashboard",
+        openedDomains: "dashboard", diffBasis: "readable", partialScope: ["dashboard HTTP server"],
+      },
+      context,
+    );
+    expect(truncated.data).toMatchObject({
+      verdict: "incomplete",
+      incomplete: {
+        reason: "the run stopped before synthesis \u2014 cancelled before synthesis",
+        unscanned: ["dashboard HTTP server"],
+      },
+    });
+  });
+
+  test("tally reports an invalid --partial-scope entry with the other field faults", async () => {
+    const { cwd, context } = fixture();
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, "[]");
+
+    const refusal = await command("pr-review.tally").execute(
+      {
+        findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable",
+        partialScope: ["dashboard HTTP server", "  "], unverified: "x",
+      },
+      context,
+    );
+    expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(refusal, "invalid run facts")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "partialScope", code: "invalid" }),
+      expect.objectContaining({ path: "unverified", code: "invalid" }),
+    ]));
+  });
+
   test("tally reports every invalid run fact in one refusal", async () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");

@@ -17,7 +17,7 @@ const verbs = ["tally", "report-path", "validate-report", "post", "worktree-clea
 type Verb = (typeof verbs)[number];
 type Input = {
   findings?: string; unverified?: string; unmetAcUnsafe?: string; unmetAcSafe?: string;
-  stopped?: string; requiredDomains?: string; openedDomains?: string; diffBasis?: string;
+  stopped?: string; requiredDomains?: string; openedDomains?: string; diffBasis?: string; partialScope?: string[];
   reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
   pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
   base?: string; head?: string; largestFileTotal?: string;
@@ -25,14 +25,14 @@ type Input = {
 };
 const inputSchema = z.object({
   findings: z.string().optional(), unverified: z.string().optional(), unmetAcUnsafe: z.string().optional(), unmetAcSafe: z.string().optional(),
-  stopped: z.string().optional(), requiredDomains: z.string().optional(), openedDomains: z.string().optional(), diffBasis: z.string().optional(),
+  stopped: z.string().optional(), requiredDomains: z.string().optional(), openedDomains: z.string().optional(), diffBasis: z.string().optional(), partialScope: z.array(z.string()).optional(),
   reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
   pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
 const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true, help: "Required; path to a JSON array of {mergeClass: must-fix | should-fix | nit}." }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Optional; non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Required; comma-separated non-empty single-line domains the resolved tier's seat plan required (at least one); omitted is refused, never inferred." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domains whose seat returned evidence; an explicitly empty value means none, omission is refused." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, help: "Required; one of readable | unreadable; omitted is refused, never defaulted." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; the incomplete verdict is derived from the run facts (--stopped, --required-domains/--opened-domains, --diff-basis), never elapsed time; the three coverage/basis facts are required, so a run that does not report its coverage is refused; the count options default to zero and are limited to 0–50." },
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true, help: "Required; path to a JSON array of {mergeClass: must-fix | should-fix | nit}." }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0." }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Optional; non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Required; comma-separated non-empty single-line domains the resolved tier's seat plan required (at least one); omitted is refused, never inferred." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domains whose seat returned evidence; an explicitly empty value means none, omission is refused." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, help: "Required; one of readable | unreadable; omitted is refused, never defaulted." }, { key: "partialScope", flags: "--partial-scope <scope...>", required: false, defaultValue: [], help: "Optional; repeat once per scope a seat declared as truncated coverage; these join the derived unscanned list." }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; the incomplete verdict is derived from the run facts (--stopped, --required-domains/--opened-domains as one entry per seat, --diff-basis, and --partial-scope for scopes seats declared as truncated), never elapsed time; the three coverage/basis facts are required, so a run that does not report its coverage is refused; the count options default to zero and are limited to 0–50." },
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
@@ -188,6 +188,15 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         return Number(raw);
       };
       const unverifiedCount = count(input.unverified, "--unverified", "unverified");
+      // A seat's declared truncated coverage widens the derived scope of a
+      // stopped/missing run; each entry must be reportable as one scope line.
+      const partialScope = (input.partialScope ?? []).flatMap((entry) => {
+        if (entry.trim() === "" || /[\r\n]/.test(entry)) {
+          diagnostics.push({ path: "partialScope", code: "invalid", message: "--partial-scope entries must be single lines of non-blank text" });
+          return [];
+        }
+        return [entry];
+      });
       const unmetAcUnsafe = count(input.unmetAcUnsafe, "--unmet-ac-unsafe", "unmetAcUnsafe");
       const unmetAcSafe = count(input.unmetAcSafe, "--unmet-ac-safe", "unmetAcSafe");
       if (diagnostics.length > 0) throw new UsageError(diagnostics[0]!.message, diagnostics);
@@ -199,6 +208,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         requiredDomains,
         openedDomains,
         diffBasisReadable: input.diffBasis === "readable",
+        ...(partialScope.length === 0 ? {} : { partialSeatScopes: partialScope }),
       });
       const result = computePrTally({
         findings,
@@ -339,6 +349,7 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
         // collection phase and hide the other tally faults. The family's own
         // check is the single validator for the accepted values.
         { name: "diffBasis", ownership: "caller" as const, route, required: false, constraint: "required at execution; one of readable | unreadable - an omission or an unaccepted value is refused beside the other field diagnostics" },
+        { name: "partialScope", ownership: "caller" as const, route, required: false, constraint: "optional; repeat once per scope a seat declared as truncated coverage; each entry is a single line of non-blank text and joins the derived unscanned list" },
       ] : []),
       ...(verb === "report-path" ? [
         { name: "reviewsDir", ownership: "derivable" as const, route, required: false, constraint: "defaults to {REVIEW_DIR} under the harness dir" },
