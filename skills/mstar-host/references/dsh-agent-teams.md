@@ -1,0 +1,142 @@
+# dsh Agent Teams reference
+
+Load when the dsh profile mounts the Agent Teams layer and multi-seat,
+multi-round work runs through `spawn_teammate`, `team_task_*`, `wait_agent`,
+and `send_message`. Channel selection → `dsh.md` § Delegation channels.
+
+## Channel shape
+
+- **Nine tools, installed per member.** `spawn_teammate`, `send_message`,
+  `list_agents`, `wait_agent`, `interrupt_agent`, `team_task_create` /
+  `team_task_list` / `team_task_get` / `team_task_update`. Every member — Lead
+  and teammates — receives the same nine definitions; the domain service
+  enforces Lead-only creation and interruption, so the toolset is not the
+  authority boundary.
+- **Any root session is the implicit Lead**; a teammate is a continuable
+  subagent child of that Lead. `spawn_teammate` sends the initial task
+  unchanged, `send_message` steers a running member at its nearest step
+  boundary and starts or resumes an inactive one.
+- **Availability is profile-composed.** When `spawn_teammate` is absent from
+  the toolset the Team layer is not mounted — use the `subagent` channel and
+  never attempt the protocol below. Mounted, the shipped Team profile layer
+  disables the legacy direct-delegation rows; it does not disable `workflow`.
+- **One Team per root session.** Roster entries and the task board are durable
+  in the Lead session log; a fresh root starts an empty Team.
+
+## Roster naming
+
+A name is the member's model-facing **`target`** everywhere — messaging,
+interruption, task owners — and it is immutable for the Team's lifetime.
+
+| Situation | Name | Rule |
+|---|---|---|
+| One seat for a role | `architect` | the role slug alone |
+| Additional seat for one role | `architect-2`, `architect-3` | role slug + seat ordinal |
+| Reserved | `lead` | the implicit Lead is always addressable as `lead` |
+
+- Names must be **lower-kebab-case**: lowercase letters and digits in
+  hyphen-separated segments. `Architect`, `architect_2`, and `architect/qc`
+  are refused by the name grammar.
+- Names are **unique for the Team's lifetime** — a name used by a creation that
+  later failed is still taken (`TEAM_MEMBER_NAME_TAKEN`), so retries use the
+  next free seat ordinal.
+- The roster shows `role: lead` or `role: teammate`; use the name (target) in
+  `send_message`, `interrupt_agent`, and task `owner` / `reassign` fields.
+
+## Plan-row ⇄ team-task mirroring
+
+Every writable plan row dispatched to a teammate is mirrored by exactly one
+shared task, created **before** the spawn so the initial prompt can cite its
+task id.
+
+| Team task field | Plan-row content | Constraint |
+|---|---|---|
+| `subject` | `<planId> / Task <n> — <role>` | concise title, 200 characters |
+| `description` | the row's `## Assignment` header region plus scope and acceptance | complete details, 16384 characters |
+| `blocked_by` | task ids mirroring the plan rows this row depends on | ids must exist; a blocked task cannot be claimed or reassigned |
+| `write_scopes` | the workspace-relative worktree/dir prefix this row may modify | absolute paths and `..` segments are refused |
+| owner | the teammate target executing the row | assigned by `claim` or Lead-only `reassign` |
+
+- **Task ids are Team-local generated values.** The plan id and task number
+  live in `subject`, never in the opaque id.
+- **Every board mutation is a compare-and-set.** Read the task with
+  `team_task_get` (or `team_task_list`), then pass its current `revision` as
+  `expected_revision`; an outdated edit is rejected instead of overwriting
+  newer work.
+- **Cover the transitions the plan row needs:** `claim` → `in_progress` +
+  owner, `complete` (keeps the owner), `release` / `reopen` (clears the owner
+  and returns the task to pending), `set_dependencies`, `edit`, `reassign`,
+  `delete`. A task that still blocks another cannot be deleted
+  (`TEAM_TASK_HAS_DEPENDENTS`).
+- **Keep the two records in step.** The plan row is the delivery authority; the
+  task board is the coordination projection. A completion recorded only on the
+  board — or only in the plan — is not a completed row.
+
+## Wake discipline
+
+Readiness never starts the owner. A task becomes `ready` when every blocker is
+completed, but that is a derived filter, not a wake signal; an idle teammate
+stays idle until someone messages it.
+
+| Member state | Meaning | Lead action |
+|---|---|---|
+| `running` | a turn is executing | `send_message` reaches it at the next step boundary; otherwise `wait_agent` |
+| `inactive` | **no turn is executing — not done, not failed** | `send_message` to start/resume it before waiting |
+| `provisioning` | creation is in flight | `wait_agent`; do not spawn the same name again |
+| `failed` | **member creation failed** | creation failure ≠ work failure: record it, then retry with a new name if capacity allows |
+
+- **`wait_agent` observes, it never wakes.** It returns `noProgress` immediately
+  when no other member is running or provisioning, and its own message says to
+  wake the required member first. It sees only changes after the call starts —
+  re-list with `list_agents` and `team_task_list` after a wakeup or timeout
+  instead of polling.
+- **A completed dependency does not wake the dependent owner.** After marking a
+  blocker complete, `send_message` the dependent's owner; `reassign` also sets
+  an owner and `in_progress` but sends **no** message, so follow it with one.
+- **`send_message` success is inbox acceptance only** (`{ sent: true }`). It
+  does not confirm the recipient processed the message.
+- **Completion is a plan-row verdict, not a status sample.** `inactive` after a
+  turn means the member stopped executing; read the plan-row evidence and the
+  settlement/close-out result before recording anything as done.
+
+## Capacity
+
+- **The Team layer caps the roster.** The shipped profile sets
+  `maxMembers: 8`; that cap counts **created teammates**, while the Lead is
+  implicit and addressable as `lead`. The 9th creation is refused with
+  `Team member limit 8 reached` (`TEAM_MEMBER_LIMIT`).
+- **The activation pool caps concurrency.** The subagent manager defaults to
+  **8 concurrent children** (`maxActiveSubagents`); a spawn beyond the free
+  pool is rejected (`subagent limit reached (active child limit: 8)`).
+- **Failures are permanent.** A `failed` creation keeps its roster entry — its
+  name and its roster slot — because the roster has no removal tool. Plan the
+  team width against both caps; when the roster is full, do not invent a ninth
+  member: keep the remaining work inside the existing seats and record the cap
+  as the reason the remaining rows are not dispatched.
+
+## Shared cwd and write isolation
+
+- **Every member shares the Lead's working directory.** `spawn_teammate` has no
+  `cwd` field, so teammates inherit the session cwd and see each other's edits
+  immediately. Split writable work across directories and record each expected
+  prefix in `write_scopes`.
+- **`write_scopes` is advisory, not a lock.** Overlapping scopes on in-progress
+  tasks surface as `writeScopeWarnings`; they never block a write. Bash,
+  formatters, and code generators are not covered by the filesystem version
+  guard either — coordinate them explicitly.
+- **A stale write is a rebase signal.** On `FS_STALE_VERSION`, re-read the file,
+  rebase the intended change onto the new content, and retry; do not overwrite
+  a teammate's edit.
+- **The Lead owns final integration.** Review the combined diff and run the
+  verification after teammates settle; a member's own claim of success is not
+  delivery evidence.
+
+## What the channel does not provide
+
+| Not provided | Consequence / where it lives instead |
+|---|---|
+| worktrees or per-member checkouts | one shared cwd; isolated writable tracks use the `subagent` channel's per-dispatch `cwd` or the repository's worktree procedure |
+| locks | `write_scopes` warns; concurrent writes can still interleave |
+| merges, rebases, or review gates | the Lead integrates and verifies; no tool merges member work |
+| automatic ownership release | `complete` keeps the owner; `release`, `reopen`, and `reassign` are explicit calls |
+| per-teammate model or preset selection | `spawn_teammate` takes name, description, prompt, and `context` (`fresh` / `fork`) only; the roster model inherits the Lead's, and `fork` means inherited conversation, not a different preset |

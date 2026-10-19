@@ -18,9 +18,11 @@ or a custom profile).
   provider as a **single canonical mount** (`providerName: mstar`). Skills are
   loadable by **name** via `ctx.skills`; the canonical skill-root form is
   `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]`.
-- Plugin commands: the plugin registers the bundled **`harness-commands/`**
-  mirror as slash commands on `ctx.commands` — **`/iteration-start`**,
-  **`/iteration-drive`**, **`/iteration-loop`**, **`/codebase-audit`**. Each
+- Plugin commands: the plugin registers the **seven** bundled
+  **`harness-commands/`** commands on `ctx.commands` — **`/iteration-start`**,
+  **`/iteration-drive`**, **`/iteration-loop`**, **`/codebase-audit`**,
+  **`/amazing-pr-review`**, **`/amazing-e2e-check`**,
+  **`/amazing-test-audit`**. Each
   command steers its command body into the receiving agent as a USER-source
   message (the mstar workflow prompt — the model executes it as a task, not
   injected context), returning a success result. Alongside that mirror the
@@ -152,7 +154,8 @@ or a custom profile).
 
 | dsh tool | Harness use |
 |----------|-------------|
-| **`subagent`** | Primary dispatch — the model-facing delegation tool the dispatch gate matches (default `toolName`; a renamed instance must be declared via Config `dispatchTools`) |
+| **`subagent`** / **`subagent_fork`** | Primary dispatch — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
+| **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams channel — only when the Team profile layer is mounted; multi-round, role-persistent work over ONE shared working directory. Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only N≥3 fan-out — one run, one conversation `workflow-run` node (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
 | **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
 | **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
@@ -172,6 +175,29 @@ violation codes as opencode/omp/CLI).
 Envelope-first discipline applies: put the header fields at the top of the
 Assignment body — the dsh dispatch gate reads only the header region, so
 body-quoted examples never leak into header fields.
+
+## Delegation channels
+
+dsh exposes three delegation surfaces. They differ in lifetime and in what the
+parent holds after the call returns; choose by the shape of the work, not by
+habit.
+
+| Channel | Surface | Use when | Not for |
+|---|---|---|---|
+| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | one self-contained Assignment of any category — including writable work behind the dispatch/lease gates; `subagent_fork` when the child must inherit the completed conversation | coordination that must stay addressable across many turns, or read-only fan-out of N≥3 |
+| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; every member works in ONE shared working directory; a teammate is a continuable subagent child, and any root session is the implicit Lead | multi-seat, multi-round, role-persistent work that must stay addressable across turns — e.g. a tracked implementer/reviewer pair over one worktree | isolated writable tracks, one-shot lookups, read-only N≥3 fan-out |
+| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width | writable fan-out — it has no per-child pre-start veto seam |
+
+**Mounting decides availability, not preference.** The shipped Agent Teams
+profile layer (`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the
+Team rows and **disables** the direct `subagent` / `subagent_fork` and legacy
+subagent-control rows, so a profile exposes one direct-delegation surface at a
+time; `workflow` rides alongside both. When `spawn_teammate` is absent from the
+toolset the Team layer is not mounted — use `subagent` and never attempt the
+Team protocol.
+
+Team protocol — roster naming, plan-row ⇄ team-task mirroring, wake
+discipline, capacity, and shared-cwd isolation — → **`references/dsh-agent-teams.md`**.
 
 ## Gates and enforcement
 
@@ -470,22 +496,35 @@ the role-preset channel read, so `Execute as` / `Act as` + skill load must be
 in the prompt). A dispatch that drops those lines has no field to fall back on
 — it is a bare delegation.
 
-**Execution: concurrent dispatch REQUIRES background mode.** The `subagent`
-tool does **not** declare `isConcurrencySafe` → fail-closed `exclusive`
-classification, so same-message invokes are issued one-at-a-time (the next
-invoke starts only after the previous one settles). Foreground invokes (no
-`run_in_background`) settle only when the child completes → end-to-end serial
-(wall ≈ N× single seat). **Therefore any N≥2 dispatch that needs parallel
-execution MUST set `run_in_background: true` on EVERY invoke of the batch**:
-background invokes settle at task start (task id returned) and their child
-agents run CONCURRENTLY in background tasks (wall ≈ single seat, not N×).
-Foreground N≥2 invokes run SERIALLY and do NOT satisfy an N-parallel
-requirement — emitting them as "the dispatch" is dispatch-incomplete; if the N
-background invokes cannot be emitted in one message → **`Blocked`** (same as
-paste-only). **Future path (upstream suggestion, not editable from this
-repo):** dsh-private declares `isConcurrencySafe: () => true` on the
-tool-subagent so same-message foreground invokes can also run concurrently —
-needs dsh maintainer evaluation (roadmap §7e).
+**Execution: same-message invokes start concurrently.** The installed `subagent`
+tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
+in ONE assistant message is admitted concurrently instead of serialized. Each
+call is a **one-shot activation**, not a synchronous run: it returns
+`{ kind: 'activation', subagentId }` (rendered `started subagent <id>`) as soon
+as the runtime accepts the child, and the parent receives a **settlement
+notice** when that child finishes — the call itself waits for nothing. The
+tool's input schema is `cwd` / `description` / `prompt` plus the optional
+preset and child-route fields: it has **no background-mode parameter** and **no
+structured-output schema parameter**, so a child's structured result arrives
+through its settlement notice and follow-up turns travel through
+`send_message` (continuable providers), never through a tool argument.
+
+Dispatch consequences:
+
+- **N assignees = N invokes in one message.** Admission is concurrent, so an
+  N-seat batch costs roughly one seat of wall time; nothing needs to be
+  "backgrounded" to overlap.
+- **Capacity is bounded.** The activation pool defaults to **8 concurrent
+  children** (`maxActiveSubagents`, a deployment setting); an invoke beyond the
+  free pool is rejected with `subagent limit reached (active child limit: 8)`,
+  which means that seat never started. Keep one message at or below the free
+  pool width, or dispatch the remaining seats after earlier children settle.
+- **A missing or rejected invoke is dispatch-incomplete for its seat** — record
+  it plainly and recover as the owning skill allows. It is never a reason to
+  declare the whole batch `Blocked`: there is no background mode to switch to.
+- **Activation is not completion.** A returned `subagentId` proves only that
+  the child started; completion evidence is the settlement notice (and, where
+  the role hands back a report, the child's closing message).
 
 **Leaf completion discipline — closing message, not the report tool (PM
 2026-08-12).** Leaf subagents hand back their Completion Report in the
@@ -528,18 +567,19 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   **`workflow`** tool (the `mstar-qc-tri` script — § Read-only fan-out via the
   `workflow` tool): one run, three concurrent children, one conversation
   `workflow-run` node. When the tool is not mounted (the `ptc` preset hides it),
-  fall back to the `subagent` path below. **The `subagent` path MUST dispatch all
-  three with `run_in_background: true` in one message** → the seats run
-  CONCURRENTLY (background children; wall ≈ single seat); foreground (no
-  `run_in_background`) runs serially (wall ≈ 3× single seat) and does NOT count
-  as parallel tri. Cannot emit required **N** → **`Blocked`**.
+  fall back to the `subagent` path below. **The `subagent` path emits all three
+  invokes in ONE message**: each returns at activation start, so the seats run
+  CONCURRENTLY (wall ≈ single seat). Re-dispatching one invoke per message runs
+  them serially and is not parallel tri. A seat that cannot be started at all →
+  **`Blocked`**.
 - **`inline`**: **N=1**.
 
 ### SDD implement
 
 - **`Execution mode: sdd`**: one implementer `subagent` dispatch per ready task id;
-  independent tasks use isolated tracks and `run_in_background: true` before
-  waiting, per **`mstar-sdd`** § Ready-task scheduling. Task reviewer is a fresh
+  independent tasks are emitted together in one message (each in its isolated
+  track) so their activations overlap, then the PM waits for settlement, per
+  **`mstar-sdd`** § Ready-task scheduling. Task reviewer is a fresh
   separate dispatch; sticky resume is limited to one sequential owner track
   with a recorded continuable-subagent id.
 
@@ -607,7 +647,7 @@ through the agent-flow ledger (§ Agent-flow ledger).
 | Surface | Path / invocation |
 |---------|-------------------|
 | Plugin skills | Skill **name** via the mstar skill-local provider (`ctx.skills`); canonical `$DSH_BUNDLED_SKILL_DIR/<name>` |
-| Plugin commands | `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit` (registered from `harness-commands/`) plus the plugin-owned `/mstar-execution` (closed-JSON operator entry; its payload is never steered to the model) |
+| Plugin commands | The seven bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` — plus the plugin-owned `/mstar-execution` (closed-JSON operator entry; its payload is never steered to the model) |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
 ## Command delivery (dsh host, updated 2026-08-11)
@@ -616,7 +656,7 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 
 **Degradation fallback:** when a command is NOT claimed client-side (lexicon fetch timing, args parsing, manual typing), the model receives the **bare text** (`/iteration-loop <方向> …`) with NO command body — unlike opencode/cursor/omp where the body always arrives.
 
-**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = Phase 2–5 on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity). **`/mstar-execution` is not covered by this fallback**: it has no repo `commands/<name>.md` and no model-facing semantics — a body-less mention of it is not an instruction to the model, and the model must never try to parse, replay or substitute its JSON payload; the operator invokes it through the host command registry.
+**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = Phase 2–5 on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity). **`/mstar-execution` is not covered by this fallback**: it has no repo `commands/<name>.md` and no model-facing semantics — a body-less mention of it is not an instruction to the model, and the model must never try to parse, replay or substitute its JSON payload; the operator invokes it through the host command registry.
 
 ## Harness dir and environment
 
