@@ -180,7 +180,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Batch** — one session reviews one PR; remaining PRs from a multi-PR input are registered as audit todos, one session each.
 
-**Defined in** — [`commands/amazing-pr-review.md`](../commands/amazing-pr-review.md); procedure → `mstar-audit` (`references/pr-review.md`, the `pr` variant: tier resolution, pipeline, worktree isolation, posting, and the report archive under `{REVIEW_DIR}/<date>-pr<N>/`).
+**Defined in** — [`commands/amazing-pr-review.md`](../commands/amazing-pr-review.md); procedure → `mstar-audit` (`references/pr-review.md`, the `pr` variant: tier resolution, pipeline, worktree isolation, same-target re-review, posting, and the report archive under `{REVIEW_DIR}/<date>-pr<N>/`).
 
 ## /amazing-e2e-check
 
