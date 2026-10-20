@@ -461,18 +461,27 @@ the seat: on a Team profile the direct `subagent` rows are disabled, and a task 
 consume a roster slot — a teammate is a DURABLE seat and the roster is finite, so a per-task
 teammate exhausts it. One seat is far below the child pool, so no chunking applies. The run costs one
 `workflow-run` node instead of a subagent card; that is the price of keeping the reviewer off the
-roster, and this template is the executable form of that route — not an improvisation. **Writable
-work never uses this route** (a workflow child has no per-child pre-start veto seam).
+roster.
+
+**This is Mode A, the SDD task reviewer.** The header therefore carries a `Task category` that is
+NOT `audit`: an `audit` category selects `code-reviewer` Mode B (the codebase-audit executor) and
+would run the wrong workflow entirely. **Writable work never uses this route** (a workflow child has
+no per-child pre-start veto seam).
+
+The payload returns the **complete canonical report**, not just a verdict: a workflow child may be
+unable to write `reportPath`, and Mode A's output (`{SDD_DIR}/task-N-review.md`) is mandatory before
+a task can be completed. The caller persists `reportMarkdown` from the returned envelope — the
+child's own write is best-effort, never the contract.
 
 **`meta`**
 
 ```json
 {
   "name": "mstar-review-single",
-  "description": "One read-only task-review seat for a single SDD task (fresh context, no roster seat), returning the task review verdict.",
+  "description": "One read-only SDD task-review seat (code-reviewer Mode A, fresh context, no roster seat), returning the complete canonical task-review report.",
   "whenToUse": "dsh host: a mandatory SDD task review that must not consume a Team roster seat (the Team profile disables the direct subagent rows).",
   "phases": [
-    { "title": "task-review", "detail": "One fresh-context task reviewer." }
+    { "title": "task-review", "detail": "One fresh-context Mode A task reviewer." }
   ]
 }
 ```
@@ -483,12 +492,14 @@ work never uses this route** (a workflow child has no per-child pre-start veto s
 {
   "planId": "<plan id>",
   "taskId": "<task number or id>",
-  "reviewCwd": "<absolute worktree path>",
+  "reviewCwd": "<absolute feature worktree path>",
   "branch": "<working branch>",
-  "range": "<base>..<head>",
-  "planPath": "<absolute plan path>",
-  "reportPath": "<absolute report path, e.g. {SDD_DIR}/task-<n>-review.md>",
-  "role": "code-reviewer",
+  "briefPath": "<absolute task brief path>",
+  "implementerReport": "<absolute implementer report path (input — never overwrite)>",
+  "diffFile": "<absolute path to the review-package diff artifact>",
+  "diffBase": "<base sha>",
+  "diffHead": "<head sha>",
+  "globalConstraints": "<the plan's Global Constraints, verbatim>",
   "reviewerFocus": "<the acceptance surface this one task must satisfy>"
 }
 ```
@@ -497,32 +508,56 @@ work never uses this route** (a workflow child has no per-child pre-start veto s
 
 ```js
 const a = args ?? {}
-const missing = ['planId', 'taskId', 'reviewCwd', 'branch', 'range', 'planPath', 'reportPath', 'role']
+const missing = ['planId', 'taskId', 'reviewCwd', 'branch', 'briefPath', 'implementerReport',
+  'diffFile', 'diffBase', 'diffHead', 'globalConstraints']
   .filter((key) => typeof a[key] !== 'string' || a[key].length === 0)
 if (missing.length > 0) {
-  throw new Error('mstar-review-single missing args: ' + missing.join(', '))
+  throw new Error('mstar-review-single missing args: ' + missing.join(', ') +
+    ' — Mode A needs the task brief, the implementer report, the diff artifact and the Global Constraints')
 }
 
-const VERDICT = {
+const REPORT = {
   type: 'object',
-  description: 'One SDD task review verdict.',
-  required: ['verdict', 'summary', 'findings'],
+  description: 'One Mode A SDD task-review result: the canonical report sections plus its full markdown.',
+  required: ['specCompliance', 'taskQuality', 'reportMarkdown'],
   properties: {
-    verdict: { type: 'string', enum: ['pass', 'needs-fixes', 'blocked'], description: 'The task review verdict.' },
-    summary: { type: 'string', description: 'Two or three sentences naming what was checked and what remains.' },
-    findings: {
+    specCompliance: {
+      type: 'object',
+      description: 'Spec compliance verdict for this task.',
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['compliant', 'issues-found'], description: 'Compliant, or issues found (name them in issues).' },
+        cannotVerify: {
+          type: 'array',
+          description: 'Items the diff cannot settle; the PM resolves them before completing the task.',
+          items: { type: 'string' }
+        }
+      }
+    },
+    strengths: { type: 'array', description: 'What the implementation does well.', items: { type: 'string' } },
+    issues: {
       type: 'array',
-      description: 'Findings ordered by severity; empty when the task passes.',
+      description: 'Findings ordered Critical, Important, Minor. Empty when the task passes.',
       items: {
         type: 'object',
-        required: ['title', 'evidence', 'impact', 'fix'],
+        required: ['severity', 'title', 'evidence', 'impact', 'fix'],
         properties: {
+          severity: { type: 'string', enum: ['critical', 'important', 'minor'], description: 'Mode A severity class.' },
           title: { type: 'string', description: 'Short imperative title.' },
-          evidence: { type: 'string', description: 'path/file.ts:123 — code you opened yourself.' },
+          evidence: { type: 'string', description: 'path/file.ts:123 — evidence you opened yourself.' },
           impact: { type: 'string', description: 'Expected vs observed, and why it matters.' },
           fix: { type: 'string', description: 'The concrete correction.' }
         }
       }
+    },
+    truncatedCoverage: {
+      type: 'string',
+      description: 'ONLY when a budget bound stopped expansion: name the interfaces/files left unexamined. Omit entirely for a complete review.'
+    },
+    taskQuality: { type: 'string', enum: ['approved', 'needs-fixes'], description: 'The Mode A task-quality gate.' },
+    reportMarkdown: {
+      type: 'string',
+      description: 'The COMPLETE canonical report in the Mode A layout: Scope (only when truncated), ### Spec Compliance, ### Strengths, ### Issues (#### Critical | Important | Minor), ### Assessment with **Task quality:**. The caller persists this to {SDD_DIR}/task-N-review.md.'
     }
   }
 }
@@ -531,22 +566,32 @@ phase('task-review')
 
 const seat = await agent(`## Assignment
 
-Execute as: ${a.role}
+Execute as: code-reviewer
 Delegation: forbidden
-Task category: audit
+Task category: review
 
 plan_id: ${a.planId}
 Task: ${a.taskId}
-Review range: ${a.range}
 Review cwd: ${a.reviewCwd}
 Working branch: ${a.branch}
-Report path: ${a.reportPath}
+Task brief: ${a.briefPath}
+Implementer report (input — never overwrite): ${a.implementerReport}
+Diff: ${a.diffFile}
+Base: ${a.diffBase}
+Head: ${a.diffHead}
 
-Review this ONE task against the plan at ${a.planPath}. Focus: ${a.reviewerFocus || 'the task acceptance criteria and directly affected interfaces'}.
+Global constraints (verbatim):
+${a.globalConstraints}
 
-Load in order: skill mstar-roles then the role reference for ${a.role} (identity first). Review only changed hunks and directly affected interfaces in the range above. Every finding needs evidence you opened yourself; prefer omission to fabrication. Do not run build or test suites (they are not your evidence channel). Never edit the worktree, never post, never merge, never touch project registers.
+You are the L2 SDD task reviewer for this ONE task — Mode A, the default. Do NOT run the codebase-audit workflow and do not produce audit-format findings.
 
-Return ONLY the JSON object matching the provided schema (verdict, summary, findings). If your sandbox permits, also write the full report to the report path above — never depend on being able to write.`, { phase: 'task-review', schema: VERDICT, label: 'task-review-1' })
+Load in order: skill mstar-roles then references/code-reviewer.md (identity first, Mode A), then mstar-sdd references/task-reviewer-prompt.md.
+
+Behavior: diff-first. Read the diff once — do not re-run git, do not mutate the checkout, do not run build or test suites. Spec compliance FIRST against the brief and the constraints above, then code quality. Treat the implementer report's claims as unverified until you check them against the diff. Focus: ${a.reviewerFocus || 'the task acceptance criteria and directly affected interfaces'}.
+
+Verdict discipline: never pre-judge; a task that cannot be verified from the diff names the items you cannot check rather than guessing. If a budget bound stops expansion, record the truncation and keep the quality label earned for the scope you did review.
+
+Return ONLY the JSON object matching the provided schema. reportMarkdown must be the COMPLETE canonical report so the caller can persist it; your own attempt to write a file is best-effort and never the contract.`, { phase: 'task-review', schema: REPORT, label: 'task-review-1' })
 
 if (seat === null) {
   throw new Error('mstar-review-single: the review seat returned nothing — dispatch it again rather than recording an unreviewed task')
@@ -556,4 +601,6 @@ return { task: a.taskId, seat }
 ```
 
 The seat is a fresh one-shot subagent: it never joins the Team roster, so an N-task plan costs N
-review runs and zero roster slots.
+review runs and zero roster slots. Persist `seat.reportMarkdown` to
+`{SDD_DIR}/task-<n>-review.md` before marking the task complete; `taskQuality` is the gate the PM
+reads, and `truncatedCoverage` blocks completing the uncovered scope.
