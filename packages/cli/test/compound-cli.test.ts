@@ -31,18 +31,37 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
     });
   });
 
-  test("--knowledge-dir without README index → compound.index.retired, exit 1", () => {
+  test("--knowledge-dir with no resolvable harness → compound.catalog.unresolved-harness, exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const knowledgeDir = join(dir, "knowledge");
       mkdirSync(knowledgeDir);
-      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
+      // A tree with no harness root: catalog completeness is a store.db query,
+      // so the check refuses instead of passing (the retired README reader is
+      // no longer the answer, and a silently skipped check is not either).
+      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], { cwd: dir });
       expect(result.exitCode).toBe(1);
-      // The README index is retired in authority (state-projection contract
-      // §4, P4 adjudication): compound.index.missing-readme is superseded by
-      // the actionable retired-reader refusal.
-      expect(cliEnvelope(result, "refused", "compound.index.retired").message).toContain("no longer a register");
+      expect(cliEnvelope(result, "refused", "compound.catalog.unresolved-harness").message).toContain("cannot be asserted");
+    });
+  });
+
+  test("--knowledge-dir with a harness whose store is missing → store.not-initialized, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const doc = join(dir, "doc.md");
+      writeFileSync(doc, KNOWLEDGE_GOOD);
+      const knowledgeDir = join(dir, "knowledge");
+      mkdirSync(knowledgeDir);
+      const harness = join(dir, ".mstar");
+      mkdirSync(harness);
+      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
+        cwd: dir,
+        env: { MSTAR_HARNESS_DIR: harness },
+      });
+      // Unavailable catalog data is never read as a complete catalog.
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("store.not-initialized");
+      expect(violationCodes(result)).not.toContain("compound.index.retired");
     });
   });
 
@@ -52,26 +71,10 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const knowledgeDir = join(dir, "knowledge");
       mkdirSync(knowledgeDir);
-      writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n");
-      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
+      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], { cwd: dir });
       expect(result.exitCode).toBe(1);
+      // The scope guard still runs independently of the catalog query.
       expect(violationCodes(result)).toContain("compound.scope.outside");
-    });
-  });
-
-  test("doc inside --knowledge-dir with index row → README register retired (exit 1, scope still guarded)", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      const knowledgeDir = join(dir, "knowledge");
-      mkdirSync(knowledgeDir);
-      const doc = join(knowledgeDir, "doc.md");
-      writeFileSync(doc, KNOWLEDGE_GOOD);
-      writeFileSync(join(knowledgeDir, "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
-      const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir]);
-      // The retired README reader refuses even when the row exists. The
-      // separate outside-scope case above keeps the scope guard covered.
-      expect(result.exitCode).toBe(1);
-      const envelope = cliEnvelope(result, "refused", "compound.index.retired");
-      expect(envelope.details?.violations?.map(({ code }) => code) ?? [envelope.code]).toEqual(["compound.index.retired"]);
     });
   });
 

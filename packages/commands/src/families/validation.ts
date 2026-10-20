@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   assertDefaultBranchProtected,
-  assertIndexRows,
+  assertKnowledgeCatalogCompleteness,
   assertLightDarkParity,
   assertQcAlignment,
   assertSddTddTriple,
@@ -379,7 +379,39 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const violations: Violation[] = [...validateSchemaYaml(readFileSync(docPath, "utf8")).violations];
         if (input.knowledgeDir !== undefined) {
           const knowledgeDir = absolute(context.cwd, input.knowledgeDir);
-          violations.push(...assertIndexRows(knowledgeDir).violations, ...scopeGuard(docPath, [knowledgeDir]).violations);
+          // Catalog completeness is a store.db query, so the check needs the
+          // process harness this invocation belongs to: the root the launcher
+          // pinned for the session first (a pinned MCP server must not fall back
+          // to the cwd's harness), then the same process probe the CLI performs.
+          // FAIL-CLOSED: without a resolvable root — or with a store the engine
+          // refuses (missing / staged / corrupt) — report the refusal instead of
+          // a completeness verdict the command cannot make.
+          const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
+          if (harnessDir === null) {
+            violations.push({
+              ok: false,
+              severity: "high",
+              code: "compound.catalog.unresolved-harness",
+              message: `no {HARNESS_DIR} resolves for this invocation, so the knowledge catalog completeness of ${knowledgeDir} cannot be asserted`,
+              fix: "run this command from a workspace that declares a harness root (.mstar / .agents, MSTAR_HARNESS_DIR), or mount the MCP server with --harness <harness-dir>; catalog completeness is a store.db query",
+            });
+          } else {
+            try {
+              violations.push(...(await assertKnowledgeCatalogCompleteness({ harnessDir })).violations);
+            } catch (error) {
+              const code = (error as { code?: unknown } | null | undefined)?.code;
+              violations.push({
+                ok: false,
+                severity: "high",
+                code: "compound.catalog.unavailable",
+                message:
+                  `the knowledge catalog completeness cannot be evaluated: ` +
+                  `${typeof code === "string" && code !== "" ? `[${code}] ` : ""}${error instanceof Error ? error.message : String(error)}`,
+                fix: "restore the issue/catalog authority (`mstar store init|upgrade|migrate`) — unavailable catalog data is never read as complete",
+              });
+            }
+          }
+          violations.push(...scopeGuard(docPath, [knowledgeDir]).violations);
         }
         const gate = { ok: violations.length === 0, violations };
         return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "compound.invalid");

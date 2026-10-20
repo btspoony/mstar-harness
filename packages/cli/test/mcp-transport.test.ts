@@ -1,22 +1,28 @@
 // Build @mstar-harness/commands before running this isolated SDK consumer suite.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { commandEnvelopeSchema, getCommandDefinitions, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
+import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { z } from "zod";
 import { registerMcpCommands } from "../src/mcp/register.js";
+import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 
-async function withClient(definitions: readonly CommandDefinition[], run: (client: Client, cwd: string) => Promise<void>) {
+async function withClient(
+  definitions: readonly CommandDefinition[],
+  run: (client: Client, cwd: string) => Promise<void>,
+  options: { controlRoot?: string } = {},
+) {
   const cwd = mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
   const server = new McpServer({ name: "isolated-command-server", version: "1.0.0" });
   const client = new Client({ name: "independent-command-consumer", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
   try {
     registerMcpCommands(server, definitions, (_definition, _sessionId, signal, _services, effects): InvocationContext => ({
-      cwd, controlRoot: null, signal, effects,
+      cwd, controlRoot: options.controlRoot ?? null, signal, effects,
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     }));
     await server.connect(serverEnd);
@@ -58,6 +64,12 @@ function diagnostics(result: CommandEnvelope): Array<Record<string, unknown>> {
   const entries = result.details?.diagnostics;
   if (!Array.isArray(entries)) throw new Error("missing grouped input diagnostics");
   return entries;
+}
+
+/** The violation codes a gate refusal carries (catalogue checks report here). */
+function catalogCodes(result: CommandEnvelope): string[] {
+  const violations = (result.details?.violations ?? []) as Array<{ code?: string }>;
+  return violations.map((violation) => violation.code ?? "");
 }
 
 // A real, effect-free command with observable computation, not a forwarding
@@ -382,5 +394,55 @@ generated_at: 2026-01-02
       const collision = envelope(await client.callTool({ name: "mstar_schema", arguments: { action: "schema", command: "qc.validate-report", family: "worktree" } }));
       expect(collision).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     });
+  });
+
+  /**
+   * The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
+   * README index read. The dsh-native tool that used to carry it is gone, so
+   * these are the product regressions on the SURVIVING route: the folded MCP
+   * action. Complete catalog passes, an unregistered knowledge body fails, and a
+   * store that cannot answer refuses instead of reading as complete.
+   */
+  test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
+    const harness = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
+    const knowledgeDir = join(harness, "knowledge");
+    mkdirSync(knowledgeDir, { recursive: true });
+    writeFileSync(join(knowledgeDir, "good.md"), KNOWLEDGE_GOOD);
+    const validate = async (client: Client) => envelope(await client.callTool({
+      name: "mstar_compound",
+      arguments: { action: "validate", docPath: join(knowledgeDir, "good.md"), knowledgeDir },
+    }));
+    try {
+      await withClient([definition("compound.validate")], async (client) => {
+        // No store yet: unavailable catalog data is never read as complete, and
+        // the retired README reader is not the fallback either.
+        const missing = await validate(client);
+        expect(missing).toMatchObject({ command: "compound.validate", status: "refused", exitCode: 1 });
+        expect(catalogCodes(missing)).toContain("store.not-initialized");
+        expect(catalogCodes(missing)).not.toContain("compound.index.retired");
+        expect(catalogCodes(missing)).not.toContain("compound.scope.outside");
+      }, { controlRoot: harness });
+
+      const context = { harnessDir: harness };
+      (await initializeStore(context)).close();
+      await registerCatalogEntity(context, {
+        kind: "document", id: "doc-good", title: "Good doc", rootKind: "knowledge", relativePath: "good.md", documentKind: "knowledge",
+      }, { operationId: "fixture-catalog-register", actor: "compound" });
+
+      await withClient([definition("compound.validate")], async (client) => {
+        // Every knowledge body registered → complete, and the doc is in scope.
+        const complete = await validate(client);
+        expect(complete).toMatchObject({ status: "ok", data: { ok: true, violations: [] } });
+
+        // A body with no catalog row is a gap the query reports by path.
+        writeFileSync(join(knowledgeDir, "unregistered.md"), KNOWLEDGE_GOOD);
+        const gap = await validate(client);
+        expect(catalogCodes(gap)).toContain("catalog.discovery.missing-document");
+        if (gap.status === "ok") throw new Error("expected a catalog gap refusal");
+        expect(JSON.stringify(gap.details?.violations ?? [])).toContain("knowledge/unregistered.md");
+      }, { controlRoot: harness });
+    } finally {
+      rmSync(harness, { recursive: true, force: true });
+    }
   });
 });

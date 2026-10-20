@@ -160,25 +160,25 @@ describe("project-root path resolution — all six dev commands with relative ar
     },
     {
       name: "compound validate <relative doc> + <relative --knowledge-dir>",
-      // compound.index.retired (state-projection contract §4) makes the
-      // --knowledge-dir form refuse with exit 1 regardless of path resolution,
-      // so this case pins exit 1. The resolution property this matrix guards
-      // is still proven: schema OK requires the doc to resolve under the
-      // project root, and scope guard OK requires BOTH the doc and the
-      // --knowledge-dir to resolve there (a cwd-relative resolution would
-      // report compound.scope.outside instead).
+      // Catalog completeness is a store.db query and this fixture root has no
+      // harness, so the --knowledge-dir form refuses with exit 1 regardless of
+      // path resolution. The resolution property this matrix guards is still
+      // proven: schema OK requires the doc to resolve under the project root,
+      // and scope guard OK requires BOTH the doc and the --knowledge-dir to
+      // resolve there (a cwd-relative resolution would report
+      // compound.scope.outside instead).
       exit: 1,
       args: ["compound", "validate", "knowledge/doc.md", "--knowledge-dir", "knowledge"],
       setup: (dir) => {
         mkdirSync(join(dir, "knowledge"), { recursive: true });
         writeFileSync(join(dir, "knowledge", "doc.md"), KNOWLEDGE_GOOD);
-        writeFileSync(join(dir, "knowledge", "README.md"), "# Knowledge\n\n| Document | Source Plan | Description | Status |\n|---|---|---|---|\n| [doc](doc.md) | 20260808-x | x | done |\n");
       },
       assert: (_dir, result) => {
         expect(result.exitCode).toBe(1);
-        const envelope = cliEnvelope(result, "refused", "compound.index.retired");
-        expect(envelope.details?.violations?.map(({ code }) => code)).toContain("compound.index.retired");
-        expect(envelope.details?.violations?.map(({ code }) => code)).not.toContain("compound.scope.outside");
+        const envelope = cliEnvelope(result, "refused", "compound.catalog.unresolved-harness");
+        const codes = envelope.details?.violations?.map(({ code }) => code) ?? [];
+        expect(codes).toContain("compound.catalog.unresolved-harness");
+        expect(codes).not.toContain("compound.scope.outside");
       },
     },
     {
