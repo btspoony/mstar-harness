@@ -24,6 +24,7 @@ import {
   MSTAR_HOST_SESSION_ID,
   SCOPED_MCP_MOUNT_LOGGER,
   registerScopedMcpMount,
+  scopedMountArgsFor,
   setScopedMcpMountLogger,
 } from '../src/gates/scoped-mcp-mount.ts'
 import { FakeLoaderRegistry } from './harness.ts'
@@ -133,6 +134,51 @@ const UNRELATED_ROW: RowFixture = {
 /** The per-agent identity env the mount must derive for one agent id. */
 const envFor = (id: string): Record<string, string> => ({ [MSTAR_HOST_SESSION_ID]: id })
 
+describe('scopedMountArgsFor — identity declaration + optional root pin', () => {
+  it('appends both flags when the base carries neither', () => {
+    expect(scopedMountArgsFor(['run', 'mcp'], '/ws/.mstar')).toEqual([
+      'run',
+      'mcp',
+      '--identity-env',
+      MSTAR_HOST_SESSION_ID,
+      '--harness',
+      '/ws/.mstar',
+    ])
+  })
+
+  it('normalizes a foreign identity-env name and still pins the root', () => {
+    expect(scopedMountArgsFor(['run', 'mcp', '--identity-env', 'OTHER_ID'], '/ws/.mstar')).toEqual([
+      'run',
+      'mcp',
+      '--identity-env',
+      MSTAR_HOST_SESSION_ID,
+      '--harness',
+      '/ws/.mstar',
+    ])
+  })
+
+  it('omits the pin for a null, empty or non-string root', () => {
+    for (const root of [null, undefined, '', '   ']) {
+      expect(scopedMountArgsFor(['run', 'mcp'], root)).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+    }
+  })
+
+  it('never appends a second --harness when the base already declares one', () => {
+    expect(scopedMountArgsFor(['run', 'mcp', '--harness', '/explicit'], '/agent/.mstar')).toEqual([
+      'run',
+      'mcp',
+      '--harness',
+      '/explicit',
+      '--identity-env',
+      MSTAR_HOST_SESSION_ID,
+    ])
+  })
+
+  it('passes a non-array args through untouched', () => {
+    expect(scopedMountArgsFor('run mcp', '/ws/.mstar')).toBe('run mcp')
+  })
+})
+
 describe('scoped MCP mount — per-agent registration', () => {
   it('two fixture agents → two scoped registrations with distinct per-agent env (a)', async () => {
     const ctx = new Context()
@@ -172,6 +218,124 @@ describe('scoped MCP mount — per-agent registration', () => {
       // `registerMcpCommand` reads NO ambient identity, so the per-agent env
       // key would never reach the connection.
       expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('pins the connection control root to the agent workspace harness (#556)', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        harnessRootFor: (agent) => {
+          const cwd = (agent as { session?: { header?: { cwd?: string } } }).session?.header?.cwd
+          return cwd === '/tmp/ws' ? '/tmp/ws/.mstar' : null
+        },
+      })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+
+      // The pin follows the AGENT's workspace, never the host process cwd:
+      // without it the server probes process.cwd(), so a connection serving one
+      // workspace could root itself on another project — and a foreign root
+      // that HOLDS a store would accept the write silently (#556).
+      expect(fake.configs[0]!.args).toEqual([
+        '-y',
+        '@mstar-harness/cli',
+        'mcp',
+        '--identity-env',
+        MSTAR_HOST_SESSION_ID,
+        '--harness',
+        '/tmp/ws/.mstar',
+      ])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('resolves the pin per agent, not once for the process', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        harnessRootFor: (agent) => {
+          const id = (agent as { id?: string }).id
+          return id === 'agent-a' ? '/ws-a/.mstar' : '/ws-b/.mstar'
+        },
+      })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-b'), source: 'fresh' })
+      await settle()
+
+      // Two agents may belong to different workspaces; one process-wide root
+      // would misroot the other connection.
+      expect((fake.configs[0]!.args as string[]).slice(-2)).toEqual(['--harness', '/ws-a/.mstar'])
+      expect((fake.configs[1]!.args as string[]).slice(-2)).toEqual(['--harness', '/ws-b/.mstar'])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('keeps the documented process-cwd probe when no harness resolves', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        harnessRootFor: () => null,
+      })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+
+      // An unresolved root adds no flag: the CLI keeps its own probe and its
+      // own `mcp.control-root-unresolved` refusal, never a guessed pin.
+      expect(fake.configs[0]!.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('never overrides a harness the deployment row already pinned', async () => {
+    const ctx = new Context()
+    const loader = new FakeLoaderRegistry(ctx)
+    loader.entriesList = [
+      {
+        options: {
+          name: '@deepseek-ai/dsh-mcp-client',
+          config: {
+            serverName: 'mstar',
+            transport: 'stdio',
+            command: 'bun',
+            args: ['run', 'mcp', '--harness', '/explicit/.mstar'],
+          },
+        },
+        disabled: false,
+        fiber: {},
+      },
+    ]
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        harnessRootFor: () => '/agent/.mstar',
+      })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-row'), source: 'fresh' })
+      await settle()
+
+      // An explicit deployment pin is a deliberate choice: append the identity
+      // declaration, never a second/overriding --harness.
+      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--harness', '/explicit/.mstar', '--identity-env', MSTAR_HOST_SESSION_ID])
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})

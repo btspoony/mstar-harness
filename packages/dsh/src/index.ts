@@ -723,7 +723,11 @@ export function apply(ctx: Context, config: Config): void {
     if (level === 'debug') logger.debug(message)
     else logger.warn(message)
   })
-  registerScopedMcpMount(ctx)
+  // The agent's own harness pins each scoped connection's control root (#556):
+  // without it the MCP server resolves its own process cwd, so a connection
+  // serving one workspace could root itself on whatever project the host was
+  // launched from — and a foreign root holding a store would accept the write.
+  registerScopedMcpMount(ctx, { harnessRootFor: (agent) => resolver.forAgent(agent) })
 
   // Background-job settle pairing listens to the exported jobs lifecycle event
   // stream. `settled` carries the registry job id and terminal projection.

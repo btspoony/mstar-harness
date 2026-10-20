@@ -54,6 +54,13 @@ export const MSTAR_HOST_SESSION_ID = 'MSTAR_HOST_SESSION_ID'
  */
 const IDENTITY_ENV_FLAG = '--identity-env'
 
+/**
+ * The exact CLI flag pinning the connection's control root (`registerMcpCommand`:
+ * `--harness <absolute path>`). The mount passes the agent's own workspace
+ * harness so the connection can never root itself on the host process cwd.
+ */
+const HARNESS_FLAG = '--harness'
+
 /** The package the mount reuses (one string literal; never a static import — optional-by-presence). */
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 
@@ -97,18 +104,31 @@ export function scopedMountEnvFor(sessionId: string): Record<string, string> {
  * so a row carrying another name would keep reading an env the mount
  * never sets); a config whose `args` is not an array is passed through
  * untouched.
+ *
+ * `harnessRoot` pins the connection's control root (#556): without it the
+ * server resolves `process.cwd()`, so a connection serving one workspace can
+ * root itself on another project the host process happened to be launched
+ * from — and a foreign root that HOLDS a store would accept the write
+ * silently. `--harness` also anchors the invocation workspace at the root's
+ * parent, so cwd-derived paths follow the pin too. A base row that already
+ * declares `--harness` keeps its own value (an explicit deployment choice is
+ * never overridden by the mount).
  */
-export function scopedMountArgsFor(args: unknown): unknown {
+export function scopedMountArgsFor(args: unknown, harnessRoot?: string | null): unknown {
   if (!Array.isArray(args)) return args
   const declared = args.indexOf(IDENTITY_ENV_FLAG)
-  if (declared >= 0 && declared + 1 < args.length) {
-    const normalized = [...args]
-    normalized[declared + 1] = MSTAR_HOST_SESSION_ID
-    return normalized
-  }
-  // No declaration (or a dangling flag with no value slot): append the
-  // full declaration pair.
-  return [...args, IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID]
+  const withIdentity = declared >= 0 && declared + 1 < args.length
+    ? (() => {
+        const normalized = [...args]
+        normalized[declared + 1] = MSTAR_HOST_SESSION_ID
+        return normalized
+      })()
+    // No declaration (or a dangling flag with no value slot): append the
+    // full declaration pair.
+    : [...args, IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID]
+  const pinned = typeof harnessRoot === 'string' && harnessRoot.trim() !== '' ? harnessRoot : null
+  if (pinned === null || withIdentity.includes(HARNESS_FLAG)) return withIdentity
+  return [...withIdentity, HARNESS_FLAG, pinned]
 }
 
 /** Consumer log levels the module sink understands. */
@@ -255,6 +275,14 @@ const defaultProvider: McpClientModuleProvider = async () => {
 export interface ScopedMcpMountOptions {
   /** The module resolver (production default resolves the optional package; tests inject a fake). */
   provider?: McpClientModuleProvider
+  /**
+   * The agent's own `{HARNESS_DIR}`, used to PIN the connection's control root
+   * (`--harness`). Omitted → the connection keeps the CLI's documented
+   * process-cwd probe (and its unresolved-root warning). The plugin passes its
+   * `HarnessResolver.forAgent`, so a scoped connection serves the workspace of
+   * the session it belongs to instead of the host process cwd (#556).
+   */
+  harnessRootFor?: (agent: unknown) => string | null
 }
 
 /**
@@ -359,9 +387,14 @@ export function registerScopedMcpMount(ctx: Context, options: ScopedMcpMountOpti
       // the shipped-row mirror) plus the identity-env args and exactly the
       // per-agent identity env.
       const base = loaderRowConfig(ctx) ?? DEFAULT_ROW_CONFIG
+      // The agent's own harness root pins the connection (#556). Resolved per
+      // agent, never once for the process: two agents may belong to different
+      // workspaces, and the whole point is that the connection serves the
+      // session's workspace rather than the host process cwd.
+      const harnessRoot = options.harnessRootFor?.(agent) ?? null
       const config: Record<string, unknown> = {
         ...base,
-        args: scopedMountArgsFor(base.args),
+        args: scopedMountArgsFor(base.args, harnessRoot),
         env: { ...((base.env as Record<string, string> | undefined) ?? {}), ...scopedMountEnvFor(id) },
       }
       claim.fiber = ctx.plugin(mod as unknown as Parameters<Context['plugin']>[0], config)
