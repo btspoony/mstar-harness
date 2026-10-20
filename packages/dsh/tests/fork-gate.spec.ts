@@ -272,7 +272,10 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
       taskId: 'T3',
       durationMs: 1_500,
     })
-    expect(view.events[0].paired).toBe(true) // the settle carries the paired identity
+    // The exported event union carries every projected kind — narrow per kind.
+    const settleEvent = view.events[0]
+    if (settleEvent?.kind !== 'settle') throw new Error('expected a settle row first')
+    expect(settleEvent.paired).toBe(true) // the settle carries the paired identity
   })
 
   it('(c2) the DEFAULT dispatchTools match subagent_fork — foreground settle with an EMPTY config', async () => {

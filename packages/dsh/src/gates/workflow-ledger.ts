@@ -21,6 +21,9 @@
  * approval result only when the current apply had previously asked about that
  * name. Unbound events are excluded via the durable session binding floor;
  * unreadable bindings pause attribution rather than implying no selection.
+ * The binding guard, the exclusion floor, the scan bound and the append all
+ * resolve the SAME root — the session's selected harness (the bind adoption
+ * receipt) — so a cross-harness bind is gated only by the root it selected.
  *
  * This consumer is observe-only: no event gates workflow execution. Missing
  * session service disables it, and contained logger/cache failures never
@@ -45,6 +48,10 @@ import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
 // Session bindings may retain an imported exclusion floor. Unresolved native
 // targets remain eligible and never produce a cursor or binding mutation.
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
+// The bind adoption receipt names the session's SELECTED harness root: the
+// binding guard and the exclusion floor read through it too (the same root
+// `resolveExecutionLedgerTarget` appends through), never the workspace root.
+import { executionBindingRootOf } from './execution-binding-roots.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The SHARED P-c cache-key normalization : the run-start
@@ -237,7 +244,11 @@ function sessionStreamIdOf(session: unknown, sessionId: string): string | undefi
 /**
  * One execution target selected by the native workflow/session resolver. The
  * store identity and epoch are a single selection and travel unchanged to
- * every event write.
+ * every event write. `harnessDir` is the control root the target was resolved
+ * in — the session's SELECTED harness (the bind adoption's root), which may
+ * differ from the carrying session's workspace harness: the scan bound and
+ * the event append must act on the store the binding lives in, never on the
+ * workspace root the row was observed from.
  */
 export type WorkflowLedgerTarget = Readonly<{
   workflowId: string
@@ -245,6 +256,7 @@ export type WorkflowLedgerTarget = Readonly<{
   sessionId: string
   storeId: string
   epoch: number
+  harnessDir: string
 }>
 
 /** The resolver returns null when this session has no authorized writer. */
@@ -253,6 +265,7 @@ export type ResolveWorkflowLedgerTarget = (sessionId: string, cwd: string) => Pr
 /** A target is usable only when it is internally consistent and names this session. */
 function targetRefusal(target: WorkflowLedgerTarget, sessionId: string): string | undefined {
   if (target.sessionId !== sessionId) return `target session ${target.sessionId} does not match the carrying session`
+  if (typeof target.harnessDir !== 'string' || target.harnessDir === '') return 'target carries no harness dir'
   if (typeof target.workflowDir !== 'string' || target.workflowDir === '') return 'target carries no workflow dir'
   if (typeof target.workflowId !== 'string' || target.workflowId === '') return 'target carries no workflow id'
   if (typeof target.storeId !== 'string' || target.storeId === '') return 'target carries no store identity'
@@ -427,6 +440,21 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
 }
 
 /**
+ * The root one session's binding guard and exclusion floor read from: the
+ * bind adoption receipt's SELECTED harness when recorded, the workspace
+ * harness otherwise — exactly the root `resolveExecutionLedgerTarget`
+ * resolves the ledger target (and its scan bound + append) through. One
+ * row's eligibility gate, its floor, its scan bound and its append
+ * therefore act on ONE control root: after a cross-harness bind (workspace
+ * A, bind to B) the guard and floor come from B, so an unreadable or
+ * differently-floored A store can neither pause attribution for a valid B
+ * binding nor filter B's events.
+ */
+function ledgerBindingRootOf(sessionId: string, workspace: string, resolver: HarnessResolver): string | null {
+  return executionBindingRootOf(sessionId, workspace) ?? resolver.forWorkspace(workspace)
+}
+
+/**
  * Register the workflow-ledger consumer: (1) a `session/created` backfill
  * listener (registered FIRST — — so no apply-time window exists
  * between the snapshot and the attach); (2) a bounded cold scan over
@@ -572,7 +600,6 @@ export function registerWorkflowLedger(
   const consumeWithTarget = async (
     session: unknown,
     sid: string,
-    harnessDir: string,
     workspace: string,
     row: WorkflowLedgerRow,
   ): Promise<void> => {
@@ -596,13 +623,15 @@ export function registerWorkflowLedger(
       log('debug', `workflow-ledger selected generation changed for session ${sid}; each event commits with the generation resolved for that event`)
     }
     observedGeneration.set(sid, selectedGeneration)
-    recordRow(session, sid, harnessDir, row, target.workflowId, target.workflowDir, selectedGeneration)
+    // The row is recorded in the TARGET's own root (the session's selected
+    // harness), not the workspace root the event was observed from — the scan
+    // bound and the event append live beside the binding that authorized them.
+    recordRow(session, sid, target.harnessDir, row, target.workflowId, target.workflowDir, selectedGeneration)
   }
 
   const advanceSkippedAgentEnd = async (
     session: unknown,
     sid: string,
-    harnessDir: string,
     workspace: string,
     seq: number,
   ): Promise<void> => {
@@ -624,10 +653,13 @@ export function registerWorkflowLedger(
       log('warn', `workflow-ledger scan-bound target refused for session ${sid} — ${refusal}`)
       return
     }
-    const bound = readDshScanBound({ harnessDir }, target.workflowId, sid)
+    // The same target-root rule for the skipped agent-end's scan bound: the
+    // bound lives in the target's root beside the binding, never in the
+    // workspace root.
+    const bound = readDshScanBound({ harnessDir: target.harnessDir }, target.workflowId, sid)
     if (bound?.stream === streamId && seq < bound.next) return
     const selectedGeneration = { storeId: target.storeId, epoch: target.epoch }
-    if (!advanceDshScanBound({ harnessDir }, target.workflowId, sid, seq + 1, streamId, selectedGeneration)) {
+    if (!advanceDshScanBound({ harnessDir: target.harnessDir }, target.workflowId, sid, seq + 1, streamId, selectedGeneration)) {
       log('warn', `workflow-ledger native scan bound not advanced for skipped agent-end event at ${seq}; it remains eligible for replay`)
     }
   }
@@ -650,7 +682,10 @@ export function registerWorkflowLedger(
     const sourceSeq = row?.seq ?? (typeof record?.seq === 'number' ? record.seq : -1)
     const workspace = sessionCwdOf(session)
     if (workspace === undefined) return
-    const harnessDir = resolver.forWorkspace(workspace)
+    // The guard and the floor read the session's SELECTED root — the same
+    // root `consumeWithTarget` appends through — never the workspace root
+    // the event was observed from.
+    const harnessDir = ledgerBindingRootOf(sid, workspace, resolver)
     if (harnessDir === null) return
     const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
     if (binding.kind === 'unavailable') {
@@ -660,21 +695,23 @@ export function registerWorkflowLedger(
     const floor = binding.binding?.excludedBeforeSeq ?? 0
     // The exclusion floor omits events observed while the session was unbound.
     if (sourceSeq < floor) return
-    if (row === undefined) return advanceSkippedAgentEnd(session, sid, harnessDir, workspace, sourceSeq)
-    return consumeWithTarget(session, sid, harnessDir, workspace, row)
+    if (row === undefined) return advanceSkippedAgentEnd(session, sid, workspace, sourceSeq)
+    return consumeWithTarget(session, sid, workspace, row)
   }
 
   /**
    * The scan begins after the durable exclusion floor and fork-inherited
-   * prefix. The selected workflow is resolved per event, so its native scan
-   * bound is read only after that event's exact target is known; matching
-   * stream positions are skipped in `recordRow`.
+   * prefix. The floor resolves from the session's SELECTED harness (the
+   * adoption receipt) — the same root the append acts on — never from the
+   * workspace the scan observed. The selected workflow is resolved per
+   * event, so its native scan bound is read only after that event's exact
+   * target is known; matching stream positions are skipped in `recordRow`.
    */
   const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
     const cut = sessionForkCutOf(session)
     const workspace = sessionCwdOf(session)
     if (workspace === undefined) return cut
-    const harnessDir = resolver.forWorkspace(workspace)
+    const harnessDir = ledgerBindingRootOf(sid, workspace, resolver)
     if (harnessDir === null) return cut
     const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
     if (binding.kind === 'unavailable') return cut

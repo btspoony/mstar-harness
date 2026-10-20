@@ -55,7 +55,7 @@ PM must assign specialist subagents for:
 - Product/market research output
 - Prompt/agent/rule refactoring output
 
-If outside whitelist, do not execute directly.
+If outside whitelist, do not execute directly. This boundary holds on every delegation channel — the Lead never implements, whether dispatching a one-shot invoke, a durable team seat, or a native fan-out.
 
 ---
 
@@ -109,6 +109,8 @@ In invoke-based hosts (any host whose active reference exposes a callable invoke
 - Do not claim dispatch completion without matching invokes.
 
 Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
+
+> **On dsh:** the delegation channel is per shape — one-shot Assignment → **`subagent`**; multi-seat / role-persistent / multi-round work → **Agent Teams** (`spawn_teammate` + `team_task_*` board + `wait_agent` + `send_message`); read-only N≥3 fan-out → **`workflow`**. Channel caps and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
 **Native-workflow hosts:** when the active host reference declares a native workflow driver instead of a goal loop, iteration progress is that workflow (workflow snapshot phases + dispatch gates + child **settle notifications**), never a goal-round loop. Phase 2 progression is then the **`Rescheduling checkpoint`** (a child settle is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; host declaration and its per-step rules → the active `mstar-host` reference.
 Dispatch mechanics and templates:
@@ -255,6 +257,7 @@ Before first implement dispatch:
 - Every implement Assignment declares `PM Task Board coverage`
 - Default batch size 1-2 IDs; `>=3` requires `Why batching is safe`
 - Completion rhythm: commit -> Completion Report -> PM Status Update -> next dispatch
+- The plan row stays the delivery authority and the board a coordination projection — mirror one board task per Assignment and keep both records in step (dsh Agent Teams board protocol → **`mstar-host`** → `references/dsh-agent-teams.md`).
 
 ---
 

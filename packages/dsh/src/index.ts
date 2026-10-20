@@ -45,7 +45,7 @@ import type { SkillLintAdvisory } from './gates/skill-lint.ts'
 import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerSddIterationTools, registerSeamTools } from './gates/tools.ts'
-import { registerExecutionSessionCommand } from './gates/execution-session.ts'
+import { registerNativeCommandTools } from './gates/native-commands.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
@@ -84,6 +84,11 @@ import {
   registerPlanModeBridge,
   setPlanModeBridgeLogger,
 } from './gates/plan-mode-bridge.ts'
+import {
+  SCOPED_MCP_MOUNT_LOGGER,
+  registerScopedMcpMount,
+  setScopedMcpMountLogger,
+} from './gates/scoped-mcp-mount.ts'
 import {
   ADVISORY_LOGGER,
   resetAdvisoryAbortWarn,
@@ -229,6 +234,9 @@ function packagedCommandsDir(): string | undefined {
   }
 }
 
+/** The bundled-commands logger (the `mstar/<topic>` logger-name convention). */
+const COMMANDS_LOGGER = 'mstar/commands'
+
 /** Static value shape after a frontmatter label: `[ \t]*` spaces, colon, non-empty value. */
 const FRONTMATTER_FIELD_RE = /^[ \t]*:[ \t]*(.+)$/
 
@@ -305,13 +313,24 @@ function parseCommandMarkdown(content: string): { name: string; description: str
  * /advisor interaction); user-typed args are appended to the steered text.
  * The registration is deferred with `ctx.inject(['commands'], …)` — the same
  * optional-unit pattern as the tools — so the plugin boots without the
- * commands service. Absent mirror (no `bundle-assets` run) → no
- * registrations.
+ * commands service. Absent mirror (no `bundle-assets` run) → no registrations
+ * and an ERROR log naming the missing mirror path plus the recovery
+ * (`bun run dsh:bundle-assets`) — a silent boot must not mask the lost
+ * slash-command surface.
  * @param ctx - registrant context carrying the commands service.
  */
 function registerMstarCommands(ctx: Context): void {
   const dir = packagedCommandsDir()
-  if (dir === undefined) return
+  if (dir === undefined) {
+    // Fail loud: resolve the EXPECTED package-relative mirror path for the
+    // message (the absent dir carries no path of its own), then emit at
+    // error level so a missing bundle is visible in the boot log.
+    const expected = fileURLToPath(new URL('../harness-commands', import.meta.url))
+    ctx.logger(COMMANDS_LOGGER).error(
+      `mstar bundled commands not registered: the packaged 'harness-commands/' mirror is missing (expected ${expected}); run \`bun run dsh:bundle-assets\` in packages/dsh to sync it, then rebuild/reload the plugin`,
+    )
+    return
+  }
   ctx.inject(['commands'], (commandsCtx) => {
     for (const file of readdirSync(dir).sort()) {
       if (!file.endsWith('.md')) continue
@@ -688,6 +707,24 @@ export function apply(ctx: Context, config: Config): void {
   })
   registerPlanModeBridge(ctx, resolver)
 
+  // Scoped MCP mounts (#528): every non-leaf `agent/created` gets ONE scoped
+  // `@deepseek-ai/dsh-mcp-client` instance (a `ctx.plugin` child fiber of
+  // THIS context) whose stdio `env` carries that agent's own id as
+  // `MSTAR_HOST_SESSION_ID` — the per-caller identity channel the stdio MCP
+  // route has (ADR: teams' name-target addressing is not a shell identity
+  // channel). Known leaf seats (the scoped-mount leaf contract) get no
+  // mount. Optional-by-presence: the package absent → ONE debug line, no
+  // registrations, boot unaffected. Disposal: the listener is a fiber-scoped
+  // effect and each mount is a child fiber of this context, so the HMR fiber
+  // swap unloads every scoped instance — and its MCP child process — with
+  // the plugin; no explicit disposer is kept here.
+  setScopedMcpMountLogger((level, message) => {
+    const logger = ctx.logger(SCOPED_MCP_MOUNT_LOGGER)
+    if (level === 'debug') logger.debug(message)
+    else logger.warn(message)
+  })
+  registerScopedMcpMount(ctx)
+
   // Background-job settle pairing listens to the exported jobs lifecycle event
   // stream. `settled` carries the registry job id and terminal projection.
   // Deferred injection keeps the jobs service optional: without it, foreground
@@ -723,7 +760,6 @@ export function apply(ctx: Context, config: Config): void {
   // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
   // registered from `harness-commands/` when the commands service exists.
   registerMstarCommands(ctx)
-  registerExecutionSessionCommand(ctx, resolver)
 
   // Skills mount — single canonical mount: register configured
   // skill roots with the dsh skill-filesystem provider contract. The object form
@@ -901,4 +937,8 @@ export function apply(ctx: Context, config: Config): void {
   // v2 seams and canonical command tools share the native tools registry.
   registerSddIterationTools(ctx, resolver)
   registerSeamTools(ctx, resolver)
+  // The native writable command surface (#526): the named mstar command set as
+  // dsh tools, identity-injected from exec.agent.id — registration and its HMR
+  // disposal both live in the module.
+  registerNativeCommandTools(ctx, resolver)
 }

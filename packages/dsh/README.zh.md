@@ -104,7 +104,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 - **seam lint**——harness 下 `DESIGN.md` / 评审报告（`{REVIEW_DIR}` = `{HARNESS_DIR}/reviews/`）/ 知识文档 / roles 目录的写入运行各自的 artifact 级 engine lint。
 - **模型可见工具**——`mstar_sdd_workspace`、`mstar_sdd_task_brief`、`mstar_iteration_gate`、`mstar_design_md_validate`、`mstar_audit_validate`、`mstar_compound_validate`、`mstar_roles_validate` 注册到 `ctx.tools`。`mstar_iteration_gate` 镜像改用 v3 输入 `snapshot_path`（`{HARNESS_DIR}/workflows/<id>/snapshot.json`——镜像 `mstar iteration gate --workflow <id>`；旧的根 `status_path` 输入随 v1 读取路径移除）。
 - **bundled 命令**——向 `ctx.commands` 注册 `/iteration-start`、`/iteration-drive`、`/iteration-loop`、`/codebase-audit`（来自打包的 `harness-commands/` 镜像；每条声明 frontmatter `input` hint，使 web 客户端 claim `/name ` 并等待用户后续输入而非立即执行；handler 把命令正文 + 用户输入 steer 进接收 agent）。
-- **插件自有命令**——`/mstar-execution` 在镜像之外注册自己的 `ctx.commands` 条目（hint `{operation JSON}`）：一个封闭 JSON 联合 `adopt`（规范 `exec-session-v1:` 引用，仅在只读 C1 session resume 成功后采纳）、`clear`、或 `run`（在覆写的执行身份下以 shell-free 方式启动原生 argv，并移除全部伪造/legacy 环境键）。身份只来自承载的原生会话自身 header，已知 leaf/subagent seat 在任何解析与 harness 探测之前即对每个操作拒绝，payload 绝不 steer 进模型——这是协作式操作者入口，不是生命周期否决，也不是 OS 进程围栏（`adopt`/`clear` 只写本会话自己的持久 binding 槽位）。
+- **原生执行绑定路径**——持久执行绑定由成功的原生 `mstar_plan_bind`（两个 bind 臂，均在引擎只读 C1 session resume 成功之后）自动采纳，并按需用 `mstar_execution_clear` 工具清除：身份来自 `exec.agent.id`（无参数、无模型可选面），清除会保留本会话自己的用户选择与排除下限，未绑定会话或不可读的 binding 记录会得到命名拒绝及其恢复路径，而不是静默写入。这条路径上没有任何斜杠命令——操作者绑定或清除执行会话，用的就是这两个原生工具。
 - **pre-step catalog 行**——一个咨询式 `agent/pre-step` 监听器追加**一条**统一的 `mstar-engine` catalog 消息，携带迭代相位闸门段（解析到 steering compass 时）与来自可读 ACTIVE store 权威的工作区状态摘要（plan 注册表、open issues、分支/政策锚点、integration exclusion、row scope（各 plan 行记录的范围）、知识摘要、compass 方向）。发射按会话+工作区变更驱动——首次发射之后，仅当渲染出的行或面板相关 payload 变化时才追加；turn 开始本身从不触发，未解析到 `{HARNESS_DIR}` 的工作区不会组合该行。其背后的构建共享同一份内存 TTL 缓存（`catalogTtlMs`，默认 60 秒）；每会话最新发射持久化到 control 根的 `store.db`（`dsh_status_emissions`），而非文件缓存。
 
 ### Enforcement semantics
@@ -224,6 +224,16 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 ## Commands
 
 插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建时同步（gitignore）。每条注册读取命令的 `name`/`description`/`input` frontmatter；声明了 `input` hint 的注册会将其作为 `input.hint` 公布，使 dsh web 客户端的决策表从「脱离式裸执行」翻转为 leadingInput **claim**——菜单点选后把 `/name ` 插入输入框（命令色 token + ghost hint），按 Enter 才提交，用户可以键入后续参数（与 `/plan`、`/goal`、`/advisor` 相同的交互）。handler 把**命令正文以 USER source 消息 steer 进接收 agent**（dsh-plan-mode 命令先例——`source: { kind: 'user' }`，模型把正文当作要执行的任务而非注入上下文；即 dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），用户键入的参数以 `## User input` 小节追加在正文后，返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
+
+## Native command surface
+
+插件把具名的可写 mstar 命令注册为原生 dsh 工具（`mstar_plan_bind`、`mstar_plan_prepare`、`mstar_plan_progress`、`mstar_plan_complete`、`mstar_workflow_register`、`mstar_issue_add`、`mstar_issue_close`）：每个工具在进程内调用共享的 `@mstar-harness/commands` 实现（路径中无任何 shell），并从 `exec.agent.id` 注入调用者身份——session id 参数在准入前被剥离，身份永远不可由模型选择——成功的原生 `plan bind` 还会持久化 workflow ledger 用于归因的持久执行绑定。在该映射之外，这个表面恰好再带一个 dsh 原生工具 `mstar_execution_clear`：它完全不带参数，清除调用会话自己已采纳的执行绑定（身份来自 `exec.agent.id`）并保留用户选择，无可清除绑定时以 `no clearable execution binding` 命名拒绝——它是 bind/clear 配对的清除半边，路径中没有任何斜杠命令。这个表面上的身份、准入与 fail-closed 叶席位拒绝遵循 ADR `docs/adr/dsh-native-identity-channels.md`。
+
+### Scoped MCP mounts（每 agent 身份）
+
+在共享的 `mstar-mcp` bundle 行之外，插件为每个非叶 agent（`agent/created`）挂载一个 scoped 的 `@deepseek-ai/dsh-mcp-client` 实例：该 scoped 实例以与 shipped bundle 行相同的服务器命令（`npx -y @mstar-harness/cli mcp`，stdio）启动，并在子进程 `env` 中携带 `MSTAR_HOST_SESSION_ID = agent.id`，因此每个 agent 的 MCP 工具调用都归因到它自己的 session id——subagent 永远不会继承父级的 id。已知的叶席位（`header.origin === 'subagent'` 或 `delegationDepth > 0`——scoped-mount 叶契约）永远不能拥有绑定，不会得到挂载。挂载是 optional-by-presence：未安装 `@deepseek-ai/dsh-mcp-client` 时不注册任何东西，只记录一条 debug 日志。每个 scoped 实例都是插件 context 的子 fiber，因此 HMR 重载会连同它的服务器子进程一起卸载。
+
+**每 agent 进程成本。** 身份归因的代价是每个非叶 agent 一个 stdio 子进程：插件运行期间创建的每个 agent 都会增加一个 `npx @mstar-harness/cli mcp` 子进程（一个完整的 Node 进程——它的内存占用加上 `npx` 解析/启动延迟——存活时间与该 agent 的挂载一致），因此子进程数量随并发非叶 agent 数线性增长，且一次 HMR 重载会把它们全部重启。叶席位、未部署 `@deepseek-ai/dsh-mcp-client` 的部署、以及从不创建 agent 的会话没有额外成本。不需要每 agent 归因的部署继续使用单一共享的 `mstar-mcp` bundle 行即可——scoped mount 换来的是身份归因，而不是免费的工具面。
 
 ## Engine seam mapping
 

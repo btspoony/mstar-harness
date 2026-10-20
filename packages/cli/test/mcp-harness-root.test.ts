@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -268,6 +268,60 @@ async function callCatalogList(resolver: ResolveContext): Promise<CommandEnvelop
   }
 }
 
+/**
+ * A foreign launch cwd: not inside any git checkout, owning no harness
+ * directory. An unpinned server launched here probes a workspace its caller
+ * never named (#533).
+ */
+async function plainForeignCwd(): Promise<{ cwd: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const cwd = path.join(root, "foreign-cwd");
+  mkdirSync(cwd, { recursive: true });
+  return { cwd };
+}
+
+/**
+ * A linked-checkout cwd whose main worktree cannot be read: the `.git` file
+ * points at a gitdir that does not exist, so the process-root probe refuses
+ * (`coordination.not-in-git`) instead of answering a root. The sibling
+ * harness owns an initialized store, so the refusal's advertised
+ * `MSTAR_HARNESS_DIR` recovery has a real root to pin.
+ */
+async function linkedForeignCwd(): Promise<{ cwd: string; harness: string }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+  roots.push(root);
+  const cwd = path.join(root, "linked");
+  const harness = path.join(root, "control", ".mstar");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(harness, { recursive: true });
+  (await initializeStore({ harnessDir: harness })).close();
+  writeFileSync(path.join(cwd, ".git"), `gitdir: ${path.join(root, "absent")}\n`, "utf8");
+  return { cwd, harness };
+}
+
+/** Drive one real command call and return the raw MCP tool result. */
+async function callRawTool(resolver: ResolveContext, id: string, args: Record<string, unknown> = {}) {
+  const definition = getCommandDefinitions().find((entry) => entry.id === id);
+  if (definition === undefined) throw new Error(`missing command: ${id}`);
+  const server = createMcpServer(resolver, [definition]);
+  const client = new Client({ name: "harness-root-test-client", version: "1.0.0" });
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverEnd);
+    await client.connect(clientEnd);
+    return await client.callTool({ name: `mstar_${id.replace(/[.-]/g, "_")}`, arguments: args });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
+/** The flat text of one raw tool result. */
+function rawText(result: { content?: Array<{ type: string; text?: string }> }): string {
+  return (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n");
+}
+
 describe("MCP harness root", () => {
   test("a read command resolves a harness outside the cwd through --harness", async () => {
     const fixture = await harnessOutsideCwd();
@@ -280,11 +334,14 @@ describe("MCP harness root", () => {
       expect(envelope).toMatchObject({ status: "refused", code: "worktree.l1.workflow-not-found" });
       expect((envelope.details as { authorityGraph?: string } | undefined)?.authorityGraph).toBe(fixture.harness);
 
-      // Without the flag the same cwd discovers nothing, so the command fails
-      // exactly as before instead of silently using the fixture harness.
-      const probed = await callWorktreeCheck(createContextResolver());
-      expect(probed).toMatchObject({ status: "refused", code: "worktree.check.refused" });
-      expect(String(probed.message)).toContain("harness directory not found");
+      // Without the flag the same cwd resolves no harness root at all, so the
+      // resolver refuses with a named cause instead of silently using the
+      // fixture harness (#533) — the refusal never names the fixture root.
+      const probed = await callRawTool(createContextResolver(), "worktree.check", { workflow: "wf-absent", plan: "p-absent" });
+      const probedText = rawText(probed);
+      expect(probed.isError).toBe(true);
+      expect(probedText).toContain("mcp.control-root-unresolved");
+      expect(probedText).not.toContain(fixture.harness);
     } finally {
       process.chdir(previousCwd);
     }
@@ -583,5 +640,153 @@ describe("MCP harness root", () => {
     expect(envelope).toMatchObject({ command: "mcp", status: "usage", exitCode: 2 });
     expect(String(envelope?.message)).toContain("--harness");
     expect(String(envelope?.message)).toContain("absolute path");
+  });
+
+  test("a rootless server proceeds when the admitted call names its own harness (F-3)", async () => {
+    const fixture = await harnessOutsideCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // catalog.list resolves its own root from the `harness` input field, so
+      // an explicit call names the workspace: the resolver must NOT refuse a
+      // call that supplies the very fact the refusal says is missing — the
+      // handler validates the named root and answers from it.
+      const named = await callRawTool(createContextResolver(), "catalog.list", { harness: fixture.harness });
+      expect(named.isError).toBe(false);
+      const envelope = named.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+
+      // A truly rootless call (no launch root, no per-call harness) still
+      // refuses with the cause and the recovery.
+      const rootless = await callRawTool(createContextResolver(), "catalog.list", {});
+      const text = rawText(rootless);
+      expect(rootless.isError).toBe(true);
+      expect(text).toContain("mcp.control-root-unresolved");
+      expect(text).toContain(realpathSync(fixture.cwd));
+      expect(text).toContain("--harness");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned server resolves the MSTAR_HARNESS_DIR recovery the refusal advertises (F-4)", async () => {
+    const fixture = await harnessOutsideCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The env pin the refusal names is real: the unpinned probe runs through
+      // the engine's own resolution (resolveProcessHarnessDir →
+      // resolveHarnessDir), which reads MSTAR_HARNESS_DIR before any cwd walk,
+      // so a server env carrying the variable pins the root.
+      process.env.MSTAR_HARNESS_DIR = fixture.harness;
+      const envelope = await callCatalogList(createContextResolver());
+      expect(envelope).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+      expect((envelope.data as { items: unknown[] }).items).toEqual([]);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned server over a foreign cwd refuses with a named cause instead of a foreign store verdict", async () => {
+    const fixture = await plainForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The launch cwd resolves to no harness root, so the server cannot know
+      // which workspace a caller belongs to (#533): the resolver must refuse
+      // with the cause and the recovery instead of letting a command present
+      // the launch cwd as the caller's control root.
+      const result = await callRawTool(createContextResolver(), "catalog.list");
+      const text = rawText(result);
+      expect(result.isError).toBe(true);
+      expect(text).toContain("mcp.control-root-unresolved");
+      expect(text).toContain(realpathSync(fixture.cwd));
+      expect(text).toContain("--harness");
+      expect(text).not.toContain("store.not-initialized");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("an unpinned server over a linked checkout with an unreadable main worktree refuses with a named cause", async () => {
+    const fixture = await linkedForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The probe refuses (coordination.not-in-git); the resolver surfaces
+      // that cause with its recovery instead of throwing a bare engine error
+      // or probing onward into an unrelated root.
+      const result = await callRawTool(createContextResolver(), "catalog.list");
+      const text = rawText(result);
+      expect(result.isError).toBe(true);
+      expect(text).toContain("mcp.control-root-unresolved");
+      expect(text).toContain("linked checkout");
+      expect(text).toContain("--harness");
+      expect(text).not.toContain("store.not-initialized");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("the advertised MSTAR_HARNESS_DIR recovery works in the linked-checkout refusal's own case", async () => {
+    const fixture = await linkedForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // The same linked checkout whose main worktree cannot be read: the
+      // refusal above names MSTAR_HARNESS_DIR as the way out, so a valid
+      // absolute value MUST pin the root here. The probe honours a non-blank
+      // variable as the explicit root BEFORE Git discovery — the engine's
+      // resolution alone would refuse (coordination.not-in-git) before ever
+      // reading the variable.
+      process.env.MSTAR_HARNESS_DIR = fixture.harness;
+      const envelope = await callCatalogList(createContextResolver());
+      expect(envelope).toMatchObject({ status: "ok", code: "catalog.list.ok" });
+      expect((envelope.data as { items: unknown[] }).items).toEqual([]);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
+  });
+
+  test("harness.scaffold still bootstraps a workspace whose cwd probe resolves to no harness", async () => {
+    const fixture = await plainForeignCwd();
+    const previousCwd = process.cwd();
+    const previousHarness = process.env.MSTAR_HARNESS_DIR;
+    delete process.env.MSTAR_HARNESS_DIR;
+    process.chdir(fixture.cwd);
+    try {
+      // A null root is harness.scaffold's premise, not a misresolution: the
+      // bootstrap command keeps the cwd fallback so a fresh workspace can
+      // establish its own harness through MCP.
+      const result = await callRawTool(createContextResolver(), "harness.scaffold", {});
+      expect(result.isError).toBe(false);
+      const envelope = result.structuredContent as CommandEnvelope;
+      expect(envelope).toMatchObject({ status: "ok", code: "harness.scaffold.ok" });
+      const scaffolded = envelope.data as { harnessDir: string };
+      expect(path.resolve(scaffolded.harnessDir)).toBe(path.join(realpathSync(fixture.cwd), ".mstar"));
+      expect(existsSync(scaffolded.harnessDir)).toBe(true);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = previousHarness;
+    }
   });
 });

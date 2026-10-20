@@ -13,9 +13,17 @@ import { validateCommandOutcome } from "./outcome.js";
  *
  * `defaultSessionId` is the identity a launcher declared for every call (the
  * stdio server's `--identity-env` channel). It is read at admission so a
- * required session selector is satisfied by that declared default; the per-call
- * selector still wins, and an invalid default reaches the same safe-id guard as
- * any other identity because the resolver never repairs it.
+ * required session selector is satisfied by that declared default. On a
+ * GENERIC unbound connection the per-call selector still wins; on a connection
+ * whose identity the launcher LOCKED (`identityLocked` — a declared channel
+ * whose variable resolved a USABLE session id at launch, the engine's single
+ * safe-session-id rule: one safe path component `[A-Za-z0-9._-]+`, at most 128
+ * characters, the scoped mount), no selector is published and a caller-supplied
+ * one is stripped before admission, so the declared identity is the only
+ * identity the connection can run under. The lock is set only for a value the
+ * engine rule accepts: an invalid declaration is never a default — it is
+ * dropped at launch, so the connection stays generic and the launch warning
+ * states the rule and the recovery.
  *
  * `defaultHarness` is the root a launcher pinned for every call (the stdio
  * server's `--harness` channel). Commands that resolve their own root from an
@@ -30,13 +38,56 @@ export type ResolveContext = {
     signal: AbortSignal,
     services: Array<{ close(): Promise<void> }>,
     effects: McpEffects,
+    call?: ResolveContextCall,
   ): InvocationContext | Promise<InvocationContext>;
   readonly defaultSessionId?: string;
   readonly defaultHarness?: string;
+  /**
+   * True when the launcher locked this connection's identity: a declared
+   * `--identity-env` channel WHOSE VARIABLE RESOLVED a USABLE session id at
+   * launch (one safe path component `[A-Za-z0-9._-]+`, at most 128 characters,
+   * per the engine's single safe-session-id rule; the per-agent scoped mount).
+   * A declared channel the rule refuses, or one that is unset or blank, locks
+   * nothing — the connection stays generic, names the cause, the rule and the
+   * recoveries at launch without echoing the rejected value, and keeps the
+   * per-call selector. On a locked connection the tools publish no session
+   * selector and a caller-supplied selector is stripped BEFORE admission, so
+   * the execution context uses the connection identity; generic unbound
+   * connections keep the selector.
+   */
+  readonly identityLocked?: boolean;
 };
+
+/**
+ * The per-call facts the transport hands the resolver after admission: only
+ * the immutable primitive selectors admission validated — never the handler
+ * value. `harness` is the explicit root the CALLER named this call (a
+ * non-blank `harness` field), undefined when the call named no root.
+ */
+export type ResolveContextCall = Readonly<{
+  readonly harness?: string;
+}>;
 
 export function mcpToolName(commandId: string): string {
   return `mstar_${commandId.replace(/[.-]/g, "_")}`;
+}
+
+/**
+ * The descriptor a LOCKED connection publishes: the identity is the
+ * connection's, so the session selector is not an input the caller may
+ * supply. Publication must agree with the input schema — a `CLI:` usage token,
+ * a `required` entry or a "Caller-supplied" requirement naming `--session-id`
+ * would advertise a parameter the tool does not publish and silently strips.
+ * The shared descriptor is never mutated; the returned shallow view is the
+ * only descriptor a locked connection renders or filters requirements from.
+ */
+function lockedDescriptor(descriptor: CommandSchemaDescriptor, selectorKey: string): CommandSchemaDescriptor {
+  return {
+    ...descriptor,
+    required: descriptor.required.filter((field) => field !== selectorKey),
+    requirements: descriptor.requirements.filter((entry) => entry.name !== selectorKey),
+    cli: { ...descriptor.cli, options: descriptor.cli.options.filter((option) => option.key !== selectorKey) },
+  };
 }
 
 /**
@@ -57,8 +108,12 @@ export function mcpToolName(commandId: string): string {
  * capability `tools/list` must not advertise. Descriptor keys are not required
  * to be payload field names — `persist.write` keys its per-kind contracts by
  * `kind` value — so they are published by the `schema` family alone.
+ *
+ * `descriptor` is the published view: on a locked connection the caller passes
+ * the selector-free `lockedDescriptor`, so `x-mstar-requirements` never names
+ * the session selector while a generic connection keeps it.
  */
-function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor) {
+function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor, identityLocked: boolean) {
   const input = definition.input;
   const jsonSchema = descriptor.input as Record<string, unknown>;
   if (!(input instanceof z.ZodObject)) return { schema: input, jsonSchema };
@@ -78,7 +133,16 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
     if (declared instanceof z.ZodOptional) requiredShape[field] = declared.unwrap();
   }
   let schema = Object.keys(requiredShape).length === 0 ? extended : extended.safeExtend(requiredShape);
-  if (selector !== undefined) {
+  // The session selector is published ONLY on a generic unbound connection.
+  // A locked connection (a declared `--identity-env` channel whose variable
+  // resolved a USABLE session id at launch — one safe path component
+  // `[A-Za-z0-9._-]+`, at most 128 characters, per the engine's single
+  // safe-session-id rule, the scoped per-agent mount) publishes no selector:
+  // the identity belongs to the connection, and a published field a handler
+  // then strips would invite exactly the override the lock forbids. A declared
+  // channel the rule refuses, or one that is unset or blank, keeps the
+  // connection generic and keeps publishing the selector.
+  if (selector !== undefined && !identityLocked) {
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
     properties[selector.key] = { type: "string" };
   }
@@ -140,6 +204,32 @@ function normalizedBlankHarness(input: unknown, defaultHarness: string | undefin
   return { ...record, harness: defaultHarness };
 }
 
+/**
+ * Strip a caller-supplied session selector BEFORE admission when the
+ * connection identity is locked. A locked connection (a declared
+ * `--identity-env` channel whose variable resolved a USABLE session id at
+ * launch per the engine's single safe-session-id rule — one safe path
+ * component `[A-Za-z0-9._-]+`, at most 128 characters, the scoped per-agent
+ * mount) resolves every execution context from the identity the launcher
+ * declared: a caller could otherwise pass a valid foreign session id and have
+ * the engine resolve THAT identity's binding and CAS token, mutating within its
+ * authority. The selector stays available on generic unbound connections —
+ * including a declared channel the rule refuses, or one that is unset or
+ * blank, which keeps the connection generic — where it is the documented
+ * per-call identity channel. The caller's object is never mutated: a shallow
+ * copy carries the stripped fields.
+ */
+function strippedSessionInput(definition: CommandDefinition, input: unknown, locked: boolean): unknown {
+  if (!locked || input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const keys = definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key);
+  if (keys.length === 0) return input;
+  const record = input as Record<string, unknown>;
+  if (!keys.some((key) => record[key] !== undefined)) return input;
+  const normalized = { ...record };
+  for (const key of keys) delete normalized[key];
+  return normalized;
+}
+
 export function registerMcpCommands(
   server: McpServer,
   definitions: readonly CommandDefinition[],
@@ -160,8 +250,14 @@ export function registerMcpCommands(
   onToolsRegistered?.([...names]);
 
   for (const { definition, name } of tools) {
+    const identityLocked = resolveContext.identityLocked === true;
     const descriptor = getCommandSchemas([definition])[0]!;
-    const contract = mcpInputContract(definition, descriptor);
+    const selector = definition.cli.options.find((option) => option.context === "sessionId");
+    // One lock-adjusted view feeds every published surface: the tool schema,
+    // `x-mstar-requirements` and the rendered description all agree that a
+    // locked connection owns the identity.
+    const published = identityLocked && selector !== undefined ? lockedDescriptor(descriptor, selector.key) : descriptor;
+    const contract = mcpInputContract(definition, published, identityLocked);
     const harnessDefault = declaresHarness(contract);
     // The SDK owns its isError/text rejection protocol. One Standard Schema
     // issue carries the complete safe refusal, not a lossy generic Zod message.
@@ -173,11 +269,12 @@ export function registerMcpCommands(
         vendor: "mstar-harness",
         jsonSchema: { input: () => contract.jsonSchema, output: () => contract.jsonSchema },
         validate(input) {
+          const identityLocked = resolveContext.identityLocked === true;
           const defaultSessionId = resolveContext.defaultSessionId;
           const defaultHarness = harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
             definition,
-            normalizedBlankHarness(input, defaultHarness),
+            normalizedBlankHarness(strippedSessionInput(definition, input, identityLocked), defaultHarness),
             descriptor,
             contract.schema,
             (data) => handlerInput(definition, data, defaultHarness),
@@ -188,13 +285,17 @@ export function registerMcpCommands(
       },
     };
     server.registerTool(name, {
-      description: renderCommandContract(definition, "mcp", descriptor),
+      description: renderCommandContract(definition, "mcp", published),
       inputSchema,
       outputSchema: definition.output,
     }, async (admitted, extra) => {
       // The resolver and the context consume only the primitive session
-      // selector; the handler value itself never leaves the capability.
-      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects);
+      // selector and the per-call root selector; the handler value itself
+      // never leaves the capability. On a locked connection the admitted
+      // selector is always undefined (stripped before admission), so the
+      // connection identity below is the only identity this call can run
+      // under.
+      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects, { harness: admitted.harness });
       const sessionId = admitted.sessionId ?? resolved.sessionId;
       const requestContext: InvocationContext = Object.freeze({
         ...resolved,

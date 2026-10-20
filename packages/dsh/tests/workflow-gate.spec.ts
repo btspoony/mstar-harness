@@ -66,7 +66,7 @@ import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { awaitWorkflowLedgerIdle, registerWorkflowLedger, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
-import type { AgentFlowEventView } from '../src/types.ts'
+import type { AgentFlowView } from '../src/types.ts'
 import type { WorkflowAskCache } from '../src/gates/workflow-policy.ts'
 
 let booted: BootResult | undefined
@@ -670,8 +670,8 @@ describe('workflow gate — P-b lease attribution', () => {
 
 /* ---------------------------------- Task 4: ledger integration ---------------------------------- */
 
-/** The booted app's agent-flow ledger events, latest first (the verdict-row read). */
-function ledgerEvents(app: BootResult): readonly AgentFlowEventView[] {
+/** The booted app's agent-flow ledger events, latest first (the verdict-row read). The element is the FULL projected union — these verdict rows are dispatches, but the exported view no longer narrows the union away. */
+function ledgerEvents(app: BootResult): AgentFlowView['events'] {
   // v3 layout: the ledger lives in the ACTIVE workflow dir (the boot's
   // seeded v2 tree — `seedV2` — has one active workflow `wf-1`).
   const view = readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')
@@ -1048,7 +1048,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // uncapped congruence explicitly).
     const runRow = ledgerEvents(app).find((e) => e.kind === 'workflow-run')
     expect(runRow).toBeDefined()
-    if (runRow === undefined) throw new Error('expected workflow-run row')
+    if (runRow === undefined || runRow.kind !== 'workflow-run') throw new Error('expected workflow-run row')
     expect(runRow.name).not.toBe(longName)
     expect(runRow.name).toMatch(/…$/)
 

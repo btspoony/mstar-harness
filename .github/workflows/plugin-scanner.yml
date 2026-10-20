@@ -40,9 +40,14 @@ jobs:
         run: bun install --frozen-lockfile
 
       # The DSH manifest points to dist/index.js; scan the real package entry.
-      - name: Build engine and DSH plugin
+      # The commands dist must exist BEFORE dsh:build: the dsh sources import
+      # @mstar-harness/commands types, so the scanner environment's tsc
+      # resolves them from the built package — without this step every push
+      # reports TS2307/TS7006 from the scan job.
+      - name: Build engine, commands and DSH plugin
         run: |
           bun run engine:build
+          bun run commands:build
           bun run dsh:build
 
       - name: Run HOL AI Plugin Scanner

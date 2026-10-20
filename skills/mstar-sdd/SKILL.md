@@ -70,6 +70,8 @@ Detail: **`references/file-handoffs.md`**.
 
 > **Engine check (when available):** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (or `import { assertBaseSha, sddWorkspace, taskBrief, reviewPackage } from "@mstar-harness/engine"` in a host hook) to drive the loop steps above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
+> **On dsh:** implementer and reviewer dispatches run on the active delegation channel (per-shape selection → **`mstar-host`** → `references/dsh.md` § Delegation channels). `subagent` mode keeps the existing continuation resume (`implementer-session.json` + `references/implementer-continuation-prompt.md`); in Agent Teams mode (`spawn_teammate` / `team_task_*` / `wait_agent` / `send_message`) a **`sticky`** implementer is a durable teammate resumed by name with `send_message` (roster/wake rules → `references/dsh-agent-teams.md`). Task reviewers stay fresh per task on every channel.
+
 ## Implementer statuses
 
 | Status | PM action |

@@ -87,6 +87,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 
 - 不因 harness 流程问题常问「是否继续」「要不要现在启动」—— **决策、记录、dispatch**
 - 进度汇报 / subagent Completion Report 后，下一条必须是 **dispatch 或下一 gate 动作**，不得以确认问句收束 turn
+- **On dsh Agent Teams（HARD）— wake discipline:** readiness never starts the owner — completing a blocker does not start it; the Lead must `send_message` (or `reassign` + one message) to start the next seat, and inactive is not completion — read plan-row evidence before recording done. Protocol → **`mstar-host`** → `references/dsh-agent-teams.md` (§ Wake discipline).
 - 未知 → 读 `mstar-*`；仅 **`Blocked`**、secrets、不可逆范围缺口、branch metadata 缺失、或 Phase 5 多轮仍 blocked 时升级用户
 - Actual Git differs from recorded source scope → same-round ordinary correction through `mstar plan prepare` / `mstar plan progress` with real facts, updating the current authoritative row, applicable working-branch information and plan projections; never hand-edit state or recreate a per-row claim.
 - **跨 plan implement 并行安全闸**与 **integration merge 串行** → `references/phase-2-worktree-lease.md` §2.0 #5 /「Multi-plan parallelism」（**无论** `Worktree mode: waived`）

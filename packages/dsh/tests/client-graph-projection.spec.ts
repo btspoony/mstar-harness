@@ -654,6 +654,7 @@ function dispatchRow(over: {
   agent?: string
   planId?: string
   taskId?: string
+  callId?: string
   verdict?: 'ok' | 'advisory' | 'denied'
 }): AgentFlowEventView {
   return {
@@ -664,6 +665,7 @@ function dispatchRow(over: {
     planId: over.planId ?? null,
     taskId: over.taskId ?? null,
     taskCategory: null,
+    ...(over.callId !== undefined ? { callId: over.callId } : {}),
     ...(over.verdict !== undefined ? { verdict: over.verdict } : {}),
   }
 }
@@ -677,6 +679,7 @@ function settleRow(over: {
   role?: string
   planId?: string
   taskId?: string
+  callId?: string
   childId?: string
   taskRef?: string
 }): AgentFlowEventView {
@@ -695,6 +698,7 @@ function settleRow(over: {
     ...(over.durationMs !== undefined ? { durationMs: over.durationMs } : {}),
     ...(over.childId !== undefined ? { childId: over.childId } : {}),
     ...(over.taskRef !== undefined ? { taskRef: over.taskRef } : {}),
+    ...(over.callId !== undefined ? { callId: over.callId } : {}),
   }
 }
 
@@ -963,6 +967,123 @@ describe('projectGraph — agents zone status derivation (spec §4)', () => {
     expect(agents.entities).toHaveLength(KNOWN_AGENTS.length)
     expect(agents.entities.every((e) => e.idle && e.status === 'idle')).toBe(true)
     expect(agents.executing).toBe(0)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Agents zone unresolved continuation: an Assignment-shaped team
+ * dispatch (`team_task_create` / `team_task_update` / `send_message`) whose
+ * latest ledger fact is the explicit `continuation`/`unresolved` row renders
+ * the DISTINCT non-running `unresolved` state — never phantom running, never
+ * counted in `executing` — while a dispatch with NO events after it stays
+ * honestly running. The event log lists the continuation row with its reason.
+ * ------------------------------------------------------------------------- */
+
+/** One nonterminal `continuation`/`unresolved` row as the projected ledger view emits it (the row carries the paired dispatch identity). */
+function continuationRow(over: {
+  ts: number
+  agent?: string
+  role: string
+  planId?: string
+  taskId?: string
+  callId?: string
+  reason: string
+}) {
+  return {
+    ts: over.ts,
+    kind: 'continuation',
+    agent: over.agent ?? null,
+    role: over.role,
+    planId: over.planId ?? null,
+    taskId: over.taskId ?? null,
+    taskCategory: null,
+    ...(over.callId !== undefined ? { callId: over.callId } : {}),
+    state: 'unresolved',
+    reason: over.reason,
+  }
+}
+
+describe('projectGraph — agents zone unresolved continuation', () => {
+  it('(a) a team_task_create dispatch whose latest fact is an unresolved continuation → status unresolved, NOT executing', () => {
+    const view = projectGraph(flowSource([
+      continuationRow({ ts: 8, agent: 'a1', role: 'fullstack-dev', reason: 'the created member is not resolvable in the roster' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1', verdict: 'ok' }),
+    ]))
+    const entity = view.agents.entities.find((e) => e.key === 'fullstack-dev')!
+    expect(entity.status).toBe('unresolved')
+    expect(entity.idle).toBe(false)
+    // The distinct non-running state never inflates the "N executing" summary.
+    expect(view.agents.executing).toBe(0)
+  })
+
+  it('(b) a dispatch with NO events after it still renders running (honest in-flight)', () => {
+    const view = projectGraph(flowSource([
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
+    expect(view.agents.executing).toBe(1)
+  })
+
+  it('(c) the event log lists the continuation row with its reason', () => {
+    const view = projectGraph(flowSource([
+      continuationRow({ ts: 8, agent: 'a1', role: 'fullstack-dev', reason: 'the roster does not list the created member' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    // Latest-first preserved: the continuation row precedes its dispatch.
+    expect(view.events.map((e) => e.kind)).toEqual(['continuation', 'dispatch'])
+    const row = view.events.find((e) => e.kind === 'continuation')!
+    expect(row.state).toBe('unresolved')
+    expect(row.reason).toBe('the roster does not list the created member')
+    expect(row.agent).toBe('a1')
+    expect(row.role).toBe('fullstack-dev')
+    // A continuation carries no gate verdict/outcome — honest unknown status.
+    expect(row.status).toBe('unknown')
+    // The event log entry assembly passes the row through as a generic event.
+    const entry = eventLogEntries(view).find((entry) => entry.kind === 'event' && entry.eventKind === 'continuation')
+    expect(entry).toMatchObject({ kind: 'event', role: 'fullstack-dev', agent: 'a1', status: 'unknown' })
+  })
+
+  it('a paired settle beats an unresolved continuation on the same dispatch (completion is the stronger fact)', () => {
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 8, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
+      continuationRow({ ts: 75, agent: 'a1', role: 'fullstack-dev', reason: 'pairing window ended' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
+  })
+
+  it('an agent-less continuation never pairs (exact identity, no guessing) — the dispatch stays running', () => {
+    const view = projectGraph(flowSource([
+      continuationRow({ ts: 8, role: 'fullstack-dev', reason: 'no attributable member turn' }),
+      dispatchRow({ ts: 7, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
+  })
+
+  it('two concurrent same-identity dispatches: a continuation pairs onto ITS OWN call (call-scoped key), never the later same-identity dispatch', () => {
+    // The continuation belongs to the EARLIER call (call-a); the later
+    // same-identity dispatch (call-b) is the entity's LATEST fact. Under the
+    // old identity-only key the continuation landed on call-b and the entity
+    // read unresolved; the call-scoped key keeps the attribution exact, so the
+    // entity stays honestly running (call-b carries no terminal fact).
+    const view = projectGraph(flowSource([
+      continuationRow({ ts: 10, agent: 'a1', role: 'fullstack-dev', reason: 'pairing window ended', callId: 'call-a' }),
+      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1', callId: 'call-b' }),
+      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', callId: 'call-a' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('running')
+  })
+
+  it('(d) an existing subagent dispatch/settle pair renders unchanged alongside an unresolved-continuation entity', () => {
+    const view = projectGraph(flowSource([
+      continuationRow({ ts: 9, agent: 'a2', role: 'frontend-dev', reason: 'pairing window ended' }),
+      dispatchRow({ ts: 8, role: 'frontend-dev', agent: 'a2' }),
+      settleRow({ ts: 7, agent: 'a1', outcome: 'ok', role: 'fullstack-dev' }),
+      dispatchRow({ ts: 6, role: 'fullstack-dev', agent: 'a1' }),
+    ]))
+    expect(view.agents.entities.find((e) => e.key === 'frontend-dev')!.status).toBe('unresolved')
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
+    expect(view.agents.executing).toBe(0)
   })
 })
 
@@ -2175,6 +2296,21 @@ describe('projectGraph — settle pairing (identity-based)', () => {
       dispatchRow({ ts: 3, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
       dispatchRow({ ts: 1, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2' }),
     ]))
+    expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
+  })
+
+  it('two concurrent same-identity calls (distinct call ids): each settle lands on ITS OWN dispatch (call-scoped key)', () => {
+    // Two dispatches share agent/role/plan/task but carry DIFFERENT live call
+    // ids; each settle carries its own dispatch's call id. The old
+    // identity-only key landed BOTH settles on the latest dispatch, leaving
+    // the earlier one phantom-running; the call-scoped key pairs each exactly.
+    const view = projectGraph(flowSource([
+      settleRow({ ts: 12, agent: 'a1', outcome: 'ok', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', callId: 'call-b' }),
+      settleRow({ ts: 11, agent: 'a1', outcome: 'denied', role: 'fullstack-dev', planId: 'plan-x', taskId: 'T2', callId: 'call-a' }),
+      dispatchRow({ ts: 9, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2', callId: 'call-b' }),
+      dispatchRow({ ts: 8, role: 'fullstack-dev', agent: 'a1', planId: 'plan-x', taskId: 'T2', callId: 'call-a' }),
+    ]))
+    expect(view.events.filter((e) => e.kind === 'dispatch').every((d) => d.settled)).toBe(true)
     expect(view.agents.entities.find((e) => e.key === 'fullstack-dev')!.status).toBe('settled')
   })
 })

@@ -15062,6 +15062,9 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
+      const envRoot = process.env.MSTAR_HARNESS_DIR;
+      if (typeof envRoot === "string" && envRoot.trim() !== "")
+        return resolveHarnessDir(start);
       throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join16(dir, ".git") });
     }
     const parent = dirname9(dir);
