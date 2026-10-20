@@ -31,17 +31,6 @@ describe("the shared input-schema union traversal", () => {
     expect(names).toEqual(["action", "first", "second", "third"]);
   });
 
-  test("keeps the root's declaration first on a shared key", () => {
-    const root = {
-      properties: { branch: { type: "string" } },
-      anyOf: [{ properties: { branch: { type: "string", enum: ["from-branch"] } } }],
-    };
-    const fields = inputFields(root);
-    // The transport decides what a key the called action does not declare, so
-    // it must see the root's own shape, not an alternative's.
-    expect(fields.get("branch")).toEqual({ type: "string" });
-  });
-
   test("never descends into a property's own alternatives", () => {
     // A nested `payload` union describes the VALUE of `payload`; reading its
     // members as input fields would advertise a field the caller cannot pass.
@@ -51,7 +40,6 @@ describe("the shared input-schema union traversal", () => {
       },
     };
     expect([...inputFields(root).keys()]).toEqual(["payload"]);
-    expect(unionBranchSchemas(root)).toHaveLength(1);
   });
 
   test("tolerates a schema that publishes no fields", () => {

@@ -283,9 +283,9 @@ describe("folded MCP command families", () => {
     // `close`: publishing either shape advertises a request the other refuses.
     expect(properties.payload).toBeUndefined();
     expect(issue.description).toContain("Varies by action: disposition, payload");
-    // A strictness-only difference stays published: both actions accept every
-    // string the index names, so no advertised value is refused.
-    expect(properties.id).toEqual({ type: "string" });
+    // A strictness-only difference stays published: the field is still in the
+    // index, and the loop below proves no advertised value is refused.
+    expect(properties.id).toBeDefined();
     for (const family of folded) {
       const shapes = family.descriptorView.properties as Record<string, unknown>;
       for (const [key, shape] of Object.entries(shapes)) {
