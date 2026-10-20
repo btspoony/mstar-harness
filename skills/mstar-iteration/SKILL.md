@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: "Use when starting, driving, resuming, or closing a Morning Star iteration, or running an autonomous Phase 1–6 loop — including without a slash command (e.g. 'start an iteration', 'drive the iteration', 'run an autonomous loop'). Manages Phase 1 (default interactive direction lock; opt-in autonomous), Autonomous Execute, iteration-close (compound promotes knowledge), PR delivery, the PR merge-ready loop, and the Phase 6 post-merge close. Branch SSOT: store.db execution authority + compass frontmatter; snapshot files are migration sources only."
+description: "Start, drive, resume or close an iteration (also without a slash command): Phase 1 direction lock, autonomous execute, iteration-close, PR delivery, merge-ready loop, post-merge close."
 ---
 
 # mstar-iteration（迭代管理）

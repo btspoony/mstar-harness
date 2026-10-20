@@ -1,6 +1,6 @@
 ---
 name: mstar-roles
-description: Morning Star role prompt hub and the **single load-selection authority** for Morning Star roles — `agents/*.md` shells plus full behavior in `references/*.md`. Role files are **identity-first** (mission / responsibilities / NEVER rules); topic `mstar-*` skills appear only as **PM-activated skill presets** (Assignment `Skill presets:` field), not default dependencies — this hub's § Load Order owns the omission / `none` / named-preset / resume / unknown-preset decision. Always load for any Morning Star role (`project-manager`, `product-manager`, `architect`, `code-reviewer`, `fullstack-dev`, `fullstack-dev-2`, `frontend-dev`, `qa-engineer`, `qc-specialist*`, `ops-engineer`, `writing-specialist`, `prompt-engineer`). Cross-role **Role → skill presets** summary in this SKILL.md; per-role preset menus in `references/*.md` are authoritative once PM activates them. Full topic skill index → **`mstar-harness-core`**.
+description: "Role prompt hub and single load-selection authority: identity-first `references/<role>.md`, PM-activated skill presets, the none/named-preset/resume decision. Always load for any Morning Star role."
 ---
 
 ## Load Order

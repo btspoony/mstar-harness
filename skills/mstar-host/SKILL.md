@@ -1,6 +1,6 @@
 ---
 name: mstar-host
-description: Morning Star host adapter for OpenCode, Cursor, Codex, Kimi, ZCode, omp, and dsh. Use after mstar-harness-core whenever host entry, clarify, dispatch, plan mode, or tool UX differs by platform - per-host subagent invoke, plan-mode bridge, parallel dispatch, and skill/command loading. Auto-detect the host from session tools, then Read references/<host>.md. Always load after mstar-harness-core.
+description: "Host adapter for OpenCode, Cursor, Codex, Kimi, ZCode, omp, dsh: entry, dispatch, plan mode, parallel dispatch, skill/command loading. Detect from session tools, then read `references/<host>.md`."
 ---
 
 # Morning Star Host Adapter

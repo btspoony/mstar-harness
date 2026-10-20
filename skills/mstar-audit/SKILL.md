@@ -1,6 +1,6 @@
 ---
 name: mstar-audit
-description: "Morning Star codebase audit — survey a repository and produce a prioritized review report (a run directory under `{REVIEW_DIR}`) with evidence-backed findings, coverage, and verification leads. Read-only on source code. Use when asked to audit or survey a codebase, find bugs, security, performance, test gaps, tech debt, dependency or DX issues, suggest what to build next, or when the user says 'what should I improve / fix / refactor / upgrade in this codebase'. Loads for deep, evidence-first review of a PR / branch / diff / working-tree changes / a commit (the `pr` variant), or for test-suite audits — grading the existing test surface via the `tests` focus or `/amazing-test-audit`. Per-variant detail: `references/` (`codebase-audit.md`, `pr-review.md`, `test-audit.md`)."
+description: "Audit or survey a codebase into an evidence-backed, prioritized review report (read-only): bugs, security, perf, test gaps, tech debt, DX, a PR/branch/diff (`pr` variant), test-suite audit."
 ---
 
 # Morning Star Codebase Audit

@@ -1,6 +1,6 @@
 ---
 name: mstar-coding-behavior
-description: Use for non-trivial implementation, debugging, refactoring, or code review in any project, especially requirement drift, speculative complexity, or agent-facing interfaces. Not for workflow orchestration, role selection, or purely editorial changes.
+description: "Use for non-trivial implementation, debugging, refactoring or code review in any project: requirement drift, speculative complexity, agent-facing interfaces. Not workflow or role selection."
 ---
 
 # Coding Behavior

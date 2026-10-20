@@ -1,6 +1,6 @@
 ---
 name: mstar-e2e
-description: Runs separately requested E2E, real-browser, device, or installed-deployment verification and produces scoped evidence. Loads only for an explicit user request or amazing-e2e-check entry; never from routine QA, UI changes, missing screenshots, or review recommendations.
+description: Separately requested E2E / real-browser / device / installed-deployment verification. Load only for an explicit request or `amazing-e2e-check`; never from routine QA or missing screenshots.
 ---
 
 # Independent E2E Verification

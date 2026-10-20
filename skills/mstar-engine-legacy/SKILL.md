@@ -1,6 +1,6 @@
 ---
 name: mstar-engine-legacy
-description: "Morning Star engine-absent safety and historical-field archive. Use only when the host has no CLI/engine capability and needs field history, checkout/atomic-safety guidance or dispatch/QC invariants. Engine-absent hosts have no file execution route — execution state is conversation tracking (no-plan mode); the archive never recreates removed plan identity, claim, Assignment seal or transfer protocols, and engine-present hosts use current domain operations."
+description: "Engine-absent safety and historical-field archive: field history, checkout/atomic safety, dispatch/QC invariants. Use only when the host has no CLI/engine (execution state = conversation tracking)."
 ---
 
 # mstar-engine-legacy（条件契约档案 / Engine-absent archive）

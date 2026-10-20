@@ -1,6 +1,6 @@
 ---
 name: mstar-use-cli
-description: Use when a Morning Star agent must choose, run, or interpret `mstar-harness` / `mstar` CLI commands — picking the command family for a task (plan row, lifecycle close, register write, report landing, worktree and integration-lease checks, path resolution), satisfying its current semantic preconditions (harness/control root, cwd, actor/session identity, numeric revision or execution token), or reading exit codes 0 / 1 / 2 and stable refusal codes. Also load it when a topical skill's engine-check callout points at the CLI, or a command refuses for a missing precondition. Recorded digests are provenance, not mutation credentials. Flags and option wording belong to CLI help.
+description: "Use when choosing, running or interpreting `mstar`/`mstar-harness` CLI commands: family selection, semantic preconditions (control root, cwd, identity, revision/token), exit codes and refusal codes."
 ---
 
 # CLI contract (`mstar-use-cli`)
