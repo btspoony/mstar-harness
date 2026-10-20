@@ -6,6 +6,14 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.4] - 2026-10-20
+
+### Changed
+
+- Version alignment with harness **4.0.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.4**.
+
 ## [4.0.3] - 2026-10-18
 
 ### Changed
