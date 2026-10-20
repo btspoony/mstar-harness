@@ -663,8 +663,18 @@ type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "fin
  * it) is a real ref. Any other multi-word value is refused instead of being
  * stored as the scope. The create-form grammar is the engine's single one
  * (`dispatch.ts`), not a second copy.
+ *
+ * A claim is ONE line. That grammar reads the value as an Assignment header and
+ * keeps the LAST `Working branch:` line, so a claim carrying a line break could
+ * name a branch the caller never wrote; it is refused before the grammar runs.
  */
 function branchOfClaim(value: string): string {
+  if (/[\r\n]/.test(value)) {
+    throw invalidPlanInput(
+      "Invalid prepare workingBranch: the claim must be a single line \u2014 a branch name or \"create <branch> from <base>\"; retry through mstar plan prepare.",
+      { field: "workingBranch", value },
+    );
+  }
   const form = parseAssignmentBranchForms(`Working branch: ${value}`).createForm;
   if (form !== undefined) {
     // The documented create form carries BOTH tokens; an incomplete one names no

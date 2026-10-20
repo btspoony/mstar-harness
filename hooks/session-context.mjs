@@ -26606,6 +26606,9 @@ function withExecutionPlanOperation(context, resolved, requestHash4, preflight, 
   });
 }
 function branchOfClaim(value) {
+  if (/[\r\n]/.test(value)) {
+    throw invalidPlanInput('Invalid prepare workingBranch: the claim must be a single line — a branch name or "create <branch> from <base>"; retry through mstar plan prepare.', { field: "workingBranch", value });
+  }
   const form = parseAssignmentBranchForms(`Working branch: ${value}`).createForm;
   if (form !== undefined) {
     if (form.name !== "" && form.base !== undefined && form.base !== "")

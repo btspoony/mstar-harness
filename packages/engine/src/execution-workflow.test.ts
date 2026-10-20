@@ -3164,4 +3164,30 @@ describe("execution-workflow: \u00A74.1 the prepare claim records source_branch"
     expect(refusal.details).toMatchObject({ field: "workingBranch", value: "create feature/undeclared" });
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
+
+  test("a claim spanning lines is refused instead of letting a later line name the branch", async () => {
+    const { fixture, sourcePath } = await claimFixture("claim-multiline");
+    const smuggled = `${SOURCE_BRANCH}\nWorking branch: feature/smuggled`;
+    const before = await workflowFootprint(fixture.context);
+    const refusal = await refusalOf(() =>
+      mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+        operationId: "op-claim-multiline", planId: PLAN_ID,
+        operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: smuggled } },
+      }),
+    );
+    // The claim is ONE line. Reading it through the Assignment header grammar
+    // would honour the injected `Working branch:` line and record that branch —
+    // a smuggled scope, so the value is refused before the grammar ever runs.
+    expect(refusal.code).toBe("coordination.invalid-input");
+    expect(refusal.message).toContain("single line");
+    expect(refusal.message).toContain("mstar plan prepare");
+    expect(refusal.details).toMatchObject({ field: "workingBranch", value: smuggled });
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    // The refusal records no branch: the row keeps the branch it was registered
+    // with and never gains the smuggled one.
+    expect(rows(fixture.context, `select state_json from execution_plans where plan_id = '${PLAN_ID}'`)[0]!.state_json)
+      .not.toContain("feature/smuggled");
+    expect((await readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID))
+      .data.plan.metadata).toMatchObject({ working_branch: SOURCE_BRANCH });
+  });
 });
