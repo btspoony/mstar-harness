@@ -843,6 +843,29 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
     expect(codes).not.toContain('lease.dispatch.unverifiable')
   })
 
+  it('the plan row the Assignment names identifies its lifecycle — no session pick needed while several are active', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const feature = await seedTwoActives(app)
+    // Deliberately NO durable pick and no session scope: several lifecycles are
+    // active and the session cwd matches neither, so before the
+    // operation-identified rung this dispatch could only report unverifiable.
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(sddAssignment(feature, ROW_BRANCH), sessionAgent('sess-x', app.root)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const codes = violationCodes(advisories[0])
+    expect(codes).not.toContain('lease.dispatch.unverifiable')
+    expect(codes).not.toContain('lease.dispatch.plan-not-found')
+    // The named lifecycle is still re-verified against its own row scope.
+    expect(codes).not.toContain('lease.dispatch.worktree-mismatch')
+    expect(codes).not.toContain('lease.dispatch.branch-mismatch')
+  })
+
   it('an Assignment dispatching into the row’s OWN recorded scope verifies clean (the positive control)', async () => {
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const feature = await seedTwoActives(app)

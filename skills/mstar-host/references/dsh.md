@@ -155,7 +155,7 @@ or a custom profile).
 | dsh tool | Harness use |
 |----------|-------------|
 | **`subagent`** / **`subagent_fork`** | Primary dispatch — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
-| **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams channel — only when the Team profile layer is mounted; multi-round, role-persistent work over ONE shared working directory. Protocol → `references/dsh-agent-teams.md` |
+| **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only N≥3 fan-out — one run, one conversation `workflow-run` node (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
 | **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
 | **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
@@ -178,26 +178,36 @@ body-quoted examples never leak into header fields.
 
 ## Delegation channels
 
-dsh exposes three delegation surfaces. They differ in lifetime and in what the
-parent holds after the call returns; choose by the shape of the work, not by
-habit.
+dsh exposes three delegation surfaces. **Mounting decides which channel you
+start from, not which work is allowed.** When the Agent Teams layer is
+installed it is the default delegation channel — a multi-task plan belongs on
+its board — and `subagent` is the fallback for a profile without it. `workflow`
+rides alongside both as the read-only fan-out surface.
 
 | Channel | Surface | Use when | Not for |
 |---|---|---|---|
-| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | one self-contained Assignment of any category — including writable work behind the dispatch/lease gates; `subagent_fork` when the child must inherit the completed conversation | coordination that must stay addressable across many turns, or read-only N≥3 fan-out while `workflow` is mounted (when it is not mounted, this path is the documented fallback — § QC default) |
-| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; every member works in ONE shared working directory; a teammate is a continuable subagent child, and any root session is the implicit Lead | multi-seat, multi-round, role-persistent work that must stay addressable across turns — e.g. a tracked implementer/reviewer pair over one worktree | isolated writable tracks, one-shot lookups, read-only N≥3 fan-out |
+| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; a teammate IS a subagent child carrying the ordinary agent toolset (it can enter an assigned checkout through its own tools), and any root session is the implicit Lead | **the default whenever the layer is mounted** — list the plan's tasks on the board first (one task per Assignment), then spawn one teammate per track: multi-task plans, parallel writable tracks, and any seat that must stay addressable across rounds or be steered by name | read-only N≥3 fan-out while `workflow` is mounted |
+| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | the documented fallback when the Team layer is NOT mounted; also single one-off lookups that need no roster | work that must stay addressable across turns, or read-only N≥3 fan-out while `workflow` is mounted |
 | **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width | writable fan-out — it has no per-child pre-start veto seam |
 
-**Mounting decides availability, not preference.** The shipped Agent Teams
-profile layer (`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the
-Team rows and **disables** the direct `subagent` / `subagent_fork` and legacy
-subagent-control rows, so a profile exposes one direct-delegation surface at a
-time; `workflow` rides alongside both. When `spawn_teammate` is absent from the
-toolset the Team layer is not mounted — use `subagent` and never attempt the
-Team protocol.
+**Parallel writable tracks are a Team workload, not a Team exclusion.** The
+channel does not create checkouts for you — that stays the repository's worktree
+procedure (one writable seat per worktree, L2 isolation) — but a teammate runs a
+full agent toolset and enters its assigned checkout itself. Record each track's
+prefix on its board task (`write_scopes` is advisory and never a lock), keep
+disjoint seats in disjoint directories, and leave integration to the Lead.
+
+**Mounting decides the starting channel.** The shipped Agent Teams profile layer
+(`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the Team rows and
+**disables** the direct `subagent` / `subagent_fork` rows, so that profile
+exposes exactly one direct-delegation surface. A profile that mounts both (a
+custom composition) starts from Agent Teams and keeps `subagent` for a seat the
+board does not track. When `spawn_teammate` is absent from the toolset the Team
+layer is not mounted — use `subagent` and never attempt the Team protocol.
+`workflow` rides alongside both.
 
 Team protocol — roster naming, plan-row ⇄ team-task mirroring, wake
-discipline, capacity, and shared-cwd isolation — → **`references/dsh-agent-teams.md`**.
+discipline, capacity, and worktree hand-off — → **`references/dsh-agent-teams.md`**.
 
 ## Gates and enforcement
 
@@ -278,6 +288,31 @@ answers, and no tool argument or config key selects one:
   a command: the writable mstar commands are dsh tools registered over
   `ctx.tools.register`, plus one dsh-native clear tool (§ The native command
   surface below).
+
+### Concurrent lifecycles and workflow selection
+
+**Several ACTIVE lifecycles at once is the normal state**, not an error: each
+plan, worktree, and PR advances on its own lifecycle, and nothing in the host
+caps how many run concurrently. A session only has to answer "which lifecycle
+does THIS operation belong to", and the resolver answers it from the operation
+itself before it ever asks the operator:
+
+1. **A plan row's recorded worktree** contains the session cwd.
+2. **The session's explicit pick** (the panel selection or `mstar plan bind`).
+3. **The plan row the operation names** — an Assignment's `Plan Path` / `SDD dir`,
+   a `--plan` argument. A plan row belongs to exactly one lifecycle, so naming it
+   identifies its owner even when the cwd matches several.
+4. **The only active entry.**
+
+An explicit pick outranks rung 3 on purpose: a pick that names a lifecycle
+WITHOUT the requested plan row is a contradiction the caller must see
+(`lease.dispatch.plan-not-found`), never a silent switch of lifecycle.
+
+Only when none of the four applies does a write report
+`workflow.selection.unbound-multi-active`, and that refusal is scoped to the one
+operation: it lists the active ids and the ways to name one. It is not a session
+pause — every other operation keeps working, and the same session can drive
+several lifecycles by naming the plan each call.
 
 ### The native command surface
 

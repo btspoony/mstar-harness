@@ -1,8 +1,9 @@
 # dsh Agent Teams reference
 
-Load when the dsh profile mounts the Agent Teams layer and multi-seat,
-multi-round work runs through `spawn_teammate`, `team_task_*`, `wait_agent`,
-and `send_message`. Channel selection → `dsh.md` § Delegation channels.
+Load when the dsh profile mounts the Agent Teams layer — it is then the DEFAULT
+delegation channel, and plan work runs through `spawn_teammate`, `team_task_*`,
+`wait_agent`, and `send_message`. Channel selection → `dsh.md` § Delegation
+channels.
 
 ## Channel shape
 
@@ -116,16 +117,24 @@ stays idle until someone messages it.
   member: keep the remaining work inside the existing seats and record the cap
   as the reason the remaining rows are not dispatched.
 
-## Shared cwd and write isolation
+## Worktree hand-off and write isolation
 
-- **Every member shares the Lead's working directory.** `spawn_teammate` has no
-  `cwd` field, so teammates inherit the session cwd and see each other's edits
-  immediately. Split writable work across directories and record each expected
-  prefix in `write_scopes`.
+- **The spawn has no `cwd` field; the member does.** `spawn_teammate` gives every
+  teammate the Lead's working directory as its STARTING directory — it is a full
+  agent, not a sandboxed function, so it enters an assigned checkout through its
+  own tools (absolute paths, or a directory change of its own). Parallel writable
+  tracks therefore work: create one worktree per track first (repository
+  procedure, L2 isolation), then state each member's absolute path in its initial
+  prompt and on its board task.
+- **Name the track in the prompt, not only the scope.** A teammate that is never
+  told which checkout belongs to it will edit the shared cwd. Put the absolute
+  worktree path, the branch, and the files it owns in the initial prompt; record
+  the same prefix in `write_scopes` as the machine-readable echo.
 - **`write_scopes` is advisory, not a lock.** Overlapping scopes on in-progress
   tasks surface as `writeScopeWarnings`; they never block a write. Bash,
   formatters, and code generators are not covered by the filesystem version
-  guard either — coordinate them explicitly.
+  guard either — coordinate them explicitly, and keep seats in disjoint
+  directories so interleaving is harmless.
 - **A stale write is a rebase signal.** On `FS_STALE_VERSION`, re-read the file,
   rebase the intended change onto the new content, and retry; do not overwrite
   a teammate's edit.
@@ -137,7 +146,7 @@ stays idle until someone messages it.
 
 | Not provided | Consequence / where it lives instead |
 |---|---|
-| worktrees or per-member checkouts | every member shares ONE cwd and the channel has no per-member `cwd`; isolated writable seats therefore come from the repository's worktree procedure, one writable seat per worktree |
+| automatic worktree creation | the channel creates no checkout; create one per writable track through the repository's worktree procedure, then hand each member its absolute path |
 | locks | `write_scopes` warns; concurrent writes can still interleave |
 | merges, rebases, or review gates | the Lead integrates and verifies; no tool merges member work |
 | automatic ownership release | `complete` keeps the owner; `release`, `reopen`, and `reassign` are explicit calls |
