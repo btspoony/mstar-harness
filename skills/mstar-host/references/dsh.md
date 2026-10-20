@@ -25,17 +25,19 @@ or a custom profile).
   **`/amazing-test-audit`**. Each
   command steers its command body into the receiving agent as a USER-source
   message (the mstar workflow prompt — the model executes it as a task, not
-  injected context), returning a success result. Alongside that mirror the
-  plugin registers the **writable mstar command surface as native tools**
-  (`mstar_plan_bind` … `mstar_issue_close` plus `mstar_execution_clear` —
-  § The native command surface below).
+  injected context), returning a success result. The plugin registers **no
+  mstar command tools of its own**: the writable mstar command surface on this
+  host is the scoped **MCP** route (§ The native command surface below).
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.
-- Model-facing tools: the plugin registers **`mstar_sdd_workspace`**,
-  **`mstar_sdd_task_brief`**, **`mstar_iteration_gate`**, and the seam
-  validators **`mstar_design_md_validate`** / **`mstar_audit_validate`** /
-  **`mstar_compound_validate`** / **`mstar_roles_validate`** on `ctx.tools`.
+- Model-facing tools: the plugin registers exactly **one** tool on `ctx.tools`
+  — **`mstar_execution_clear`** (the native-only clear, § The native command
+  surface). Every other mstar capability is an MCP tool of the scoped mount,
+  published one tool per command family (`mcp__mstar__mstar_plan`,
+  `mstar_workflow`, `mstar_issue`, `mstar_sdd`, `mstar_iteration`,
+  `mstar_design_md`, `mstar_audit`, `mstar_compound`, `mstar_roles`, …) with an
+  `action` argument selecting the member command.
 - Web client plugin (workflow panel): the same `mstar` bundle row carries a
   browser client half (`dsh.client` + `exports["./client"]`) discovered
   automatically by `ClientModuleHostService` — no separate profile layer or
@@ -157,9 +159,8 @@ or a custom profile).
 | **`subagent`** / **`subagent_fork`** | Primary dispatch — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
 | **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams channel — only when the Team profile layer is mounted; multi-round, role-persistent work over ONE shared working directory. Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only N≥3 fan-out — one run, one conversation `workflow-run` node (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
-| **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
-| **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
-| **`mstar_*_validate`** | On-demand seam validators (design-md / audit / compound / roles) |
+| **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). Identity comes from the scoped mount's `--identity-env`, so the server acts as the calling agent (§ The native command surface) |
+| **`mstar_execution_clear`** | The ONE native-only tool: clear the calling session's own durable execution binding. No parameters, identity from `exec.agent.id`, leaf seats refused fail-closed |
 | **bash / read / write / edit / grep / glob / web_search** | Standard agent tools — evidence per `mstar-coding-behavior` |
 
 ### `subagent` dispatch shape
@@ -292,28 +293,65 @@ answers, and no tool argument or config key selects one:
   an execution route: coordination documents have no file fallback there
   (`execution.not-active` — the file route is retired), and the
   register kind stays under its own document validator.
-- The host-native execution entry is the **native command tool surface**, not
-  a command: the writable mstar commands are dsh tools registered over
-  `ctx.tools.register`, plus one dsh-native clear tool (§ The native command
-  surface below).
+- The host-native execution entry is the **scoped MCP mount**, not a command and
+  not a native duplicate: the writable mstar commands arrive as MCP tools
+  (`mcp__mstar__mstar_<family>` with an `action`), and the only dsh-native tool
+  beside them is `mstar_execution_clear` (§ The native command surface below).
 
 ### The native command surface
 
-The writable mstar commands are native dsh tools — `mstar_plan_bind`,
-`mstar_plan_prepare`, `mstar_plan_progress`, `mstar_plan_complete`,
-`mstar_workflow_register`, `mstar_issue_add`, `mstar_issue_close` — plus the
-one dsh-native `mstar_execution_clear`. Each calls the shared
-`@mstar-harness/commands` implementation in-process (no shell anywhere in the
-path) and carries the caller identity from `exec.agent.id` — a session id
-argument is stripped before admission, so identity is never model-choosable.
-A known leaf seat (`header.origin === 'subagent'` or `delegationDepth > 0`)
-is refused fail-closed on the coordinator-seat-capable tools
-(`mstar_plan_bind`, `mstar_plan_complete`, `mstar_execution_clear`) before
-any admission or engine round-trip. The former plugin-owned command
-**`/mstar-execution`** was removed: its rationale is superseded by this
-native path — see `docs/adr/dsh-native-identity-channels.md`
-(§ Superseded rationale). Tool semantics live in the dsh README
-(`packages/dsh/README.md`, § Native command surface).
+On this host the writable mstar command surface is the **MCP route**, not a
+native duplicate set. The plugin's bundle patch inserts one `mstar-mcp` row
+(`npx @mstar-harness/cli mcp` over stdio, § MCP delivery) and the plugin
+registers one **scoped mount per agent** carrying `--identity-env`, so the CLI
+process acts as the calling session: the agent's `sessionId` reaches the shared
+admission on every call without a model-supplied field. Each MCP tool is one
+command FAMILY with an `action` argument — `mstar_plan` (`bind` / `prepare` /
+`progress` / `complete`), `mstar_workflow` (`register`), `mstar_issue` (`add` /
+`close`), `mstar_sdd` (`workspace` / `task-brief`), `mstar_iteration` (`gate`),
+`mstar_design_md` / `mstar_compound` / `mstar_roles` (`validate`), `mstar_audit`
+(`scaffold` / `secret-scan` / `supply-chain`), plus every other family. An
+unknown or missing `action` refuses with that family's real action list, and a
+missing required field refuses with the shared aggregated message naming every
+missing field — validation, refusal aggregation and payload composition are the
+shared command layer's, unchanged.
+
+The plugin registers exactly ONE tool of its own: **`mstar_execution_clear`**.
+
+- **Why it is native**: it clears the dsh plugin's OWN durable state — the
+  `executionBinding` slot in the control root's `store.db` — and there is no
+  shared `execution.clear` command for the MCP route to carry.
+- **Shape**: no parameters at all. Identity comes from `exec.agent.id`, so a
+  `sessionId` argument (or any other argument) is ignored and only the caller's
+  own binding is reachable; the user's workflow selection and exclusion floor
+  are preserved.
+- **Leaf guard**: a known leaf seat (`header.origin === 'subagent'` or
+  `delegationDepth > 0`) is refused fail-closed before the store read.
+- **Refusals**: `execution.clear.no-harness` names the two routes that exist
+  (open the session in a workspace declaring `.mstar/`/`.mstarc`, or point the
+  plugin's `harnessDir` config at the control root); `execution.clear.no-binding`
+  names the `harnessDir` config route for a binding recorded in another control
+  root and states the no-action case; `execution.clear.store-refused` names the
+  store's own reason and, when this session is keyed to another workspace,
+  carries that workspace under `data.recordedCwd`.
+
+The fourteen command tools this host used to register (`mstar_plan_bind` …
+`mstar_issue_close`, plus `mstar_sdd_workspace` / `mstar_sdd_task_brief` /
+`mstar_iteration_gate` / `mstar_design_md_validate` / `mstar_compound_validate` /
+`mstar_roles_validate` / `mstar_audit_validate`) are **gone with no alias and no
+compatibility tool**: thirteen of them duplicated an MCP tool 1:1, so the model
+had two identical surfaces to choose from and the whole set cost ~10k characters
+of fixed context per request. Call the MCP tool instead — `mstar_plan` with
+`action: "bind"` where an older document says `mstar_plan_bind`, and so on. The
+one with no exact twin is the review-report credential scan
+(`mstar_audit_validate`): the scan still runs inside `mstar_audit`
+`action: "scaffold"` as the report is written, and inside `action:
+"secret-scan"` for git-tracked files, while the audit seam gate keeps checking
+every `{REVIEW_DIR}` report write — but there is no longer a standalone
+"validate this report file" tool. The former plugin-owned command
+**`/mstar-execution`** stays removed; the ADR
+`docs/adr/dsh-native-identity-channels.md` (§ Superseded rationale) explains why
+identity lives on the mount and the clear rather than on a command.
 
 ## Agent-flow ledger
 
