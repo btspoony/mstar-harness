@@ -407,7 +407,8 @@ function bindReceiptRefOf(envelope: CommandEnvelope): ExecutionSessionRef | unde
 /**
  * The dsh-side adoption refusal: the engine coordinator seat the bind
  * committed stays bound, the durable slot is NOT written, and the message
- * names the cause plus the recovery (the model can re-run the bind).
+ * names the cause plus the recovery (the resume re-bind re-adopts — a plain
+ * re-execution bind cannot replace the live ACTIVE holder).
  */
 function adoptionRefusal(code: string, message: string, recovery: string): CommandEnvelope<never> {
   return refusalEnvelope({ command: 'plan.bind', status: 'refused', code, exitCode: 1, message, recovery })
@@ -511,12 +512,15 @@ async function adoptNativeExecutionBinding(
     recordExecutionBindingRoot(sessionId, cwd, harnessDir)
   } catch (error) {
     // The engine's own refusal code/message surface verbatim; the seat the
-    // bind committed stays bound, so re-running the bind recovers.
+    // bind committed stays bound, so the RESUME re-bind (the original session
+    // reference + the same harness) re-adopts — a plain re-execution bind is
+    // refused (a live ACTIVE holder is never replaced by a bind).
     const { code, message } = refusalOf(error)
     return adoptionRefusal(
       code,
       message,
-      'The engine coordinator seat from the bind stays bound — re-run the bind to adopt again, or resume with your own session reference.',
+      'The engine coordinator seat from the bind stays bound and a plain re-execution bind is refused (a live ACTIVE holder is never replaced). ' +
+        'Recovery: re-run the native bind as a resume — pass the original session reference (the bind receipt\'s session reference, still durable in the binding slot) as `resumeRef` with the SAME `harness` selection — which re-adopts the binding slot.',
     )
   }
   return envelope

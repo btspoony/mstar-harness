@@ -22,9 +22,16 @@
  * Scope note: this is a per-host-process receipt, not a durable channel. A
  * host restart (or a plugin-fiber reload) drops it, and the consumers then
  * answer exactly as they did before this module existed (attribution null,
- * clear `no-binding`) — the named recovery for both is re-running the native
- * bind, which re-adopts (the engine coordinator seat stays bound, so the
- * re-bind recovers) and re-records the root here.
+ * clear `no-binding`). The named recovery for both is a RESUME re-bind:
+ * re-run the native bind carrying the ORIGINAL session reference (the
+ * `resumeRef` the first bind's receipt minted — still durable in the
+ * binding slot's `executionBinding.session`) and the SAME `harness`
+ * selection; the engine resumes the still-bound coordinator seat and the
+ * adoption re-records the root here. A plain re-execution bind is NOT a
+ * recovery: a live holder's row is never replaced by a bind — the bind is
+ * refused (`coordination.identity-mismatch` for a live current-epoch holder,
+ * `execution.session-unavailable` once the row's epoch is behind the store's)
+ * and adopts nothing.
  */
 
 /** One record: the selected root for one exact `(sessionId, cwd)` pair. */

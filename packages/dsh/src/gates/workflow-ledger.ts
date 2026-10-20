@@ -21,6 +21,9 @@
  * approval result only when the current apply had previously asked about that
  * name. Unbound events are excluded via the durable session binding floor;
  * unreadable bindings pause attribution rather than implying no selection.
+ * The binding guard, the exclusion floor, the scan bound and the append all
+ * resolve the SAME root — the session's selected harness (the bind adoption
+ * receipt) — so a cross-harness bind is gated only by the root it selected.
  *
  * This consumer is observe-only: no event gates workflow execution. Missing
  * session service disables it, and contained logger/cache failures never
@@ -45,6 +48,10 @@ import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
 // Session bindings may retain an imported exclusion floor. Unresolved native
 // targets remain eligible and never produce a cursor or binding mutation.
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
+// The bind adoption receipt names the session's SELECTED harness root: the
+// binding guard and the exclusion floor read through it too (the same root
+// `resolveExecutionLedgerTarget` appends through), never the workspace root.
+import { executionBindingRootOf } from './execution-binding-roots.ts'
 import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The SHARED P-c cache-key normalization : the run-start
@@ -433,6 +440,21 @@ function depthAdvisory(sessions: SessionsView, row: WorkflowLedgerRow, warned: S
 }
 
 /**
+ * The root one session's binding guard and exclusion floor read from: the
+ * bind adoption receipt's SELECTED harness when recorded, the workspace
+ * harness otherwise — exactly the root `resolveExecutionLedgerTarget`
+ * resolves the ledger target (and its scan bound + append) through. One
+ * row's eligibility gate, its floor, its scan bound and its append
+ * therefore act on ONE control root: after a cross-harness bind (workspace
+ * A, bind to B) the guard and floor come from B, so an unreadable or
+ * differently-floored A store can neither pause attribution for a valid B
+ * binding nor filter B's events.
+ */
+function ledgerBindingRootOf(sessionId: string, workspace: string, resolver: HarnessResolver): string | null {
+  return executionBindingRootOf(sessionId, workspace) ?? resolver.forWorkspace(workspace)
+}
+
+/**
  * Register the workflow-ledger consumer: (1) a `session/created` backfill
  * listener (registered FIRST — — so no apply-time window exists
  * between the snapshot and the attach); (2) a bounded cold scan over
@@ -660,7 +682,10 @@ export function registerWorkflowLedger(
     const sourceSeq = row?.seq ?? (typeof record?.seq === 'number' ? record.seq : -1)
     const workspace = sessionCwdOf(session)
     if (workspace === undefined) return
-    const harnessDir = resolver.forWorkspace(workspace)
+    // The guard and the floor read the session's SELECTED root — the same
+    // root `consumeWithTarget` appends through — never the workspace root
+    // the event was observed from.
+    const harnessDir = ledgerBindingRootOf(sid, workspace, resolver)
     if (harnessDir === null) return
     const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
     if (binding.kind === 'unavailable') {
@@ -676,15 +701,17 @@ export function registerWorkflowLedger(
 
   /**
    * The scan begins after the durable exclusion floor and fork-inherited
-   * prefix. The selected workflow is resolved per event, so its native scan
-   * bound is read only after that event's exact target is known; matching
-   * stream positions are skipped in `recordRow`.
+   * prefix. The floor resolves from the session's SELECTED harness (the
+   * adoption receipt) — the same root the append acts on — never from the
+   * workspace the scan observed. The selected workflow is resolved per
+   * event, so its native scan bound is read only after that event's exact
+   * target is known; matching stream positions are skipped in `recordRow`.
    */
   const scanStartSeq = (session: unknown, sid: string, endSeq: number): number => {
     const cut = sessionForkCutOf(session)
     const workspace = sessionCwdOf(session)
     if (workspace === undefined) return cut
-    const harnessDir = resolver.forWorkspace(workspace)
+    const harnessDir = ledgerBindingRootOf(sid, workspace, resolver)
     if (harnessDir === null) return cut
     const binding = readWorkflowSessionBinding(harnessDir, sid, workspace)
     if (binding.kind === 'unavailable') return cut

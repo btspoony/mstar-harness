@@ -20,7 +20,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -28,14 +28,17 @@ import {
   createExecutionWorkflow,
   encodeExecutionSessionRef,
   initializeStore,
+  readDshScanBound,
   readExecutionState,
   registerCatalogEntity,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@mstar-harness/engine'
+import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { clearExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
-import { resetExecutionBindingRootsForTests } from '../src/gates/execution-binding-roots.ts'
+import { executionBindingRootOf, resetExecutionBindingRootsForTests } from '../src/gates/execution-binding-roots.ts'
+import { awaitWorkflowLedgerIdle, setWorkflowLedgerLogger } from '../src/gates/workflow-ledger.ts'
 import { bootApp, type BootResult } from './harness.ts'
 
 const TS = '2026-09-21T00:00:00.000Z'
@@ -193,14 +196,20 @@ async function gitFixtureRoot(): Promise<{ root: string; worktree: string; sourc
 }
 
 /** Boot the composed app and seed the synthetic lifecycle for the CHILD session. */
-async function bootedWithFixture(): Promise<BootResult & {
+async function bootedWithFixture(options: { sessions?: 'fake' } = {}): Promise<BootResult & {
   featureWorktree: string
   sourceSha: string
   baseSha: string
   evidenceDir: string
 }> {
   const fixture = await gitFixtureRoot()
-  const app = booted = await bootApp({ root: fixture.root })
+  const app = booted = await bootApp({
+    root: fixture.root,
+    // The fake sessions service mounts the plugin's REAL workflow-ledger
+    // consumer wiring (the two-root ledger-consumer regressions drive real
+    // `tool-workflow/*` rows through it); absent, the consumer is disabled.
+    ...(options.sessions === undefined ? {} : { sessionsService: options.sessions }),
+  })
   await seedUnboundWorkflow(app.harnessDir, CHILD_ID)
   // The evidence files live in the plan's own SDD area (the engine accepts
   // only absolute evidence paths inside {PLAN_DIR} / {SDD_DIR}/<plan-id>).
@@ -832,6 +841,190 @@ describe('native binding adoption — a native plan bind persists the executionB
     const again = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
     expect(again.status).toBe('refused')
     expect(again.code).toBe('execution.clear.no-binding')
+  })
+
+  it('feeds real rows through the ledger CONSUMER from the SELECTED root: the B floor governs gate, bound and append; the A floor never filters', async () => {
+    // REGRESSION (round-7 must-fix, I-000769): the ledger's binding guard and
+    // exclusion floor used to resolve the WORKSPACE harness while the append
+    // went to the adoption receipt's root — root A's floor filtered root B's
+    // events. The consumer below is the plugin's real wiring
+    // (bootApp sessionsService:'fake' → registerWorkflowLedger) and the rows
+    // are real `tool-workflow/*` envelopes; the floors are DIFFERENT per root.
+    const app = await bootedWithFixture({ sessions: 'fake' })
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+
+    // DIFFERENT A/B floors (each store merges by max, so the order below is
+    // not load-bearing): A's floor excludes EVERY row of this fixture's log,
+    // B's floor excludes only its first row.
+    expect(updateWorkflowSessionBinding(app.harnessDir, CHILD_ID, app.root, { excludedBeforeSeq: 50 }).kind).toBe('written')
+    expect(updateWorkflowSessionBinding(harnessB, CHILD_ID, app.root, { excludedBeforeSeq: 1 }).kind).toBe('written')
+
+    // A REAL structural session carrying two tool-workflow/run-start rows:
+    // seq 0 is B-excluded (0 < 1), seq 1 is B-legitimate (1 >= 1) yet
+    // A-excluded (1 < 50).
+    const session = {
+      header: { id: CHILD_ID, cwd: app.root, createdAt: 1_700_000_000_000 },
+      seq: 2,
+      inheritedEventCount: 0,
+      eventAt: (seq: number) =>
+        seq === 0
+          ? { type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_001, data: { runId: 'b-excluded', name: 'b-excluded' } }
+          : seq === 1
+            ? { type: 'tool-workflow/run-start', seq: 1, time: 1_700_000_000_002, data: { runId: 'b-legitimate', name: 'b-legitimate' } }
+            : undefined,
+    }
+    ;(app.ctx.get('sessions') as unknown as { register(session: unknown): void }).register(session)
+
+    // Live route first (the consume path's guard + floor): the pre-fix ledger
+    // read A's floor (50) here and dropped BOTH rows.
+    app.ctx.events.emit({}, 'session/event', session, session.eventAt(0))
+    app.ctx.events.emit({}, 'session/event', session, session.eventAt(1))
+    await awaitWorkflowLedgerIdle()
+    const ledgerB = join(harnessB, 'workflows', WORKFLOW_ID)
+    expect(readAgentFlow(ledgerB, WORKFLOW_ID)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['b-legitimate'])
+    expect(readDshScanBound({ harnessDir: harnessB }, WORKFLOW_ID, CHILD_ID)).toMatchObject({ next: 2 })
+
+    // Cold-scan route (the scanStartSeq bound): the rescan starts AT the B
+    // floor, replays the one accepted identity and records nothing new.
+    app.ctx.events.emit({}, 'session/created', session)
+    await awaitWorkflowLedgerIdle()
+    expect(readAgentFlow(ledgerB, WORKFLOW_ID)?.events.map((event) => event.kind === 'workflow-run' ? event.runId : event.kind)).toEqual(['b-legitimate'])
+    expect(readDshScanBound({ harnessDir: harnessB }, WORKFLOW_ID, CHILD_ID)).toMatchObject({ next: 2 })
+
+    // Root A: no rows, no scan bound, floor untouched at 50 — the A floor sat
+    // there the whole time and filtered nothing on B.
+    expect(readAgentFlow(join(app.harnessDir, 'workflows', WORKFLOW_ID), WORKFLOW_ID)?.events ?? []).toEqual([])
+    expect(readDshScanBound({ harnessDir: app.harnessDir }, WORKFLOW_ID, CHILD_ID)).toBeUndefined()
+    expect(storedBinding(app.harnessDir, app.root)?.excludedBeforeSeq).toBe(50)
+  })
+
+  it('keeps attribution alive when the WORKSPACE root\'s binding store is unreadable and the selected root stays healthy', async () => {
+    // REGRESSION (I-000769, the guard half): the pre-fix ledger read its
+    // binding guard from the workspace harness, so an unreadable A store
+    // paused attribution for a valid B binding.
+    //
+    // Unreadable-A mechanism: A's `store.db` is REPLACED by a new file of
+    // garbage bytes (rename first, so the engine's inode-keyed probe
+    // connection cache misses and the fresh open fails SQLITE_NOTADB →
+    // `readWorkflowSessionBinding` answers `unavailable`). No fixture seam
+    // swap is involved.
+    const app = await bootedWithFixture({ sessions: 'fake' })
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+
+    await rename(join(app.harnessDir, 'store.db'), join(app.harnessDir, 'store.db.fixture-backup'))
+    await writeFile(join(app.harnessDir, 'store.db'), 'this is not a sqlite database')
+
+    const warnings: string[] = []
+    const previousLogger = setWorkflowLedgerLogger((level, message) => {
+      if (level === 'warn') warnings.push(message)
+    })
+    try {
+      const session = {
+        header: { id: CHILD_ID, cwd: app.root, createdAt: 1_700_000_000_100 },
+        seq: 1,
+        inheritedEventCount: 0,
+        eventAt: (seq: number) => seq === 0
+          ? { type: 'tool-workflow/run-start', seq: 0, time: 1_700_000_000_101, data: { runId: 'b-guard-run', name: 'b-guard-run' } }
+          : undefined,
+      }
+      ;(app.ctx.get('sessions') as unknown as { register(session: unknown): void }).register(session)
+      app.ctx.events.emit({}, 'session/created', session)
+      await awaitWorkflowLedgerIdle()
+
+      // The row landed through the SELECTED root's healthy store — A's broken
+      // binding store never paused it (no attribution-paused warn either).
+      expect(readAgentFlow(join(harnessB, 'workflows', WORKFLOW_ID), WORKFLOW_ID)?.events)
+        .toMatchObject([{ kind: 'workflow-run', runId: 'b-guard-run' }])
+      expect(readDshScanBound({ harnessDir: harnessB }, WORKFLOW_ID, CHILD_ID)).toMatchObject({ next: 1 })
+      expect(readAgentFlow(join(app.harnessDir, 'workflows', WORKFLOW_ID), WORKFLOW_ID)?.events ?? []).toEqual([])
+      expect(warnings.some((message) => message.includes('attribution paused'))).toBe(false)
+    } finally {
+      setWorkflowLedgerLogger(previousLogger)
+    }
+  })
+
+  it('recovers a lost adoption receipt through the RESUME re-bind with the same harness; a plain re-execution bind still refuses', async () => {
+    // REGRESSION (I-000770): the module note and the adoption refusal used to
+    // name "re-run the bind" as the receipt-loss recovery — but a live ACTIVE
+    // holder is never replaced by a bind (coordination.identity-mismatch).
+    // The real recovery is a resume re-bind carrying the ORIGINAL session
+    // reference and the SAME harness.
+    const app = await bootedWithFixture()
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+    const real = bindRefOf(bound)
+
+    // The host restart / fiber reload: the in-process receipt map is gone
+    // (the module's test-only reset — the same factory a real restart
+    // observes), while the durable binding slot in B survives.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+
+    // A plain re-execution bind is NOT a recovery: the engine refuses the
+    // bind against the recorded holder row (post-bind the store epoch is
+    // ahead of the row's — the own-row guard answers) and writes nothing.
+    const plain = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(plain.status).toBe('refused')
+    expect(plain.code).toBe('execution.session-unavailable')
+    expect(storedBinding(harnessB, app.root)?.executionBinding?.session).toEqual(real)
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+
+    // The real recovery: resume with the ORIGINAL session reference and the
+    // SAME harness — the engine resumes the still-bound seat, the adoption
+    // re-writes the slot and re-records the receipt.
+    const recovered = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      resumeRef: encodeExecutionSessionRef(real),
+      harness: harnessB,
+    }))
+    expect(recovered.status).toBe('ok')
+    const binding = storedBinding(harnessB, app.root)
+    expect(binding?.executionBinding?.session).toEqual(real)
+    expect(binding?.executionBinding?.harnessRoot).toBe(harnessB)
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(harnessB)
+    expect((await resolveExecutionLedgerTarget(CHILD_ID, app.root))?.harnessDir).toBe(harnessB)
   })
 
   it('keeps the workspace-root path unchanged: a bind without an explicit harness attributes and clears through the workspace harness', async () => {
