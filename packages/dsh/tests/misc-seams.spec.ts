@@ -4,11 +4,13 @@
  * hard-mode repair escape on the content-blind listener — the typed
  * `SeamVetoError` lives on the known-document branch).
  *
- * The four on-demand `mstar_*_validate` tool mirrors this file used to drive
- * were duplicates of the MCP tools (`mstar_design_md` / `mstar_audit` /
- * `mstar_compound` / `mstar_roles`), so they went away with the rest of the
- * native command surface; the seam VALIDATORS they wrapped are the same ones
- * the gates below exercise, which is where their coverage lives now.
+ * Three of the four on-demand `mstar_*_validate` tool mirrors this file used to
+ * drive were duplicates of the MCP tools (`mstar_design_md` / `mstar_compound`
+ * / `mstar_roles`), so they went away with the rest of the native command
+ * surface; the seam VALIDATORS they wrapped are the same ones the gates below
+ * exercise, which is where their coverage lives now. `mstar_audit_validate`
+ * survives (the `mstar_audit` family publishes no report validator), so its
+ * tool arm is driven at the end of this file.
  *
  * Composition: the app boots the REAL-composition harness with the dsh-tools
  * registry installed from the npm registry, so gate listeners exercise the
@@ -30,7 +32,9 @@ import {
   lintRolesWrite,
   type SeamLintAdvisory,
 } from '../src/index.ts'
-import { bootApp, FakeLoaderRegistry, seedHarness, type BootResult } from './harness.ts'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { bootApp, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -804,5 +808,59 @@ describe('shared envelope', () => {
     } finally {
       await ctx.fiber.dispose().catch(() => {})
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// mstar_audit_validate — the surviving native validator (no MCP twin)
+// ---------------------------------------------------------------------------
+
+/** Branded call identity for registry executes. */
+const callId = 'misc-seams.spec' as ToolCallId
+/** Test signal (never aborted). */
+const signal = new AbortController().signal
+
+/** Run one tool call through the composed registry. */
+function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  return ctx.tools.execute({ callId, name, arguments: args, signal })
+}
+
+describe('mstar_audit_validate', () => {
+  it('clean report → ok true', async () => {
+    const app = booted = await bootApp()
+    const report = reviewReportPath(app.root)
+    await seedFile(report, AUDIT_REPORT)
+
+    const result = await run(app.ctx, 'mstar_audit_validate', { report_path: report })
+
+    expect(result.isError).toBe(false)
+    if (result.isError) return
+    expect(valueOf(result).ok).toBe(true)
+    expect(valueOf(result).violations).toEqual([])
+    expect(valueOf(result).secrets).toEqual([])
+  })
+
+  it('report reproducing a secret → violations + secrets findings', async () => {
+    const app = booted = await bootApp()
+    const report = reviewReportPath(app.root)
+    await seedFile(report, AUDIT_SECRET)
+
+    const result = await run(app.ctx, 'mstar_audit_validate', { report_path: report })
+
+    expect(result.isError).toBe(false)
+    if (result.isError) return
+    expect(valueOf(result).ok).toBe(false)
+    expect(valueOf(result).violations.map((v: { code: string }) => v.code)).toContain('audit.secrets.found')
+    expect(valueOf(result).secrets!.some((s: { type: string }) => s.type === 'password')).toBe(true)
+  })
+
+  it('missing report file → error result', async () => {
+    const app = booted = await bootApp()
+
+    const result = await run(app.ctx, 'mstar_audit_validate', { report_path: join(app.root, 'nope.md') })
+
+    expect(result.isError).toBe(true)
+    if (!result.isError) return
+    expect(result.error.message).toContain('report file not found')
   })
 })

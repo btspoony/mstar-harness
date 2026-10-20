@@ -24,8 +24,9 @@ export const name = 'dsh-invariant'
  * skill-lint gate, the v2 seam gates for design-md/audit/compound/roles
  * paths), the `tools/pre-execute` dispatch listener (field + lease + worktree
  * L1/L2 gates), the advisory `agent/pre-step` catalog listener (change-driven
- * engine-status row: iteration-gate section + workspace-state digest), the one
- * dsh-native tool registered on `ctx.tools` (`mstar_execution_clear`), the
+ * engine-status row: iteration-gate section + workspace-state digest), the
+ * dsh-native tools registered on `ctx.tools` (`mstar_plan_bind`, the
+ * durable-slot producer; `mstar_audit_validate`; `mstar_execution_clear`), the
   * `ctx.dshMstar` and `ctx.dshHostAdapter` services, and the child skill-filesystem
  * mount (skills provider registration) — whose presence and removal are
  * asserted by the real-composition suites and the HMR-safety disposal tests

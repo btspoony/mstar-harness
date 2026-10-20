@@ -1,25 +1,31 @@
 /**
- * The dsh native tool surface after the duplicate-command removal — exactly one
- * tool, `mstar_execution_clear`.
+ * The dsh native tool surface — exactly three tools, each justified by the rule
+ * its module header states: `mstar_plan_bind` (the producer of the dsh-local
+ * durable execution binding + adoption receipt the MCP bind cannot write),
+ * `mstar_audit_validate` (a capability the MCP surface does not publish) and
+ * `mstar_execution_clear` (no shared command exists).
  *
  * Fourteen mstar commands used to be registered here and in `gates/tools.ts` as
  * dsh tools, each duplicating an MCP tool of the SAME name 1:1 (two identical
  * model-facing surfaces, ~10k characters of fixed context per request). The
  * scoped MCP mount is the writable command surface on this host and covers all
  * of them, so those tools are gone and this suite pins their ABSENCE beside the
- * surviving tool's contract: identity from `exec.agent.id` (never model-supplied),
- * the fail-closed leaf-seat guard, and the named refusals with their
- * `data.recordedCwd` fact.
+ * surviving tools' contracts: identity from `exec.agent.id` (never
+ * model-supplied), the fail-closed leaf-seat guard, the durable adoption a
+ * native bind performs, and the named refusals with their `data.recordedCwd`
+ * fact.
  *
  * Every case boots the REAL-composition harness (the same plugin the dsh app
- * loads) and drives the tool through the REAL registry, while the execution
+ * loads) and drives the tools through the REAL registry, while the execution
  * authority is a SYNTHETIC store fixture built by the engine's own producers
  * (initializeStore → catalog registration → createExecutionWorkflow →
  * bindExecutionSession, the `execution-session.spec.ts` idiom) — the real
  * control-root store in `.mstar/` is never touched.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -43,16 +49,27 @@ const WORKFLOW_ID = 'wf-native-surface'
 const PLAN_ID = 'plan-native-surface'
 const PARENT_ID = 'session-native-parent'
 const CHILD_ID = 'session-native-child'
+const BIND_TOOL = 'mstar_plan_bind'
+const AUDIT_TOOL = 'mstar_audit_validate'
 const CLEAR_TOOL = 'mstar_execution_clear'
 
 /**
- * The fourteen tools this change removed: the seven writable commands (now MCP
- * `mstar_plan` / `mstar_workflow` / `mstar_issue` actions, one tool per family)
- * and the seven read-only mirrors (now `mstar_sdd` / `mstar_iteration` /
- * `mstar_design_md` / `mstar_audit` / `mstar_compound` / `mstar_roles`).
+ * The registered surface — the whole `mstar_` native namespace on this host.
+ * Rule (module header): a tool lives here only as the producer of a dsh-local
+ * durable record the MCP route cannot write, or as a capability the MCP surface
+ * does not publish at all.
+ */
+const NATIVE_SURFACE = [AUDIT_TOOL, CLEAR_TOOL, BIND_TOOL] as const
+
+/**
+ * The twelve tools this change removed: the six remaining writable commands
+ * (now MCP `mstar_plan` / `mstar_workflow` / `mstar_issue` actions, one tool per
+ * family) and the six remaining read-only mirrors (now `mstar_sdd` /
+ * `mstar_iteration` / `mstar_design_md` / `mstar_compound` / `mstar_roles`).
+ * `mstar_plan_bind` and `mstar_audit_validate` are NOT here: they survive
+ * because no MCP route replaces what they uniquely do.
  */
 const REMOVED_TOOLS = [
-  'mstar_plan_bind',
   'mstar_plan_prepare',
   'mstar_plan_progress',
   'mstar_plan_complete',
@@ -63,7 +80,6 @@ const REMOVED_TOOLS = [
   'mstar_sdd_task_brief',
   'mstar_iteration_gate',
   'mstar_design_md_validate',
-  'mstar_audit_validate',
   'mstar_compound_validate',
   'mstar_roles_validate',
 ] as const
@@ -106,6 +122,15 @@ function storedBinding(harnessDir: string, cwd: string, sessionId = CHILD_ID): W
   const read = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
   if (read.kind !== 'ok') throw new Error(`the binding slot read failed: ${read.reason}`)
   return read.binding
+}
+
+/**
+ * The session's adopted execution binding, or `null` — tolerant of a slot that
+ * was never written (a refusal path leaves no readable record).
+ */
+function adoptedBindingOf(harnessDir: string, cwd: string, sessionId: string): WorkflowSessionBinding['executionBinding'] | null {
+  const read = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
+  return read.kind === 'ok' ? read.binding?.executionBinding ?? null : null
 }
 
 /**
@@ -176,14 +201,113 @@ async function adoptFor(harnessDir: string, cwd: string, sessionId: string): Pro
   return ref
 }
 
+/**
+ * The REAL execution authority at `harnessDir`: an initialized store, one
+ * registered catalog plan, and one created lifecycle whose CREATING identity is
+ * `coordinatorSessionId` — deliberately NOT bound, so the native
+ * `mstar_plan_bind` call is the bind the lifecycle actually uses.
+ */
+async function seedUnboundWorkflow(harnessDir: string, coordinatorSessionId: string): Promise<void> {
+  await mkdir(harnessDir, { recursive: true })
+  const handle = await initializeStore({ harnessDir })
+  handle.close()
+  const rootToken = (await readExecutionState({ harnessDir })).token
+  await registerCatalogEntity(
+    { harnessDir },
+    { kind: 'plan', id: PLAN_ID, title: `${PLAN_ID} title`, rootKind: 'plans', relativePath: `plans/${PLAN_ID}.md` },
+    { operationId: `register-${PLAN_ID}`, actor: 'native-commands.spec' },
+  )
+  const created = await createExecutionWorkflow(
+    {
+      harnessDir,
+      caller: { sessionId: coordinatorSessionId, role: 'coordinator', workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
+    } satisfies ExecutionContext,
+    {
+      entry: { id: WORKFLOW_ID, type: 'plan', started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
+      snapshot: {
+        schema_version: 1,
+        id: WORKFLOW_ID,
+        type: 'plan',
+        status: 'running',
+        started_at: TS,
+        updated_at: TS,
+        plans: [{ id: PLAN_ID, title: `${PLAN_ID} title`, file: `plans/${PLAN_ID}.md`, status: 'Todo' }],
+        delivery_kind: 'development',
+        branch: { source: 'feature/native-surface', target: 'main' },
+      } as never,
+      expected: rootToken,
+      operationId: `create-${WORKFLOW_ID}`,
+    },
+  )
+  if (created.data.workflows[0] === undefined) throw new Error('the fixture workflow was not created')
+}
+
+/** Run fixture Git with process-local signing and identity overrides; returns stdout. */
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: 'commit.gpgsign',
+      GIT_CONFIG_VALUE_0: 'false',
+      GIT_CONFIG_KEY_1: 'user.name',
+      GIT_CONFIG_VALUE_1: 'Fixture User',
+      GIT_CONFIG_KEY_2: 'user.email',
+      GIT_CONFIG_VALUE_2: 'fixture@example.test',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  })
+}
+
+/**
+ * A REAL Git fixture root: the root itself is the `main` control checkout, plus
+ * one linked feature worktree. `plan bind` resolves its control root through the
+ * same git-top-level/workspace probe the CLI uses, so the fixture is what makes
+ * the native call resolve the harness the fixture seeded.
+ */
+async function gitFixtureRoot(): Promise<{ root: string; worktree: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'native-commands-git-'))
+  roots.push(root)
+  const worktree = join(root, 'feature')
+  git(['init', '-q', '-b', 'main'], root)
+  await writeFile(join(root, 'seed.txt'), 'seed\n')
+  git(['add', 'seed.txt'], root)
+  git(['commit', '-q', '-m', 'fixture'], root)
+  git(['worktree', 'add', '-q', worktree, '-b', 'feature/native-surface'], root)
+  return { root, worktree }
+}
+
+/** Boot the composed app on a git fixture root and seed the UNBOUND lifecycle for CHILD_ID. */
+async function bootedWithFixture(): Promise<BootResult> {
+  const fixture = await gitFixtureRoot()
+  const app = booted = await bootApp({ root: fixture.root })
+  await seedUnboundWorkflow(app.harnessDir, CHILD_ID)
+  // The ledger-attribution resolver canonicalizes the REAL dir under
+  // {WORKFLOW_DIR}; the store fixture registers the lifecycle but materializes
+  // no dir, so seed it.
+  await mkdir(join(app.harnessDir, 'workflows', WORKFLOW_ID), { recursive: true })
+  return app
+}
+
 // ---------------------------------------------------------------------------
-// Registration surface — one tool, fourteen absences
+// Registration surface — three tools, twelve absences
 // ---------------------------------------------------------------------------
 
-describe('native tool surface — one tool, no MCP duplicates', () => {
-  it('registers mstar_execution_clear and none of the fourteen removed command tools', async () => {
+describe('native tool surface — three tools, no MCP duplicates', () => {
+  it('registers exactly mstar_plan_bind, mstar_audit_validate and mstar_execution_clear', async () => {
     const app = booted = await bootApp()
-    expect(app.ctx.tools.get(CLEAR_TOOL)).toBeDefined()
+    // The model-facing registry view: every `mstar_` name the model can call
+    // on this host. The COUNT is the assertion — a fourth native tool means
+    // the rule in the module header was broken, not that a name is missing.
+    const names = app.ctx.tools.schemas()
+      .map(schema => schema.name)
+      .filter(name => name.startsWith('mstar_'))
+      .sort()
+    expect(names).toHaveLength(NATIVE_SURFACE.length)
+    expect(names).toEqual([...NATIVE_SURFACE])
+    for (const name of NATIVE_SURFACE) expect(app.ctx.tools.get(name), name).toBeDefined()
     for (const name of REMOVED_TOOLS) {
       // The duplicate surface is gone with no alias and no compatibility tool:
       // every one of these commands is reached through the scoped MCP mount
@@ -192,21 +316,108 @@ describe('native tool surface — one tool, no MCP duplicates', () => {
     }
   })
 
-  it('publishes an EMPTY parameter face: identity is never model-supplied', async () => {
+  it('unregisters every native tool on fiber.dispose (HMR: a post-dispose lookup finds none)', async () => {
     const app = booted = await bootApp()
-    const tool = app.ctx.tools.get(CLEAR_TOOL)!
-    // The registry publishes the tool's `parameters` as a JSON schema; the
-    // clear declares none, so the model has no field to put an identity in.
-    const published = tool.parameters as { properties?: Record<string, unknown> }
-    expect(Object.keys(published.properties ?? {})).toEqual([])
-  })
-
-  it('unregisters on fiber.dispose (HMR: a post-dispose lookup finds none)', async () => {
-    const app = booted = await bootApp()
-    expect(app.ctx.tools.get(CLEAR_TOOL)).toBeDefined()
+    for (const name of NATIVE_SURFACE) expect(app.ctx.tools.get(name), name).toBeDefined()
     expect(app.pluginFiber).toBeDefined()
     await app.pluginFiber!.dispose()
-    expect(app.ctx.tools.get(CLEAR_TOOL)).toBeUndefined()
+    for (const name of NATIVE_SURFACE) expect(app.ctx.tools.get(name), name).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// mstar_plan_bind — the durable-slot producer
+// ---------------------------------------------------------------------------
+
+describe('mstar_plan_bind — the command that writes the dsh durable binding', () => {
+  it('publishes no session-id parameter (identity is never model-supplied)', async () => {
+    const app = booted = await bootApp()
+    const published = app.ctx.tools.get(BIND_TOOL)!.parameters as { properties?: Record<string, unknown> }
+    const properties = Object.keys(published.properties ?? {})
+    // The bind's own documented selectors are published; the session selector
+    // is not one of them.
+    expect(properties).toContain('workflow')
+    expect(properties).toContain('execution')
+    expect(properties).not.toContain('sessionId')
+  })
+
+  it('adopts the engine-minted reference after a native execution bind, keeps the selection, and the ledger resolves', async () => {
+    const app = await bootedWithFixture()
+    // A pre-existing durable selection (the picker pick + exclusion floor)
+    // must survive adoption untouched.
+    expect(updateWorkflowSessionBinding(app.harnessDir, CHILD_ID, app.root, {
+      selectedWorkflowId: WORKFLOW_ID,
+      excludedBeforeSeq: 7,
+    }).kind).toBe('written')
+
+    const bound = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root), {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      // A model-supplied identity is STRIPPED before admission: the adoption
+      // below must name the CALLING session, never this value.
+      sessionId: PARENT_ID,
+    }))
+    expect(bound.status).toBe('ok')
+
+    const binding = storedBinding(app.harnessDir, app.root)
+    // The adopted reference is the engine's own mint — the canonical C1
+    // binding naming the carrying session, not a dsh-invented record. This is
+    // the capability the MCP `mstar_plan` action `bind` does NOT have: it binds
+    // the engine seat and leaves this slot unwritten.
+    expect(binding?.executionBinding?.version).toBe(1)
+    expect(binding?.executionBinding?.harnessRoot).toBe(realpathSync(app.harnessDir))
+    expect(binding?.executionBinding?.session.workflowId).toBe(WORKFLOW_ID)
+    expect(binding?.executionBinding?.session.sessionId).toBe(CHILD_ID)
+    expect(binding?.executionBinding?.session.role).toBe('coordinator')
+    // The user selection is preserved: the adopted workflow becomes the stored
+    // pick and the exclusion floor is kept (merged, never reset).
+    expect(binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    expect(binding?.excludedBeforeSeq).toBe(7)
+
+    // Ledger attribution works with NO slash command: the workflow resolves
+    // from the binding slot this bind populated.
+    const target = await resolveExecutionLedgerTarget(CHILD_ID, app.root)
+    expect(target).not.toBeNull()
+    expect(target?.workflowId).toBe(WORKFLOW_ID)
+    expect(target?.workflowDir).toBe(realpathSync(join(app.harnessDir, 'workflows', WORKFLOW_ID)))
+    expect(target?.sessionId).toBe(CHILD_ID)
+    // The id the model typed was never adopted for the parent either.
+    expect(adoptedBindingOf(app.harnessDir, app.root, PARENT_ID)).toBeNull()
+  })
+
+  it('refuses a known leaf seat fail-closed, before any admission or engine round-trip', async () => {
+    const app = await bootedWithFixture()
+    // The leaf markers are exactly the two shapes the shared predicate reads.
+    for (const header of [{ origin: 'subagent' }, { delegationDepth: 2 }]) {
+      const refused = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(CHILD_ID, app.root, header), {
+        execution: true,
+        coordinator: true,
+        workflow: WORKFLOW_ID,
+      }))
+      expect(refused.status).toBe('refused')
+      expect(refused.code).toBe('plan.bind.leaf-seat')
+      expect(String(refused.message).split('\n')[0]).toBe('known leaf sessions cannot adopt, clear, or run on any operation')
+      // Fail-closed means nothing was written: the durable slot stays absent.
+      expect(adoptedBindingOf(app.harnessDir, app.root, CHILD_ID)).toBeNull()
+    }
+  })
+
+  it('returns the engine refusal verbatim and adopts nothing when the bind is refused', async () => {
+    const app = await bootedWithFixture()
+    // The workflow's creating identity is the CHILD session; the parent is not
+    // its coordinator, so the engine refuses the bind.
+    const refused = envelopeOf(await run(app.ctx, BIND_TOOL, agentOf(PARENT_ID, app.root), {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+    }))
+    expect(refused.status).not.toBe('ok')
+    // The engine's own code, never a dsh adoption rewrite: a refused bind is
+    // the engine's verdict and the adoption returns the envelope unchanged.
+    expect(String(refused.code)).not.toStartWith('binding.')
+    expect(adoptedBindingOf(app.harnessDir, app.root, PARENT_ID)).toBeNull()
+    expect(adoptedBindingOf(app.harnessDir, app.root, CHILD_ID)).toBeNull()
   })
 })
 
@@ -214,7 +425,7 @@ describe('native tool surface — one tool, no MCP duplicates', () => {
 // The surviving capability — clearing the session's own durable binding
 // ---------------------------------------------------------------------------
 
-describe('mstar_execution_clear — the one native-only capability', () => {
+describe('mstar_execution_clear — the native-only clear', () => {
   it("clears the calling session's adopted binding, keeps the selection, and ignores a model-supplied session id", async () => {
     const app = booted = await bootApp()
     const ref = await adoptFor(app.harnessDir, app.root, CHILD_ID)
@@ -244,6 +455,15 @@ describe('mstar_execution_clear — the one native-only capability', () => {
     expect(await resolveExecutionLedgerTarget(CHILD_ID, app.root)).toBeNull()
     // `ref` is only here to keep the fixture's receipt in scope for readers.
     expect(decodeExecutionSessionRef(encodeExecutionSessionRef(ref)).sessionId).toBe(CHILD_ID)
+  })
+
+  it('publishes an EMPTY parameter face: identity is never model-supplied', async () => {
+    const app = booted = await bootApp()
+    const tool = app.ctx.tools.get(CLEAR_TOOL)!
+    // The registry publishes the tool's `parameters` as a JSON schema; the
+    // clear declares none, so the model has no field to put an identity in.
+    const published = tool.parameters as { properties?: Record<string, unknown> }
+    expect(Object.keys(published.properties ?? {})).toEqual([])
   })
 
   it('refuses a known leaf seat fail-closed, before any store read', async () => {

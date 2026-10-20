@@ -56,6 +56,10 @@ import type { ExecutionBinding, ExecutionPlanView, ExecutionRead, ExecutionState
 import type { WorkflowSelectionView } from '../types.ts'
 import { STATUS_FILE, asRecord } from './_shared.ts'
 import type { WorkflowLedgerTarget } from './workflow-ledger.ts'
+// The bind adoption receipt names the session's SELECTED harness root: the
+// binding guard and the exclusion floor read through it too (the same root
+// `resolveExecutionLedgerTarget` appends through), never the workspace root.
+import { executionBindingRootOf } from './execution-binding-roots.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
 
 /** The active-set resolver result: the session's active lifecycle or a clear error. */
@@ -703,13 +707,25 @@ function ledgerTargetDir(root: string, workflowId: string): string | null {
  * maintenance exclusion around its own append, this call runs outside it, so an
  * activation may still complete between the two (recorded residual seam §4.3).
  *
- * The harness resolved here is the session's workspace control root, and the
- * returned target carries that root so the ledger's write path (scan bound,
- * event append) acts on the store the binding lives in.
+ * The harness resolved here is the session's SELECTED harness, not the
+ * workspace's: a native bind carrying an explicit `harness` adopts its
+ * binding into THAT control root (the adoption receipt), and the returned
+ * target carries the same root so the ledger's write path (scan bound, event
+ * append) acts on the store the binding lives in.
+ *
+ * Resolution ORDER: the receipt is read FIRST and the workspace probe runs
+ * only for a session that never selected an explicit root. The receipt names
+ * a root the carrying workspace may not even declare (a bind into another
+ * control root from a workspace with no harness at all); probing the
+ * workspace first would answer `null` there and drop every ledger event of a
+ * perfectly valid binding.
  */
 export async function resolveExecutionLedgerTarget(sessionId: string, cwd: string): Promise<WorkflowLedgerTarget | null> {
   if (sessionId === '' || cwd === '') return null
-  const harnessDir = resolveHarnessDir(cwd, { workspaceRoot: cwd })
+  // The selected root first (the bind adoption receipt); the workspace
+  // harness only backs a session that never selected an explicit root.
+  const receiptRoot = executionBindingRootOf(sessionId, cwd)
+  const harnessDir = receiptRoot ?? resolveHarnessDir(cwd, { workspaceRoot: cwd })
   if (harnessDir === null) return null
   const binding = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
   if (binding.kind === 'unavailable') return null

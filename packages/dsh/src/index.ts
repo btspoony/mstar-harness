@@ -933,9 +933,10 @@ export function apply(ctx: Context, config: Config): void {
     invalidateSelection: (harnessDir, sessionId) => catalogInvalidation.invalidateSession(harnessDir, sessionId),
   })
 
-  // The one dsh-native tool the writable mstar surface keeps:
-  // `mstar_execution_clear` (identity-injected from exec.agent.id).
-  // Registration and its HMR disposal both live in the module. The writable
-  // COMMAND surface is the scoped MCP mount, not a native duplicate set.
+  // The dsh-native tool surface — three tools, registered and HMR-disposed in
+  // the module: `mstar_plan_bind` (producer of the dsh durable execution
+  // binding + its adoption receipt, which the MCP bind cannot write),
+  // `mstar_audit_validate` (no MCP twin) and `mstar_execution_clear` (no
+  // shared command). Every other command is the scoped MCP mount's action.
   registerNativeCommandTools(ctx, resolver)
 }
