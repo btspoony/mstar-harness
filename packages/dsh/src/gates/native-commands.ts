@@ -688,8 +688,9 @@ function executionClearTool(
       const outcome = await clearExecutionSessionBinding(harnessDir, sessionId, cwd)
       if (outcome.kind === 'cleared') {
         // Drop the adoption receipt: the slot is gone, so a later clear
-        // answers `no-binding` against the workspace root instead of
-        // re-resolving a cleared slot.
+        // resolves the workspace root instead of re-resolving a cleared slot —
+        // it answers `no-binding` when the workspace declares a harness there,
+        // and the named no-harness refusal otherwise.
         clearExecutionBindingRoot(sessionId, cwd)
         return toCanonicalValue(executionClearOk())
       }

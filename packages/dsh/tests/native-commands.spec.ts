@@ -279,7 +279,7 @@ describe('native command tool registration', () => {
     }
   })
 
-  it('describes flattened json payloads mechanically from the published schema (F-5)', async () => {
+  it('describes flattened json payloads mechanically from the published schema', async () => {
     const app = booted = await bootApp()
     const propertiesOf = (name: string): Record<string, { description?: string }> => {
       // The registry's get returns the compiled tool: its parameter root is
@@ -547,7 +547,7 @@ describe('native leaf-seat refusal — a known leaf can never mint a coordinator
 })
 
 // ---------------------------------------------------------------------------
-// (c2) F-0 — a refused bind surfaces the ENGINE's refusal verbatim: the
+// (c2) A refused bind surfaces the ENGINE's refusal verbatim: the
 // adoption narrowing never rewrites a non-ok envelope as a dsh-side
 // binding refusal, even when the bind arms were requested.
 // ---------------------------------------------------------------------------
@@ -1092,7 +1092,7 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect(readAgentFlow(join(app.harnessDir, 'workflows', WORKFLOW_ID), WORKFLOW_ID)?.events ?? []).toEqual([])
   }))
 
-  it('clears a binding adopted in another control root when the workspace declares NO harness', async () => {
+  it('clears a binding adopted in another control root when the workspace declares NO harness', () => withoutHarnessEnv(async () => {
     // REGRESSION: the clear must read the adoption receipt BEFORE the workspace
     // probe. The workspace-first order refused `execution.clear.no-harness` for
     // every session that validly bound into another control root from a
@@ -1111,6 +1111,7 @@ describe('native binding adoption — a native plan bind persists the executionB
     // plugin's unconfigured resolver answer null for this cwd.
     const workspace = await mkdtemp(join(tmpdir(), 'native-commands-workspace-'))
     roots.push(workspace)
+    expect(resolveHarnessDir(workspace, { workspaceRoot: workspace })).toBeNull()
 
     const child = agentOf(CHILD_ID, workspace)
     const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
@@ -1145,7 +1146,7 @@ describe('native binding adoption — a native plan bind persists the executionB
     const again = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
     expect(again.status).toBe('refused')
     expect(again.code).toBe('execution.clear.no-harness')
-  })
+  }))
 
   it('recovers a lost adoption receipt through the RESUME re-bind with the same harness; a plain re-execution bind still refuses', async () => {
     // REGRESSION: the module note and the adoption refusal used to

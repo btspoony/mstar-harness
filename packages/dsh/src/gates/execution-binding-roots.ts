@@ -68,8 +68,10 @@ export function executionBindingRootOf(sessionId: string, cwd: string): string |
 
 /**
  * Drop the receipt — the native clear calls this after it actually cleared
- * the binding in the selected root, so a later clear answers `no-binding`
- * against the workspace root instead of re-resolving a cleared slot.
+ * the binding in the selected root, so a later clear resolves the workspace
+ * root instead of re-resolving a cleared slot: it answers `no-binding` when
+ * the workspace declares a harness there, and the named no-harness refusal
+ * otherwise.
  */
 export function clearExecutionBindingRoot(sessionId: string, cwd: string): void {
   if (sessionId === '' || cwd === '') return
