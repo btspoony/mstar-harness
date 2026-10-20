@@ -1,12 +1,56 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import cliManifest from "../../package.json" with { type: "json" };
-import { getCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
+import { getCommandDefinitions, refusalEnvelope, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "./register.js";
+import type { McpSeat } from "./stdio.js";
+
+/**
+ * The coordinator-seat commands a leaf seat can never run: a leaf may not bind
+ * a plan (the coordinator seat + the credential adoption) and may not complete
+ * one (the sole Done write). Every other command — the writable subset the
+ * removed native `issue.add` / `issue.close` / `plan.prepare` / `plan.progress`
+ * tools used to carry — stays reachable.
+ */
+const LEAF_SEAT_REFUSED_COMMANDS = new Set(["plan.bind", "plan.complete"]);
+
+/** The named leaf-seat refusal: actual cause plus the supported recovery. */
+function leafSeatRefusal(command: string): CommandEnvelope<never> {
+  return refusalEnvelope({
+    command,
+    status: "refused",
+    code: `${command}.leaf-seat`,
+    exitCode: 1,
+    message: "known leaf sessions cannot bind or complete a plan, adopt a credential, or clear a binding",
+    recovery:
+      'This connection was launched with --seat leaf (the calling session header carries origin "subagent" or delegationDepth > 0). ' +
+      "Coordinator-seat operations belong to the non-leaf coordinating session: run the operation there, or continue with the commands this seat may use (issue.add / issue.close / plan.prepare / plan.progress and every read).",
+  });
+}
+
+/**
+ * Apply the connection's seat to the definition list. A `leaf` seat keeps every
+ * definition but replaces the coordinator-seat arm's execution with a named
+ * refusal, so the tool stays discoverable and every call fails closed BEFORE
+ * any engine round-trip or credential adoption — the shared admission still
+ * validates the published input first, and nothing mutates.
+ */
+function seatDefinitions(
+  definitions: readonly CommandDefinition[],
+  seat: McpSeat | undefined,
+): readonly CommandDefinition[] {
+  if (seat !== "leaf") return definitions;
+  return definitions.map((definition) =>
+    LEAF_SEAT_REFUSED_COMMANDS.has(definition.id)
+      ? { ...definition, execute: async () => leafSeatRefusal(definition.id) }
+      : definition,
+  );
+}
 
 export function createMcpServer(
   resolveContext: ResolveContext,
   definitions: readonly CommandDefinition[] = getCommandDefinitions(),
   onToolsRegistered?: (names: readonly string[]) => void,
+  seat?: McpSeat,
 ): McpServer {
   const server = new McpServer({ name: "mstar-harness", version: cliManifest.version });
   const services: Array<{ close(): Promise<void> }> = [];
@@ -47,6 +91,6 @@ export function createMcpServer(
     get: () => resolveContext.identityLocked === true,
     enumerable: true,
   });
-  registerMcpCommands(server, definitions, createRequestContext, services, onToolsRegistered);
+  registerMcpCommands(server, seatDefinitions(definitions, seat), createRequestContext, services, onToolsRegistered);
   return server;
 }
