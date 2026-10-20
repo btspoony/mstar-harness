@@ -57,8 +57,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { SEVERITY_ORDER } from '@mstar-harness/engine'
 import { iterationViolationView } from '../src/gates/_shared.ts'
-import { ITERATION_VIOLATION_SCHEMA } from '../src/gates/tools.ts'
 import { bootApp, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
@@ -235,7 +235,7 @@ function captureDispatchWarns(ctx: BootResult['ctx']): string[] {
 /* ---------------------------------- mode off ---------------------------------- */
 
 describe('iteration violation output contract', () => {
-  it('preserves nit severity and admits it in the declared output schema', () => {
+  it('preserves nit severity and keeps it inside the engine severity vocabulary', () => {
     const result = {
       ok: false,
       severity: 'nit',
@@ -248,7 +248,11 @@ describe('iteration violation output contract', () => {
       code: 'iteration.note',
       message: 'Informational result',
     })
-    expect(ITERATION_VIOLATION_SCHEMA.properties.severity.enum).toContain(view.severity)
+    // The published JSON-schema pin this assertion used to read went away with
+    // the `mstar_iteration_gate` tool: the view's severity is now bounded by the
+    // shared `IterationGateViolationView` type and by the engine's own SSOT
+    // list, so `nit` (informational) can never be silently dropped.
+    expect(SEVERITY_ORDER).toContain(view.severity as (typeof SEVERITY_ORDER)[number])
   })
 })
 

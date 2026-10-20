@@ -18,8 +18,9 @@
  *  5. seam gates — broken DESIGN.md write flagged;
  *  6. agent/pre-step — engine-status projection (iteration gate + state) composed
  *     into the step messages (AC-7 "full mstar-gated session");
- *  7. v2 seam tools — mstar_sdd_workspace creates the SDD dir,
- *     mstar_iteration_gate evaluates the committed fixtures;
+ *  7. the one dsh-native tool — `mstar_execution_clear` registers on the booted
+ *     app (the fourteen command duplicates are gone; the writable command
+ *     surface is the scoped MCP mount);
  *  8. bundledSkillDir — explicit relative roots resolve from an isolated
  *     launch cwd, independently of the app workspace and test-runner cwd.
  *
@@ -29,14 +30,14 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { PreToolDecision, ToolExecution, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -74,11 +75,6 @@ function fixture(rel: string): string {
 const callId = 'e2e-session.spec' as ToolCallId
 /** Test signal (never aborted). */
 const signal = new AbortController().signal
-
-/** Run one tool call through the composed registry. */
-function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>, agent?: unknown): Promise<ToolExecutionResult> {
-  return ctx.tools.execute({ callId, name, arguments: args, ...(agent === undefined ? {} : { agent }), signal } as never)
-}
 
 /** FsTarget for a local-backend path. */
 const target = (path: string): FsTarget => ({ targetKey: path as FsTarget['targetKey'], displayPath: path })
@@ -218,18 +214,9 @@ describe('full dsh app boot — fixture cordis.yml composition', () => {
 
     // Host adapter service attached (boot settled).
     expect(booted.ctx.dshHostAdapter).toBeInstanceOf(DshHostAdapter)
-    // All v2 seam + validation tools registered on ctx.tools.
-    for (const name of [
-      'mstar_sdd_workspace',
-      'mstar_sdd_task_brief',
-      'mstar_iteration_gate',
-      'mstar_design_md_validate',
-      'mstar_audit_validate',
-      'mstar_compound_validate',
-      'mstar_roles_validate',
-    ]) {
-      expect(booted.ctx.tools.get(name), name).toBeDefined()
-    }
+    // The one dsh-native tool is registered on ctx.tools; the fourteen command
+    // duplicates are gone (the writable surface is the scoped MCP mount).
+    expect(booted.ctx.tools.get('mstar_execution_clear')).toBeDefined()
     // The mirror skills/ mount is live through ctx.skills.
     const skills = await booted.ctx.skills.list()
     expect(skills.some((s) => s.name === 'mstar-harness-core')).toBe(true)
@@ -457,50 +444,6 @@ describe('agent/pre-step — one unified engine-status row (iteration gate + sta
     for (const dropped of ['residuals:', 'row scope:', 'policy:', 'knowledge:', 'direction:', 'agent flow:', 'store:']) {
       expect(text).not.toContain(dropped)
     }
-  })
-})
-
-/* ===========================================================================
- * 8. v2 seam tools — callable over the committed fixtures
- * ========================================================================== */
-
-describe('v2 seam tools — callable in-app over the committed fixtures', () => {
-  it('mstar_sdd_workspace creates the SDD dir for a fixture plan', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    const result = await run(app.ctx, 'mstar_sdd_workspace', { plan_id: 'e2e-fixture-plan', control_root: app.root })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(result.value).toEqual({ sdd_dir: realpathSync(join(app.harnessDir, 'sdd', 'e2e-fixture-plan')) })
-    expect(existsSync(join((result.value as { sdd_dir: string }).sdd_dir, '.gitignore'))).toBe(true)
-    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('sdd dir:')
-  })
-
-  it('mstar_iteration_gate evaluates the committed fixtures (PASS, phase-2-execute)', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    const snapshot = JSON.parse(fixture('workflow/wf-1/snapshot.json')) as { plans: unknown[]; [key: string]: unknown }
-    await seedActiveWorkflow(app.harnessDir, 'wf-1', snapshot.plans, {
-      ...snapshot,
-      type: 'iteration',
-      started_at: '2026-08-19',
-      compass_ref: 'iterations/wf-1/delivery-compass.md',
-      branch: { base: 'main', integration: 'iteration/fixture', target: 'main' },
-      delivery_kind: 'development',
-    }, 'seed-wf-1', app.root, 'wf-1')
-    const result = await run(app.ctx, 'mstar_iteration_gate', {
-      workflow_id: 'wf-1',
-      compass_path: join(FIXTURES, 'iteration', 'delivery-compass.md'),
-    }, { id: 'e2e-agent', session: { header: { id: 'seed-wf-1', cwd: app.root } } })
-
-    expect(result.isError).toBe(false)
-    if (result.isError) return
-    expect(result.value).toMatchObject({
-      transition: 'phase-2-execute',
-      all_plans_done: false,
-      ok: true,
-      entry: { ok: false },
-    })
-    expect((result.content[0] as { type: 'text'; text: string }).text).toContain('PASS')
   })
 })
 
