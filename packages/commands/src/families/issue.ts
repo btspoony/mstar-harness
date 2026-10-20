@@ -33,6 +33,7 @@ import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../t
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
+import { payloadSchema } from "../payload-field-schema.js";
 import { engineErrorFacts } from "./family-refusal.js";
 
 const inputSchema = z.object({
@@ -229,44 +230,6 @@ const payloadType: Record<string, IssuePayloadName> = Object.fromEntries(
   actions.flatMap(([verb, action]) => (action.payload === null ? [] : [[verb, action.payload] as [string, IssuePayloadName]])),
 );
 const expectedRevisionVerbs: Record<string, true> = Object.fromEntries(actions.filter(([, action]) => action.cas).map(([verb]) => [verb, true]));
-function fieldSchema(field: PayloadFieldSchema, condition?: string): z.ZodType {
-  let schema: z.ZodType;
-  if (field.type === "object") {
-    schema = z.object(Object.fromEntries(Object.entries(field.properties ?? {}).map(([name, child]) => [name, fieldSchema(child, condition)])));
-  } else if (field.type === "string[]") {
-    let array = z.array(z.string());
-    if (field.minItems !== undefined) array = array.min(field.minItems);
-    if (field.itemsNonblank) array = array.refine((items) => items.every((item) => item.trim() !== ""));
-    schema = array;
-  } else if (field.type === "string" || field.type === "string | null") {
-    // `"string | null"` is the declared union spelling (the null arm also
-    // arrives as the separate `nullable` flag, applied below). Treating it as a
-    // free-form string keeps the type the contract states: falling through to
-    // `z.unknown()` would accept any JSON value where the domain declares a
-    // string-or-null.
-    if (field.values !== undefined) {
-      // An enum is its own constraint: every member is a non-empty string by
-      // construction, so `nonblankWhenPresent` has nothing left to assert on it
-      // (applying a refine here would be provably-true dead code). It applies
-      // only to a free-form string.
-      schema = z.enum(field.values as [string, ...string[]]);
-    } else {
-      let text = z.string();
-      if (field.nonblankWhenPresent) text = text.refine((value) => value.trim() !== "", `${field.description ?? "field"} must be nonblank when present`);
-      schema = text;
-    }
-  } else {
-    schema = z.unknown();
-  }
-  if (field.nullable) schema = schema.nullable();
-  return field.required || (condition !== undefined && field.requiredWhen?.includes(condition) === true) ? schema : schema.optional();
-}
-
-function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition?: string): z.ZodType {
-  const fields = ISSUE_PAYLOAD_SCHEMAS[typeName] as Record<string, PayloadFieldSchema>;
-  return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, condition)])));
-}
-
 function closureInputSchema(input: z.ZodObject<Record<string, z.core.$ZodType>>, defaultDisposition: TerminalDisposition): z.ZodType<IssueInput> {
   const fields = ISSUE_PAYLOAD_SCHEMAS.ClosureEvidence as Record<string, PayloadFieldSchema>;
   const dispositions = [...new Set(Object.values(fields).flatMap((field) => field.requiredWhen ?? []))] as TerminalDisposition[];

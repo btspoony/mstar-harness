@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.0.4] - 2026-10-20
+
+### Changed
+
+- **`harness.scaffold` resolves from the invocation workspace and the pinned harness root.** The handler no longer defaults its root from `process.cwd()`: it uses the `InvocationContext` cwd (an explicit `path` still wins and is resolved against that cwd). Under `mstar mcp --harness <absolute path>`, an omitted `path` scaffolds that exact pinned harness dir verbatim — custom root names included, and ahead of `MSTAR_HARNESS_DIR` or a workspace `.mstarc` — instead of re-discovering a root under `dirname(harnessRoot)`, so a launch checkout and its `.gitignore` are left untouched. Regressions drive two workspaces through the production MCP assembly.
+- **An identity-locked MCP connection refuses identity override.** A server launched with `--identity-env` (a scoped per-agent mount) publishes no session selector on its tools and strips a caller-supplied `sessionId` before admission, so every call runs under the connection identity the launcher declared — a caller can no longer pass a valid foreign session id and act inside that identity's authority. Generic unbound connections keep the documented per-call `sessionId` selector. A locked connection always has a resolved identity: a declared channel whose variable is unset or blank resolves no session id, so that connection stays generic (the per-call selector remains its identity channel) and one launch-time line names the variable, the cause and both recoveries instead of locking a connection with no identity at all. A declared value the engine's safe-session-id rule refuses — not one safe path component `[A-Za-z0-9._-]+`, not `""`, `.`, `..` or a value containing `/` or `\`, or longer than the engine's `SESSION_ID_MAX_LENGTH` ceiling — likewise resolves no identity: it stays unlocked and warned rather than locking an identity no identity-consuming call could use, and its launch-time line states the rule and the correct-the-variable-or-drop-`--identity-env`-and-relaunch recovery without echoing the rejected value. The declared identity is resolved once when the connection is created, so the lock can neither outlive the identity it locks nor appear after the connection became generic. A locked connection's published tool metadata also omits the session selector everywhere — the input properties, `x-mstar-requirements`, the rendered `CLI:` usage token and the caller-supplied section — so the contract an agent reads never asks for a parameter the tool does not publish and silently strips; a generic connection still publishes it.
+- **The `MSTAR_HARNESS_DIR` recovery works everywhere the refusal names it.** The engine's harness-root resolution honours a non-blank `MSTAR_HARNESS_DIR` before its linked-checkout refusal, so the recovery the MCP control-root refusal advertises also resolves on a linked checkout whose main worktree cannot be read.
+
+- Version alignment with harness **4.0.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.0.4**.
+
 ## [4.0.3] - 2026-10-18
 
 ### Changed

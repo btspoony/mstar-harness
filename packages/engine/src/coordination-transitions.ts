@@ -154,6 +154,9 @@ export function assertGitObjectId(value: unknown, what: string): string {
   return value;
 }
 
+/** One submitted evidence value and the payload field that carried it. */
+export type EvidencePathRef = { field: string; path: string };
+
 export type ValidatedCompletionEvidence = {
   source_sha: string | null;
   review_base: string | null;
@@ -164,7 +167,8 @@ export type ValidatedCompletionEvidence = {
   qa_gate: "mandatory" | "pm-acceptance";
   qa_decision: "pass";
   qa_report: string;
-  evidence_paths: string[];
+  /** Every evidence value with its payload field, so a path refusal can name it. */
+  evidence_refs: EvidencePathRef[];
 };
 
 export function readCompletionEvidence(value: unknown, route: RowValidationRoute = "integration"): ValidatedCompletionEvidence {
@@ -193,10 +197,27 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
   const qaReport = value.qa.report;
   const extra = value.evidence_paths === undefined ? [] : value.evidence_paths;
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
-    throw new CoordinationError("coordination.invalid-input", "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate.");
+    // A caller with four paths needs to know WHICH entry is not a path, so the
+    // refusal names the index. The message cannot also name a command here
+    // (Rule #341 class 4: an interpolated message carries no statically provable
+    // verb), so the transport's recovery channel names the repair.
+    // reachability: manual — the message must name the runtime index of the offending entry, so no statically provable command can live in it; the transport recovery channel names plan show
+    const entries: readonly unknown[] = Array.isArray(extra) ? extra : [];
+    const index = entries.findIndex((entry) => !isNonEmptyString(entry));
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      index < 0
+        ? "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate."
+        : `Invalid evidence_paths[${index}]: every entry must be a non-empty evidence path.`,
+      index < 0 ? {} : { field: `evidence_paths[${index}]`, value: entries[index] },
+    );
   }
-  const paths = new Set<string>([...qc.reports, qc.consolidated, ...extra]);
-  paths.add(qaReport);
+  const evidenceRefs: EvidencePathRef[] = [
+    ...(qc.reports as string[]).map((path, index) => ({ field: `qc.reports[${index}]`, path })),
+    { field: "qc.consolidated", path: qc.consolidated },
+    { field: "qa.report", path: qaReport },
+    ...(extra as string[]).map((path, index) => ({ field: `evidence_paths[${index}]`, path })),
+  ];
   return {
     source_sha: sourceSha,
     review_base: reviewBase,
@@ -207,7 +228,7 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
     qa_gate: qaGate,
     qa_decision: "pass",
     qa_report: qaReport,
-    evidence_paths: [...paths],
+    evidence_refs: evidenceRefs,
   };
 }
 

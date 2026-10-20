@@ -8,11 +8,16 @@
  * `status.json` `workflows[]`) by the locked order: row scope (a plan row
  * whose `metadata.worktree_path` contains the hint's cwd) → cwd (a
  * `control_worktree_path` containing it) → the session's durable
- * `selectedWorkflowId` → the only active entry. Each automatic rung needs
- * EXACTLY ONE distinct match; zero or several fall through, and nothing
- * falls back to the registry's first entry. With N>1 and no binding the
- * resolver fails loud (`workflow.selection.unbound-multi-active` + the
- * active ids) — the write path skips and the read path shows the picker.
+ * `selectedWorkflowId` → the plan row the operation names (`hint.planId`) →
+ * the only active entry. Each automatic rung needs EXACTLY ONE distinct
+ * match; zero or several fall through, and nothing falls back to the
+ * registry's first entry. Several ACTIVE lifecycles are ordinary, so the
+ * operation-identified rung carries the common parallel case: a plan row
+ * belongs to one lifecycle, which resolves the selection with no pick and no
+ * discriminating cwd. Only when no rung applies does the resolver fail loud
+ * (`workflow.selection.unbound-multi-active` + the active ids + how to name
+ * one) — that refusal is scoped to the ONE operation, never a session-wide
+ * write pause, and the read path shows the picker.
  *
  * READ path (catalog/panel): the same binding order → latest terminal
  * snapshot by mtime (history, reachable ONLY for an empty active set) →
@@ -71,13 +76,16 @@ export type ActiveWorkflowSelection = WorkflowSelectionView
  * `sessionId` is the durable picker key (`session.header.id`), NEVER a
  * scope fallback;
  * Agent exists; `selectedWorkflowId` is the session's durable pick (loaded
- * by the caller from the engine-status store). Every field is optional —
- * an omitted hint just misses the corresponding rung.
+ * by the caller from the engine-status store); `planId` is the plan row the
+ * CURRENT operation names, which identifies its owning lifecycle without
+ * asking the session to pick one. Every field is optional — an omitted hint
+ * just misses the corresponding rung.
  */
 export interface SessionHint {
   cwd?: string
   sessionId?: string
   selectedWorkflowId?: string
+  planId?: string
 }
 
 /**
@@ -307,6 +315,29 @@ function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWor
 }
 
 /**
+ * Rung 1.5 (operation-identified binding): the plan row the CURRENT operation
+ * names. A plan row belongs to exactly one lifecycle, so naming it is sufficient
+ * evidence even when several lifecycles are active and the cwd matches more than
+ * one — the normal case once parallel worktrees share one control root, where
+ * cwd alone can never discriminate. Several matches fall through to the next
+ * rung; nothing is arbitrated by array order.
+ */
+function planBinding(source: ActiveSetSource, hint: SessionHint): ActiveWorkflowSelection | undefined {
+  const planId = hint.planId === '' ? undefined : hint.planId
+  if (planId === undefined) return undefined
+  const matches = new Map<string, ActiveEntry>()
+  for (const entry of source.entries) {
+    const snapshot = source.snapshotOf(entry)
+    if (snapshot === undefined) continue
+    if (activeRowsOf(snapshot).some((row) => row?.id === planId || row?.plan_id === planId)) {
+      matches.set(entry.id, entry)
+    }
+  }
+  const only = soleEntry(matches)
+  return only === undefined ? undefined : { kind: 'active', workflowId: only.id, dir: only.dir }
+}
+
+/**
  * The normalized ACTIVE-SET source the binding order below runs on: the
  * validated registry rows plus each entry's materialized state (the plan rows
  * with their own recorded scope and the lifecycle's integration topology). The
@@ -372,33 +403,42 @@ function activeEntriesOf(registry: readonly unknown[]): { entries: ActiveEntry[]
 }
 
 /**
- * The selection tail over an already-normalized active set (D4 binding
- * order): the two automatic rungs → the session's durable
- * `selectedWorkflowId` → the only active entry. Explicit identity is
- * preserved at every rung — an id is either named by the session's own
- * evidence or the set is a single entry; a multi-active set with no binding
- * is `workflow.selection.unbound-multi-active` and NOTHING falls back to the
- * registry's first (or newest) entry.
+ * The selection tail over an already-normalized active set (D4 binding order):
+ * the physical automatic rungs (a plan row's worktree, the integration
+ * worktree) → the session's durable `selectedWorkflowId` → the plan row the
+ * CURRENT operation names → the only active entry. An explicit pick outranks
+ * the inferred plan row so a contradictory pick reaches its own not-found path
+ * instead of silently switching lifecycle. Explicit identity is preserved at
+ * every rung — an id is either named by the session's own evidence, by the
+ * operation's plan row, or the set is a single entry; a multi-active set with
+ * no binding is `workflow.selection.unbound-multi-active` and NOTHING falls
+ * back to the registry's first (or newest) entry.
  */
 function selectActiveWorkflow(source: ActiveSetSource, hint?: SessionHint): ActiveWorkflowSelection {
   if (hint !== undefined) {
     const automatic = automaticBinding(source, hint)
     if (automatic !== undefined) return automatic
+    // The session's EXPLICIT pick outranks an inferred one: a pick that names a
+    // lifecycle without the requested plan row is a contradiction the caller
+    // must see (its own not-found path), never a silent switch of lifecycle.
     const selected = hint.selectedWorkflowId
     if (selected !== undefined && selected !== '') {
       const picked = source.entries.find((entry) => entry.id === selected)
       if (picked !== undefined) return { kind: 'active', workflowId: picked.id, dir: picked.dir }
     }
+    const byPlan = planBinding(source, hint)
+    if (byPlan !== undefined) return byPlan
   }
   if (source.entries.length === 1) {
     const only = source.entries[0] as ActiveEntry
     return { kind: 'active', workflowId: only.id, dir: only.dir }
   }
+  const activeWorkflowIds = source.entries.map((entry) => entry.id)
   return {
     kind: 'error',
     code: 'workflow.selection.unbound-multi-active',
-    message: `${source.entries.length} active lifecycles are registered \u2014 this session has no lease, is not inside a workflow worktree and has no stored selection; pick one for this session (writes pause until then)`,
-    activeWorkflowIds: source.entries.map((entry) => entry.id),
+    message: `${source.entries.length} active lifecycles are registered \u2014 name the one this operation belongs to (a plan row inside it, a worktree under it, --workflow <id>, or a session selection); active ids: ${activeWorkflowIds.join(', ')}`,
+    activeWorkflowIds,
   }
 }
 

@@ -389,7 +389,11 @@ export async function leaseGateViolations(
   if (planId === undefined || planId === '') return []
   let source: ExecutionWorkflowSourceRead
   try {
-    source = activeSource ?? await readExecutionWorkflowSource({ harnessDir }, hint)
+    // The Assignment names its plan row: that row belongs to exactly one ACTIVE
+    // lifecycle, so it identifies the lifecycle even when several are active and
+    // the cwd cannot discriminate (parallel worktrees under one control root).
+    const selectionHint = { ...hint, planId }
+    source = activeSource ?? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
   } catch {
     return [leaseViolation('lease.dispatch.unverifiable', 'the ACTIVE execution workflow could not be read; STOP before writable dispatch', 'restore the ACTIVE store authority, then rerun the dispatch')]
   }

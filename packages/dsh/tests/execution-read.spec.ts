@@ -320,6 +320,33 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(missing.kind).toBe('error')
   })
 
+  it('binds a named plan row to its owning lifecycle instead of leaving the set unbound', async () => {
+    const { harnessDir } = await appWithRoot('execution-plan-binding')
+    const worktree = await tempDir('execution-plan-binding-wt')
+    await seedExecutionAuthority(harnessDir, [
+      { id: 'wf-alpha', planId: 'plan-alpha', integrationWorktreePath: worktree },
+      { id: 'wf-beta', planId: 'plan-beta' },
+    ])
+
+    // Naming the plan row disambiguates with no durable pick at all: a plan row
+    // belongs to exactly one lifecycle, so several ACTIVE lifecycles are no
+    // longer a reason to refuse the operation.
+    const byPlan = await readExecutionWorkflowSource({ harnessDir }, { planId: 'plan-beta' })
+    expect(byPlan.kind === 'active' ? byPlan.workflowId : null).toBe('wf-beta')
+    expect(byPlan.kind === 'active' ? activeRowsOf(byPlan.snapshot).map((row) => row.id) : []).toEqual(['plan-beta'])
+
+    // A plan id no lifecycle holds is NOT a guess: the set stays unbound so the
+    // caller's own not-found path decides, never a positional pick.
+    const absent = await readExecutionWorkflowSource({ harnessDir }, { planId: 'plan-absent' })
+    expect(absent.kind).toBe('error')
+    if (absent.kind !== 'error' || absent.selection.kind !== 'error') return
+    expect(absent.selection.code).toBe('workflow.selection.unbound-multi-active')
+
+    // The operation-identified rung never outranks physical cwd evidence.
+    const byCwd = await readExecutionWorkflowSource({ harnessDir }, { cwd: join(worktree, 'src'), planId: 'plan-beta' })
+    expect(byCwd.kind === 'active' ? byCwd.workflowId : null).toBe('wf-alpha')
+  })
+
   it('refuses an unreadable authority instead of falling back to the retired files', async () => {
     const { harnessDir } = await appWithRoot('execution-unreadable')
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])

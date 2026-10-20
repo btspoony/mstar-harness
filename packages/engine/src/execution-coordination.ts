@@ -115,6 +115,7 @@ import {
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting } from "./path.js";
+import { parseAssignmentBranchForms } from "./dispatch.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
@@ -655,6 +656,42 @@ function withExecutionPlanOperation<T>(
 type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig };
 
 /**
+ * The branch one `prepare` claim names. The Assignment's documented forms are a
+ * plain branch name and `create <branch> from <base>`; the second is a CLAIM,
+ * never a branch, so it is resolved to its branch here — the recorded
+ * `metadata.working_branch` (and therefore every `source_branch` derived from
+ * it) is a real ref. Any other multi-word value is refused instead of being
+ * stored as the scope. The create-form grammar is the engine's single one
+ * (`dispatch.ts`), not a second copy.
+ *
+ * A claim is ONE line. That grammar reads the value as an Assignment header and
+ * keeps the LAST `Working branch:` line, so a claim carrying a line break could
+ * name a branch the caller never wrote; it is refused before the grammar runs.
+ */
+function branchOfClaim(value: string): string {
+  if (/[\r\n]/.test(value)) {
+    throw invalidPlanInput(
+      "Invalid prepare workingBranch: the claim must be a single line \u2014 a branch name or \"create <branch> from <base>\"; retry through mstar plan prepare.",
+      { field: "workingBranch", value },
+    );
+  }
+  const form = parseAssignmentBranchForms(`Working branch: ${value}`).createForm;
+  if (form !== undefined) {
+    // The documented create form carries BOTH tokens; an incomplete one names no
+    // usable branch and no base, so it is refused rather than half-applied.
+    if (form.name !== "" && form.base !== undefined && form.base !== "") return form.name;
+  } else if (!/\s/.test(value)) {
+    // A branch name never carries whitespace, so whitespace is what distinguishes
+    // a claim string from a branch.
+    return value;
+  }
+  throw invalidPlanInput(
+    "Invalid prepare workingBranch: record a branch name, or the Assignment's \"create <branch> from <base>\" form; retry through mstar plan prepare.",
+    { field: "workingBranch", value },
+  );
+}
+
+/**
  * Preparation configuration has no Assignment and no plan-body pin. Optional
  * checkout metadata is supplied by the coordinator or inherited from the row;
  * the omitted members keep the safe ordinary defaults.
@@ -674,7 +711,15 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
     throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
   }
-  return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
+  const branch = config.workingBranch === undefined ? undefined : branchOfClaim(config.workingBranch);
+  return {
+    config: {
+      ...config,
+      ...(branch === undefined ? {} : { workingBranch: branch }),
+      qaGate: config.qaGate ?? "mandatory",
+      findingsCleanup: config.findingsCleanup ?? "allow-residual",
+    },
+  };
 }
 
 /** Refuse assigning any plan row to the branch attached to the control checkout. */
@@ -955,7 +1000,10 @@ export async function progressExecutionPlan(
         progress.track_branches,
       );
     }
-    assertEvidenceInsidePlanArea(planAreas, progress.evidence_paths);
+    assertEvidenceInsidePlanArea(
+      planAreas,
+      progress.evidence_paths.map((path, index) => ({ field: `progress.evidence_paths[${index}]`, path })),
+    );
 
     const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
     const nextMetadata =
@@ -1314,7 +1362,7 @@ function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: 
   if (failure !== undefined) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      "The transition requires matching report-only completion evidence; inspect the workflow with mstar status validate.",
+      "The report-only route completes only after its registered completion policy is RECORDED as fulfilled. Record that fulfilment with mstar workflow evidence --workflow <id> --file <absolute-json>, then retry plan complete.",
       {
         message: failure.message,
         plan_id: planId,
@@ -1731,7 +1779,7 @@ async function captureCompletionWitnesses(
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
   const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
-  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_paths);
+  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_refs);
   const evidenceRefs = completionEvidenceRefs(evidence);
   if (route === "report-only") {
     assertReportOnlyCompletionEvidence(snapshot, read.planId);
@@ -1797,7 +1845,7 @@ function completeInTransaction(
   assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
   // Revalidate aliases/existence after the proof gap, before committing captured
   // evidence. Body hashes stay outside SQLite ownership and committed replays.
-  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_paths);
+  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_refs);
   const refs = witnesses.evidenceRefs;
   const scope = route === "report-only" ? null : planScopeOf(witness.view, planId);
   const record: CompletionRecord = {

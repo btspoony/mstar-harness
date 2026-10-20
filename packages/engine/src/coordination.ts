@@ -76,6 +76,7 @@ import {
   summarize,
   type CoordinationRole,
   type CoordinationSeat,
+  type EvidencePathRef,
   type IntegrationAnchors,
   type ValidatedCompletionEvidence,
 } from "./coordination-transitions.js";
@@ -1004,22 +1005,43 @@ export function planAreaRoots(harnessRoot: string, planId: string): string[] {
 /**
  * Absolute, existing evidence inside one plan's own plan/SDD area. Both
  * transports derive their areas from the addressed plan and harness layout.
+ *
+ * Each submitted value arrives with the payload field that carried it, so a
+ * refusal names the member to correct instead of leaving the caller to guess
+ * which of `qc.reports[]` / `qc.consolidated` / `qa.report` / `evidence_paths[]`
+ * is wrong. The offending field, its value and the allowed roots are carried in
+ * the details AND repeated in the message, because a caller reads the message
+ * first. The message advertises no command (Rule #341 class 4 forbids a command
+ * inside a message carrying runtime values); the transports' recovery channel
+ * names the verb that inspects the plan scope.
  */
-export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: readonly string[]): void {
-  for (const path of paths) {
+export function assertEvidenceInsidePlanArea(roots: readonly string[], refs: readonly EvidencePathRef[]): void {
+  const allowed = roots.join(" or ");
+  for (const { field, path } of refs) {
+    const details = { field, value: path, allowed: roots };
     if (!isAbsolute(path)) {
-      throw invalidInput("Evidence path must be absolute and inside the plan area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path });
+      // reachability: manual — the message must name the runtime field, its value and the runtime roots, so no statically provable command can live in it; the transport recovery channel names plan show
+      throw invalidInput(
+        `Evidence value in ${field} is not an absolute path: ${JSON.stringify(path)}; evidence must be an absolute path inside ${allowed}`,
+        details,
+      );
     }
     const abs = canonicalizeNearestExisting(path);
     if (!roots.some((root) => isWithin(root, abs))) {
+      // reachability: manual — the message must name the runtime field, its value and the runtime roots, so no statically provable command can live in it; the transport recovery channel names plan show
       throw new CoordinationError(
         "coordination.path-mismatch",
-        "Evidence path is outside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.",
-        { path: abs, allowed: roots },
+        `Evidence value in ${field} is outside the plan area: ${JSON.stringify(abs)}; evidence must be an absolute path inside ${allowed}`,
+        { ...details, value: abs },
       );
     }
     if (!existsSync(abs)) {
-      throw new CoordinationError("coordination.invalid-input", "Evidence path does not exist inside the plan's plan/SDD area. Inspect the plan scope with mstar plan show. Pass the plan id registered in the workflow row.", { path: abs });
+      // reachability: manual — the message must name the runtime field, its value and the runtime roots, so no statically provable command can live in it; the transport recovery channel names plan show
+      throw new CoordinationError(
+        "coordination.invalid-input",
+        `Evidence value in ${field} does not exist: ${JSON.stringify(abs)}; record the evidence inside ${allowed} first`,
+        { ...details, value: abs },
+      );
     }
   }
 }

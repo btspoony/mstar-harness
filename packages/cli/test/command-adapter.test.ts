@@ -841,13 +841,13 @@ test("sparse input reaches the command resolver without transport defaulting", a
 test("plan payload decode returns indexed field paths in the usage envelope", async () => {
   const result = await run(["plan", "issue-add", "--entries", "[{},5]"]);
   expect(result.status).toBe(2);
-  expect(JSON.parse(result.stdout)).toMatchObject({
-    command: "plan.issue-add",
-    status: "usage",
-    details: {
-      diagnostics: [{ path: "entries[1]", index: 1 }],
-    },
-  });
+  const envelope = JSON.parse(result.stdout) as { details?: { diagnostics?: Array<{ path: string; index?: number }> } };
+  expect(envelope).toMatchObject({ command: "plan.issue-add", status: "usage" });
+  const diagnostics = envelope.details?.diagnostics ?? [];
+  // Every element is addressed by its own index: the object element names the
+  // entry fields it lacks, and the scalar element is a wrong-typed element.
+  expect(diagnostics).toContainEqual(expect.objectContaining({ path: "entries[0].title", index: 0 }));
+  expect(diagnostics).toContainEqual(expect.objectContaining({ path: "entries[1]", index: 1 }));
 });
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-typed-options-"));

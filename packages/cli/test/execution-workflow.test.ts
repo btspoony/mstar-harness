@@ -1162,3 +1162,57 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(String(jsonOf(refused).message)).toContain("must NAME the holder");
   });
 });
+
+/**
+ * The two engine-owned workflow payloads that arrive as a `--file` document
+ * publish their shape on the same read-only surface as every other payload
+ * command, and their CLI help names the route that shows it. Neither case
+ * touches the authority: `schema` and `--help` are pure reads.
+ */
+describe("mstar workflow \u2014 published payload contracts", () => {
+  function readOnly(args: string[]): RunResult {
+    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], { cwd: CLI_ROOT, stdout: "pipe", stderr: "pipe" });
+    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  }
+  function descriptorOf(command: string): Record<string, any> {
+    const result = readOnly(["schema", "--command", command]);
+    expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+    const descriptor = (jsonOf(result).data as Record<string, any>).descriptor;
+    if (descriptor === null || typeof descriptor !== "object") throw new Error(`no descriptor: ${result.stdout}`);
+    return descriptor;
+  }
+  test("execution-policy and evidence publish their document shape with schema-linked help", () => {
+    const policy = descriptorOf("workflow.execution-policy").payloadSchemas.policy as Record<string, any>;
+    expect(Object.keys(policy.properties).sort()).toEqual(["plan_parallelism", "push_policy", "worktree_mode"]);
+    // The closed concurrency set is published, not just the key name.
+    expect(policy.properties.plan_parallelism.enum).toEqual(["serial", "parallel"]);
+    const help = readOnly(["workflow", "execution-policy", "--help"]).stdout.replace(/\s+/g, " ");
+    expect(help).toContain("mstar schema --command workflow.execution-policy");
+
+    const delivery = descriptorOf("workflow.evidence").payloadSchemas.delivery as Record<string, any>;
+    const members = JSON.stringify(delivery.anyOf);
+    for (const member of ["compound", "pr", "merge", "completion"]) expect(members).toContain(`"${member}"`);
+  });
+
+  test("the published document shape refuses an out-of-set plan_parallelism instead of recording it", async () => {
+    const fixture = await activeFixture("mstar-workflow-policy-set");
+    const identity = coordinatorIdentity();
+    expect(registerReportOnlyWorkflow(fixture, identity, await rootTokenOf(fixture)).exitCode).toBe(0);
+    const bound = bindCoordinator(fixture, WORKFLOW_ID, await workflowTokenOf(fixture));
+    const policyPath = join(fixture.root, "policy-out-of-set.json");
+    writeJson(policyPath, { plan_parallelism: "sometimes" });
+    const refused = runCli(
+      workflowVerbArgs("execution-policy", fixture, bound, await workflowTokenOf(fixture), "policy-out-of-set", ["--file", policyPath]),
+      fixture,
+      identity,
+    );
+    // The published set is the enforced one: the transport refuses the value
+    // before the engine writes a policy block it would reject anyway.
+    expect(refused.exitCode, refused.stdout).toBe(2);
+    const envelope = jsonOf(refused);
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(String(envelope.message)).toContain("plan_parallelism");
+    expect(String(envelope.message)).toContain("serial");
+    expect(await storedHeader(fixture)).not.toHaveProperty("execution_policy");
+  });
+});

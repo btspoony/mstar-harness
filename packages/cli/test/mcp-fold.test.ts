@@ -19,13 +19,15 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * for the payload-composed input view), and it also published 154,471
  * characters of output schemas — 327,811 characters in total, over 90k tokens.
  * The fold publishes the descriptor field index instead of payload composition
- * and drops output schemas, so the after figure is 31,342 characters of
- * description + input schema (~8.7k tokens): 32,000 keeps a small but real
- * margin while a regression that starts republishing per-command contracts
- * inside family descriptions — or that lets per-action tools creep back —
- * reddens here.
+ * and drops output schemas, so the after figure is 32,155 characters of
+ * description + input schema (~8.9k tokens; the payload schemas published for
+ * `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
+ * detail, not per-command republishing): 33,000 keeps a small but real margin
+ * while a regression that starts republishing per-command contracts inside
+ * family descriptions — or that lets per-action tools creep back — reddens
+ * here.
  */
-const PUBLISHED_SURFACE_BUDGET_CHARS = 32_000;
+const PUBLISHED_SURFACE_BUDGET_CHARS = 33_000;
 
 type PublishedTool = Readonly<{
   name: string;
