@@ -106,37 +106,44 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     ...(details === undefined ? {} : { details }),
     // Rule #341 class 3 requires a statically provable recovery per refusal
     // branch, so this stays an inline chain of literal sentences rather than a
-    // helper call. The two plan.complete branches that name ANOTHER verb are the
-    // ones where re-running `plan complete` cannot succeed.
+    // helper call. `coordination.invalid-transition` covers several causes on
+    // plan.complete, so each branch below keys on the detail the engine attaches
+    // for that cause: `details.code` is consultDeliveryEvidence's own violation
+    // code, `details.required` is the row's configured QA gate. Re-running
+    // `plan complete` only helps when the payload was the problem.
     recovery: id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_KIND_UNREGISTERED"
       ? "The workflow declares no delivery kind, and the kind is fixed at registration. Close it honestly with mstar workflow lifecycle --workflow <workflow-id> --status failed --reason <text>, then register a replacement workflow with the correct declared delivery kind."
-      : id === "plan.complete" && code === "coordination.invalid-transition"
+      : id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE"
         // A report-only completion needs the policy fulfilment RECORDED first; no
         // amount of correct QC/QA evidence substitutes for it.
         ? "Record the missing delivery evidence — for a report-only route the fulfilment of its registered completion policy — with mstar workflow evidence --workflow <workflow-id> --file <absolute-json>, then retry plan complete. Read the workflow's own state with mstar status validate."
-        : (id === "plan.complete" || id === "plan.progress") && typeof details?.field === "string"
-          // The refusal names which payload field carried the bad value; the plan's
-          // own area is what that value must sit inside.
-          ? "Correct the evidence values named by the refusal's field details: each must be an absolute path to an existing file inside the plan area. Read the plan's area with mstar plan show, then retry."
-          : id === "plan.complete" && code === "coordination.scope-mismatch"
-            ? details !== undefined && "expected" in details && "actual" in details
-              ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
-              // No recorded scope at all: there is no anchor to compare, so the repair
-              // is to record the row's worktree and branch, not to re-register one.
-              : "The plan records no worktree/branch scope. Record the plan worktree and feature branch with mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>, then retry."
-            : id === "plan.bind"
-              ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
-              : id === "plan.show"
-                ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
-                : id === "plan.prepare"
-                  ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
-                  : id === "plan.progress"
-                    ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
-                    : id === "plan.issue-add"
-                      ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
-                      : id === "plan.issue-close"
-                        ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition>."
-                        : "Delivery-route evidence and QC/QA proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.",
+        : id === "plan.complete" && code === "coordination.invalid-transition" && typeof details?.required === "string"
+          // The submission's gate is not the row's configured gate: either the
+          // evidence or the recorded configuration is what changes.
+          ? "The submitted QA evidence does not match the plan's configured QA gate. Submit the matching QA or PM acceptance report, or re-record the configured gate with mstar plan prepare --qa-gate <gate>, then retry."
+          : (id === "plan.complete" || id === "plan.progress") && typeof details?.field === "string"
+            // The refusal names which payload field carried the bad value; the plan's
+            // own area is what that value must sit inside.
+            ? "Correct the evidence values named by the refusal's field details: each must be an absolute path to an existing file inside the plan area. Read the plan's area with mstar plan show, then retry."
+            : id === "plan.complete" && code === "coordination.scope-mismatch"
+              ? details !== undefined && "expected" in details && "actual" in details
+                ? "The recorded working branch does not match the workflow's registered delivery source. Correct the registered anchor with mstar workflow delivery-anchors, or re-record the row scope with mstar plan prepare."
+                // No recorded scope at all: there is no anchor to compare, so the repair
+                // is to record the row's worktree and branch, not to re-register one.
+                : "The plan records no worktree/branch scope. Record the plan worktree and feature branch with mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>, then retry."
+              : id === "plan.bind"
+                ? "The registered workflow and current coordinator identity must match; a first bind needs the execution route and an existing binding is resumed through its active session reference. Run mstar plan bind --execution true --coordinator true --workflow <workflow-id>, or mstar plan bind --resume-ref <session-ref>."
+                : id === "plan.show"
+                  ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
+                  : id === "plan.prepare"
+                    ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
+                    : id === "plan.progress"
+                      ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress <json-progress-object>."
+                      : id === "plan.issue-add"
+                        ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries <issues-file>."
+                        : id === "plan.issue-close"
+                          ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition>."
+                          : "Delivery-route evidence and QC/QA proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.",
   });
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {

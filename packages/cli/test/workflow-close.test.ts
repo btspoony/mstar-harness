@@ -532,6 +532,42 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
   }, 30_000);
 });
 
+describe("mstar plan complete — a refusal names the verb that actually advances it", () => {
+  /**
+   * `coordination.invalid-transition` covers several causes. The report-only
+   * policy question is one of them; a QA gate that disagrees with the row's
+   * configured gate is another, and re-recording workflow delivery evidence
+   * cannot fix that one.
+   */
+  test("a QA gate mismatch keeps its own recovery", async () => {
+    const fixture = await activeFixture("mstar-complete-gate-mismatch");
+    await registerAndBind(fixture);
+
+    const started = join(fixture.root, "progress-gate-mismatch.json");
+    writeJson(started, { status: "InProgress", summary: "gate mismatch probe", evidence_paths: [fixture.qcReport] });
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(moved.exitCode, moved.stdout).toBe(0);
+
+    // The policy fulfilment IS recorded, so the report-only question is settled;
+    // the row's QA gate defaults to mandatory and the payload says pm-acceptance.
+    const delivery = join(fixture.root, "delivery-gate-mismatch.json");
+    writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
+    const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(recorded.exitCode, recorded.stdout).toBe(0);
+
+    const completion = join(fixture.root, "completion-gate-mismatch.json");
+    writeJson(completion, {
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+    });
+    const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(refused.exitCode).toBe(1);
+    expect(envelope(refused).code).toBe("coordination.invalid-transition");
+    expect(recoveryOf(refused)).toContain("mstar plan prepare");
+    expect(recoveryOf(refused)).not.toContain("mstar workflow evidence");
+  }, 30_000);
+});
+
 describe("mstar status workflow-close — usage and the retired file transports", () => {
   test("missing workflow selector is a usage refusal", async () => {
     const fixture = await activeFixture("mstar-close-usage");
