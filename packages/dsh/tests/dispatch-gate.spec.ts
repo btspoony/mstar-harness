@@ -915,3 +915,87 @@ describe('dispatch gate — the carrying-session hint is derived ONLY where the 
     expect(warns[0]).toContain('mstar store init')
   })
 })
+
+/* ---------------------------------- leaf-seat tool boundary ---------------------------------- */
+
+/**
+ * PR #558 must-fix 1: the profile-wide `mstar-mcp` row mounts a GENERIC
+ * connection (no `--identity-env`, no `--seat`), so the scoped leaf mount's
+ * server-side restriction never covered it — a known leaf could name a bound
+ * coordinator session on that connection and run `plan.complete`. The guard
+ * lives on `tools/pre-execute`, where the host knows the calling agent is a
+ * leaf, and reads the folded tool's `action` from the call's arguments.
+ */
+
+/** The folded plan tool as the shipped bundle's `mstar` server publishes it. */
+const PLAN_TOOL = 'mcp__mstar__mstar_plan'
+
+/** A known leaf seat: the subagent origin the identity chain reads. */
+const leafAgent = (): unknown => ({ id: 'leaf-session', session: { header: { origin: 'subagent' } } })
+
+/** A known leaf seat by delegation depth (the other shape of the same contract). */
+const depthLeafAgent = (): unknown => ({ id: 'depth-leaf', session: { header: { delegationDepth: 1 } } })
+
+/** The coordinating session on the SAME generic connection. */
+const coordinatingAgent = (): unknown => ({ id: 'coordinator-session', session: { header: { origin: 'user' } } })
+
+/** One folded MCP call: the family tool plus its `action` selector. */
+const foldedCall = (tool: string, args: Record<string, unknown>, agent: unknown): ToolExecution =>
+  toolExec(tool, args, agent)
+
+describe('leaf-seat tool boundary — coordinator actions on the folded MCP surface', () => {
+  it('refuses plan.complete and plan.bind for a known leaf before the MCP child runs', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['complete', 'bind']) {
+      const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(PLAN_TOOL, { action, plan: 'p', sessionId: 'coordinator-session' }, leafAgent()), defaultAllow)
+      expect(decision.kind).toBe('deny')
+      expect((decision as { reason?: string }).reason).toContain('leaf-seat.coordinator-action')
+      expect((decision as { reason?: string }).reason).toContain(action)
+    }
+  })
+
+  it('refuses the same actions for a leaf recognised by delegation depth', async () => {
+    const app = booted = await bootApp()
+    const decision = await app.ctx.waterfall('tools/pre-execute', foldedCall(PLAN_TOOL, { action: 'complete' }, depthLeafAgent()), defaultAllow)
+    expect(decision.kind).toBe('deny')
+  })
+
+  it('does not refuse the same generic connection for a non-leaf session', async () => {
+    const app = booted = await bootApp()
+    for (const action of ['complete', 'bind']) {
+      expect(await app.ctx.waterfall('tools/pre-execute', foldedCall(PLAN_TOOL, { action }, coordinatingAgent()), defaultAllow))
+        .toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('leaves the leaf’s allowed folded MCP actions reachable', async () => {
+    const app = booted = await bootApp()
+    const allowed: ToolExecution[] = [
+      foldedCall(PLAN_TOOL, { action: 'prepare' }, leafAgent()),
+      foldedCall(PLAN_TOOL, { action: 'progress' }, leafAgent()),
+      foldedCall(PLAN_TOOL, { action: 'show' }, leafAgent()),
+      foldedCall('mcp__mstar__mstar_issue', { action: 'add' }, leafAgent()),
+      foldedCall('mcp__mstar__mstar_sdd', { task_number: 1 }, leafAgent()),
+      foldedCall('mcp__mstar__mstar_schema', { family: 'plan' }, leafAgent()),
+      toolExec('bash', { command: 'ls' }, leafAgent()),
+    ]
+    for (const exec of allowed) {
+      expect(await app.ctx.waterfall('tools/pre-execute', exec, defaultAllow)).toEqual({ kind: 'allow' })
+    }
+  })
+
+  it('refuses the session recovery that binds the caller as the replacing coordinator', async () => {
+    const app = booted = await bootApp()
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      foldedCall('mcp__mstar__mstar_session', { action: 'recover', workflow: 'wf-a' }, leafAgent()),
+      defaultAllow,
+    )
+    expect(decision.kind).toBe('deny')
+    expect((decision as { reason?: string }).reason).toContain('session.recover')
+    // The launch (`session.run`) mints an identity for a CHILD process, never
+    // a seat for this caller — it stays reachable.
+    expect(await app.ctx.waterfall('tools/pre-execute', foldedCall('mcp__mstar__mstar_session', { action: 'run' }, leafAgent()), defaultAllow))
+      .toEqual({ kind: 'allow' })
+  })
+})

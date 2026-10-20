@@ -27,6 +27,12 @@
  * (`plan.bind` / `plan.complete`) before any execution — a leaf can never
  * bind or complete a plan, adopt a credential, or clear a binding.
  *
+ * Defence in depth, not the sole enforcement: this mount only covers the
+ * per-agent scoped connection, while the profile-wide `mstar-mcp` row is
+ * generic (no identity, no `--seat`). The `tools/pre-execute` leaf-seat
+ * boundary (`leaf-seat.ts`) refuses that same coordinator arm for a known leaf
+ * on EVERY connection, before this scoped server's own restriction is reached.
+ *
  * Optional-by-presence (the degradation posture of the rest of the plugin):
  * `@deepseek-ai/dsh-mcp-client` is NOT a dependency of this plugin — when
  * the package is not installed the mount registers nothing, logs ONE debug

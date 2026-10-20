@@ -45,6 +45,7 @@ import type { SkillLintAdvisory } from './gates/skill-lint.ts'
 import { seamWriteIntentListener } from './gates/seams.ts'
 import type { SeamId, SeamLintAdvisory } from './gates/seams.ts'
 import { registerNativeCommandTools } from './gates/native-commands.ts'
+import { leafSeatToolListener } from './gates/leaf-seat.ts'
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
@@ -834,6 +835,14 @@ export function apply(ctx: Context, config: Config): void {
   // chain and make this security gate unreachable — "a deny short-circuits
   // regardless of order" holds only once the listener is reached.
   ctx.on('tools/pre-execute', (exec, next) => preExecuteListener(ctx, resolver, config, adapter, exec, next), { prepend: true })
+
+  // Leaf-seat tool boundary — the folded MCP surface's coordinator actions
+  // (`plan.bind`, `plan.complete`, `session.recover`) refused for a known leaf
+  // seat before the MCP client child executes, on every connection INCLUDING
+  // the profile-wide generic `mstar-mcp` row (which carries no identity and no
+  // `--seat`, so the scoped mount's server-side restriction never covered it).
+  // Same refusal channel and prepend reachability argument as the gate above.
+  ctx.on('tools/pre-execute', (exec, next) => leafSeatToolListener(exec, next), { prepend: true })
 
   // Role → agent preset channel: an `internal/get`
   // waterfall listener wraps `ctx.subagents` reads so a role-matched
