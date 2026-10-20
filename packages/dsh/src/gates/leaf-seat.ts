@@ -8,9 +8,8 @@
  * Consumers:
  * - `scoped-mcp-mount.ts` — a known leaf never gets an identity-bearing child
  *   process (there is no binding it could ever attribute);
- * - `native-commands.ts` — the coordinator-seat-capable native tools
- *   (`mstar_plan_bind`, `mstar_plan_complete`, `mstar_execution_clear`) refuse
- *   a leaf seat fail-closed, before any admission or engine round-trip.
+ * - `native-commands.ts` — the native `mstar_execution_clear` tool refuses a
+ *   leaf seat fail-closed, before any store read.
  */
 export function isLeafSeatHeader(header: unknown): boolean {
   if (typeof header !== 'object' || header === null) return false

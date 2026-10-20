@@ -24,15 +24,14 @@ export const name = 'dsh-invariant'
  * skill-lint gate, the v2 seam gates for design-md/audit/compound/roles
  * paths), the `tools/pre-execute` dispatch listener (field + lease + worktree
  * L1/L2 gates), the advisory `agent/pre-step` catalog listener (change-driven
- * engine-status row: iteration-gate section + workspace-state digest), the v2
- * seam tools registered on `ctx.tools`
- * (`mstar_sdd_*`, `mstar_iteration_gate`, the validate wrappers), the
+ * engine-status row: iteration-gate section + workspace-state digest), the one
+ * dsh-native tool registered on `ctx.tools` (`mstar_execution_clear`), the
   * `ctx.dshMstar` and `ctx.dshHostAdapter` services, and the child skill-filesystem
  * mount (skills provider registration) — whose presence and removal are
  * asserted by the real-composition suites and the HMR-safety disposal tests
  * (hmr-safety.spec.ts aggregate, catalog.spec.ts teardown, skill-lint.spec.ts
- * HMR, skills-mount disposal, sdd-iteration-tools.spec.ts / worktree-l2.spec.ts
- * / misc-seams.spec.ts tool lifetimes, e2e-session.spec.ts full-app boot),
+ * HMR, skills-mount disposal, native-commands.spec.ts / worktree-l2.spec.ts
+ * / misc-seams.spec.ts lifetimes, e2e-session.spec.ts full-app boot),
  * not by an invariant companion. The profile-bundle manifest
  * (`dsh.bundle.patch` in package.json) and the packaged `harness-skills/` /
  * `harness-commands/` mirrors are static package contents, not runtime state.
