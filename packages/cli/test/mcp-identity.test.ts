@@ -348,25 +348,46 @@ describe("MCP session identity", () => {
   });
 
   /**
-   * A locked connection (a declared channel) strips a caller-supplied
-   * selector BEFORE admission, so the declared identity governs every call.
-   * The declared value here is malformed on purpose: it makes the outcome
-   * prove WHOSE identity carried the call. The stripped caller id
-   * ("main-session", valid) never reaches the engine — the declared value
-   * reaches the shared safe-id guard and refuses specifically.
+   * M3: the lock requires a USABLE identity, not merely a non-blank value. A
+   * locked connection publishes no selector and strips the caller's, so a
+   * declared value the safe-id rule refuses would leave every
+   * identity-consuming call refused at that same guard — a connection nobody
+   * can use and cannot rebind. Such a value therefore resolves no identity:
+   * the connection stays generic exactly like an unset/blank declaration, the
+   * per-call selector remains the identity channel, and the launch line names
+   * the rule and the recovery without echoing the rejected value.
    */
-  test("a locked connection strips a per-call sessionId — the declared identity governs even a malformed one", async () => {
+  test("an UNSAFE declared value stays unlocked, publishes the selector, and honors the per-call id", async () => {
     const previous = process.env[DECLARED_IDENTITY];
     process.env[DECLARED_IDENTITY] = "../declared-session";
     try {
       const fixture = await initializedHarness();
+      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
+      expect(resolver.identityLocked).toBe(false);
+      expect(resolver.defaultSessionId).toBeUndefined();
+      expect(stderr).toContain("[mcp.identity-env-unsafe]");
+      expect(stderr).toContain(`--identity-env ${DECLARED_IDENTITY}`);
+      // The line states the rule (so the launcher can correct the value) and
+      // never repeats the rejected value.
+      expect(stderr).toContain("[A-Za-z0-9._-]+");
+      expect(stderr).toContain("at most 128 characters");
+      expect(stderr).not.toContain("../declared-session");
+      // Both supported escapes are named: correct the variable, or drop the
+      // flag — either way the identity is a launch fact, so relaunch.
+      expect(stderr).toContain(`correct ${DECLARED_IDENTITY}`);
+      expect(stderr).toContain("drop --identity-env");
+      expect(stderr).toContain("relaunch");
+      // The helper asserts the selector is published for an unlocked resolver.
+      // A valid caller id then reaching workflow lookup proves the call ran
+      // under IT: had the unsafe value locked and been stripped in, the shared
+      // guard would have refused the call instead.
       const result = await registeredMcpCall(
         "session.recover",
         { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
         context(fixture.root),
-        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        resolver,
       );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-session-id" });
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
     } finally {
       if (previous === undefined) delete process.env[DECLARED_IDENTITY];
       else process.env[DECLARED_IDENTITY] = previous;
@@ -374,46 +395,60 @@ describe("MCP session identity", () => {
   });
 
   /**
-   * SEC-01 regression on the production MCP path (the assembly the real
-   * `mstar mcp` process installs): a cross-identity override attempt through
-   * the declared-connection tools is refused — the caller-supplied DIFFERENT
-   * valid session id is stripped before admission while the declared
-   * (malformed) value reaches the identity guard, so a caller can never run
-   * the call under its own id. The generic unbound connection keeps the
-   * per-call selector (the cases above).
+   * The unsafe-value verdict has to survive the PRODUCTION assembly (the one
+   * `mstar mcp` installs, where `createMcpServer` wraps the resolver): an
+   * unsafe declared value must not lock that path either, and the caller's
+   * valid id must reach the invocation. The old contract proved the opposite
+   * — a locked, unstrippable connection refused at the shared guard.
    */
-  test("the production server strips a cross-identity sessionId on a locked connection", async () => {
+  test("the production server keeps an unsafe declared value unlocked and honors the per-call id", async () => {
     const previous = process.env[DECLARED_IDENTITY];
     process.env[DECLARED_IDENTITY] = "../declared-session";
     try {
       const fixture = await initializedHarness();
+      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
+      expect(resolver.identityLocked).toBe(false);
+      expect(resolver.defaultSessionId).toBeUndefined();
+      expect(stderr).toContain("[mcp.identity-env-unsafe]");
       const result = await registeredMcpCall(
         "session.recover",
         { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
         context(fixture.root),
-        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        resolver,
         "server",
       );
-      // The declared identity reached the guard — never the caller's valid id.
-      expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-session-id" });
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
     } finally {
       if (previous === undefined) delete process.env[DECLARED_IDENTITY];
       else process.env[DECLARED_IDENTITY] = previous;
     }
   });
 
-  test("a malformed declared identity fails loudly at the shared safe-id guard", async () => {
+  /**
+   * The engine rule has two refusal branches — the path-component shape and
+   * the 128-character ceiling — and both must resolve no identity here: a
+   * value the rule refuses is not a lock. The over-long case is asserted
+   * explicitly so a shape-only reimplementation of the rule in this module
+   * (a plain `[A-Za-z0-9._-]+` match, which 129 `a`s do satisfy) would fail.
+   */
+  test("an over-long declared value resolves no identity and is never echoed", async () => {
     const previous = process.env[DECLARED_IDENTITY];
-    process.env[DECLARED_IDENTITY] = "../declared-session";
+    const overLong = "a".repeat(129);
+    process.env[DECLARED_IDENTITY] = overLong;
     try {
       const fixture = await initializedHarness();
+      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
+      expect(resolver.identityLocked).toBe(false);
+      expect(resolver.defaultSessionId).toBeUndefined();
+      expect(stderr).toContain("[mcp.identity-env-unsafe]");
+      expect(stderr).not.toContain(overLong);
       const result = await registeredMcpCall(
         "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
         context(fixture.root),
-        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        resolver,
       );
-      expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-session-id" });
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
     } finally {
       if (previous === undefined) delete process.env[DECLARED_IDENTITY];
       else process.env[DECLARED_IDENTITY] = previous;

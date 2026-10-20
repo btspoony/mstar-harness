@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { resolveProcessHarnessDir } from "@mstar-harness/engine";
+import { assertSafeSessionId, resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { Transport } from "@modelcontextprotocol/server";
 import { withToolCorrection } from "./correction.js";
@@ -72,9 +72,10 @@ export interface McpStdioOptions {
    * channel. Unset means the server reads no ambient identity at all: an MCP
    * connection is process-level, so any same-host process can set a variable;
    * a launcher that mounts a scoped server declares the channel explicitly.
-   * A declared variable that is unset or blank resolves no identity, so the
-   * connection stays generic (a launch-time warning names the cause and the
-   * recovery) instead of locking an identity it does not have.
+   * A declared variable that is unset, blank, or holds a value the engine's
+   * safe-session-id rule refuses resolves no identity, so the connection stays
+   * generic (a launch-time warning names the cause and the recovery) instead of
+   * locking an identity it does not have.
    */
   identityEnv?: string;
   /**
@@ -88,10 +89,49 @@ export interface McpStdioOptions {
   harnessRoot?: string;
 }
 
-function declaredSessionId(identityEnv: string | undefined): string | undefined {
-  if (identityEnv === undefined) return undefined;
+/**
+ * The launch verdict for one declared identity channel: the id the connection
+ * locks to, or no id plus the one-line warning that names why.
+ */
+type DeclaredIdentity =
+  | { readonly sessionId: string; readonly warning: null }
+  | { readonly sessionId: undefined; readonly warning: string | null };
+
+function resolveDeclaredIdentity(identityEnv: string | undefined): DeclaredIdentity {
+  if (identityEnv === undefined) return { sessionId: undefined, warning: null };
   const value = process.env[identityEnv];
-  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    return { sessionId: undefined, warning: unresolvedIdentityChannelWarning(identityEnv) };
+  }
+  try {
+    // The engine's single safe-session-id rule owns what a session id may be.
+    // A value it refuses could never reach an identity-consuming command, so
+    // locking it would make the connection unusable rather than bound: it
+    // resolves no identity, exactly like an unset/blank declaration.
+    assertSafeSessionId(value, `--identity-env ${identityEnv}`);
+  } catch {
+    return { sessionId: undefined, warning: unsafeIdentityChannelWarning(identityEnv) };
+  }
+  return { sessionId: value, warning: null };
+}
+
+/**
+ * The one-line cause + recovery for a declared identity channel whose variable
+ * holds a value the safe-session-id rule refuses. An unsafe value cannot lock
+ * the connection — a locked connection publishes no selector and strips the
+ * caller's, so every identity-consuming call would be refused at the same guard
+ * with no supported way to change the connection's identity. The connection
+ * stays generic and this line names the rule and the two escapes. The rejected
+ * value is NEVER echoed: the engine rule deliberately withholds it, and this
+ * line reaches stderr, where a value the launcher mistyped has no business.
+ */
+function unsafeIdentityChannelWarning(identityEnv: string): string {
+  return (
+    `[mcp.identity-env-unsafe] --identity-env ${identityEnv} resolved to a value that is not a valid session id ` +
+    "(the rule: one safe path component [A-Za-z0-9._-]+, at most 128 characters; the rejected value is not echoed), " +
+    "so this connection stays unlocked and the per-call sessionId selector remains the identity channel. " +
+    `Recovery: correct ${identityEnv} to a valid session id, or drop --identity-env to declare a generic connection explicitly, then relaunch the server (the identity is a launch fact).`
+  );
 }
 
 /**
@@ -115,20 +155,25 @@ function unresolvedIdentityChannelWarning(identityEnv: string): string {
  * below is this factory with no options, so the unparameterized server keeps
  * reading no ambient identity and probing `process.cwd()` for its harness root.
  *
- * A declared identity channel that RESOLVES a non-blank session id LOCKS the
+ * A declared identity channel that RESOLVES a usable session id LOCKS the
  * connection: `registerMcpCommands` publishes no session selector on such a
  * connection and strips a caller-supplied selector before admission, so every
  * call runs under the declared identity — a caller can never choose one
- * (`identityLocked` below). The identity is resolved ONCE, when this factory
- * runs: the lock state is a launch fact, so a variable that appears or
- * disappears while the connection lives never changes which identity it can
- * run under. A declared channel that resolves NO id (the variable is unset or
- * blank) does not lock the connection: it stays the generic connection, warns
+ * (`identityLocked` below). "Usable" is the engine's single safe-session-id
+ * rule, not mere non-blankness: a declared value the rule refuses cannot lock,
+ * because a locked connection with an unusable identity publishes no selector
+ * and strips the caller's, leaving every identity-consuming call refused at
+ * that same guard. Such a value resolves no identity and the connection stays
+ * generic. The identity is resolved ONCE, when this factory runs: the lock
+ * state is a launch fact, so a variable that appears or disappears while the
+ * connection lives never changes which identity it can run under. A declared
+ * channel that resolves NO id (the variable is unset, blank, or an unsafe
+ * value) does not lock the connection: it stays the generic connection, warns
  * once at launch with the cause and the recovery, and keeps the per-call
  * `sessionId` selector as its identity channel. An UNDECLARED channel is that
- * same generic connection without a warning. A malformed declared value is
- * not repaired here — it reaches the same safe-session-id guard as any other
- * identity, which refuses loudly.
+ * same generic connection without a warning. The rejected value is never
+ * echoed, and the safe-id rule is not duplicated here — the engine owns it and
+ * this module only asks.
  *
  * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
  * rebased or discovered, because the mounting process owns the root. The same
@@ -170,11 +215,10 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
   // lives. A channel that resolves nothing locks nothing — it warns with the
   // cause and the recovery instead of locking an identity the connection does
   // not have, which would leave every identity-consuming call unreachable.
-  const declaredIdentity = declaredSessionId(options.identityEnv);
+  const declared = resolveDeclaredIdentity(options.identityEnv);
+  const declaredIdentity = declared.sessionId;
   const identityLocked = declaredIdentity !== undefined;
-  if (options.identityEnv !== undefined && declaredIdentity === undefined) {
-    process.stderr.write(`${unresolvedIdentityChannelWarning(options.identityEnv)}\n`);
-  }
+  if (declared.warning !== null) process.stderr.write(`${declared.warning}\n`);
   const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects, call?: ResolveContextCall) => {
     const sessionId = declaredIdentity;
     // The root the ADMITTED CALL named (a non-blank `harness` field,
