@@ -63,6 +63,24 @@ export function mcpToolName(commandId: string): string {
 }
 
 /**
+ * The descriptor a LOCKED connection publishes: the identity is the
+ * connection's, so the session selector is not an input the caller may
+ * supply. Publication must agree with the input schema — a `CLI:` usage token,
+ * a `required` entry or a "Caller-supplied" requirement naming `--session-id`
+ * would advertise a parameter the tool does not publish and silently strips.
+ * The shared descriptor is never mutated; the returned shallow view is the
+ * only descriptor a locked connection renders or filters requirements from.
+ */
+function lockedDescriptor(descriptor: CommandSchemaDescriptor, selectorKey: string): CommandSchemaDescriptor {
+  return {
+    ...descriptor,
+    required: descriptor.required.filter((field) => field !== selectorKey),
+    requirements: descriptor.requirements.filter((entry) => entry.name !== selectorKey),
+    cli: { ...descriptor.cli, options: descriptor.cli.options.filter((option) => option.key !== selectorKey) },
+  };
+}
+
+/**
  * The MCP-facing input shape: the command's own input plus the domain-owned
  * payload contracts, so a caller can construct a declared payload from
  * `tools/list` instead of guessing at an opaque field. Payload values keep
@@ -80,6 +98,10 @@ export function mcpToolName(commandId: string): string {
  * capability `tools/list` must not advertise. Descriptor keys are not required
  * to be payload field names — `persist.write` keys its per-kind contracts by
  * `kind` value — so they are published by the `schema` family alone.
+ *
+ * `descriptor` is the published view: on a locked connection the caller passes
+ * the selector-free `lockedDescriptor`, so `x-mstar-requirements` never names
+ * the session selector while a generic connection keeps it.
  */
 function mcpInputContract(definition: CommandDefinition, descriptor: CommandSchemaDescriptor, identityLocked: boolean) {
   const input = definition.input;
@@ -210,8 +232,14 @@ export function registerMcpCommands(
   onToolsRegistered?.([...names]);
 
   for (const { definition, name } of tools) {
+    const identityLocked = resolveContext.identityLocked === true;
     const descriptor = getCommandSchemas([definition])[0]!;
-    const contract = mcpInputContract(definition, descriptor, resolveContext.identityLocked === true);
+    const selector = definition.cli.options.find((option) => option.context === "sessionId");
+    // One lock-adjusted view feeds every published surface: the tool schema,
+    // `x-mstar-requirements` and the rendered description all agree that a
+    // locked connection owns the identity.
+    const published = identityLocked && selector !== undefined ? lockedDescriptor(descriptor, selector.key) : descriptor;
+    const contract = mcpInputContract(definition, published, identityLocked);
     const harnessDefault = declaresHarness(contract);
     // The SDK owns its isError/text rejection protocol. One Standard Schema
     // issue carries the complete safe refusal, not a lossy generic Zod message.
@@ -239,7 +267,7 @@ export function registerMcpCommands(
       },
     };
     server.registerTool(name, {
-      description: renderCommandContract(definition, "mcp", descriptor),
+      description: renderCommandContract(definition, "mcp", published),
       inputSchema,
       outputSchema: definition.output,
     }, async (admitted, extra) => {

@@ -151,6 +151,41 @@ async function registeredMcpCall(
   }
 }
 
+type PublishedTool = Readonly<{
+  description?: string;
+  inputSchema: Readonly<{
+    properties?: Readonly<Record<string, unknown>>;
+    required?: readonly string[];
+    "x-mstar-requirements"?: readonly Readonly<{ name: string }>[];
+  }>;
+}>;
+
+/**
+ * The `tools/list` entry the REGISTERED server publishes for one command. The
+ * published contract is a launch-time fact, so reading it needs neither a call
+ * nor an engine fixture: this is the surface a model reads before it decides
+ * which parameters exist.
+ */
+async function publishedMcpTool(commandId: string, resolver: ResolveContext): Promise<PublishedTool> {
+  const definition = getCommandDefinitions().find((entry) => entry.id === commandId);
+  if (definition === undefined) throw new Error(`missing command: ${commandId}`);
+  const server = new McpServer({ name: "metadata-test-server", version: "1.0.0" });
+  const client = new Client({ name: "metadata-test-client", version: "1.0.0" });
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+  try {
+    registerMcpCommands(server, [definition], resolver);
+    await server.connect(serverEnd);
+    await client.connect(clientEnd);
+    const { tools } = await client.listTools();
+    const tool = tools.find((entry) => entry.name === `mstar_${commandId.replace(/[.-]/g, "_")}`);
+    if (tool === undefined) throw new Error(`unlisted tool: ${commandId}`);
+    return tool as unknown as PublishedTool;
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
 async function runCli(args: string[], baseContext: InvocationContext): Promise<Record<string, unknown>> {
   const program = new Command();
   program.name("mstar").exitOverride();
@@ -586,6 +621,53 @@ describe("MCP session identity", () => {
     const after = readFileSync(path.join(fixture.harness, "store.db"));
     expect(wrongSession).toMatchObject({ status: "refused", code: "coordination.identity-mismatch" });
     expect(after).toEqual(before);
+  });
+
+  /**
+   * The lock governs PUBLICATION, not only admission: a locked connection's
+   * identity is the connection's, so neither the `CLI:` usage token, the
+   * `x-mstar-requirements` entries nor a "Caller-supplied" description line
+   * may name the selector. Otherwise the tool tells a model to pass a
+   * parameter it does not publish and silently strips.
+   */
+  test("a locked connection publishes no session selector in the tool metadata", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const tool = await publishedMcpTool("session.recover", createContextResolver({ identityEnv: DECLARED_IDENTITY }));
+      expect(tool.inputSchema.properties ?? {}).not.toHaveProperty("sessionId");
+      expect(tool.inputSchema.required ?? []).not.toContain("sessionId");
+      expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
+      // The rest of the contract is intact: the fix filters the selector, not
+      // the description.
+      expect(tool.description).toContain("CLI: mstar session recover");
+      expect(tool.description).toContain("Caller-supplied:");
+      expect(tool.description).not.toContain("--session-id");
+      expect(tool.description ?? "").not.toMatch(/Caller-supplied:[^\n]*\bsessionId\b/);
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  /**
+   * The filter is LOCK-scoped, not global: a generic unbound connection keeps
+   * the selector property, its requirement entry and the usage token, because
+   * there the per-call selector is the documented identity channel.
+   */
+  test("a generic connection still publishes the session selector in the tool metadata", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    delete process.env[DECLARED_IDENTITY];
+    try {
+      const tool = await publishedMcpTool("session.recover", resolverCapturingStderr(DECLARED_IDENTITY).resolver);
+      expect(tool.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
+      expect((tool.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
+      expect(tool.description).toContain("--session-id");
+      expect(tool.description ?? "").toMatch(/Caller-supplied:[^\n]*\bsessionId\b/);
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
   });
 
   test("CLI parses and routes --session-id through the command adapter", async () => {
