@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   assertDefaultBranchProtected,
@@ -7,6 +7,7 @@ import {
   assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
+  catalogRootDir,
   classifySkillLint,
   activeLifecyclePlanId,
   completenessLevel,
@@ -134,6 +135,10 @@ function activeGraphLifecycleBranches(graph: ExecutionState): ActiveLifecycleBra
   return [...branches.values()];
 }
 function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
+/** Physical path when the target exists, lexical `resolve` otherwise — a caller may name a directory that is not created yet, and a symlinked or `./`-spelled equal path must compare equal. */
+function canonicalPath(target: string): string {
+  try { return realpathSync(target); } catch { return path.resolve(target); }
+}
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
@@ -396,19 +401,42 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               fix: "run this command from a workspace that declares a harness root (.mstar / .agents, MSTAR_HARNESS_DIR), or mount the MCP server with --harness <harness-dir>; catalog completeness is a store.db query",
             });
           } else {
-            try {
-              violations.push(...(await assertKnowledgeCatalogCompleteness({ harnessDir })).violations);
-            } catch (error) {
-              const code = (error as { code?: unknown } | null | undefined)?.code;
+            // The completeness query discovers bodies and matches catalog rows
+            // under ONE root: the harness-resolved knowledge root. Running it
+            // for a caller's other directory would report that root's verdict as
+            // if it were the named directory's, so a schema-valid unregistered
+            // body over there would pass. Only a path at or inside the
+            // configured root is proven by the configured-root verdict.
+            const configuredRoot = catalogRootDir({ harnessDir }, "knowledge");
+            const named = canonicalPath(knowledgeDir);
+            const root = canonicalPath(configuredRoot);
+            if (named !== root && !named.startsWith(root + path.sep)) {
               violations.push({
                 ok: false,
                 severity: "high",
-                code: "compound.catalog.unavailable",
+                code: "compound.catalog.knowledge-dir-mismatch",
                 message:
-                  `the knowledge catalog completeness cannot be evaluated: ` +
-                  `${typeof code === "string" && code !== "" ? `[${code}] ` : ""}${error instanceof Error ? error.message : String(error)}`,
-                fix: "restore the issue/catalog authority (`mstar store init|upgrade|migrate`) — unavailable catalog data is never read as complete",
+                  `${knowledgeDir} is not inside the configured knowledge root ${configuredRoot}, so its catalog completeness cannot be asserted — ` +
+                  "catalog completeness is a store.db query over the configured root, and no catalog row is registered against another directory",
+                fix:
+                  `validate the configured root instead (drop --knowledge-dir), or move the declaration into ${configuredRoot}; ` +
+                  "to validate a directory elsewhere, point the project's knowledge root at it (`.mstarc` `[config] knowledge_dir` or MSTAR_HARNESS_DIR) and validate there",
               });
+            } else {
+              try {
+                violations.push(...(await assertKnowledgeCatalogCompleteness({ harnessDir })).violations);
+              } catch (error) {
+                const code = (error as { code?: unknown } | null | undefined)?.code;
+                violations.push({
+                  ok: false,
+                  severity: "high",
+                  code: "compound.catalog.unavailable",
+                  message:
+                    `the knowledge catalog completeness cannot be evaluated: ` +
+                    `${typeof code === "string" && code !== "" ? `[${code}] ` : ""}${error instanceof Error ? error.message : String(error)}`,
+                  fix: "restore the issue/catalog authority (`mstar store init|upgrade|migrate`) — unavailable catalog data is never read as complete",
+                });
+              }
             }
           }
           violations.push(...scopeGuard(docPath, [knowledgeDir]).violations);
