@@ -136,7 +136,7 @@ The generated prompt asks you to review it before submission. The CLI prints a v
 
 ## MCP
 
-`mstar-harness mcp` runs the stdio MCP server from the same `@mstar-harness/cli` package as the command line. There is no standalone MCP package, committed per-host stdio bundle, or native bridge. The server registers the canonical non-installer commands as tools, named `mstar_<command>` with dots and hyphens replaced by underscores (`issue.close` → `mstar_issue_close`). Tool descriptions and input schemas come from the same registry as `--help`, and a refusal keeps its stable envelope and code, returned as a tool error: explain or resolve the refusal rather than retrying through a different identity or path.
+`mstar-harness mcp` runs the stdio MCP server from the same `@mstar-harness/cli` package as the command line. There is no standalone MCP package, committed per-host stdio bundle, or native bridge. The server publishes one tool per command **family**, named `mstar_<family>` — the command id's first segment, with hyphens folded to underscores (`issue.close` → `mstar_issue`; a single-word id such as `report` is its own family, `mstar_report`, whose action is the id itself) — and every tool takes a required `action` selecting a member command. Tool descriptions and input schemas come from the same registry as `--help`, `mstar_schema` returns one command's full contract (`command: "<family>.<action>"`), and an unknown or missing `action` refuses with the family's real action list. A refusal keeps its stable envelope and code, returned as a tool error: explain or resolve the refusal rather than retrying through a different identity or path.
 
 Every host ships a launch configuration for the same server command:
 

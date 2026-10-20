@@ -32,6 +32,12 @@
 | `engine-status-store.ts` | **新增**：`{HARNESS_DIR}/snapshots/engine-status.json` 持久化存储（写入 = 目录写锁 + 临时文件 rename；读取 = 显式 `unavailable` 原因） | 见 §0.3 依赖边 |
 | `engine-status-endpoint.ts` | **新增**：宿主半体 `/api/mstar/engineStatus`（typert 服务 + invocation descriptor + 可选单元安装/去重） | 同上 |
 
+- **`gates/tools.ts` 已不存在**（§1 row 15、§3.1 表、§3.3/§3.4 中的该模块条目均为历史记录）：随 MCP
+  家族折叠，`registerSddIterationTools` / `registerSeamTools` / `ITERATION_VIOLATION_SCHEMA` 一并移除，
+  seam 与 sdd/iteration 校验改由 `mcp__mstar__mstar_<family>` 的对应 action 承载；本插件只保留三个原生
+  工具（`mstar_plan_bind` / `mstar_audit_validate` / `mstar_execution_clear`），注册在
+  `gates/native-commands.ts`。
+
 ### 0.3 依赖边（现状图）
 
 ```
@@ -73,7 +79,7 @@ gates/* ──> gates/_shared.ts
 | 12 | packaged dirs + skill-filesystem config | 1730–1794 | `packagedSkillsDir`、`packagedCommandsDir`（import.meta.url 包相对，非 cwd 锚定）、`skillLocalConfig`（provider `mstar`、`includeDefaultRoots: false`） |
 | 13 | **host adapter** | 1796–1956 | `DshHostAdapterOptions`、`DshHostAdapter extends Service implements HostAdapter`（`statusGate`/`dispatchGate` 共享核心 + `beforeStatusWrite`/`beforeDispatch`/`beforeMerge` hooks） |
 | 14 | **engine-status catalog**（pre-step） | 1958–2418 | `pluginVersion`、`engineStatusSource`、`CatalogCacheEntry`、`buildCatalogSources`、`catalogSourcesFor`（TTL）、`renderEngineStatusCatalog`、`harnessStateSource`、`knowledgeDigest`、`compassDirection`、`steeringCompassPath`、`iterationGateSource`、`preStepCatalogListener`（变更驱动发射 + `panelDigestOf`）、`EmissionDigest`、`agentDigestKey` |
-| 15 | 视图映射 + **工具注册** | 2420–2896 | `iterationViolationView`、`iterationGateView`、`ITERATION_VIOLATION_SCHEMA`、`registerSddIterationTools`（`mstar_sdd_workspace`/`mstar_sdd_task_brief`/`mstar_iteration_gate`）、`registerSeamTools`（`mstar_design_md_validate`/`mstar_audit_validate`/`mstar_compound_validate`/`mstar_roles_validate`）——均 `ctx.inject(['tools'], …)` 延迟注册 |
+| 15 | 视图映射 + **工具注册**（历史；`gates/tools.ts` 已移除） | 2420–2896 | `iterationViolationView`、`iterationGateView`、`ITERATION_VIOLATION_SCHEMA`、`registerSddIterationTools`（sdd / iteration 工具镜像）、`registerSeamTools`（design-md / audit / compound / roles 校验镜像）——均 `ctx.inject(['tools'], …)` 延迟注册 |
 | 16 | 命令注册 | 2898–2967 | `commandFrontmatterField`、`parseCommandMarkdown`、`registerMstarCommands`（`ctx.inject(['commands'], …)`，`source: { kind: 'user' }` steer） |
 | 17 | **HarnessResolver** + session 助手 | 2969–3031 | `HarnessResolver`（per-workspace 探测，explicit 优先，memoized）、`sessionCwdOf`、`actorAgentOf` |
 | 18 | **apply()** | 3033–3184 | 启动接线：resolver 构造 → `DshMstar` service → `DshHostAdapter` service → `registerMstarCommands` → skill-filesystem mount → boot 观测 warn（hard 缺 dispatchBinding/dispatchTools）→ fs 三组 gate 注册（prepend）→ `tools/pre-execute` → `agent/pre-step` catalog（TTL cache + digest）→ sdd/iteration 工具 → seam 工具 |
@@ -137,7 +143,7 @@ gates/* ──> gates/_shared.ts
 | `gates/dispatch.ts` | §11 | 全部 dispatch 门禁 + `DISPATCH_LOGGER`、`DEFAULT_DISPATCH_TOOLS`、`ASSIGNMENT_HEADING_RE`、`ASSIGNMENT_FIELD_RE` | `DispatchGateAdvisory`（type） | `preExecuteListener`（entry）、`dispatchGateCore`/`leaseGateViolations`/`assignmentTextFromFields`/`resolveDispatchHard`/`DISPATCH_LOGGER`（adapter + entry boot warn） |
 | `gates/adapter.ts` | §13 | `DshHostAdapterOptions`、`DshHostAdapter`（含 `statusGate`/`dispatchGate`/`beforeStatusWrite`/`beforeDispatch`/`beforeMerge`）+ `HOST_LOGGER` | `DshHostAdapterOptions`（type）、`DshHostAdapter` | — |
 | `gates/catalog.ts` | §14 + §15 视图映射 | catalog 全部函数 + `CATALOG_LOGGER`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`RESIDUAL_SEVERITIES` | — | `preStepCatalogListener`、`buildCatalogSources`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`createCatalogInvalidation`、type `CatalogCacheEntry`/`EmissionDigest`/`CatalogInvalidation`（entry 接线） |
-| `gates/tools.ts` | §15 注册 | `registerSddIterationTools`、`registerSeamTools`、`ITERATION_VIOLATION_SCHEMA` | — | `registerSddIterationTools`、`registerSeamTools`（entry） |
+| ~~`gates/tools.ts`~~ | §15 注册 | **已移除（历史）**：`registerSddIterationTools`、`registerSeamTools`、`ITERATION_VIOLATION_SCHEMA` 随 MCP 家族折叠删除；原生工具现注册在 `gates/native-commands.ts` | — | — |
 | `gates/_shared.ts` | §4/5/7/12/17/15 | **插件契约**：`Config` interface + `Config` schema、`HarnessResolver` + `sessionCwdOf`/`actorAgentOf`；**共享助手**：`formatViolation`、`asRecord`、`resolveSeamHard`、`packagedSkillsDir`、`skillLocalConfig`、`iterationViolationView`/`iterationGateView`；**共享常量**：`STATUS_FILE` | `Config`（type + value）、`HarnessResolver`、`skillLocalConfig` | 全部（各 gate/entry 消费） |
 
 ### 3.2 入口（拆分后）— 模块索引 + 启动接线

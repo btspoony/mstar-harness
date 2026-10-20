@@ -383,19 +383,26 @@ plus the durable slot. A coordinating session on this host therefore uses the
 rows and the clear both resolve through that record); the MCP action remains the
 route for any other bind caller, including every non-dsh host.
 
-**Holding an old tool name?** Twelve further command tools this host used to
-register are gone with no alias and no compatibility tool — `mstar_plan_prepare`
-/ `mstar_plan_progress` / `mstar_plan_complete` / `mstar_workflow_register` /
-`mstar_issue_add` / `mstar_issue_close` / `mstar_sdd_workspace` /
-`mstar_sdd_task_brief` / `mstar_iteration_gate` / `mstar_design_md_validate` /
-`mstar_compound_validate` / `mstar_roles_validate`. They duplicated an MCP tool
-1:1, so two identical surfaces competed for the same call and the whole set cost
-~10k characters of fixed context per request. Recovery: call the folded MCP
-family instead — `mcp__mstar__mstar_plan` with `action: "prepare"` where an older
-document says `mstar_plan_prepare`, and so on — and read the family's real
-actions and parameters with `mcp__mstar__mstar_schema` (`family: <name>`, or
+**Holding an old tool name?** Any `mstar_<family>_<action>` spelling of a
+command — the former plan / workflow / issue / sdd / iteration / design-md /
+compound / roles mirrors, twelve tools in all — is gone with no alias and no
+compatibility tool. Those twelve duplicated an MCP tool 1:1, so two identical
+surfaces competed for the same call and the whole set cost ~10k characters of
+fixed context per request. **One exception to that 1:1 phrasing:** the dsh
+compound-validate mirror also published a dsh-only `repo_root` parameter for
+reference-existence checks (the compound-refresh Phase 2 check), and
+`compound.validate` in `packages/commands/src/families/validation.ts` carries
+neither that parameter nor that check — so the capability went with the tool and
+has no MCP twin. Recovery: call the folded family instead —
+`mcp__mstar__mstar_plan` with `action: "prepare"` where an older document spells
+the prepare mirror natively, and so on — and read the family's real actions and
+parameters with `mcp__mstar__mstar_schema` (`family: <name>`, or
 `command: <command-id>` for one leaf contract) instead of guessing from the old
-name. The former plugin-owned command **`/mstar-execution`** stays removed; the
+name. For the knowledge-doc checks use MCP `mstar_compound` with
+`action: "validate"` (or the CLI `mstar compound validate`) without `repo_root`;
+the reference-existence half is the `mstar-compound-refresh` knowledge-write
+seam's job, not an on-demand tool. The former plugin-owned command
+**`/mstar-execution`** stays removed; the
 ADR `docs/adr/dsh-native-identity-channels.md` (§ Superseded rationale) explains
 why identity lives on the mount and the clear rather than on a command.
 
