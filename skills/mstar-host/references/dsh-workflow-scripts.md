@@ -2,7 +2,9 @@
 
 Copy-paste templates for the dsh **`workflow`** tool (`@deepseek-ai/dsh-tool-workflow`, mounted by the
 shipped agent presets; the `ptc` preset disables it). Use them for **read-only** fan-out of **N ≥ 3**
-seats — plan QC tri, large-repo audit categories, `/amazing-pr-review deep` seats. House rules and the
+seats — plan QC tri, large-repo audit categories, `/amazing-pr-review deep` seats — and for a **single
+read-only seat** when no direct delegation can carry it (a Team profile disables `subagent`, and a task
+review must not consume a roster slot). House rules and the
 operator path live in skill **`mstar-host`** → `references/dsh.md` § Read-only fan-out via the `workflow`
 tool; this file holds only the scripts, their `meta`, and their `args`.
 
@@ -40,7 +42,8 @@ return everything in the result payload.
 | Plan QC tri (`Execution mode: sdd`) | § 1 | `mstar-qc-tri` | 3 (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) |
 | `/codebase-audit` large-repo category fan-out | § 2 | `mstar-audit-fanout` | 9 (one per audit category) |
 | `/amazing-pr-review deep` | § 3 | `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
-| Any 1–2 read-only delegation | — | — | keep `subagent` — no script, no `workflow-run` node |
+| SDD task review that must not take a Team roster seat | § 4 | `mstar-review-single` | 1 (one fresh-context reviewer per task) |
+| Any other 1–2 read-only delegation | — | — | prefer `subagent` (or a teammate) — no script, no `workflow-run` node |
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
@@ -132,6 +135,8 @@ const seats = await parallel([
 Execute as: qc-specialist
 Delegation: forbidden
 Task category: audit
+Budget (review / QC seats): /1 round — one full pass over the review range
+Return shape (review / QC seats): the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Review range: ${a.range}
@@ -152,6 +157,8 @@ Return ONLY the JSON object matching the provided schema (seat, verdict, summary
 Execute as: qc-specialist-2
 Delegation: forbidden
 Task category: audit
+Budget (review / QC seats): /1 round — one full pass over the review range
+Return shape (review / QC seats): the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Review range: ${a.range}
@@ -172,6 +179,8 @@ Return ONLY the JSON object matching the provided schema (seat, verdict, summary
 Execute as: qc-specialist-3
 Delegation: forbidden
 Task category: audit
+Budget (review / QC seats): /1 round — one full pass over the review range
+Return shape (review / QC seats): the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
 
 plan_id: ${a.planId}
 Review range: ${a.range}
@@ -291,6 +300,8 @@ const seatPrompt = (category) => `## Assignment
 Execute as: code-reviewer
 Delegation: forbidden
 Task category: audit
+Budget (review / QC seats): /1 round — one pass over the assigned categories
+Return shape (review / QC seats): the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
 
 Audit category: ${category}
 Repo under audit: ${a.repo}
@@ -415,6 +426,8 @@ const seatPrompt = (domain, extra) => `## Assignment
 Execute as: code-reviewer
 Delegation: forbidden
 Task category: audit
+Budget (review / QC seats): /1 round — one pass over the assigned categories
+Return shape (review / QC seats): the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
 
 Review target: ${a.target}
 Review worktree: ${a.worktree}
@@ -450,3 +463,156 @@ const seats = await parallel(thunks)
 // declares it as uncollected under the report notes and never reads it as "no findings".
 return seats
 ```
+
+## 4. `mstar-review-single` — one read-only task-review seat
+
+A single fresh-context reviewer for one SDD task, for the case where a direct delegation cannot carry
+the seat: on a Team profile the direct `subagent` rows are disabled, and a task review must not
+consume a roster slot — a teammate is a DURABLE seat and the roster is finite, so a per-task
+teammate exhausts it. One seat is far below the child pool, so no chunking applies. The run costs one
+`workflow-run` node instead of a subagent card; that is the price of keeping the reviewer off the
+roster.
+
+**This is Mode A, the SDD task reviewer.** The header therefore carries a `Task category` that is
+NOT `audit`: an `audit` category selects `code-reviewer` Mode B (the codebase-audit executor) and
+would run the wrong workflow entirely. **Writable work never uses this route** (a workflow child has
+no per-child pre-start veto seam).
+
+The payload returns the **complete canonical report**, not just a verdict: a workflow child may be
+unable to write `reportPath`, and Mode A's output (`{SDD_DIR}/task-N-review.md`) is mandatory before
+a task can be completed. The caller persists `reportMarkdown` from the returned envelope — the
+child's own write is best-effort, never the contract.
+
+**`meta`**
+
+```json
+{
+  "name": "mstar-review-single",
+  "description": "One read-only SDD task-review seat (code-reviewer Mode A, fresh context, no roster seat), returning the complete canonical task-review report.",
+  "whenToUse": "dsh host: a mandatory SDD task review that must not consume a Team roster seat (the Team profile disables the direct subagent rows).",
+  "phases": [
+    { "title": "task-review", "detail": "One fresh-context Mode A task reviewer." }
+  ]
+}
+```
+
+**`args`**
+
+```json
+{
+  "planId": "<plan id>",
+  "taskId": "<task number or id>",
+  "reviewCwd": "<absolute feature worktree path>",
+  "branch": "<working branch>",
+  "briefPath": "<absolute task brief path>",
+  "implementerReport": "<absolute implementer report path (input — never overwrite)>",
+  "diffFile": "<absolute path to the review-package diff artifact>",
+  "diffBase": "<base sha>",
+  "diffHead": "<head sha>",
+  "globalConstraints": "<the plan's Global Constraints, verbatim>",
+  "reviewerFocus": "<the acceptance surface this one task must satisfy>"
+}
+```
+
+**`script`**
+
+```js
+const a = args ?? {}
+const missing = ['planId', 'taskId', 'reviewCwd', 'branch', 'briefPath', 'implementerReport',
+  'diffFile', 'diffBase', 'diffHead', 'globalConstraints']
+  .filter((key) => typeof a[key] !== 'string' || a[key].length === 0)
+if (missing.length > 0) {
+  throw new Error('mstar-review-single missing args: ' + missing.join(', ') +
+    ' — Mode A needs the task brief, the implementer report, the diff artifact and the Global Constraints')
+}
+
+const REPORT = {
+  type: 'object',
+  description: 'One Mode A SDD task-review result: the canonical report sections plus its full markdown.',
+  required: ['specCompliance', 'taskQuality', 'reportMarkdown'],
+  properties: {
+    specCompliance: {
+      type: 'object',
+      description: 'Spec compliance verdict for this task.',
+      required: ['kind'],
+      properties: {
+        kind: { type: 'string', enum: ['compliant', 'issues-found'], description: 'Compliant, or issues found (name them in issues).' },
+        cannotVerify: {
+          type: 'array',
+          description: 'Items the diff cannot settle; the PM resolves them before completing the task.',
+          items: { type: 'string' }
+        }
+      }
+    },
+    strengths: { type: 'array', description: 'What the implementation does well.', items: { type: 'string' } },
+    issues: {
+      type: 'array',
+      description: 'Findings ordered Critical, Important, Minor. Empty when the task passes.',
+      items: {
+        type: 'object',
+        required: ['severity', 'title', 'evidence', 'impact', 'fix'],
+        properties: {
+          severity: { type: 'string', enum: ['critical', 'important', 'minor'], description: 'Mode A severity class.' },
+          title: { type: 'string', description: 'Short imperative title.' },
+          evidence: { type: 'string', description: 'path/file.ts:123 — evidence you opened yourself.' },
+          impact: { type: 'string', description: 'Expected vs observed, and why it matters.' },
+          fix: { type: 'string', description: 'The concrete correction.' }
+        }
+      }
+    },
+    truncatedCoverage: {
+      type: 'string',
+      description: 'ONLY when a budget bound stopped expansion: name the interfaces/files left unexamined. Omit entirely for a complete review.'
+    },
+    taskQuality: { type: 'string', enum: ['approved', 'needs-fixes'], description: 'The Mode A task-quality gate.' },
+    reportMarkdown: {
+      type: 'string',
+      description: 'The COMPLETE canonical report in the Mode A layout: Scope (only when truncated), ### Spec Compliance, ### Strengths, ### Issues (#### Critical | Important | Minor), ### Assessment with **Task quality:**. The caller persists this to {SDD_DIR}/task-N-review.md.'
+    }
+  }
+}
+
+phase('task-review')
+
+const seat = await agent(`## Assignment
+
+Execute as: code-reviewer
+Delegation: forbidden
+Task category: review
+Budget (review / QC seats): /1 round — one pass over the task diff
+Return shape (review / QC seats): the canonical Mode A report (reportMarkdown) + taskQuality; stop when the task diff and its directly affected interfaces are covered
+
+plan_id: ${a.planId}
+Task: ${a.taskId}
+Review cwd: ${a.reviewCwd}
+Working branch: ${a.branch}
+Task brief: ${a.briefPath}
+Implementer report (input — never overwrite): ${a.implementerReport}
+Diff: ${a.diffFile}
+Base: ${a.diffBase}
+Head: ${a.diffHead}
+
+Global constraints (verbatim):
+${a.globalConstraints}
+
+You are the L2 SDD task reviewer for this ONE task — Mode A, the default. Do NOT run the codebase-audit workflow and do not produce audit-format findings.
+
+Load in order: skill mstar-roles then references/code-reviewer.md (identity first, Mode A), then mstar-sdd references/task-reviewer-prompt.md.
+
+Behavior: diff-first. Read the diff once — do not re-run git, do not mutate the checkout, do not run build or test suites. Spec compliance FIRST against the brief and the constraints above, then code quality. Treat the implementer report's claims as unverified until you check them against the diff. Focus: ${a.reviewerFocus || 'the task acceptance criteria and directly affected interfaces'}.
+
+Verdict discipline: never pre-judge; a task that cannot be verified from the diff names the items you cannot check rather than guessing. If a budget bound stops expansion, record the truncation and keep the quality label earned for the scope you did review.
+
+Return ONLY the JSON object matching the provided schema. reportMarkdown must be the COMPLETE canonical report so the caller can persist it; your own attempt to write a file is best-effort and never the contract.`, { phase: 'task-review', schema: REPORT, label: 'task-review-1' })
+
+if (seat === null) {
+  throw new Error('mstar-review-single: the review seat returned nothing — dispatch it again rather than recording an unreviewed task')
+}
+
+return { task: a.taskId, seat }
+```
+
+The seat is a fresh one-shot subagent: it never joins the Team roster, so an N-task plan costs N
+review runs and zero roster slots. Persist `seat.reportMarkdown` to
+`{SDD_DIR}/task-<n>-review.md` before marking the task complete; `taskQuality` is the gate the PM
+reads, and `truncatedCoverage` blocks completing the uncovered scope.

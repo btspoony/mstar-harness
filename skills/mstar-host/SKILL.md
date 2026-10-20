@@ -48,7 +48,7 @@ Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → 
 
 When PM dispatches **N >= 2** concurrent assignees (QC tri-review, dual-track implement, etc.) and the host exposes actual invoke / Task / subagent tools, read **`references/parallel-dispatch.md`** in the dispatch round (shared with `mstar-dispatch-gates`). Without a callable invoke tool when dispatch is required → **`Blocked`**; Assignment Markdown alone is not dispatch.
 
-On **dsh** only, read-only fan-out of **N ≥ 3** seats runs through the native **`workflow`** tool instead of N `subagent` invokes (1–2 delegations keep `subagent`; writable fan-out never uses it) — scripts + operator path: `references/dsh.md` § Read-only fan-out via the `workflow` tool.
+On **dsh** only, read-only fan-out runs through the native **`workflow`** tool instead of N `subagent` invokes. **N ≥ 3** is the width it is designed for; **1–2 seats** normally keep a direct delegation (`subagent`, or a teammate when the Team layer is mounted) because the run node costs more than the seat saves — **except** when no direct delegation can carry that read-only seat: on a Team profile the direct `subagent` rows are disabled, and a one-seat task review must not consume a roster slot, so routing it through a one-seat `workflow` run is a **supported** route there, not an improvisation. Writable fan-out never uses `workflow` — it has no per-child pre-start veto seam. Scripts + operator path: `references/dsh.md` § Read-only fan-out via the `workflow` tool.
 
 ## `/goal` directive (host-agnostic)
 

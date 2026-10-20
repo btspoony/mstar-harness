@@ -1,8 +1,9 @@
 # dsh Agent Teams reference
 
-Load when the dsh profile mounts the Agent Teams layer and multi-seat,
-multi-round work runs through `spawn_teammate`, `team_task_*`, `wait_agent`,
-and `send_message`. Channel selection → `dsh.md` § Delegation channels.
+Load when the dsh profile mounts the Agent Teams layer — it is then the DEFAULT
+delegation channel, and plan work runs through `spawn_teammate`, `team_task_*`,
+`wait_agent`, and `send_message`. Channel selection → `dsh.md` § Delegation
+channels.
 
 ## Channel shape
 
@@ -53,10 +54,40 @@ task id.
 | Team task field | Plan-row content | Constraint |
 |---|---|---|
 | `subject` | `<planId> / Task <n> — <role>` | concise title, 200 characters |
-| `description` | the row's `## Assignment` header region plus scope and acceptance | complete details, 16384 characters |
+| `description` | a coordination summary — task id, plan row, files in scope, acceptance criteria | complete details, 16384 characters. **Never the `## Assignment` header region** (see below) |
 | `blocked_by` | task ids mirroring the plan rows this row depends on | ids must exist; a blocked task cannot be claimed or reassigned |
-| `write_scopes` | the workspace-relative worktree/dir prefix this row may modify | absolute paths and `..` segments are refused |
+| `write_scopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths and `..` segments are refused — a sibling worktree is named in the prompt instead |
 | owner | the teammate target executing the row | assigned by `claim` or Lead-only `reassign` |
+
+### Exactly one gated carrier per Assignment — every time
+
+`TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — `spawn_teammate.prompt`,
+`team_task_create.description`, `team_task_update.description` and
+`send_message.message` — and every Assignment-shaped call is recorded as its own
+dispatch. Both failure directions are real:
+
+- **Two carriers** for one piece of work: the board `description` repeats the
+  Assignment header, so the spawn settles with its member while the board row
+  never settles, leaving a permanently unresolved duplicate that inflates
+  dispatch counts and the panel graph.
+- **No carrier** for a later task: a teammate reused on a track is steered with a
+  header-free message, no new spawn happens, and the task's Assignment never
+  reaches a carrier at all — so `gateAssignmentText` never runs its field, lease
+  and worktree checks, and the ledger records nothing. A silently ungated
+  writable dispatch is worse than a duplicate.
+
+**So each task gets exactly one carrier, chosen by its position on the track:**
+
+| Task on the reused track | Carrier |
+|---|---|
+| the track's FIRST task | `spawn_teammate.prompt` (the spawn is the dispatch) |
+| every LATER task on that track | `send_message.message` (the steer IS the dispatch) |
+| never | `team_task_create.description` / `team_task_update.description` — the board row is the coordination record, always non-Assignment text (ids, scope, acceptance) |
+
+A track's later task therefore carries its full `## Assignment` header in the
+`send_message` that starts it. That is the only way its gates run; a short
+"continue with task 3" message is not a delegation and must not be used to
+dispatch writable work.
 
 - **Task ids are Team-local generated values.** The plan id and task number
   live in `subject`, never in the opaque id.
@@ -116,16 +147,73 @@ stays idle until someone messages it.
   member: keep the remaining work inside the existing seats and record the cap
   as the reason the remaining rows are not dispatched.
 
-## Shared cwd and write isolation
+### Seat budget: one seat per track, never one per task
 
-- **Every member shares the Lead's working directory.** `spawn_teammate` has no
-  `cwd` field, so teammates inherit the session cwd and see each other's edits
-  immediately. Split writable work across directories and record each expected
-  prefix in `write_scopes`.
+The roster is **finite and non-recyclable**, so a seat policy of "a fresh
+teammate for every task" exhausts it and then cannot dispatch the remaining work
+— on a Team profile the direct `subagent` rows are disabled, so there is no
+cheap escape once the roster is full.
+
+| Work | Seat | Why |
+|---|---|---|
+| Implementer | **one durable teammate per WRITABLE TRACK**, reused across that track's tasks via `send_message` | the track keeps its checkout, branch, and context; a new seat per task is what exhausts the roster |
+| Task reviewer | **not a roster seat** — a `workflow` single-seat read-only run (or `subagent` when mounted) | review isolation wants a fresh context per task, and fresh-context children outside the roster do not consume the cap. The one-seat `workflow` route is a **supported** path when no direct delegation can carry the seat — template `dsh-workflow-scripts.md` § 4 `mstar-review-single`; rules `dsh.md` § Read-only fan-out |
+| Plan QC tri | `workflow` fan-out | read-only, N≥3, one run |
+
+- **Review isolation and roster economy are not in conflict.** A reviewer needs a
+  fresh CONTEXT, not a durable identity: `workflow` children are fresh one-shot
+  subagents that never join the Team, so each task review is isolated while the
+  roster stays untouched.
+- **Budget the width before the first spawn.** `tracks + reserved recovery ≤
+  maxMembers`; leave at least one free slot so a genuinely failed track can be
+  re-seated.
+- **A wave does NOT free capacity — it moves an existing member.** Idle is not
+  freed: `maxMembers` counts created teammates and the roster has no removal
+  operation, so waiting for a wave to finish never yields a new seat. When a plan
+  has more writable tracks than `maxMembers - reserved`, the supported move is to
+  **reassign an idle member to the later track** and tell it the new address:
+  1. `list_agents` → pick a teammate that is `inactive` and whose track is
+     genuinely finished (its board task is `complete`).
+  2. `team_task_get` the later track's board task, then `team_task_update`
+     `reassign` it to that member (that row's owner is the migration record).
+  3. `send_message` that member with the later track's **absolute checkout
+     path, branch and the full `## Assignment` header** — the steer is the later
+     task's gated carrier (§ Exactly one gated carrier per Assignment), so a
+     header-free wake-up would leave the task ungated.
+  Record the migration on the plan row. If no member is free, the remaining
+  tracks wait; if they cannot wait, run their read-only work as `workflow` seats
+  and record the cap as the reason the remaining writable rows are not
+  dispatched.
+- **When the cap is reached, the recovery is documented, not manual.** Keep the
+  remaining rows on their existing track owners, or run them as `workflow`
+  read-only work, and record the cap as the reason in the plan row — never a
+  ninth spawn attempt, and never a hand-edited roster.
+
+## Worktree hand-off and write isolation
+
+- **The spawn has no `cwd` field; the member does.** `spawn_teammate` gives every
+  teammate the Lead's working directory as its STARTING directory — it is a full
+  agent, not a sandboxed function, so it enters an assigned checkout through its
+  own tools (absolute paths, or a directory change of its own). Parallel writable
+  tracks therefore work: create one worktree per track first (repository
+  procedure, L2 isolation), then state each member's absolute checkout path in
+  its initial prompt.
+- **The prompt carries the absolute address; the board carries a legal scope.**
+  A teammate that is never told which checkout belongs to it will edit the shared
+  cwd, so the initial prompt must name the absolute worktree path, the branch,
+  and the files it owns. `write_scopes` is a DIFFERENT field: it is
+  workspace-relative and refuses absolute paths and `..` segments, so never paste
+  a checkout path into it. Record the repository-relative prefixes the track
+  modifies (for example `packages/dsh/src/gates/`) — the same path means the same
+  file inside every worktree of that repository — and omit the field when the
+  track only reads or when its scope cannot be expressed (a checkout outside the
+  workspace): the prompt is the authority, `write_scopes` is only the advisory
+  echo.
 - **`write_scopes` is advisory, not a lock.** Overlapping scopes on in-progress
   tasks surface as `writeScopeWarnings`; they never block a write. Bash,
   formatters, and code generators are not covered by the filesystem version
-  guard either — coordinate them explicitly.
+  guard either — coordinate them explicitly, and keep seats in disjoint
+  directories so interleaving is harmless.
 - **A stale write is a rebase signal.** On `FS_STALE_VERSION`, re-read the file,
   rebase the intended change onto the new content, and retry; do not overwrite
   a teammate's edit.
@@ -137,7 +225,7 @@ stays idle until someone messages it.
 
 | Not provided | Consequence / where it lives instead |
 |---|---|
-| worktrees or per-member checkouts | every member shares ONE cwd and the channel has no per-member `cwd`; isolated writable seats therefore come from the repository's worktree procedure, one writable seat per worktree |
+| automatic worktree creation | the channel creates no checkout; create one per writable track through the repository's worktree procedure, then hand each member its absolute path |
 | locks | `write_scopes` warns; concurrent writes can still interleave |
 | merges, rebases, or review gates | the Lead integrates and verifies; no tool merges member work |
 | automatic ownership release | `complete` keeps the owner; `release`, `reopen`, and `reassign` are explicit calls |

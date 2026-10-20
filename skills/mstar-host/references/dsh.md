@@ -154,9 +154,9 @@ or a custom profile).
 
 | dsh tool | Harness use |
 |----------|-------------|
-| **`subagent`** / **`subagent_fork`** | Primary dispatch — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
-| **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams channel — only when the Team profile layer is mounted; multi-round, role-persistent work over ONE shared working directory. Protocol → `references/dsh-agent-teams.md` |
-| **`workflow`** | Read-only N≥3 fan-out — one run, one conversation `workflow-run` node (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
+| **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
+| **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
+| **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
 | **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
 | **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
 | **`mstar_*_validate`** | On-demand seam validators (design-md / audit / compound / roles) |
@@ -164,10 +164,13 @@ or a custom profile).
 
 ### `subagent` dispatch shape
 
-The dsh `subagent` tool is the delegation channel (schema rendered by
+The dsh `subagent` tool is the DIRECT delegation channel (schema rendered by
 `@deepseek-ai/dsh-tool-subagent`; `provider`-bound, default toolName
-`subagent`). Dispatch an Assignment the same way as other agent-tool hosts:
-the dispatch gate validates the **Assignment header region** (`## Assignment`
+`subagent`) — the one that carries an Assignment when the Team layer is not
+mounted, and the shape below is what its callers emit. On a Team-mounted profile
+the same Assignment text goes out through a board task + `spawn_teammate`
+instead (§ Delegation channels). Either way the dispatch gate validates the
+**Assignment header region** (`## Assignment`
 + `**Execute as**` / `**Delegation**` / `**Task category**` / `**Working
 branch**` / `**Branch policy**` fields — engine `composeDispatchGate`, same
 violation codes as opencode/omp/CLI).
@@ -178,26 +181,54 @@ body-quoted examples never leak into header fields.
 
 ## Delegation channels
 
-dsh exposes three delegation surfaces. They differ in lifetime and in what the
-parent holds after the call returns; choose by the shape of the work, not by
-habit.
+dsh exposes three delegation surfaces. **Mounting decides which channel you
+start from, not which work is allowed.** When the Agent Teams layer is
+installed it is the default delegation channel — a multi-task plan belongs on
+its board — and `subagent` is the fallback for a profile without it. `workflow`
+rides alongside both as the read-only fan-out surface.
 
 | Channel | Surface | Use when | Not for |
 |---|---|---|---|
-| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | one self-contained Assignment of any category — including writable work behind the dispatch/lease gates; `subagent_fork` when the child must inherit the completed conversation | coordination that must stay addressable across many turns, or read-only N≥3 fan-out while `workflow` is mounted (when it is not mounted, this path is the documented fallback — § QC default) |
-| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; every member works in ONE shared working directory; a teammate is a continuable subagent child, and any root session is the implicit Lead | multi-seat, multi-round, role-persistent work that must stay addressable across turns — e.g. a tracked implementer/reviewer pair over one worktree | isolated writable tracks, one-shot lookups, read-only N≥3 fan-out |
-| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width | writable fan-out — it has no per-child pre-start veto seam |
+| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; a teammate IS a subagent child carrying the ordinary agent toolset (it can enter an assigned checkout through its own tools), and any root session is the implicit Lead | **the default whenever the layer is mounted** — list the plan's tasks on the board first (one task per Assignment), then spawn one teammate per track: multi-task plans, parallel writable tracks, and any seat that must stay addressable across rounds or be steered by name | read-only fan-out while `workflow` is mounted |
+| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | the documented fallback when the Team layer is NOT mounted; also single one-off lookups that need no roster | work that must stay addressable across turns, or read-only fan-out while `workflow` is mounted |
+| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width; a single read-only seat routes here when no direct delegation can carry it (Team profile, where `subagent` is disabled and a review must not take a roster seat) | writable fan-out — it has no per-child pre-start veto seam |
 
-**Mounting decides availability, not preference.** The shipped Agent Teams
-profile layer (`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the
-Team rows and **disables** the direct `subagent` / `subagent_fork` and legacy
-subagent-control rows, so a profile exposes one direct-delegation surface at a
-time; `workflow` rides alongside both. When `spawn_teammate` is absent from the
-toolset the Team layer is not mounted — use `subagent` and never attempt the
-Team protocol.
+**Parallel writable tracks are a Team workload, not a Team exclusion.** The
+channel does not create checkouts for you — that stays the repository's worktree
+procedure (one writable seat per worktree, L2 isolation) — but a teammate runs a
+full agent toolset and enters its assigned checkout itself. Record each track's
+prefix on its board task (`write_scopes` is advisory and never a lock), keep
+disjoint seats in disjoint directories, and leave integration to the Lead.
+
+**Every Assignment has EXACTLY one gated carrier.** `spawn_teammate.prompt`,
+`team_task_create.description`, `team_task_update.description` and
+`send_message.message` are all dispatch carriers. Two carriers for one piece of
+work leave a permanently unresolved duplicate in the ledger; **zero carriers
+leave the work ungated** — a teammate reused on a track is steered by
+`send_message`, so a header-free steer means the field, lease and worktree checks
+never run for that task. The board `description` is therefore always coordination
+text, and each task's Assignment rides its own carrier: the track's first task in
+`spawn_teammate.prompt`, every later task on that track in the `send_message`
+that starts it (§ `references/dsh-agent-teams.md` § Exactly one gated carrier per
+Assignment).
+
+**Seats are budgeted per track, not per task.** The roster is finite and has no
+removal operation, so one durable teammate per writable track (reused via
+`send_message`) is the plan shape; task reviewers are fresh-context `workflow`
+children that never join the roster. Budget, member migration between tracks (a wave frees no capacity), and the at-cap recovery →
+`references/dsh-agent-teams.md` § Capacity.
+
+**Mounting decides the starting channel.** The shipped Agent Teams profile layer
+(`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the Team rows and
+**disables** the direct `subagent` / `subagent_fork` rows, so that profile
+exposes exactly one direct-delegation surface. A profile that mounts both (a
+custom composition) starts from Agent Teams and keeps `subagent` for a seat the
+board does not track. When `spawn_teammate` is absent from the toolset the Team
+layer is not mounted — use `subagent` and never attempt the Team protocol.
+`workflow` rides alongside both.
 
 Team protocol — roster naming, plan-row ⇄ team-task mirroring, wake
-discipline, capacity, and shared-cwd isolation — → **`references/dsh-agent-teams.md`**.
+discipline, capacity, and worktree hand-off — → **`references/dsh-agent-teams.md`**.
 
 ## Gates and enforcement
 
@@ -207,7 +238,7 @@ The plugin wires the engine gates on dsh seams (all in-process):
 |------|------|-------------------|
 | Status gate | `fs/write-intent` + `fs/edit-intent` on `{HARNESS_DIR}/status.json` | repair-escape advisory (never vetoes the repairing write) — **except** the store-authority refusal class below |
 | Store authority in the status gate | inside the status gate's document classification (register kind, snapshot cleanup extension) | **typed veto under hard, and no repair escape**: when the findings-cleanup verdict cannot be read because the issue authority is missing (`store.not-initialized`), staged (`store.not-active`), corrupt, below-floor or busy, the write is vetoed (`status.veto` / `findings.cleanup-authority-unavailable`) — the repair is a store command (`mstar store init|upgrade|migrate`), never a document write |
-| Dispatch gate | `tools/pre-execute` on the `subagent` tool | `PreToolDecision { kind: 'deny', reason }` |
+| Dispatch gate | `tools/pre-execute` on every delegation carrier — the configured `dispatchTools` (`subagent` / `subagent_fork` by default) **and** the Agent Teams carriers (`spawn_teammate`, `team_task_create`, `team_task_update`, `send_message`) | `PreToolDecision { kind: 'deny', reason }` |
 | Lease gate | inside the dispatch gate (SDD / InProgress dispatches) | deny under hard |
 | Worktree L1/L2 | inside the dispatch gate | deny under hard |
 | Skill-authoring lint | `fs/write-intent` on `SKILL.md` under mounted roots | repair-escape advisory |
@@ -278,6 +309,38 @@ answers, and no tool argument or config key selects one:
   a command: the writable mstar commands are dsh tools registered over
   `ctx.tools.register`, plus one dsh-native clear tool (§ The native command
   surface below).
+
+### Concurrent lifecycles and workflow selection
+
+**Several ACTIVE lifecycles at once is the normal state**, not an error: each
+plan, worktree, and PR advances on its own lifecycle, and nothing in the host
+caps how many run concurrently. A session only has to answer "which lifecycle
+does THIS operation belong to", and the resolver answers it from the operation
+itself before it ever asks the operator. The order below is the resolver's own:
+
+1. **A plan row's recorded worktree** contains the session cwd.
+2. **A lifecycle's integration worktree** contains the session cwd.
+3. **The session's explicit pick** (the panel selection or `mstar plan bind`).
+4. **The plan row the operation names** — an Assignment's `Plan Path` / `SDD dir`,
+   a `--plan` argument. A plan row belongs to exactly one lifecycle, so naming it
+   identifies its owner even when the cwd matches several.
+5. **The only active entry.**
+
+Every automatic rung (1, 2, 4) needs **exactly one distinct** lifecycle: zero or
+several matches fall through to the next rung, and nothing is ever decided by
+registry order, recency, or a longest-prefix guess.
+
+An explicit pick outranks rung 4 on purpose: a pick that names a lifecycle
+WITHOUT the requested plan row is a contradiction the caller must see
+(`lease.dispatch.plan-not-found`), never a silent switch of lifecycle. A pick
+naming a lifecycle that is no longer active has expired, so the operation's own
+plan row may resolve it (rung 4) — the pick named nothing the store can confirm.
+
+Only when none of the five applies does a write report
+`workflow.selection.unbound-multi-active`, and that refusal is scoped to the one
+operation: it lists the active ids and the ways to name one. It is not a session
+pause — every other operation keeps working, and the same session can drive
+several lifecycles by naming the plan each call.
 
 ### The native command surface
 
@@ -431,13 +494,16 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
 
 ## PM dispatch
 
-Harness **dispatch** on dsh = a `subagent` tool call with the full Assignment
-text (role binding in the prompt — `Execute as` / `Act as` + skill load;
-there is no separate `agent` field, the Assignment body IS the prompt). **N
-assignees = N `subagent` calls = N independent delegations** (dispatch-gate
+Harness **dispatch** on dsh carries the full Assignment text as the delegation
+prompt (role binding in the prompt — `Execute as` / `Act as` + skill load;
+there is no separate `agent` field, the Assignment body IS the prompt). **Which
+tool carries it is the mounted channel's decision** (§ Delegation channels):
+with Agent Teams mounted, one board task plus one `spawn_teammate` per assignee;
+on a direct-`subagent` profile, one `subagent` call per Assignment. **N
+assignees = N independent delegations** on either channel (dispatch-gate
 口径: one assistant message carries all N invokes — the gate counts each
-dispatched Assignment). Paste-only Assignment without an invoke is **not**
-dispatch.
+dispatched Assignment, board task or `subagent` call alike). Paste-only
+Assignment without an invoke is **not** dispatch.
 
 **Role-binding field:** none — binding is **prompt-only** on dsh (the tool has
 no role field; the header region of the Assignment body is what the gate and
@@ -528,12 +594,15 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
 
 ### SDD implement
 
-- **`Execution mode: sdd`**: one implementer `subagent` dispatch per ready task id;
-  independent tasks are emitted together in one message (each in its isolated
-  track) so their activations overlap, then the PM waits for settlement, per
-  **`mstar-sdd`** § Ready-task scheduling. Task reviewer is a fresh
-  separate dispatch; sticky resume is limited to one sequential owner track
-  with a recorded continuable-subagent id.
+- **`Execution mode: sdd`**: one implementer delegation per ready task id, on the
+  mounted channel: with Agent Teams, one board task per task id and one
+  `spawn_teammate` per track, each handed its own worktree; on a
+  direct-`subagent` profile, one `subagent` call per task id. Independent tracks
+  are started together so their activations overlap, then the PM waits for
+  settlement, per **`mstar-sdd`** § Ready-task scheduling. The task reviewer is a
+  fresh separate seat on either channel. Sticky resume is a durable teammate
+  resumed by name on the Team channel, and a recorded continuable-subagent id on
+  the direct one.
 
 ## Read-only fan-out via the `workflow` tool
 
@@ -546,14 +615,26 @@ run is recorded as durable `tool-workflow/*` session events and the stock dsh UI
 node the operator expands by phase and member. Use it for **read-only fan-out of
 N ≥ 3 seats** — plan QC tri, large-repo audit categories, `/amazing-pr-review
 deep` seats — and copy the `script` + `meta` + `args` from this skill →
-`references/dsh-workflow-scripts.md`. For **1–2** delegations keep **`subagent`**
-(the tool's own guidance): the two-seat default tier of `/amazing-pr-review`
-shows two subagent cards and no `workflow-run` node, and that is expected.
+`references/dsh-workflow-scripts.md`. For **1–2** seats a direct delegation is the
+cheaper default — **`subagent`**, or a teammate when the Team layer is mounted —
+following the tool's own guidance: the two-seat default tier of
+`/amazing-pr-review` shows two subagent cards and no `workflow-run` node, and
+that is expected.
+
+**One read-only seat is supported when nothing else can carry it.** On a Team
+profile the direct `subagent` rows are disabled, and a task review needs a fresh
+context without taking a roster seat — so a **one-seat `workflow` run** is the
+supported route there, with its executable form in
+`references/dsh-workflow-scripts.md` § 4 `mstar-review-single`. It costs one
+`workflow-run` node instead of a subagent card; that is the price of keeping the
+reviewer off the finite roster, not an unsupported workaround.
 
 **Read-only only.** A workflow child is a delegated child (the shipped `spawn`
 provider pins `approval: never` for the whole delegation), and the run has **no
 per-child pre-start veto seam** — so a script is never the channel for writable
-work; writable fan-out stays on `subagent` behind the dispatch and lease gates.
+work; writable fan-out goes through the mounted delegation channel
+(`spawn_teammate`, or `subagent` on a direct profile) behind the dispatch and
+lease gates.
 Seats return findings in their result payload and must never depend on writing
 files — the caller persists the seat reports.
 
