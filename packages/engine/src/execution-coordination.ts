@@ -115,6 +115,7 @@ import {
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting } from "./path.js";
+import { parseAssignmentBranchForms } from "./dispatch.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
@@ -655,6 +656,32 @@ function withExecutionPlanOperation<T>(
 type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig };
 
 /**
+ * The branch one `prepare` claim names. The Assignment's documented forms are a
+ * plain branch name and `create <branch> from <base>`; the second is a CLAIM,
+ * never a branch, so it is resolved to its branch here — the recorded
+ * `metadata.working_branch` (and therefore every `source_branch` derived from
+ * it) is a real ref. Any other multi-word value is refused instead of being
+ * stored as the scope. The create-form grammar is the engine's single one
+ * (`dispatch.ts`), not a second copy.
+ */
+function branchOfClaim(value: string): string {
+  const form = parseAssignmentBranchForms(`Working branch: ${value}`).createForm;
+  if (form !== undefined) {
+    // The documented create form carries BOTH tokens; an incomplete one names no
+    // usable branch and no base, so it is refused rather than half-applied.
+    if (form.name !== "" && form.base !== undefined && form.base !== "") return form.name;
+  } else if (!/\s/.test(value)) {
+    // A branch name never carries whitespace, so whitespace is what distinguishes
+    // a claim string from a branch.
+    return value;
+  }
+  throw invalidPlanInput(
+    "Invalid prepare workingBranch: record a branch name, or the Assignment's \"create <branch> from <base>\" form; retry through mstar plan prepare.",
+    { field: "workingBranch", value },
+  );
+}
+
+/**
  * Preparation configuration has no Assignment and no plan-body pin. Optional
  * checkout metadata is supplied by the coordinator or inherited from the row;
  * the omitted members keep the safe ordinary defaults.
@@ -674,7 +701,15 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
     throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
   }
-  return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
+  const branch = config.workingBranch === undefined ? undefined : branchOfClaim(config.workingBranch);
+  return {
+    config: {
+      ...config,
+      ...(branch === undefined ? {} : { workingBranch: branch }),
+      qaGate: config.qaGate ?? "mandatory",
+      findingsCleanup: config.findingsCleanup ?? "allow-residual",
+    },
+  };
 }
 
 /** Refuse assigning any plan row to the branch attached to the control checkout. */

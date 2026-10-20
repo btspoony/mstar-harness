@@ -26605,6 +26605,16 @@ function withExecutionPlanOperation(context, resolved, requestHash4, preflight, 
     return { ...receipt, operationId: request.operationId, replayed: false, recovery };
   });
 }
+function branchOfClaim(value) {
+  const form = parseAssignmentBranchForms(`Working branch: ${value}`).createForm;
+  if (form !== undefined) {
+    if (form.name !== "" && form.base !== undefined && form.base !== "")
+      return form.name;
+  } else if (!/\s/.test(value)) {
+    return value;
+  }
+  throw invalidPlanInput(`Invalid prepare workingBranch: record a branch name, or the Assignment's "create <branch> from <base>" form; retry through mstar plan prepare.`, { field: "workingBranch", value });
+}
 function readPrepareInputs(call) {
   const config = call.operation.config ?? {};
   assertExactKeys(config, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
@@ -26620,7 +26630,15 @@ function readPrepareInputs(call) {
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
     throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
   }
-  return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
+  const branch = config.workingBranch === undefined ? undefined : branchOfClaim(config.workingBranch);
+  return {
+    config: {
+      ...config,
+      ...branch === undefined ? {} : { workingBranch: branch },
+      qaGate: config.qaGate ?? "mandatory",
+      findingsCleanup: config.findingsCleanup ?? "allow-residual"
+    }
+  };
 }
 function assertWorkingBranchIsFeature(context, workingBranch) {
   if (workingBranch === undefined)
@@ -35449,6 +35467,7 @@ var init_engine = __esm(() => {
   init_execution_store();
   init_issue();
   init_path();
+  init_dispatch();
   init_execution_session();
   init_coordination_write();
   init_execution_store();

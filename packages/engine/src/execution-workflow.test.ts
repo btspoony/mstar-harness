@@ -3077,3 +3077,91 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * §4.1 the prepare claim names a BRANCH, never the Assignment's claim string
+ * ------------------------------------------------------------------------ */
+
+/**
+ * A standalone development row plus a real, clean source worktree on its
+ * registered delivery branch — the scope a completion proves against.
+ */
+async function claimFixture(label: string): Promise<{
+  fixture: Fixture;
+  sourcePath: string;
+  harness: string;
+  sourceSha: string;
+}> {
+  const fixture = await workflowFixture(label);
+  const sourcePath = join(fixture.repoRoot, "wt-source");
+  runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, sourcePath], fixture.repoRoot);
+  const harness = dirname(storeDbPath(fixture.context));
+  writeText(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n`);
+  return {
+    fixture,
+    sourcePath,
+    harness,
+    sourceSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim(),
+  };
+}
+
+describe("execution-workflow: \u00A74.1 the prepare claim records source_branch", () => {
+  test("a create-from claim records the branch as source_branch and completes", async () => {
+    const { fixture, sourcePath, harness } = await claimFixture("claim-create-from");
+    // The Assignment's own `Working branch: create <branch> from <base>` value,
+    // handed to prepare verbatim: the recorded scope must be the BRANCH, so the
+    // completion's source_branch is the registered delivery source.
+    const prepared = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-claim-prepare", planId: PLAN_ID,
+      operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: `create ${SOURCE_BRANCH} from main` } },
+    });
+    expect(prepared.data.plan.metadata).toMatchObject({ working_branch: SOURCE_BRANCH });
+    await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-claim-start", planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "claim prepared", evidence_paths: [] } },
+    });
+    const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim();
+    const reports = ["qc.md", "qc-consolidated.md", "qa.md"].map((name) => join(harness, "plans", PLAN_ID, name));
+    reports.forEach((path) => writeText(path, "# Claim fixture evidence\n"));
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-claim-complete", planId: PLAN_ID,
+      operation: {
+        kind: "complete",
+        evidence: {
+          source_sha: sourceSha, review_base: sourceSha, review_head: sourceSha,
+          qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
+          qa: { gate: "mandatory", decision: "pass", report: reports[2]! },
+        },
+      },
+    });
+    expect(completed.data.plan.status).toBe("Done");
+    expect(completed.data.coordination?.completion).toMatchObject({ source_branch: SOURCE_BRANCH });
+  });
+
+  test("a plain branch name is recorded as source_branch unchanged", async () => {
+    const { fixture, sourcePath } = await claimFixture("claim-plain-branch");
+    const prepared = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-plain-prepare", planId: PLAN_ID,
+      operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: SOURCE_BRANCH } },
+    });
+    expect(prepared.data.plan.metadata).toMatchObject({ working_branch: SOURCE_BRANCH });
+  });
+
+  test("a claim that is not a branch records no source_branch and is refused with a named recovery", async () => {
+    const { fixture, sourcePath } = await claimFixture("claim-not-a-branch");
+    const before = await workflowFootprint(fixture.context);
+    const refusal = await refusalOf(() =>
+      mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+        operationId: "op-claim-refused", planId: PLAN_ID,
+        // A create claim with no `<base>` — whitespace can never be part of a
+        // branch name, so this is not one and never gets recorded as a scope.
+        operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: "create feature/undeclared" } },
+      }),
+    );
+    expect(refusal.code).toBe("coordination.invalid-input");
+    expect(refusal.message).toContain("create <branch> from <base>");
+    expect(refusal.message).toContain("mstar plan prepare");
+    expect(refusal.details).toMatchObject({ field: "workingBranch", value: "create feature/undeclared" });
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+});
