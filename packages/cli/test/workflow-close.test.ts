@@ -566,6 +566,34 @@ describe("mstar plan complete — a refusal names the verb that actually advance
     expect(recoveryOf(refused)).toContain("mstar plan prepare");
     expect(recoveryOf(refused)).not.toContain("mstar workflow evidence");
   }, 30_000);
+
+  /**
+   * A Git object id refusal carries `field` too (`source_sha` / `review_base` /
+   * `review_head`). It is not an evidence path, so a path rule must never be its
+   * recovery.
+   */
+  test("a malformed Git object id keeps its own recovery", async () => {
+    const fixture = await activeFixture("mstar-complete-sha-mismatch");
+    await registerAndBind(fixture);
+
+    const started = join(fixture.root, "progress-sha-mismatch.json");
+    writeJson(started, { status: "InProgress", summary: "sha mismatch probe", evidence_paths: [fixture.qcReport] });
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(moved.exitCode, moved.stdout).toBe(0);
+
+    const completion = join(fixture.root, "completion-sha-mismatch.json");
+    writeJson(completion, {
+      source_sha: "abc123",
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+    const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+    expect(refused.exitCode).toBe(1);
+    expect(envelope(refused).code).toBe("coordination.invalid-input");
+    // The refusal names the field, and the recovery does not prescribe a path.
+    expect(envelope(refused).details).toMatchObject({ field: "source_sha", actual: "abc123" });
+    expect(recoveryOf(refused)).not.toContain("absolute path");
+  }, 30_000);
 });
 
 describe("mstar status workflow-close — usage and the retired file transports", () => {

@@ -197,7 +197,20 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
   const qaReport = value.qa.report;
   const extra = value.evidence_paths === undefined ? [] : value.evidence_paths;
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
-    throw new CoordinationError("coordination.invalid-input", "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate.");
+    // A caller with four paths needs to know WHICH entry is not a path, so the
+    // refusal names the index. The message cannot also name a command here
+    // (Rule #341 class 4: an interpolated message carries no statically provable
+    // verb), so the transport's recovery channel names the repair.
+    // reachability: manual — the message must name the runtime index of the offending entry, so no statically provable command can live in it; the transport recovery channel names plan show
+    const entries: readonly unknown[] = Array.isArray(extra) ? extra : [];
+    const index = entries.findIndex((entry) => !isNonEmptyString(entry));
+    throw new CoordinationError(
+      "coordination.invalid-input",
+      index < 0
+        ? "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate."
+        : `Invalid evidence_paths[${index}]: every entry must be a non-empty evidence path.`,
+      index < 0 ? {} : { field: `evidence_paths[${index}]`, value: entries[index] },
+    );
   }
   const evidenceRefs: EvidencePathRef[] = [
     ...(qc.reports as string[]).map((path, index) => ({ field: `qc.reports[${index}]`, path })),

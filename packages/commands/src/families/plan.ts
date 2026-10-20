@@ -98,6 +98,21 @@ class PlanInputError extends Error {}
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
+/**
+ * Payload members whose value the engine resolves as an evidence PATH. A
+ * `coordination.invalid-input` refusal also carries `field` for a Git object id
+ * (`source_sha` / `review_base` / `review_head`), which is not a path, so the
+ * transport's recovery branches on the member rather than on the detail's
+ * presence.
+ */
+const EVIDENCE_PATH_FIELDS: Record<string, true> = { "qc.consolidated": true, "qa.report": true };
+function isEvidencePathField(field: unknown): boolean {
+  if (typeof field !== "string") return false;
+  return EVIDENCE_PATH_FIELDS[field] === true ||
+    field.startsWith("qc.reports[") ||
+    field.startsWith("evidence_paths[") ||
+    field.startsWith("progress.evidence_paths[");
+}
 function failure(id: string, error: unknown): CommandEnvelope<never> {
   if (error instanceof PlanInputError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: error.message });
   const message = error instanceof Error ? error.message : String(error);
@@ -128,9 +143,10 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
           // The submission's gate is not the row's configured gate: either the
           // evidence or the recorded configuration is what changes.
           ? "The submitted QA evidence does not match the plan's configured QA gate. Submit the matching QA or PM acceptance report, or re-record the configured gate with mstar plan prepare --qa-gate <gate>, then retry."
-          : (id === "plan.complete" || id === "plan.progress") && typeof details?.field === "string"
-            // The refusal names which payload field carried the bad value; the plan's
-            // own area is what that value must sit inside.
+          : (id === "plan.complete" || id === "plan.progress") && isEvidencePathField(details?.field)
+            // The refusal names which payload field carried the bad VALUE; the
+            // plan's own area is what that value must sit inside. A Git object id
+            // refusal carries `field` too, and a path rule never fixes it.
             ? "Correct the evidence values named by the refusal's field details: each must be an absolute path to an existing file inside the plan area. Read the plan's area with mstar plan show, then retry."
             : id === "plan.complete" && code === "coordination.scope-mismatch"
               ? details !== undefined && "expected" in details && "actual" in details

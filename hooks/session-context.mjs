@@ -15684,7 +15684,9 @@ function readCompletionEvidence(value, route = "integration") {
   const qaReport = value.qa.report;
   const extra = value.evidence_paths === undefined ? [] : value.evidence_paths;
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
-    throw new CoordinationError("coordination.invalid-input", "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate.");
+    const entries = Array.isArray(extra) ? extra : [];
+    const index2 = entries.findIndex((entry) => !isNonEmptyString(entry));
+    throw new CoordinationError("coordination.invalid-input", index2 < 0 ? "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate." : `Invalid evidence_paths[${index2}]: every entry must be a non-empty evidence path.`, index2 < 0 ? {} : { field: `evidence_paths[${index2}]`, value: entries[index2] });
   }
   const evidenceRefs = [
     ...qc.reports.map((path2, index2) => ({ field: `qc.reports[${index2}]`, path: path2 })),
