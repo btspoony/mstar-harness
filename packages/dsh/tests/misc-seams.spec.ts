@@ -825,7 +825,24 @@ function run(ctx: BootResult['ctx'], name: string, args: Record<string, unknown>
   return ctx.tools.execute({ callId, name, arguments: args, signal })
 }
 
+/** Assert the generic-card presentCall contract (title / kind / rawInput). */
+function expectGenericCall(view: unknown, rawInput: unknown): void {
+  const card = view as { card?: string; title?: string; kind?: string; rawInput?: unknown } | undefined
+  expect(card).toBeDefined()
+  expect(card!.card).toBe('generic')
+  expect(typeof card!.title).toBe('string')
+  expect(card!.kind).toBe('other')
+  expect(card!.rawInput).toEqual(rawInput)
+}
+
 describe('mstar_audit_validate', () => {
+  it('presentCall renders a generic card carrying the report path', async () => {
+    const app = booted = await bootApp()
+    // The surviving validator keeps its presentation arm: the transcript card
+    // names the report it scanned instead of the command that ran.
+    expectGenericCall(app.ctx.tools.get('mstar_audit_validate')!.presentCall?.({ report_path: '/r.md' }), '/r.md')
+  })
+
   it('clean report → ok true', async () => {
     const app = booted = await bootApp()
     const report = reviewReportPath(app.root)

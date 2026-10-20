@@ -40,6 +40,7 @@ import {
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from '@mstar-harness/engine'
 import { adoptExecutionBinding, resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
+import { adoptionRecoveryText, postCommitAdoptionRefusal } from '../src/gates/native-commands.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, type BootResult } from './harness.ts'
@@ -529,3 +530,138 @@ describe('mstar_execution_clear — the native-only clear', () => {
     expect(storedBinding(app.harnessDir, recordedWorkspace)?.executionBinding ?? null).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// The POST-COMMIT adoption contract — the failing stage selects the recovery
+//
+// Both arms run only after the shared `plan.bind` returned ok, so the engine
+// seat is bound either way; the two failures must never advertise the same
+// route. The deterministic trigger for the slot arm is the public store
+// cwd-mismatch regression above; the engine-resume arm has no public trigger
+// (the reference was minted by the bind that just succeeded), so the pure
+// selection is asserted directly.
+// ---------------------------------------------------------------------------
+
+/** The post-commit facts an adoption refusal carries beside its canonical envelope. */
+function postCommitFactsOf(envelope: unknown): { committed?: unknown; data?: unknown } {
+  return envelope as { committed?: unknown; data?: unknown }
+}
+
+/** The message a refusal envelope carries (the shared shape, read without narrowing the status union). */
+function refusalMessageOf(envelope: unknown): string {
+  return String((envelope as { message?: unknown }).message ?? '')
+}
+
+/** One coordinator reference in the engine's canonical shape (a pure fixture: never compared against a minted one). */
+const ADOPTED_REF: ExecutionSessionRef = {
+  storeId: 'store-native-contract',
+  epoch: 3,
+  workflowId: WORKFLOW_ID,
+  role: 'coordinator',
+  sessionId: CHILD_ID,
+}
+
+describe('post-commit adoption recovery — the failing stage selects the route', () => {
+  it('does not promise a resume re-bind after the ENGINE resume refused the reference', () => {
+    const recovery = adoptionRecoveryText('resume', 'store.stale-epoch')
+    // The engine refused this very reference: the recovery must not instruct
+    // the caller to re-run the resume re-bind it rejected, nor promise that
+    // that re-bind re-adopts the slot.
+    expect(recovery).not.toContain('The resume re-adopts the binding slot')
+    expect(recovery).not.toContain('re-run the native bind as a resume carrying')
+    // The seat is bound and the slot was not written…
+    expect(recovery).toContain('BOUND')
+    expect(recovery).toContain('NOT written')
+    // …and the actual cause plus the engine's own coordinator recovery route
+    // are named.
+    expect(recovery).toContain('store.stale-epoch')
+    expect(recovery).toContain('mstar session recover')
+    expect(recovery).toContain('--prior-session')
+  })
+
+  it('keeps the resume re-bind as the recovery when only the durable slot write failed', () => {
+    const recovery = adoptionRecoveryText('durable-slot', 'store.authority-unreadable')
+    expect(recovery).toContain('`data.resumeRef` as `resumeRef`')
+    expect(recovery).toContain('SAME `harness`')
+    expect(recovery).toContain('re-adopts')
+    // Without a recorded-workspace fact the recovery only describes the
+    // condition (there is no `data.recordedCwd` to point at).
+    expect(recovery).not.toContain('`data.recordedCwd`')
+  })
+
+  it('names the recorded workspace in the slot-write recovery when the store answered cwd-mismatch', () => {
+    const recovery = adoptionRecoveryText('durable-slot', 'store.authority-unreadable', '/recorded/workspace')
+    expect(recovery).toContain('`data.recordedCwd`')
+    expect(recovery).toContain('/recorded/workspace')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The three refusals of a committed bind that never reached the durable write
+//
+// A real engine mints a readable reference naming the carrying session, so no
+// fixture reaches these arms; the selection is where the contract lives. Each
+// arm must stay `committed` (the seat IS bound), and must carry exactly the
+// facts its own recovery names — the engine coordinator route on the two arms
+// where a resume re-bind would loop, the caller-identity fix on the third.
+// ---------------------------------------------------------------------------
+
+describe('post-commit adoption refusals — the facts each recovery names', () => {
+  it('binding.receipt-unrecognizable: no reference exists, so the recovery is the engine coordinator route', () => {
+    const refusal = postCommitAdoptionRefusal({
+      kind: 'receipt-unrecognizable',
+      sessionId: CHILD_ID,
+      workflowId: WORKFLOW_ID,
+    })
+    expect(refusal.status).toBe('refused')
+    expect(refusal.code).toBe('binding.receipt-unrecognizable')
+    expect(postCommitFactsOf(refusal).committed).toBe(true)
+    // Nothing was read out of the receipt: there is no `resumeRef` to carry,
+    // only the workflow the bind input named.
+    expect(postCommitFactsOf(refusal).data).toEqual({ workflowId: WORKFLOW_ID })
+    const recovery = recoveryOf(refusal as unknown as Record<string, unknown>)
+    expect(recovery).toContain(`mstar session recover --workflow ${WORKFLOW_ID}`)
+    expect(recovery).toContain(`--prior-session ${CHILD_ID}`)
+    expect(recovery).toContain('--unowned=true')
+    expect(recovery).toContain('BOUND')
+    expect(recovery).toContain('NOT written')
+    // A resume re-bind would carry the reference this arm could not read.
+    expect(recovery).not.toContain('re-adopts the binding slot')
+  })
+
+  it('binding.no-harness: the minted reference is carried, and the recovery never promises a re-bind', () => {
+    const refusal = postCommitAdoptionRefusal({ kind: 'no-harness', ref: ADOPTED_REF })
+    expect(refusal.status).toBe('refused')
+    expect(refusal.code).toBe('binding.no-harness')
+    expect(postCommitFactsOf(refusal).committed).toBe(true)
+    // The minted reference is the one fact that makes the recovery performable
+    // without the slot this path could not write.
+    expect(postCommitFactsOf(refusal).data).toEqual({
+      resumeRef: encodeExecutionSessionRef(ADOPTED_REF),
+      workflowId: WORKFLOW_ID,
+    })
+    const recovery = recoveryOf(refusal as unknown as Record<string, unknown>)
+    expect(recovery).toContain(`mstar session recover --workflow ${WORKFLOW_ID}`)
+    expect(recovery).toContain(`--prior-session ${CHILD_ID}`)
+    expect(recovery).toContain('--unowned=true')
+    // The plain re-bind is refused while the seat is bound: the recovery must
+    // not advertise the loop it would present.
+    expect(recovery).not.toContain('re-run the bind as a resume')
+  })
+
+  it('binding.foreign-reference: nothing is carried and the fix is the calling identity', () => {
+    const foreign: ExecutionSessionRef = { ...ADOPTED_REF, sessionId: PARENT_ID }
+    const refusal = postCommitAdoptionRefusal({ kind: 'foreign-reference', ref: foreign, sessionId: CHILD_ID })
+    expect(refusal.status).toBe('refused')
+    expect(refusal.code).toBe('binding.foreign-reference')
+    expect(postCommitFactsOf(refusal).committed).toBe(true)
+    // No engine recovery is offered: an unadoptable reference stays that way,
+    // and no fact of this refusal would make one performable.
+    expect(postCommitFactsOf(refusal).data).toBeUndefined()
+    expect(refusalMessageOf(refusal)).toContain(PARENT_ID)
+    expect(refusalMessageOf(refusal)).toContain(CHILD_ID)
+    expect(recoveryOf(refusal as unknown as Record<string, unknown>))
+      .toBe('Run the bind as the carrying session itself; a reference to another session is never adoptable.')
+  })
+})
+

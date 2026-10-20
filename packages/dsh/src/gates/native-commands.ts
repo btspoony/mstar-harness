@@ -536,6 +536,73 @@ export function adoptionRecoveryText(
 }
 
 /**
+ * The facts a PRE-SLOT post-commit refusal answers with: each arm is reached
+ * only after the engine bind committed and before the durable slot write, so
+ * every arm leaves the seat BOUND and must carry the facts its own recovery
+ * names.
+ */
+export type PostCommitAdoptionFailure =
+  | { kind: 'receipt-unrecognizable'; sessionId: string; workflowId?: string }
+  | { kind: 'no-harness'; ref: ExecutionSessionRef }
+  | { kind: 'foreign-reference'; ref: ExecutionSessionRef; sessionId: string }
+
+/**
+ * The three refusals of a committed bind that never reached the durable slot
+ * write. Pure and exported for the refusal regression: a real engine mints a
+ * readable reference naming the carrying session, so no fixture can produce
+ * these arms — the selection itself is what the contract is pinned on.
+ */
+export function postCommitAdoptionRefusal(failure: PostCommitAdoptionFailure): CommandEnvelope<never> {
+  if (failure.kind === 'receipt-unrecognizable') {
+    // The engine bind committed, but its envelope carried no readable
+    // reference, so the durable slot cannot be written and the resume re-bind
+    // has nothing to carry. A plain re-execution bind is refused while the
+    // live holder exists — the engine's own coordinator recovery is the way
+    // out (it replaces the recorded holder after operator attestation).
+    const workflow = failure.workflowId ?? '<workflow-id>'
+    return adoptionRefusal(
+      'binding.receipt-unrecognizable',
+      'the plan bind envelope carried no recognizable execution session reference — the execution binding was NOT adopted',
+      'The engine coordinator seat from the bind stays BOUND (a live ACTIVE holder is never replaced by a bind), but the durable execution binding slot was NOT written: ' +
+        'this build could not read the minted reference back out of the bind receipt. ' +
+        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${workflow} ` +
+        `--prior-session ${failure.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
+        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
+      { ...(failure.workflowId === undefined ? {} : { workflowId: failure.workflowId }) },
+    )
+  }
+  if (failure.kind === 'no-harness') {
+    // DEFENSIVE, not part of the normal contract: the shared admission refuses
+    // a null root before committing, so a committed bind reaches this arm only
+    // when the root facts changed between the bind and the adoption (the
+    // variable removed, a `.mstar`/`.mstarc` declaration created or removed,
+    // or the git worktree changed). It therefore must not tell the caller to
+    // "re-run the bind" — that bind is refused — so it carries the minted
+    // reference and names the engine's coordinator recovery instead.
+    return adoptionRefusal(
+      'binding.no-harness',
+      'the carrying session has no resolved control root or workspace — the execution binding was NOT adopted',
+      'The engine coordinator seat from the bind stays BOUND, but the durable execution binding slot was NOT written: this adoption could not resolve the control root the shared bind committed in. ' +
+        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${failure.ref.workflowId} ` +
+        `--prior-session ${failure.ref.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
+        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
+      { ref: failure.ref, workflowId: failure.ref.workflowId },
+    )
+  }
+  // The reference names a session other than the caller: adopting it would
+  // bind another session's seat, and no re-bind can make it adoptable. It is
+  // still a POST-COMMIT refusal — the engine bind committed — so it states
+  // that fact with no `data`: nothing read here would make a recovery
+  // performable.
+  return adoptionRefusal(
+    'binding.foreign-reference',
+    `the bound session reference names ${failure.ref.sessionId}, not the carrying session ${failure.sessionId} — the execution binding was NOT adopted`,
+    'Run the bind as the carrying session itself; a reference to another session is never adoptable.',
+    {},
+  )
+}
+
+/**
  * Task 3 (#527): persist the durable `executionBinding` slot after a native
  * `plan bind` succeeds — the adoption the removed slash command performed,
  * kept on the native path. The binding order's durable-selection
@@ -582,24 +649,12 @@ async function adoptNativeExecutionBinding(
   const sessionId = callerSessionIdOf(exec)
   const ref = bindReceiptRefOf(envelope)
   if (ref === undefined) {
-    // POST-COMMIT: the engine bind committed, but its envelope carried no
-    // readable reference, so the durable slot cannot be written and the
-    // resume re-bind has nothing to carry. A plain re-execution bind is
-    // refused while the live holder exists — the engine's own coordinator
-    // recovery is the way out (it replaces the recorded holder after operator
-    // attestation). The workflow is still derivable from the bind input.
-    const workflowId = bindWorkflowIdOf(input)
-    const workflow = workflowId ?? '<workflow-id>'
-    return adoptionRefusal(
-      'binding.receipt-unrecognizable',
-      'the plan bind envelope carried no recognizable execution session reference — the execution binding was NOT adopted',
-      'The engine coordinator seat from the bind stays BOUND (a live ACTIVE holder is never replaced by a bind), but the durable execution binding slot was NOT written: ' +
-        'this build could not read the minted reference back out of the bind receipt. ' +
-        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${workflow} ` +
-        `--prior-session ${sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
-        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
-      { ...(workflowId === undefined ? {} : { workflowId }) },
-    )
+    // POST-COMMIT: the workflow is still derivable from the bind input.
+    return postCommitAdoptionRefusal({
+      kind: 'receipt-unrecognizable',
+      sessionId,
+      workflowId: bindWorkflowIdOf(input),
+    })
   }
   // The adoption target is the root the shared admission bound in. Both
   // `plan.bind` arms resolve it as `resolveProcessHarnessDir(cwd,
@@ -625,31 +680,12 @@ async function adoptNativeExecutionBinding(
     harnessDir = null
   }
   if (harnessDir === null || cwd === undefined) {
-    // DEFENSIVE, not part of the normal contract: the shared admission refuses
-    // a null root before committing, so a committed bind reaches this branch
-    // only when the root facts changed between the bind and this adoption (the
-    // variable removed, a `.mstar`/`.mstarc` declaration created or removed,
-    // or the git worktree changed). It therefore must not tell the caller to
-    // "re-run the bind" — that bind is refused — so it carries the minted
-    // reference and names the engine's coordinator recovery instead.
-    return adoptionRefusal(
-      'binding.no-harness',
-      'the carrying session has no resolved control root or workspace — the execution binding was NOT adopted',
-      'The engine coordinator seat from the bind stays BOUND, but the durable execution binding slot was NOT written: this adoption could not resolve the control root the shared bind committed in. ' +
-        `Recover the seat through the engine's own coordinator recovery: run \`mstar session recover --workflow ${ref.workflowId} ` +
-        `--prior-session ${ref.sessionId} --reason <text> --attestation <path> --expect <token> --operation <id>\` ` +
-        '(use `--unowned=true` instead of `--prior-session` when the workflow records no coordinator row), then re-run the bind.',
-      { ref, workflowId: ref.workflowId },
-    )
+    return postCommitAdoptionRefusal({ kind: 'no-harness', ref })
   }
   // The reference names the carrying session — the same first check the slash
   // adoption made, before any engine round-trip.
   if (ref.sessionId !== sessionId) {
-    return adoptionRefusal(
-      'binding.foreign-reference',
-      `the bound session reference names ${ref.sessionId}, not the carrying session ${sessionId} — the execution binding was NOT adopted`,
-      'Run the bind as the carrying session itself; a reference to another session is never adoptable.',
-    )
+    return postCommitAdoptionRefusal({ kind: 'foreign-reference', ref, sessionId })
   }
   // Which post-commit step failed decides the recovery: the engine resume
   // rejecting the reference cannot be recovered by presenting that same
@@ -901,6 +937,18 @@ function executionClearTool(
   })
 }
 
+/** One violation row of `auditValidateTool`'s output schema — its only consumer, and not a public surface. */
+const AUDIT_VALIDATE_VIOLATION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
+    code: { type: 'string', required: true },
+    message: { type: 'string', required: true },
+    fix: { type: 'string' },
+  },
+} as const
+
 /**
  * The native `mstar_audit_validate` tool — the review-report credential scan of
  * `mstar-audit` Hard Rule 4 (`redactSecrets`), and the validator behind
@@ -913,16 +961,6 @@ function executionClearTool(
  * never a secret value (Hard Rule 4). A missing report file is an error result
  * naming the absolute path, not a manufactured `ok`.
  */
-export const AUDIT_VALIDATE_VIOLATION_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    severity: { type: 'string', required: true, enum: ['critical', 'high', 'medium', 'low', 'nit'] },
-    code: { type: 'string', required: true },
-    message: { type: 'string', required: true },
-    fix: { type: 'string' },
-  },
-} as const
 
 function auditValidateTool() {
   return defineTool({
