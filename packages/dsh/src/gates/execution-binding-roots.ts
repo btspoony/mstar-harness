@@ -30,11 +30,14 @@
  * `resumeRef` the first bind's receipt minted — still durable in the
  * binding slot's `executionBinding.session`) and the SAME `harness`
  * selection; the engine resumes the still-bound coordinator seat and the
- * adoption re-records the root here. A plain re-execution bind is NOT a
- * recovery: a live holder's row is never replaced by a bind — the bind is
- * refused (`coordination.identity-mismatch` for a live current-epoch holder,
- * `execution.session-unavailable` once the row's epoch is behind the store's)
- * and adopts nothing.
+ * adoption re-records the root here. When the ADOPTION itself failed after
+ * the engine bind committed, the slot never received that reference: the
+ * refusal then carries it as `data.resumeRef` (with the workflow id and the
+ * adoption's `harness` root), so the same resume re-bind stays performable.
+ * A plain re-execution bind is NOT a recovery: a live holder's row is never
+ * replaced by a bind — the bind is refused (`coordination.identity-mismatch`
+ * for a live current-epoch holder, `execution.session-unavailable` once the
+ * row's epoch is behind the store's) and adopts nothing.
  */
 
 /** One record: the selected root for one exact `(sessionId, cwd)` pair. */

@@ -406,13 +406,49 @@ function bindReceiptRefOf(envelope: CommandEnvelope): ExecutionSessionRef | unde
 }
 
 /**
+ * The facts a POST-COMMIT adoption refusal must carry for its own recovery to
+ * be performable: the engine-minted session reference, in the wire shape the
+ * bind accepts straight back as `resumeRef`, plus the workflow it names and the
+ * control root the adoption attempted (the `harness` to pass back). This is
+ * exactly the path where the durable slot was NOT written, so the reference
+ * exists nowhere else the caller can reach.
+ */
+type AdoptionRefusalFacts = Readonly<{
+  ref: ExecutionSessionRef
+  workflowId: string
+  harness: string
+}>
+
+/**
  * The dsh-side adoption refusal: the engine coordinator seat the bind
  * committed stays bound, the durable slot is NOT written, and the message
  * names the cause plus the recovery (the resume re-bind re-adopts — a plain
- * re-execution bind cannot replace the live ACTIVE holder).
+ * re-execution bind cannot replace the live ACTIVE holder). A refusal built
+ * AFTER the commit additionally states that the seat is bound (`committed`)
+ * and carries {@link AdoptionRefusalFacts} under `data`, so the recovery it
+ * names is performable without the slot it could not write. The extra members
+ * sit beside the shared refusal shape — the shared `CommandEnvelope` contract
+ * and every other command's refusals are untouched.
  */
-function adoptionRefusal(code: string, message: string, recovery: string): CommandEnvelope<never> {
-  return refusalEnvelope({ command: 'plan.bind', status: 'refused', code, exitCode: 1, message, recovery })
+function adoptionRefusal(
+  code: string,
+  message: string,
+  recovery: string,
+  facts?: AdoptionRefusalFacts,
+): CommandEnvelope<never> {
+  const refusal = refusalEnvelope({ command: 'plan.bind', status: 'refused', code, exitCode: 1, message, recovery })
+  if (facts === undefined) return refusal
+  return Object.assign(
+    refusal as CommandEnvelope<never> & { committed?: true; data?: unknown },
+    {
+      committed: true as const,
+      data: {
+        resumeRef: encodeExecutionSessionRef(facts.ref),
+        workflowId: facts.workflowId,
+        harness: facts.harness,
+      },
+    },
+  )
 }
 
 /**
@@ -521,15 +557,19 @@ async function adoptNativeExecutionBinding(
     recordExecutionBindingRoot(sessionId, cwd, harnessDir)
   } catch (error) {
     // The engine's own refusal code/message surface verbatim; the seat the
-    // bind committed stays bound, so the RESUME re-bind (the original session
-    // reference + the same harness) re-adopts — a plain re-execution bind is
-    // refused (a live ACTIVE holder is never replaced by a bind).
+    // bind committed stays bound, so the RESUME re-bind (the reference this
+    // refusal carries + the same harness) re-adopts — a plain re-execution
+    // bind is refused (a live ACTIVE holder is never replaced by a bind).
+    // The durable slot is exactly what this path failed to write, so the
+    // refusal itself must carry the minted reference: otherwise its own
+    // recovery ("pass the original session reference") is unperformable.
     const { code, message } = refusalOf(error)
     return adoptionRefusal(
       code,
       message,
-      'The engine coordinator seat from the bind stays bound and a plain re-execution bind is refused (a live ACTIVE holder is never replaced). ' +
-        'Recovery: re-run the native bind as a resume — pass the original session reference (the bind receipt\'s session reference, still durable in the binding slot) as `resumeRef` with the SAME `harness` selection — which re-adopts the binding slot.',
+      'The engine coordinator seat from the bind stays BOUND and a plain re-execution bind is refused (a live ACTIVE holder is never replaced). ' +
+        'Recovery: re-run the native bind as a resume carrying this refusal\'s `data.resumeRef` as `resumeRef`, with the SAME `harness` selection (`data.harness` names the control root the adoption targeted), run from the session workspace the durable selection is recorded under — the durable binding is keyed by the session id AND that workspace. The resume re-adopts the binding slot.',
+      { ref, workflowId: ref.workflowId, harness: harnessDir },
     )
   }
   return envelope
@@ -622,6 +662,38 @@ function executionClearNoHarness(): CommandEnvelope<never> {
 }
 
 /**
+ * The named no-binding refusal of the clear. It is TRUE for both reachable
+ * cases, which is why it names neither "nothing exists" nor a nonexistent
+ * action:
+ *
+ * - the resolved root genuinely holds no clearable binding for this session;
+ * - the session adopted a binding into ANOTHER control root whose in-process
+ *   adoption receipt the host lost (a restart or a plugin reload drops the
+ *   receipt, not the durable slot). Reaching that slot requires re-recording
+ *   the selected root, and the only supported route that does so is a RESUME
+ *   re-bind carrying the binding's original session reference and the same
+ *   `harness` — which this recovery names, because no other clear route
+ *   reaches a cross-root slot.
+ *
+ * A session that never adopted a cross-root binding is the no-action case the
+ * recovery also states. (A durable selected-root pointer would remove this
+ * cross-root gap; it needs a host-durable per-session store the workspace root
+ * must not carry, so it is not part of this refusal's fix.)
+ */
+function executionClearNoBinding(): CommandEnvelope<never> {
+  return refusalEnvelope({
+    command: EXECUTION_CLEAR_COMMAND,
+    status: 'refused',
+    code: 'execution.clear.no-binding',
+    exitCode: 1,
+    message: 'no clearable execution binding is reachable from the control root resolved here',
+    recovery: 'This clear resolves the control root of the carrying session\'s workspace (or the configured root), and a binding adopted into a DIFFERENT control root is not reachable from it — the in-process adoption receipt that recorded that root does not survive a host restart or a plugin reload. ' +
+      'If this session adopted a binding in another control root, re-run the native bind as a resume carrying that binding\'s ORIGINAL session reference as `resumeRef` and the SAME `harness` selection (this re-records the selected root for the session), then re-run this clear. ' +
+      'If no cross-root binding was ever adopted, there is nothing to clear and no action is needed.',
+  })
+}
+
+/**
  * Task 5 (#530): the native `mstar_execution_clear` tool — the replacement
  * reachability for `clearExecutionBinding` after the removal of the slash
  * command whose `clear` arm was its only caller. It wraps
@@ -631,9 +703,9 @@ function executionClearNoHarness(): CommandEnvelope<never> {
  * parameter face is EMPTY, so identity is never model-choosable. The resolved
  * root is the session's SELECTED harness (the bind adoption's receipt) when
  * one exists, the workspace harness otherwise. The named outcomes surface as
- * envelopes: `cleared` → ok, `no-binding` → the named refusal the slash arm
- * threw, an unreadable/refused store → refusal carrying the store's own
- * reason.
+ * envelopes: `cleared` → ok, `no-binding` → the named refusal (which names the
+ * cross-root case a lost receipt leaves behind), an unreadable/refused store →
+ * refusal carrying the store's own reason.
  */
 function executionClearTool(
   resolver: { forAgent(agent: unknown): string | null },
@@ -644,7 +716,7 @@ function executionClearTool(
       "Clear the calling session's own durable mstar execution binding (the one the native mstar_plan_bind tool adopted). " +
       'The session id comes from the calling agent identity (exec.agent.id) — there are no parameters and identity is never model-choosable; ' +
       "the user's workflow selection and exclusion floor are preserved. " +
-      'Clearing a session with no adopted binding is a named refusal (no clearable execution binding), ' +
+      'Clearing a session whose binding is not reachable from the resolved control root is a named refusal (no clearable execution binding) naming the cross-root resume re-bind, ' +
       'and an unreadable or refused binding record is a refusal carrying the store reason, never a silent no-op.',
     parameters: {},
     output: {
@@ -694,15 +766,14 @@ function executionClearTool(
         clearExecutionBindingRoot(sessionId, cwd)
         return toCanonicalValue(executionClearOk())
       }
+      if (outcome.kind === 'no-binding') return toCanonicalValue(executionClearNoBinding())
       return toCanonicalValue(refusalEnvelope({
         command: EXECUTION_CLEAR_COMMAND,
         status: 'refused',
-        code: outcome.kind === 'no-binding' ? 'execution.clear.no-binding' : 'execution.clear.store-refused',
+        code: 'execution.clear.store-refused',
         exitCode: 1,
-        message: outcome.kind === 'no-binding' ? 'no clearable execution binding' : `no clearable execution binding (${outcome.reason})`,
-        recovery: outcome.kind === 'no-binding'
-          ? 'This session has no durable execution binding to clear — adopt one first with the native mstar_plan_bind tool if a binding was expected; otherwise no action is needed.'
-          : 'Resolve the store refusal named in the message (the durable binding record must be readable and writable for this session and its exact cwd), then re-run the clear.',
+        message: `no clearable execution binding (${outcome.reason})`,
+        recovery: 'Resolve the store refusal named in the message (the durable binding record must be readable and writable for this session and its exact cwd), then re-run the clear.',
       }))
     },
   })

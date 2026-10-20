@@ -26,6 +26,7 @@ import { join, resolve } from 'node:path'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import {
   createExecutionWorkflow,
+  decodeExecutionSessionRef,
   encodeExecutionSessionRef,
   initializeStore,
   readDshScanBound,
@@ -1206,6 +1207,85 @@ describe('native binding adoption — a native plan bind persists the executionB
     expect((await resolveExecutionLedgerTarget(CHILD_ID, app.root))?.harnessDir).toBe(harnessB)
   })
 
+  it('carries the engine-minted reference in a post-commit adoption refusal and the resume re-bind it names re-adopts', async () => {
+    // REGRESSION: the adoption runs AFTER the engine bind committed, and its
+    // catch replaces the successful envelope with a refusal. That refusal used
+    // to drop the minted reference and still tell the caller to "pass the
+    // original session reference, still durable in the binding slot" — on the
+    // one path where the slot write failed. A mismatched pre-existing durable
+    // selection is the deterministic public trigger: the session's selection is
+    // recorded under ANOTHER workspace, the store keyed by (session, workspace)
+    // refuses the adoption write, while the ENGINE bind in the same root
+    // commits, so the refusal's own recovery is the only way back.
+    const app = await bootedWithFixture()
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+    const recordedWorkspace = await mkdtemp(join(tmpdir(), 'native-commands-workspace-'))
+    roots.push(recordedWorkspace)
+    expect(updateWorkflowSessionBinding(harnessB, CHILD_ID, recordedWorkspace, {
+      selectedWorkflowId: WORKFLOW_ID,
+      excludedBeforeSeq: 4,
+    }).kind).toBe('written')
+
+    const child = agentOf(CHILD_ID, app.root)
+    const refused = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(refused.status).toBe('refused')
+    // The engine bind COMMITTED: the coordinator seat belongs to the caller…
+    const state = await readExecutionState({ harnessDir: harnessB })
+    expect(state.data.workflows[0]?.coordinator?.sessionId).toBe(CHILD_ID)
+    // …and the refusal states that beside its refusal status, without
+    // contradicting it (the ADOPTION was refused, the bind was not).
+    expect(refused.committed).toBe(true)
+    // The refusal carries what its own recovery needs, in the input shapes the
+    // caller hands straight back.
+    const data = refused.data as { resumeRef?: string; workflowId?: string; harness?: string } | undefined
+    expect(typeof data?.resumeRef).toBe('string')
+    expect(data?.workflowId).toBe(WORKFLOW_ID)
+    expect(data?.harness).toBe(harnessB)
+    const carried = decodeExecutionSessionRef(data!.resumeRef!)
+    // The carried value IS the engine-minted reference, not a fabrication.
+    expect(state.data.workflows[0]!.coordinator).toEqual(carried)
+    // The recovery text names the reference it carries and the same harness.
+    const recovery = String((refused.details as { recovery?: string } | undefined)?.recovery ?? '')
+    expect(recovery).toContain('BOUND')
+    expect(recovery).toContain('`data.resumeRef`')
+    expect(recovery).toContain('SAME `harness`')
+    // Nothing was adopted for the CURRENT workspace (the store refused that
+    // key), which is why the reference exists nowhere but this refusal.
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+    expect(readWorkflowSessionBinding(harnessB, CHILD_ID, app.root)).toMatchObject({
+      kind: 'unavailable',
+      reason: 'cwd-mismatch',
+    })
+
+    // The advertised recovery, performed with the carried values only: the
+    // carried `resumeRef` + the same `harness`, from the workspace the durable
+    // selection is recorded under. It re-adopts the slot there and records the
+    // receipt for that root.
+    const recorded = agentOf(CHILD_ID, recordedWorkspace)
+    const recovered = envelopeOf(await run(app.ctx, 'mstar_plan_bind', recorded, {
+      resumeRef: data!.resumeRef!,
+      harness: data!.harness!,
+    }))
+    expect(recovered.status).toBe('ok')
+    const binding = storedBinding(harnessB, recordedWorkspace)
+    expect(binding?.executionBinding?.session).toEqual(carried)
+    expect(binding?.executionBinding?.harnessRoot).toBe(harnessB)
+    // The user selection and exclusion floor the store keyed to that workspace
+    // survive the adoption unchanged.
+    expect(binding?.selectedWorkflowId).toBe(WORKFLOW_ID)
+    expect(binding?.excludedBeforeSeq).toBe(4)
+    expect(executionBindingRootOf(CHILD_ID, recordedWorkspace)).toBe(harnessB)
+  })
+
   it('keeps the workspace-root path unchanged: a bind without an explicit harness attributes and clears through the workspace harness', async () => {
     // The workspace path (no explicit per-call harness) must behave exactly as
     // before the selected-harness resolution existed.
@@ -1260,15 +1340,79 @@ describe('native execution clear — the replacement reachability for clearExecu
     expect(await resolveExecutionLedgerTarget(CHILD_ID, app.root)).toBeNull()
   })
 
+  it('names the cross-root case and the resume re-bind when a restart lost the receipt, and that re-bind restores the clear', async () => {
+    // REGRESSION: after a host restart the in-process adoption receipt is gone,
+    // so the clear falls back to the workspace/configured root and answered
+    // `no-binding` with "This session has no durable execution binding to clear
+    // — adopt one first … otherwise no action is needed". For a cross-harness
+    // binding that cause is FALSE (the durable slot exists in root B) and the
+    // only working recovery (the resume re-bind that re-records the selected
+    // root) was hidden. The refusal must name the true cause and that route.
+    const app = await bootedWithFixture()
+    const rootB = await mkdtemp(join(tmpdir(), 'native-commands-harness-b-'))
+    roots.push(rootB)
+    const harnessB = join(rootB, '.mstar')
+    await seedUnboundWorkflow(harnessB, CHILD_ID)
+    await mkdir(join(harnessB, 'workflows', WORKFLOW_ID), { recursive: true })
+
+    const child = agentOf(CHILD_ID, app.root)
+    const bound = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      execution: true,
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      harness: harnessB,
+    }))
+    expect(bound.status).toBe('ok')
+    const real = bindRefOf(bound)
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(harnessB)
+
+    // The host restart / fiber reload: the receipt map is gone (the module's
+    // own test seam is the same factory a real restart observes), while the
+    // durable binding in harnessB survives.
+    resetExecutionBindingRootsForTests()
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBeUndefined()
+
+    const refused = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(refused.status).toBe('refused')
+    // The code is unchanged — only the message/recovery become true.
+    expect(refused.code).toBe('execution.clear.no-binding')
+    expect(String(refused.message).split('\n')[0])
+      .toBe('no clearable execution binding is reachable from the control root resolved here')
+    const recovery = String((refused.details as { recovery?: string } | undefined)?.recovery ?? '')
+    // The true cause (not reachable from the root resolved here) plus every
+    // part of the performable route and the no-action case.
+    expect(recovery).toContain('a binding adopted into a DIFFERENT control root is not reachable from it')
+    expect(recovery).toContain('`resumeRef`')
+    expect(recovery).toContain('SAME `harness`')
+    expect(recovery).toContain('no action is needed')
+    // Nothing was cleared: B still holds the adopted binding.
+    expect(storedBinding(harnessB, app.root)?.executionBinding?.session).toEqual(real)
+
+    // The advertised path works: the resume re-bind with the ORIGINAL reference
+    // and the same harness re-records the selected root, then the clear acts on
+    // root B.
+    const reAdopted = envelopeOf(await run(app.ctx, 'mstar_plan_bind', child, {
+      resumeRef: encodeExecutionSessionRef(real),
+      harness: harnessB,
+    }))
+    expect(reAdopted.status).toBe('ok')
+    expect(executionBindingRootOf(CHILD_ID, app.root)).toBe(harnessB)
+    const cleared = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
+    expect(cleared.status).toBe('ok')
+    expect(cleared.code).toBe('execution.clear.ok')
+    expect(storedBinding(harnessB, app.root)?.executionBinding ?? null).toBeNull()
+  })
+
   it('refuses with the named error when there is nothing to clear', async () => {
     const app = await bootedWithFixture()
     const child = agentOf(CHILD_ID, app.root)
     const refused = envelopeOf(await run(app.ctx, 'mstar_execution_clear', child, {}))
     expect(refused.status).toBe('refused')
     expect(refused.code).toBe('execution.clear.no-binding')
-    // The existing named error text of the removed slash arm, surfaced as the
-    // refusal message's first line (the envelope appends Help/Recovery lines).
-    expect(String(refused.message).split('\n')[0]).toBe('no clearable execution binding')
+    // The named no-binding message states its TRUE scope: the control root this
+    // clear resolved (the envelope appends Help/Recovery lines).
+    expect(String(refused.message).split('\n')[0])
+      .toBe('no clearable execution binding is reachable from the control root resolved here')
     const details = refused.details as { recovery?: string; helpRoute?: string } | undefined
     expect(typeof details?.recovery).toBe('string')
     expect((details?.recovery ?? '').length).toBeGreaterThan(0)
