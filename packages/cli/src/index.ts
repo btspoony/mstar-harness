@@ -113,7 +113,12 @@ async function runInit(options: InitOptions) {
     // Any verified difference is skew: a checkout ahead of the selected CLI is as
     // far apart as one behind it, so neither is reported as success.
     const pluginMismatched = installedPluginVersion !== undefined && installedPluginVersion !== chosenCli;
-    const globalFailed = globalResult.action === "failed" && (installedPluginVersion ?? packageVersion) !== packageVersion;
+    // A failed update matters when it was meant to move the CLI forward: PATH
+    // then stays on the running version instead of the one this run promised.
+    // No plugin version enters this: an adapter that installs no plugin and
+    // ignores initFlags never reports one, and that is no reason to report a
+    // failed update as configured.
+    const globalFailed = globalResult.action === "failed" && chosenCli !== packageVersion;
     if (pluginMismatched || globalFailed) {
       throw new Error(
         `The host plugin is at ${installedPluginVersion ?? "an unconfirmed version"}, while this run targets ${chosenCli}` +
