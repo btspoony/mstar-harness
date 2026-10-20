@@ -349,7 +349,7 @@ describe("folded MCP command families", () => {
   /**
    * A refusal is a response the caller may forward or a session may record, so
    * a caller-supplied selector value never travels with it — the same rule
-   * `undeclaredSelectorRefusal` states for a session id. Only its shape is
+   * the selector refusal states for a session id. Only its shape is
    * reported; the legal action list and the family name carry the recovery.
    */
   test("an unknown action never echoes the supplied value", async () => {
@@ -459,12 +459,36 @@ describe("folded MCP command families", () => {
         expect((published?.inputSchema.properties ?? {}).sessionId).toMatchObject({ type: "string" });
         const refusal = envelope(await call(client, entry.tool, { action: entry.action, sessionId: value }));
         expect(refusal).toMatchObject({ command: entry.id, status: "usage", code: "command.invalid-input", exitCode: 2 });
-        expect(refusal.details?.acceptingActions).toEqual(entry.accepting);
-        expect(refusal.details?.selector).toBe("sessionId");
+        expect(refusal.details?.selectors).toEqual([{ key: "sessionId", acceptingActions: [...entry.accepting] }]);
         for (const accepting of entry.accepting) expect(refusal.message).toContain(accepting);
         expect(refusal.details?.recovery).toContain("drop");
         expect(JSON.stringify(refusal)).not.toContain(value);
       }
+    });
+  });
+
+  /**
+   * One call, one refusal: a selector the selected action does not declare, a
+   * key it does not accept and its own missing required field all come back
+   * together. Refusing the selector on its own would cost a second round-trip
+   * for input the transport already holds.
+   */
+  test("a refused selector, a rejected field and a missing field share one refusal", async () => {
+    await withClient(async (client) => {
+      const value = "selector-value-that-must-not-be-echoed";
+      const refused = envelope(await call(client, "mstar_iteration", { action: "gate", sessionId: value, bogus: 1 }));
+      expect(refused).toMatchObject({ command: "iteration.gate", status: "usage", code: "command.invalid-input", exitCode: 2 });
+      const paths = (refused.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
+      // The refused selector, the rejected key, then the action's own admission
+      // problem — the refused selector is never re-offered to admission.
+      expect(paths).toEqual(["sessionId", "bogus", "workflow"]);
+      expect(refused.details?.selectors).toEqual([{ key: "sessionId", acceptingActions: ["register"] }]);
+      expect(refused.details?.fields).toEqual(["bogus"]);
+      for (const text of [refused.message, String(refused.details?.recovery)]) {
+        expect(text).toContain("bogus");
+        expect(text).toContain("register");
+      }
+      expect(JSON.stringify(refused)).not.toContain(value);
     });
   });
 
