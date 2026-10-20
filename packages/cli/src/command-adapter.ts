@@ -20,6 +20,7 @@ import {
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
+import { unionBranchSchemas } from "./schema-branches.js";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
@@ -248,17 +249,14 @@ function optionKey(flags: string): string {
 }
 
 function optionJsonSchema(definition: CommandDefinition, key: string): Record<string, unknown> {
+  // The SAME union traversal the folded family index and the payload-field list
+  // use: one input schema, one reading of its alternatives (schema-branches.ts).
   const schemas: Record<string, unknown>[] = [];
-  const pending: unknown[] = [definition.input.toJSONSchema()];
-  while (pending.length > 0) {
-    const schema = pending.pop();
-    if (schema === null || typeof schema !== "object") continue;
-    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
-      const property = (schema.properties as Record<string, unknown>)[key];
-      if (property !== undefined && typeof property === "object" && property !== null) schemas.push(property as Record<string, unknown>);
-    }
-    if ("anyOf" in schema && Array.isArray(schema.anyOf)) pending.push(...schema.anyOf);
-    if ("oneOf" in schema && Array.isArray(schema.oneOf)) pending.push(...schema.oneOf);
+  for (const branch of unionBranchSchemas(definition.input.toJSONSchema())) {
+    const properties = branch.properties;
+    if (properties === null || typeof properties !== "object") continue;
+    const property = (properties as Record<string, unknown>)[key];
+    if (property !== undefined && typeof property === "object" && property !== null) schemas.push(property as Record<string, unknown>);
   }
   if (schemas.length === 0) return {};
   const unique = [...new Map(schemas.map((schema) => [JSON.stringify(schema), schema])).values()];
@@ -349,14 +347,10 @@ export function renderCommandContract(
   // `kind` values) exist only to publish per-kind domain schemas — they stay
   // neutrally labeled and make no input-field or transport claim.
   const inputProperties = new Set<string>();
-  const schemas: unknown[] = [descriptor.input];
-  while (schemas.length > 0) {
-    const schema = schemas.pop();
-    if (schema === null || typeof schema !== "object") continue;
-    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
-      for (const key of Object.keys(schema.properties)) inputProperties.add(key);
-    }
-    if ("anyOf" in schema && Array.isArray(schema.anyOf)) schemas.push(...schema.anyOf);
+  for (const branch of unionBranchSchemas(descriptor.input)) {
+    const properties = branch.properties;
+    if (properties === null || typeof properties !== "object") continue;
+    for (const key of Object.keys(properties as Record<string, unknown>)) inputProperties.add(key);
   }
   const payloadKeys = Object.keys(descriptor.payloadSchemas);
   const payloadFields = payloadKeys.filter((key) => inputProperties.has(key));

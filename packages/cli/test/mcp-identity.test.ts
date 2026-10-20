@@ -38,9 +38,16 @@ const declaredNodeFloor = (
 /** Injected current runtime: at/above the declared floor. */
 const AT_OR_ABOVE_RUNTIME = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 
-/** The folded tool one command id publishes under, and the `action` that selects it. */
+/**
+ * The folded tool one command id publishes under, and the `action` that selects
+ * it. The tool name derives from the definition's authored family segment
+ * (`familyOf(definition)`), never from the id prefix, so the lookup goes
+ * through the definition the id names.
+ */
 function foldedTool(commandId: string): { name: string; action: string } {
-  return { name: familyToolName(familyOf(commandId)), action: actionOf(commandId) };
+  const definition = getCommandDefinitions().find((entry) => entry.id === commandId);
+  if (definition === undefined) throw new Error(`unknown command id ${JSON.stringify(commandId)}`);
+  return { name: familyToolName(familyOf(definition)), action: actionOf(commandId) };
 }
 
 const effects = {

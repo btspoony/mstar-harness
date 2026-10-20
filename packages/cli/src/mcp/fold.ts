@@ -1,14 +1,32 @@
 import type { CommandDefinition } from "@mstar-harness/commands";
+import { inputFields } from "../schema-branches.js";
 
 /**
- * The family a command id belongs to: the segment before its first `.`. An id
- * with no `.` is its own family, and its action is the id itself, so every
- * published tool has the same `<family>` + `action` shape and no command needs
- * a second tool.
+ * The family a definition belongs to: the FIRST segment of its authored CLI
+ * path, which is also what `mstar_schema --family` resolves
+ * (`packages/commands/src/families/schema.ts` filters
+ * `entry.cli.path[0] === family`).
+ *
+ * Deriving it from the definition — not from its id — is what keeps the
+ * published tool name, the family description and the `mstar_schema` recovery
+ * text pointed at the same family the discovery route accepts. The corpus
+ * agrees on both derivations today (the fold suite asserts it over
+ * `getCommandDefinitions()`), but an id whose prefix drifted from its authored
+ * path would otherwise publish `mstar_<id prefix>` while its recovery named a
+ * family that `mstar_schema` refuses as unknown.
+ *
+ * The id-prefix fallback covers only a definition that never passed
+ * `validateCommandDefinitions` (it refuses an empty `cli.path`, so no real
+ * command reaches here): a hand-built fixture, or a future caller constructing
+ * a definition directly. An id with no `.` is its own family, and its action is
+ * the id itself, so every published tool keeps the same `<family>` + `action`
+ * shape and no command needs a second tool.
  */
-export function familyOf(commandId: string): string {
-  const dot = commandId.indexOf(".");
-  return dot === -1 ? commandId : commandId.slice(0, dot);
+export function familyOf(definition: CommandDefinition): string {
+  const segment = definition.cli.path[0];
+  if (segment !== undefined) return segment;
+  const dot = definition.id.indexOf(".");
+  return dot === -1 ? definition.id : definition.id.slice(0, dot);
 }
 
 /**
@@ -22,16 +40,8 @@ export function actionOf(commandId: string): string {
 }
 
 /**
- * The command id one action names: `<family>.<action>`, or the id itself for a
- * family-less command (where the action IS the family name). It is the spelling
- * `mstar_schema` accepts, so publication examples and refusals never advertise
- * an id that does not exist.
+ * `mstar_<family>`: the published tool name, with `.` and `-` folded to `_`.
  */
-export function commandIdForAction(family: string, action: string): string {
-  return family === action ? family : `${family}.${action}`;
-}
-
-/** `mstar_<family>`: the published tool name, with `.` and `-` folded to `_`. */
 export function familyToolName(family: string): string {
   return `mstar_${family.replace(/[.-]/g, "_")}`;
 }
@@ -50,7 +60,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   persist: "Read and replace persisted review or JSON documents.",
   migrate: "Retired legacy-plan migration; refuses without mutating.",
   iteration: "Iteration phase gates, push cadence and registration.",
-  plan: "Coordinator plan rows: bind, progress, complete and issue links.",
+  plan: "Coordinator plan rows: bind, progress, complete and issue links. bind writes the engine row only; a dsh-coordinating session that needs dsh-local ledger attribution uses the native mstar_plan_bind.",
   session: "Launch or recover a coordinator session identity.",
   workflow: "Workflow lifecycle: register, evidence, phase, policy and branch anchors.",
   issue: "Issue store: capture, triage, closure and links.",
@@ -147,24 +157,13 @@ export type FoldedFamilyTool = Readonly<{
 
 /**
  * The fields one member input publishes, including the branches of a union
- * input (`schema` is an anyOf of three strict selector objects). The scan
- * mirrors the contract renderer's payload scan so a non-object input loses
- * none of the fields its alternatives publish.
+ * input (`schema` is an anyOf of three selector objects). The traversal is
+ * shared with the rendered contract (`schema-branches.ts`), so the family index
+ * and the CLI/payload contract can never disagree about which keywords publish
+ * fields.
  */
 function publishedFields(input: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  const fields: Record<string, unknown> = {};
-  const schemas: unknown[] = [input];
-  while (schemas.length > 0) {
-    const schema = schemas.pop();
-    if (schema === null || typeof schema !== "object") continue;
-    if ("anyOf" in schema && Array.isArray(schema.anyOf)) schemas.push(...schema.anyOf);
-    if ("properties" in schema && schema.properties !== null && typeof schema.properties === "object") {
-      for (const [key, property] of Object.entries(schema.properties)) {
-        if (fields[key] === undefined) fields[key] = property;
-      }
-    }
-  }
-  return fields;
+  return Object.fromEntries(inputFields(input));
 }
 
 function requiredFields(input: Readonly<Record<string, unknown>>): readonly string[] {
@@ -186,8 +185,11 @@ function familyDescription(family: string, members: readonly FoldMember[], actio
   // The pointer names the id SHAPE, not only one example: the detail command
   // takes `<family>.<action>`, and a reader who needs another action must be
   // able to derive its id. Naming every id would exceed the surface budget, so
-  // one real example carries the spelling and the pattern carries the rule.
-  const example = commandIdForAction(family, actions[0]!);
+  // one real member id carries the spelling and the pattern carries the rule.
+  // The example is the member's OWN id, never a rebuilt `<family>.<action>`,
+  // so a family name that is not its id prefix cannot advertise an id that does
+  // not exist.
+  const example = members[0]!.definition.id;
   lines.push(actions[0] === family
     ? `Fields: mstar_schema {"command":"${example}"}.`
     : `Fields: mstar_schema {"command":"<family>.<action>"} (e.g. "${example}").`);
@@ -196,17 +198,28 @@ function familyDescription(family: string, members: readonly FoldMember[], actio
 
 /**
  * Fold published members into one tool per family. The property set is the
- * union of the members' input schemas (first declaration wins on a shared key,
- * each property kept exactly as its descriptor produced it), the only
- * unconditional requirement is `action`, and the action enum is the family's
- * real action list. Both collision classes are refused at publication time:
- * two families that fold to one tool name, and two members that publish the
- * same action.
+ * union of the members' input schemas, the only unconditional requirement is
+ * `action`, and the action enum is the family's real action list.
+ *
+ * REFUSED at publication time, each naming both parties: two families that fold
+ * to one tool name, two members that publish the same action, and a member field
+ * named `action` (the family selector owns that name).
+ *
+ * NOT refused: a key several members declare with different shapes. The first
+ * declaration is published and reused for every action, and refusing instead
+ * would delete real families — `issue.payload` is an untyped placeholder on
+ * `add` (every domain payload) and a typed object on `close`, and
+ * `issue.disposition` carries an enum on `add` and none on `close`. The known
+ * cost is discovery imprecision for the later action: the index may name one
+ * action's shape for a key another validates differently, or a narrower enum
+ * than a later action accepts. That cost is a refused VALUE at admission, never
+ * a wrong result — admission always validates the SELECTED member's own schema.
+ * The fold suite pins this first-wins rule with those two real pairs.
  */
 export function foldFamilyTools(members: readonly FoldMember[]): readonly FoldedFamilyTool[] {
   const groups = new Map<string, FoldMember[]>();
   for (const member of members) {
-    const family = familyOf(member.definition.id);
+    const family = familyOf(member.definition);
     const group = groups.get(family);
     if (group === undefined) groups.set(family, [member]);
     else group.push(member);

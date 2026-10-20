@@ -6,6 +6,7 @@ import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextpro
 import { McpServer } from "@modelcontextprotocol/server";
 import { getCommandDefinitions, getCommandSchemas, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
+import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
@@ -18,7 +19,7 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * for the payload-composed input view), and it also published 154,471
  * characters of output schemas — 327,811 characters in total, over 90k tokens.
  * The fold publishes the descriptor field index instead of payload composition
- * and drops output schemas, so the after figure is 31,209 characters of
+ * and drops output schemas, so the after figure is 31,342 characters of
  * description + input schema (~8.7k tokens): 32,000 keeps a small but real
  * margin while a regression that starts republishing per-command contracts
  * inside family descriptions — or that lets per-action tools creep back —
@@ -101,7 +102,7 @@ describe("folded MCP command families", () => {
   test("one published tool per family, carrying the family's real action list", async () => {
     const families = new Map<string, string[]>();
     for (const definition of definitions) {
-      const family = familyOf(definition.id);
+      const family = familyOf(definition);
       families.set(family, [...(families.get(family) ?? []), actionOf(definition.id)]);
     }
     await withClient(async (_client, tools) => {
@@ -121,7 +122,7 @@ describe("folded MCP command families", () => {
   test("the folded property set is the union of the members' published fields", () => {
     const members = definitions.map((definition) => ({ definition, input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>> }));
     const folded = foldFamilyTools(members);
-    expect(folded.length).toBe(new Set(definitions.map((definition) => familyOf(definition.id))).size);
+    expect(folded.length).toBe(new Set(definitions.map((definition) => familyOf(definition))).size);
     for (const family of folded) {
       const properties = family.descriptorView.properties as Record<string, unknown>;
       const memberInputs = family.definitions.map((definition) => getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>);
@@ -138,6 +139,45 @@ describe("folded MCP command families", () => {
         expect(properties[shared]).toEqual(first);
       }
     }
+  });
+
+  /**
+   * The published field index is built by the SAME union traversal the rendered
+   * contract uses (`src/schema-branches.ts`). No current definition publishes a
+   * `oneOf` input, so the traversal is pinned here: a member whose input splits
+   * on `oneOf` must still publish every alternative's fields, or a caller is
+   * told a field does not exist while admission accepts it.
+   */
+  test("a member input that splits on oneOf publishes its alternative fields", () => {
+    const definition = { ...definitions[0]!, id: "fixture.one-of" } as CommandDefinition;
+    const input = {
+      oneOf: [
+        { properties: { mode: { type: "string" } } },
+        { properties: { target: { type: "string" } } },
+      ],
+    };
+    const [folded] = foldFamilyTools([{ definition, input }]);
+    const properties = folded!.descriptorView.properties as Record<string, unknown>;
+    expect(properties.mode).toEqual({ type: "string" });
+    expect(properties.target).toEqual({ type: "string" });
+    // The action's own accepted set carries them too: the transport refuses a
+    // supplied key outside it, so a missing branch would refuse a real field.
+    expect([...folded!.acceptedFields.get("one-of")!].sort()).toEqual(["mode", "target"]);
+  });
+
+  /**
+   * One derivation of family identity. Publication groups by the definition's
+   * authored `cli.path[0]` — the segment `mstar_schema --family` accepts — while
+   * the action still comes from the id. The two must agree over the corpus: an
+   * id whose prefix drifted from its authored path would publish
+   * `mstar_<prefix>` whose recovery names a family the discovery route refuses
+   * as unknown. This is a fact to surface, not to paper over.
+   */
+  test("every command's id prefix is its authored family segment", () => {
+    const mismatched = definitions
+      .filter((definition) => definition.id.split(".", 1)[0] !== definition.cli.path[0])
+      .map((definition) => `${definition.id} (cli.path[0] = ${String(definition.cli.path[0])})`);
+    expect(mismatched).toEqual([]);
   });
 
   test("each family's field-detail pointer names the id shape and a real example", () => {
@@ -180,8 +220,44 @@ describe("folded MCP command families", () => {
       .toThrow(/family selector/);
   });
 
+  /**
+   * Publication refuses duplicate tool names, duplicate actions and an `action`
+   * shadow — but NOT a shape collision: a key two members declare differently
+   * keeps the FIRST declaration. Refusing would delete real families, because
+   * the corpus contains legitimate disagreements (below). The cost is bounded
+   * to a refused value at admission — the selected member always validates its
+   * own schema — never a wrong result. Pinned so the module doc cannot drift
+   * back to claiming every collision is refused.
+   */
+  test("a key two members shape differently keeps the first declaration", () => {
+    const folded = foldFamilyTools(definitions.map((definition) => ({
+      definition,
+      input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>,
+    })));
+    const issue = folded.find((family) => family.family === "issue");
+    const properties = issue!.descriptorView.properties as Record<string, Record<string, unknown>>;
+    // Read the members' own declarations through the SAME shared traversal the
+    // fold publishes with: `issue.close`'s input is a union of five selector
+    // branches, so its fields live on the branches, not on the root.
+    const own = (id: string) => {
+      const definition = definitions.find((entry) => entry.id === id);
+      if (definition === undefined) throw new Error(`unknown command id ${id}`);
+      return inputFields(getCommandSchemas([definition])[0]!.input);
+    };
+    // `issue.payload` is an untyped placeholder on `add` (every domain payload)
+    // and a typed object on `close`: the typed one is the one NOT published.
+    expect(properties.payload).toEqual(own("issue.add").get("payload"));
+    expect(own("issue.close").get("payload")).toMatchObject({ type: "object" });
+    expect(properties.payload).not.toMatchObject({ type: "object" });
+    // `issue.disposition` carries an enum on `add` and none on `close`: the
+    // published enum is the first declaration's, so `close` can refuse a value
+    // the index still names (`open`) — a refusal, never a wrong result.
+    expect(properties.disposition).toEqual(own("issue.add").get("disposition"));
+    expect(own("issue.close").get("disposition")?.enum).toBeUndefined();
+  });
+
   test("every family states its purpose, so the tool list stays readable", () => {
-    const missing = [...new Set(definitions.map((definition) => familyOf(definition.id)))].filter((family) => FAMILY_PURPOSE[family] === undefined);
+    const missing = [...new Set(definitions.map((definition) => familyOf(definition)))].filter((family) => FAMILY_PURPOSE[family] === undefined);
     expect(missing).toEqual([]);
   });
 
