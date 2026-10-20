@@ -335,6 +335,21 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
     });
   });
 
+  test("aggregated refusal names every missing review field in one attempt", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "empty.json", {});
+      const r = runCli(["persist", "write", "review", "--key", "review-empty", "--file", payloadFile], { env: harnessEnv(dir) });
+      expect(r.exitCode).toBe(1);
+      const refusal = message(r);
+      // One refusal, every problem: the caller repairs the document once.
+      expect(refusal).toContain("review.missing-schema");
+      expect(refusal).toContain("review.missing-verdict");
+      expect(refusal).toContain("review.missing-summary");
+      expect(refusal).toContain("review.findings-not-array");
+      expect(existsSync(join(dir, "sdd", "_reviews", "review-empty.json"))).toBe(false);
+    });
+  });
+
   test("rejects a verdict/tally mismatch (exit 1, no write)", () => {
     withTempDir((dir) => {
       const mismatched = { ...REVIEW_PAYLOAD, verdict: "ship it" };

@@ -20,11 +20,18 @@ import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
+import { payloadSchema } from "../payload-field-schema.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const progressPayloadSchema = z.record(z.string(), z.unknown());
-const entryPayloadSchema = z.record(z.string(), z.unknown());
-const entriesPayloadSchema = z.array(entryPayloadSchema);
+/**
+ * One `plan issue-add` entry is a plan-scoped capture: the engine derives
+ * `projectId` from the addressed plan (`ResidualInput`), so the published item
+ * shape is the `CaptureInput` registry without that one member. Every other
+ * field, its enum values and its requiredness come from the registry — never a
+ * second copy here.
+ */
+const entriesPayloadSchema = z.array(payloadSchema("CaptureInput").omit({ projectId: true }));
 const evidencePayloadSchema = z.record(z.string(), z.unknown());
 /**
  * The declared payload shape of `plan complete`: the ordinary completion
@@ -418,6 +425,15 @@ function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<stri
     // one a file payload and an inline --evidence value meet.
     evidence: `Completion evidence JSON object (--file <absolute-json> or inline). ${EVIDENCE_PATH_DESCRIPTION}`,
     file: `Completion evidence JSON file (absolute path); its qc.reports[], qc.consolidated, qa.report and evidence_paths[] values are evidence paths. ${EVIDENCE_PATH_DESCRIPTION}`,
+    expect: PLAN_EXPECT_HELP,
+    sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,
+  };
+  if (verb === "issue-add") return {
+    // The item contract is the engine's CaptureInput registry, which the schema
+    // command already publishes; the entry item is that type minus the
+    // plan-derived projectId.
+    entries: "JSON array of plan-scoped capture entries, one object per finding; read the per-entry fields with mstar schema CaptureInput (projectId is derived from the addressed plan)",
+    file: "Absolute path to a JSON file holding that entries array",
     expect: PLAN_EXPECT_HELP,
     sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,
   };

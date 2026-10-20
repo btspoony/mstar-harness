@@ -98,6 +98,28 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
     const stored = await readExecutionAuthority(f.context, { workflowId: WF, planId: PLAN });
     if (!("plan" in stored.data)) throw new Error("ACTIVE plan view missing"); expect(stored.data.plan.status).toBe("InProgress");
   });
+  test("aggregated refusal names every missing plan issue entry field in one attempt", async () => {
+    const f = await fixture(); await register(f); expect((await bind(f)).code).toBe(0);
+    const incomplete = [{ title: "missing every other field" }, { title: "also incomplete" }];
+    const path = join(f.root, "entries-incomplete.json"); write(path, JSON.stringify(incomplete));
+    const missing = ["kind", "severity", "impact", "acceptance", "sourceIdentity", "rootCauseKey", "acceptanceKey",
+      "occurrenceKey", "sourceKind", "location", "observedBehavior", "discoveredAt", "evidence"];
+    // Both transports answer one payload in ONE refusal: the inline value is the
+    // declared array schema's own refusal, the file route the engine's aggregated
+    // per-entry problems — neither reveals one field per attempt.
+    const inline = cli(["plan", "issue-add", "--plan", PLAN, "--entries", JSON.stringify(incomplete), "--expect", await token(f),
+      "--operation", "issue-add-aggregate-inline", "--harness", f.harness], f, identity());
+    expect(inline.code, inline.stdout).toBe(2); expect(inline.json.code).toBe("command.invalid-input");
+    const paths = ((inline.json.details?.diagnostics ?? []) as Array<{ path?: string }>).map((entry) => entry.path ?? "");
+    for (const index of [0, 1]) {
+      for (const field of missing) expect(paths).toContain(`entries[${index}].${field}`);
+    }
+    const fromFile = cli(["plan", "issue-add", "--plan", PLAN, "--file", path, "--expect", await token(f),
+      "--operation", "issue-add-aggregate-file", "--harness", f.harness], f, identity());
+    expect(fromFile.code, fromFile.stdout).not.toBe(0);
+    const problems = (fromFile.json.details?.problems ?? []) as Array<{ path?: string }>;
+    expect(problems.map((entry) => entry.path)).toEqual(["entries[0]", "entries[1]"]);
+  });
   test("issue capture and exact replay retain one issue id", async () => {
     const f = await fixture(); await register(f); expect((await bind(f)).code).toBe(0);
     const first = await addIssue(f, WF, PLAN, "capture-replay"); expect(first.code, first.stdout).toBe(0);

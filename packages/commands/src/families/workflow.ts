@@ -138,10 +138,19 @@ function parseWorkflowJson<T>(text: string, label: string, code: string): T {
     );
   }
 }
+/**
+ * The transport mirror of the engine's declared `WorkflowExecutionPolicy`
+ * (`packages/engine/src/workflow.ts`): the three keys the header records, each
+ * an accepted-but-opaque value. `policy` is parsed AND published through this
+ * one schema, so `mstar schema --command workflow.execution-policy` states the
+ * shape the `--file` route accepts. `passthrough` keeps the engine's own
+ * `coordination.forbidden-field` guard as the authority on unknown keys — the
+ * transport must not refuse them with a weaker message first.
+ */
 const workflowExecutionPolicySchema = z.object({
-  plan_parallelism: z.unknown().optional(),
-  worktree_mode: z.unknown().optional(),
-  push_policy: z.unknown().optional(),
+  plan_parallelism: z.unknown().optional().describe("Concurrency contract: serial or parallel. The engine enforces the closed set; any other value is refused."),
+  worktree_mode: z.unknown().optional().describe("Accepted-but-opaque worktree mode value; copied into the policy block unchanged."),
+  push_policy: z.unknown().optional().describe("Accepted-but-opaque push policy value; copied into the policy block unchanged."),
 }).passthrough();
 
 function parseWorkflowExecutionPolicy(text: string): WorkflowExecutionPolicy {
@@ -338,7 +347,6 @@ function makeDefinition(
     payloads: Object.fromEntries([
       ...keys.flatMap((key): [string, { schema: z.ZodType }][] => {
         if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
-        if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
         const override = payloadOverride[key];
         return override === undefined ? [] : [[key, { schema: override }]];
       }),
@@ -349,6 +357,7 @@ function makeDefinition(
         .map(([key, schema]): [string, { schema: z.ZodType; help?: string }] => [key, {
           schema,
           ...(key === "delivery" ? { help: "UTF-8 JSON object loaded from --file (pathname, never inline JSON); supply at least one complete member. development allows any subset of compound {outcome: created|updated|skipped, reason?: non-empty; required for skipped}, pr {repo,head,target: non-empty}, merge {provider,evidence: non-empty}; verification/report-only allows completion {policy,evidence: non-empty}. Omit untouched members; supplied member blocks are complete, not sub-field patches. Members outside registered delivery_kind are refused. A report-only completion.policy must match the registered completion_policy for lifecycle completion; a mismatched report may be recorded and corrected by another evidence update before close. A matching non-empty completion on a Done row is frozen; edit its referenced document in place, or use a separate workflow for a different completed intent. Done alone does not freeze other evidence. PR identity is immutable once recorded: keep its registered repo/head/target for that delivery, or use a separate workflow for a different PR. ACTIVE workflows use the DB-backed coordinator evidence operation; this --file route is pre-activation." } : {}),
+          ...(key === "policy" ? { help: "Execution-policy object loaded from --file (pathname, never inline JSON): plan_parallelism, worktree_mode and push_policy, every member optional. The object REPLACES the recorded policy block — an omitted key is removed, never retained. plan_parallelism is the closed serial | parallel set; an unknown key is refused. Read the declared shape with mstar schema --command workflow.execution-policy." } : {}),
         }]),
     ]),
     output: commandEnvelopeSchema,
@@ -640,7 +649,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, [{ key: "sessionId", context: "sessionId" }], {
       expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
-    }));
+      ...(transition.name === "execution-policy" ? {
+        file: "Absolute path to a UTF-8 JSON execution-policy object; read its fields with mstar schema --command workflow.execution-policy",
+      } : {}),
+    }, transition.name === "execution-policy" ? { policy: workflowExecutionPolicySchema } : {}));
   }
   defs.push(makeDefinition("iteration.register", "Register a create-only iteration workflow with its branch anchors and Todo rows.", "write", ["workflow", "compassRef", "branchBase", "branchIntegration", "branchTargetIteration", "row", "project", "startedAt", "harness", "expect", "operation"], async (input, context) => {
     try {
