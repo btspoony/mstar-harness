@@ -56,7 +56,7 @@ task id.
 | `subject` | `<planId> / Task <n> — <role>` | concise title, 200 characters |
 | `description` | the row's `## Assignment` header region plus scope and acceptance | complete details, 16384 characters |
 | `blocked_by` | task ids mirroring the plan rows this row depends on | ids must exist; a blocked task cannot be claimed or reassigned |
-| `write_scopes` | the workspace-relative worktree/dir prefix this row may modify | absolute paths and `..` segments are refused |
+| `write_scopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths and `..` segments are refused — a sibling worktree is named in the prompt instead |
 | owner | the teammate target executing the row | assigned by `claim` or Lead-only `reassign` |
 
 - **Task ids are Team-local generated values.** The plan id and task number
@@ -124,12 +124,19 @@ stays idle until someone messages it.
   agent, not a sandboxed function, so it enters an assigned checkout through its
   own tools (absolute paths, or a directory change of its own). Parallel writable
   tracks therefore work: create one worktree per track first (repository
-  procedure, L2 isolation), then state each member's absolute path in its initial
-  prompt and on its board task.
-- **Name the track in the prompt, not only the scope.** A teammate that is never
-  told which checkout belongs to it will edit the shared cwd. Put the absolute
-  worktree path, the branch, and the files it owns in the initial prompt; record
-  the same prefix in `write_scopes` as the machine-readable echo.
+  procedure, L2 isolation), then state each member's absolute checkout path in
+  its initial prompt.
+- **The prompt carries the absolute address; the board carries a legal scope.**
+  A teammate that is never told which checkout belongs to it will edit the shared
+  cwd, so the initial prompt must name the absolute worktree path, the branch,
+  and the files it owns. `write_scopes` is a DIFFERENT field: it is
+  workspace-relative and refuses absolute paths and `..` segments, so never paste
+  a checkout path into it. Record the repository-relative prefixes the track
+  modifies (for example `packages/dsh/src/gates/`) — the same path means the same
+  file inside every worktree of that repository — and omit the field when the
+  track only reads or when its scope cannot be expressed (a checkout outside the
+  workspace): the prompt is the authority, `write_scopes` is only the advisory
+  echo.
 - **`write_scopes` is advisory, not a lock.** Overlapping scopes on in-progress
   tasks surface as `writeScopeWarnings`; they never block a write. Bash,
   formatters, and code generators are not covered by the filesystem version
