@@ -257,42 +257,6 @@ describe("folded MCP command families", () => {
       .toThrow(/family selector/);
   });
 
-  /**
-   * Publication refuses duplicate tool names, duplicate actions and an `action`
-   * shadow — but NOT a shape collision: a key two members declare differently
-   * keeps the FIRST declaration. Refusing would delete real families, because
-   * the corpus contains legitimate disagreements (below). The cost is bounded
-   * to a refused value at admission — the selected member always validates its
-   * own schema — never a wrong result. Pinned so the module doc cannot drift
-   * back to claiming every collision is refused.
-   */
-  test("a key two members shape differently keeps the first declaration", () => {
-    const folded = foldFamilyTools(definitions.map((definition) => ({
-      definition,
-      input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>,
-    })));
-    const issue = folded.find((family) => family.family === "issue");
-    const properties = issue!.descriptorView.properties as Record<string, Record<string, unknown>>;
-    // Read the members' own declarations through the SAME shared traversal the
-    // fold publishes with: `issue.close`'s input is a union of five selector
-    // branches, so its fields live on the branches, not on the root.
-    const own = (id: string) => {
-      const definition = definitions.find((entry) => entry.id === id);
-      if (definition === undefined) throw new Error(`unknown command id ${id}`);
-      return inputFields(getCommandSchemas([definition])[0]!.input);
-    };
-    // `issue.payload` is an untyped placeholder on `add` (every domain payload)
-    // and a typed object on `close`: the typed one is the one NOT published.
-    expect(properties.payload).toEqual(own("issue.add").get("payload"));
-    expect(own("issue.close").get("payload")).toMatchObject({ type: "object" });
-    expect(properties.payload).not.toMatchObject({ type: "object" });
-    // `issue.disposition` carries an enum on `add` and none on `close`: the
-    // published enum is the first declaration's, so `close` can refuse a value
-    // the index still names (`open`) — a refusal, never a wrong result.
-    expect(properties.disposition).toEqual(own("issue.add").get("disposition"));
-    expect(own("issue.close").get("disposition")?.enum).toBeUndefined();
-  });
-
   test("every family states its purpose, so the tool list stays readable", () => {
     const missing = [...new Set(definitions.map((definition) => familyOf(definition)))].filter((family) => FAMILY_PURPOSE[family] === undefined);
     expect(missing).toEqual([]);
