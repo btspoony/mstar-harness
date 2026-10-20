@@ -251,18 +251,25 @@ function strippedActionInput(input: unknown): unknown {
  * the family's real action list plus the supported recovery — the family tool
  * itself and `mstar_schema` for field detail — so the caller can retry without
  * a second discovery round.
+ *
+ * The supplied selector is NEVER echoed, for the same reason
+ * `undeclaredSelectorRefusal` never echoes one: any caller-controlled scalar can
+ * be credential-shaped, and a value copied into `message` / `diagnostics[].received`
+ * is forwarded wherever the refusal is read or recorded. Only its shape is
+ * reported; both `mstar_schema` examples are runnable verbatim, selector
+ * included — a published next step that the tool refuses is not a recovery.
  */
 function unknownActionRefusal(family: FoldedFamilyTool, action: unknown): CommandEnvelope<never> {
   const listed = family.actions.map((entry) => JSON.stringify(entry)).join(" | ");
-  const received = typeof action === "string" ? JSON.stringify(action) : action === undefined ? "undefined" : typeof action;
+  const received = typeof action === "string" ? "supplied" : action === undefined ? "undefined" : typeof action;
   return refusalEnvelope({
     command: family.toolName,
     status: "usage",
     code: "command.invalid-input",
     exitCode: 2,
-    message: `unknown action ${received} for ${family.toolName}; available actions: ${family.actions.join(", ")}`,
+    message: `unknown action for ${family.toolName}; available actions: ${family.actions.join(", ")}`,
     helpRoute: `mstar schema --family ${family.family}`,
-    recovery: `call ${family.toolName} with "action" set to one of the available actions; for one action's fields call mstar_schema {"family":"${family.family}"} and then {"command":"<member id>"}`,
+    recovery: `call ${family.toolName} with "action" set to one of the available actions; for one action's fields call mstar_schema {"action":"schema","family":"${family.family}"} and then {"action":"schema","command":"${family.definitions[0]!.id}"}`,
     diagnostics: [{ path: "action", code: "not_allowed", message: `action must be one of ${listed}`, expected: listed, received }],
     details: { actions: family.actions },
   });
@@ -402,7 +409,7 @@ function undeclaredFieldRefusal(
     exitCode: 2,
     message: `action ${JSON.stringify(action)} of ${family.toolName} does not accept the field ${JSON.stringify(rejected)}; it accepts: ${cappedFieldList(accepted)}${payloadNote}`,
     helpRoute: `mstar schema --family ${family.family}`,
-    recovery: `drop ${JSON.stringify(rejected)}${acceptingActions.length === 0 ? "" : ` (the action(s) that accept it: ${acceptingActions.join(", ")})`}, or call mstar_schema {"command":${JSON.stringify(definition.id)}} for this action's real input shape`,
+    recovery: `drop ${JSON.stringify(rejected)}${acceptingActions.length === 0 ? "" : ` (the action(s) that accept it: ${acceptingActions.join(", ")})`}, or call mstar_schema {"action":"schema","command":${JSON.stringify(definition.id)}} for this action's real input shape`,
     diagnostics: [{
       path: rejected,
       code: "not_allowed",

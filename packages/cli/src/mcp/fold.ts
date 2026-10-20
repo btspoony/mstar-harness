@@ -189,10 +189,13 @@ function familyDescription(family: string, members: readonly FoldMember[], actio
   // The example is the member's OWN id, never a rebuilt `<family>.<action>`,
   // so a family name that is not its id prefix cannot advertise an id that does
   // not exist.
+  //
+  // `"action":"schema"` is not decoration: `mstar_schema` refuses a call with
+  // no selector, so an example without it is a next step that always fails.
   const example = members[0]!.definition.id;
   lines.push(actions[0] === family
-    ? `Fields: mstar_schema {"command":"${example}"}.`
-    : `Fields: mstar_schema {"command":"<family>.<action>"} (e.g. "${example}").`);
+    ? `Fields: mstar_schema {"action":"schema","command":"${example}"}.`
+    : `Fields: mstar_schema {"action":"schema","command":"<family>.<action>"} (e.g. "${example}").`);
   return lines.join("\n");
 }
 

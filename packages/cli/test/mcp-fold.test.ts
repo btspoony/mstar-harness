@@ -19,13 +19,14 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * for the payload-composed input view), and it also published 154,471
  * characters of output schemas — 327,811 characters in total, over 90k tokens.
  * The fold publishes the descriptor field index instead of payload composition
- * and drops output schemas, so the after figure is 32,155 characters of
- * description + input schema (~8.9k tokens; the payload schemas published for
+ * and drops output schemas, so the after figure is 32,749 characters of
+ * description + input schema (~9.1k tokens; the payload schemas published for
  * `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
  * detail, not per-command republishing): 33,000 keeps a small but real margin
  * while a regression that starts republishing per-command contracts inside
  * family descriptions — or that lets per-action tools creep back — reddens
- * here.
+ * here. A published discovery example must carry every field the tool
+ * REQUIRES (`"action":"schema"`), so the margin absorbs that cost too.
  */
 const PUBLISHED_SURFACE_BUDGET_CHARS = 33_000;
 
@@ -98,6 +99,24 @@ async function withClient(
 
 function call(client: Client, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   return client.callTool({ name, arguments: args });
+}
+
+/**
+ * The `mstar_schema {...}` calls a published text hands the caller, as runnable
+ * arguments. A multi-action family publishes the id SHAPE (`<family>.<action>`)
+ * and spells one real member in its `(e.g. "<id>")`, so that example is
+ * substituted — the shape sentence is documentation, the named member is the
+ * call.
+ */
+function schemaExamples(text: string): Array<Record<string, unknown>> {
+  const named = /\(e\.g\. "([^"]+)"\)/.exec(text)?.[1];
+  return [...text.matchAll(/mstar_schema (\{[^}]*\})/g)].map((match) => {
+    const example = JSON.parse(match[1]!) as Record<string, unknown>;
+    const command = example.command;
+    return typeof command === "string" && command.includes("<") && named !== undefined
+      ? { ...example, command: named }
+      : example;
+  });
 }
 
 describe("folded MCP command families", () => {
@@ -189,10 +208,12 @@ describe("folded MCP command families", () => {
       input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>,
     })));
     for (const family of folded) {
-      expect(family.description).toContain('mstar_schema {"command"');
+      // The pointer carries the mandatory selector: `mstar_schema` refuses a
+      // call without one, so an action-less example is a next step that fails.
+      expect(family.description).toContain('mstar_schema {"action":"schema","command"');
       // A multi-action family must spell the derivation, not only one example.
       if (family.actions.length > 1) {
-        expect(family.description).toContain('{"command":"<family>.<action>"}');
+        expect(family.description).toContain('{"action":"schema","command":"<family>.<action>"}');
       }
       const named = [...family.description.matchAll(/"command":"([^"]+)"/g)]
         .map((match) => match[1]!)
@@ -296,6 +317,56 @@ describe("folded MCP command families", () => {
         expect(refusal.details?.recovery).toContain("mstar_schema");
         expect(refusal.details?.helpRoute).toBe("mstar schema --family host");
       }
+    });
+  });
+
+  /**
+   * A refusal is a response the caller may forward or a session may record, so
+   * a caller-supplied selector value never travels with it — the same rule
+   * `undeclaredSelectorRefusal` states for a session id. Only its shape is
+   * reported; the legal action list and the family name carry the recovery.
+   */
+  test("an unknown action never echoes the supplied value", async () => {
+    await withClient(async (client) => {
+      // Join-built canary: a real secret-shaped runtime value with no
+      // secret-shaped literal in source for scanners to flag.
+      const secret = ["sk", "live-fold-action"].join("-");
+      const refusal = envelope(await call(client, "mstar_host", { action: secret }));
+      expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      const diagnostics = (refusal.details?.diagnostics ?? []) as Array<{ path?: string; received?: string }>;
+      expect(diagnostics).toContainEqual(expect.objectContaining({ path: "action", received: "supplied" }));
+      expect(JSON.stringify(refusal)).not.toContain(secret);
+      // Same rule for a plain unknown value: the message names the tool and the
+      // legal actions, never the caller's string.
+      const plain = envelope(await call(client, "mstar_host", { action: "detect-signals" }));
+      expect(JSON.stringify(plain)).not.toContain("detect-signals");
+    });
+  });
+
+  /**
+   * Every `mstar_schema` example a published text hands the caller must be a
+   * call the tool ACCEPTS: `mstar_schema` refuses a call with no selector, so an
+   * action-less example sends the caller into a second refusal. The sources are
+   * the family pointer in `tools/list` and both recovery texts.
+   */
+  test("every published mstar_schema example is a call the tool accepts", async () => {
+    await withClient(async (client, tools) => {
+      const family = tools.find((entry) => entry.name === "mstar_issue");
+      if (family === undefined) throw new Error("unpublished family tool: mstar_issue");
+      const texts = [
+        family.description ?? "",
+        String(envelope(await call(client, "mstar_issue", { action: "no-such-action" })).details?.recovery ?? ""),
+        String(envelope(await call(client, "mstar_issue", { action: "add", bogus: 1 })).details?.recovery ?? ""),
+      ];
+      let driven = 0;
+      for (const text of texts) {
+        for (const example of schemaExamples(text)) {
+          const accepted = envelope(await call(client, "mstar_schema", example));
+          expect(accepted.status).toBe("ok");
+          driven++;
+        }
+      }
+      expect(driven).toBeGreaterThanOrEqual(3);
     });
   });
 
