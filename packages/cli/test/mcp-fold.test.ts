@@ -13,11 +13,14 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * description plus its input JSON schema, read back from `tools/list`.
  *
  * This is a ceiling, not a repository fact. `tools/list` is paid on every
- * request of every session, and the per-command surface this replaces measured
- * ~190k characters (~53k tokens) with 66% of its description text being CLI
- * usage a tool caller cannot run. The fold lands near 30k (~8k tokens, ~16%),
- * so 32k keeps about 10% growth room for new commands and longer required-field
- * lists, while a regression that starts republishing per-command contracts
+ * request of every session. On the same probe the per-command surface this
+ * replaces measured 173,340 characters of description + input schema (189,881
+ * for the payload-composed input view), and it also published 154,471
+ * characters of output schemas — 327,811 characters in total, over 90k tokens.
+ * The fold publishes the descriptor field index instead of payload composition
+ * and drops output schemas, so the after figure is 31,209 characters of
+ * description + input schema (~8.7k tokens): 32,000 keeps a small but real
+ * margin while a regression that starts republishing per-command contracts
  * inside family descriptions — or that lets per-action tools creep back —
  * reddens here.
  */
@@ -137,17 +140,38 @@ describe("folded MCP command families", () => {
     }
   });
 
-  test("each family's field-detail example names a real command id", () => {
+  test("each family's field-detail pointer names the id shape and a real example", () => {
     const ids = new Set(definitions.map((definition) => definition.id));
     const folded = foldFamilyTools(definitions.map((definition) => ({
       definition,
       input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>,
     })));
     for (const family of folded) {
-      const example = /"command":"([^"]+)"/.exec(family.description)?.[1];
-      expect(example).toBeDefined();
-      expect(ids.has(example!)).toBe(true);
+      expect(family.description).toContain('mstar_schema {"command"');
+      // A multi-action family must spell the derivation, not only one example.
+      if (family.actions.length > 1) {
+        expect(family.description).toContain('{"command":"<family>.<action>"}');
+      }
+      const named = [...family.description.matchAll(/"command":"([^"]+)"/g)]
+        .map((match) => match[1]!)
+        .filter((id) => !id.includes("<"));
+      const example = /\(e\.g\. "([^"]+)"\)/.exec(family.description)?.[1];
+      if (example !== undefined) named.push(example);
+      expect(named.length).toBeGreaterThan(0);
+      for (const id of named) expect(ids.has(id)).toBe(true);
     }
+  });
+
+  test("a payload-carrying action points its payload shape at mstar_schema", () => {
+    const folded = foldFamilyTools(definitions.map((definition) => ({
+      definition,
+      input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>,
+    })));
+    const issue = folded.find((family) => family.family === "issue");
+    expect(issue?.description).toMatch(/- add: actor; payload via mstar_schema/);
+    // A family with no payload contract carries no payload pointer.
+    const status = folded.find((family) => family.family === "status");
+    expect(status?.description).not.toContain("payload via mstar_schema");
   });
 
   test("a member field that shadows the family selector is refused at publication", () => {
@@ -209,6 +233,53 @@ describe("folded MCP command families", () => {
       expect((session?.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).not.toContain("sessionId");
       expect(session?.description).not.toContain("--session-id");
     }, { identityLocked: true, defaultSessionId: "locked-identity" });
+  });
+
+  /**
+   * A family publishes its session selector ONCE for the whole tool, so the
+   * published schema says every action accepts it. Only the listed actions
+   * declare it; on the others the action's Zod object strips the value and the
+   * call silently runs under the connection identity. The transport refuses
+   * before admission instead, names the accepting actions, and never echoes
+   * the supplied identity.
+   */
+  test("a session selector the selected action does not read refuses before admission", async () => {
+    const cases = [
+      { tool: "mstar_status", id: "status.tech-debt", action: "tech-debt", accepting: ["workflow-close"] },
+      { tool: "mstar_milestone", id: "milestone.list", action: "list", accepting: ["assign"] },
+      { tool: "mstar_iteration", id: "iteration.gate", action: "gate", accepting: ["register"] },
+      { tool: "mstar_session", id: "session.run", action: "run", accepting: ["recover"] },
+      { tool: "mstar_workflow_note", id: "workflow-note.coverage", action: "coverage", accepting: ["append"] },
+    ] as const;
+    await withClient(async (client, tools) => {
+      const value = "selector-value-that-must-not-be-echoed";
+      for (const entry of cases) {
+        const published = tools.find((tool) => tool.name === entry.tool);
+        expect((published?.inputSchema.properties ?? {}).sessionId).toMatchObject({ type: "string" });
+        const refusal = envelope(await call(client, entry.tool, { action: entry.action, sessionId: value }));
+        expect(refusal).toMatchObject({ command: entry.id, status: "usage", code: "command.invalid-input", exitCode: 2 });
+        expect(refusal.details?.acceptingActions).toEqual(entry.accepting);
+        expect(refusal.details?.selector).toBe("sessionId");
+        for (const accepting of entry.accepting) expect(refusal.message).toContain(accepting);
+        expect(refusal.details?.recovery).toContain("drop");
+        expect(JSON.stringify(refusal)).not.toContain(value);
+      }
+    });
+  });
+
+  test("an action that does declare the selector still runs, and a uniform family never refuses it", async () => {
+    await withClient(async (client) => {
+      // The one status action that declares `sessionId`: the call reaches its
+      // own definition instead of the selector refusal above.
+      const accepted = envelope(await call(client, "mstar_status", { action: "workflow-close", sessionId: "accepted-session" }));
+      expect(accepted.command).toBe("status.workflow-close");
+      expect(accepted.message).not.toContain("does not declare");
+
+      // Every `mstar_plan` action declares the selector, so the guard is silent.
+      const uniform = envelope(await call(client, "mstar_plan", { action: "show", sessionId: "uniform-session" }));
+      expect(uniform.command).toBe("plan.show");
+      expect(uniform.message).not.toContain("does not declare");
+    });
   });
 
   test("the whole published surface stays inside the design budget", async () => {

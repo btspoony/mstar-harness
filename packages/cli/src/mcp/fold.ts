@@ -101,6 +101,19 @@ export type FoldMember = Readonly<{
   selector?: Readonly<{ key: string }>;
 }>;
 
+/**
+ * A selector a family publishes ONCE while only some of its actions read it.
+ * The published schema is family-wide, so the fact that an action does not
+ * accept it cannot be expressed there; the transport needs this map to refuse
+ * a supplied selector instead of letting the action's schema strip it
+ * silently, and to name the actions that do accept it in the recovery.
+ */
+export type FamilySelector = Readonly<{
+  key: string;
+  /** The actions that declare this selector, in declaration order. */
+  actions: readonly string[];
+}>;
+
 /** One published tool: a whole command family selected by `action`. */
 export type FoldedFamilyTool = Readonly<{
   family: string;
@@ -108,6 +121,12 @@ export type FoldedFamilyTool = Readonly<{
   /** The published `action` values, in declaration order. */
   actions: readonly string[];
   definitions: readonly CommandDefinition[];
+  /**
+   * Every selector the family publishes, with the actions that accept it. A
+   * key listed here is published on the family tool; a key whose action list
+   * does not contain the selected action must be refused before admission.
+   */
+  selectors: readonly FamilySelector[];
   /** The published JSON schema: required `action` plus the merged member fields. */
   descriptorView: Readonly<Record<string, unknown>>;
   description: string;
@@ -145,9 +164,20 @@ function familyDescription(family: string, members: readonly FoldMember[], actio
   const lines = [FAMILY_PURPOSE[family] ?? `${family} commands.`];
   members.forEach((member, index) => {
     const required = requiredFields(member.input);
-    lines.push(`- ${actions[index]}: ${required.length === 0 ? "no required fields" : required.join(", ")}`);
+    // A payload contract is member detail, not a field requirement: naming it
+    // here keeps the per-action line honest without repeating the nested shape
+    // in every family schema. `mstar_schema` is the discovery path.
+    const payload = Object.keys(member.definition.payloads ?? {}).length === 0 ? "" : "; payload via mstar_schema";
+    lines.push(`- ${actions[index]}: ${required.length === 0 ? "no required fields" : required.join(", ")}${payload}`);
   });
-  lines.push(`Fields: mstar_schema {"command":"${commandIdForAction(family, actions[0]!)}"}.`);
+  // The pointer names the id SHAPE, not only one example: the detail command
+  // takes `<family>.<action>`, and a reader who needs another action must be
+  // able to derive its id. Naming every id would exceed the surface budget, so
+  // one real example carries the spelling and the pattern carries the rule.
+  const example = commandIdForAction(family, actions[0]!);
+  lines.push(actions[0] === family
+    ? `Fields: mstar_schema {"command":"${example}"}.`
+    : `Fields: mstar_schema {"command":"<family>.<action>"} (e.g. "${example}").`);
   return lines.join("\n");
 }
 
@@ -181,6 +211,7 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
     const duplicate = actions.find((action, index) => actions.indexOf(action) !== index);
     if (duplicate !== undefined) throw new Error(`${family}: duplicate action ${JSON.stringify(duplicate)}`);
     const properties: Record<string, unknown> = { action: { type: "string", enum: actions } };
+    const selectors = new Map<string, string[]>();
     const requirements: Array<{ name: string; ownership: "caller"; route: "mcp"; help: string }> = [{
       name: "action",
       ownership: "caller",
@@ -198,9 +229,14 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
       }
       // A member's identity selector is a transport field of the whole
       // connection, so the family publishes it once, with the member's own
-      // requirement help, instead of competing with the member fields.
+      // requirement help, instead of competing with the member fields. The
+      // accepting actions are recorded because the family schema cannot say
+      // per action what the transport must refuse.
       const selector = member.selector;
       if (selector === undefined) continue;
+      const accepting = selectors.get(selector.key) ?? [];
+      accepting.push(actionOf(member.definition.id));
+      selectors.set(selector.key, accepting);
       if (properties[selector.key] === undefined) properties[selector.key] = { type: "string" };
       if (!requirements.some((entry) => entry.name === selector.key)) {
         requirements.push({
@@ -216,6 +252,7 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
       toolName,
       actions,
       definitions: group.map((member) => member.definition),
+      selectors: [...selectors].map(([key, accepting]) => ({ key, actions: accepting })),
       descriptorView: {
         type: "object",
         properties,

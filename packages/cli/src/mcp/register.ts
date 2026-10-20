@@ -3,7 +3,7 @@ import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder, refusalEnve
 import { z } from "zod";
 import type { CommandAdmission, CommandDefinition, CommandEnvelope, CommandSchemaDescriptor, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
-import { definitionForAction, foldFamilyTools, type FoldedFamilyTool } from "./fold.js";
+import { actionOf, definitionForAction, foldFamilyTools, type FoldedFamilyTool } from "./fold.js";
 import { surfaceAssignmentRecovery } from "../command-adapter.js";
 import { validateCommandOutcome } from "./outcome.js";
 /**
@@ -268,6 +268,59 @@ function unknownActionRefusal(family: FoldedFamilyTool, action: unknown): Comman
   });
 }
 
+/**
+ * The refusal for a session selector the SELECTED action does not declare.
+ *
+ * A family publishes its selector once for the whole tool, but only some
+ * actions read it. On the others the key is not a declared context key, so
+ * `handlerInput` does not strip it and the action's Zod object (strip, never
+ * strict) silently discards the value: the call runs under the connection
+ * identity and the caller sees no signal that the identity it passed was
+ * ignored. That is the same rule the input-contract comment states — a tool
+ * field the handler does not read must not be advertised — so the transport
+ * refuses BEFORE admission instead of letting the field vanish.
+ *
+ * The refusal names the actions that DO accept the selector (that is the
+ * discovery fact the family schema cannot publish) and never echoes the
+ * supplied value: a session id is a credential-shaped fact, and echoing it
+ * into an error the caller may forward adds no recovery. A LOCKED connection
+ * is exempt: it publishes no selector at all, and `strippedSessionInput`
+ * already owns the deliberate scrape of a caller-supplied one.
+ */
+function undeclaredSelectorRefusal(
+  family: FoldedFamilyTool,
+  definition: CommandDefinition,
+  input: unknown,
+  locked: boolean,
+): CommandEnvelope<never> | undefined {
+  if (locked || input === null || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  const declared = new Set(definition.cli.options.filter((option) => option.context === "sessionId").map((option) => option.key));
+  for (const selector of family.selectors) {
+    if (declared.has(selector.key) || record[selector.key] === undefined) continue;
+    const action = actionOf(definition.id);
+    const accepting = selector.actions.map((entry) => JSON.stringify(entry));
+    return refusalEnvelope({
+      command: definition.id,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      message: `action ${JSON.stringify(action)} of ${family.toolName} does not declare the ${JSON.stringify(selector.key)} selector; it is accepted by: ${selector.actions.join(", ")}`,
+      helpRoute: `mstar schema --family ${family.family}`,
+      recovery: `drop ${JSON.stringify(selector.key)} to run this action under the connection identity, or call ${family.toolName} with "action" set to one of: ${selector.actions.join(", ")}`,
+      diagnostics: [{
+        path: selector.key,
+        code: "not_allowed",
+        message: `${selector.key} is not an input of ${definition.id}; the actions that accept it: ${selector.actions.join(", ")}`,
+        expected: accepting.join(" | "),
+        received: "supplied",
+      }],
+      details: { action: definition.id, selector: selector.key, acceptingActions: selector.actions },
+    });
+  }
+  return undefined;
+}
+
 export function registerMcpCommands(
   server: McpServer,
   definitions: readonly CommandDefinition[],
@@ -321,8 +374,12 @@ export function registerMcpCommands(
           if (definition === undefined) {
             return { issues: [{ message: JSON.stringify(unknownActionRefusal(family, action)) }] };
           }
-          const entry = prepared.get(definition.id)!;
           const locked = resolveContext.identityLocked === true;
+          const selectorRefusal = undeclaredSelectorRefusal(family, definition, input, locked);
+          if (selectorRefusal !== undefined) {
+            return { issues: [{ message: JSON.stringify(selectorRefusal) }] };
+          }
+          const entry = prepared.get(definition.id)!;
           const defaultSessionId = resolveContext.defaultSessionId;
           const defaultHarness = entry.harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
