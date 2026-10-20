@@ -19,9 +19,15 @@
  * the package is not installed the mount registers nothing, logs ONE debug
  * line (a one-time probe per apply), and never throws. The server command
  * mirrors the shipped bundle's `mstar-mcp` row (bundle/cordis.patch.yml:
- * `npx -y @mstar-harness/cli mcp`, stdio); when the deployment's loader
- * carries a readable row config for the package, that config is the base and
- * only the per-agent `env` and the identity-env args are overlaid.
+ * `npx -y @mstar-harness/cli mcp`, stdio). The base is that row ONLY: the
+ * loader read selects the deployment row by the row's OWN identity (the
+ * bundle row id `mstar-mcp`, else the MStar server identity in its config —
+ * `serverName: mstar` or the `@mstar-harness/cli … mcp` launch args), never
+ * by the package name alone, because a profile may enable another
+ * `@deepseek-ai/dsh-mcp-client` row for a different server before it. When no
+ * row is identifiably the MStar row, the shipped-row mirror is the base —
+ * never another server's row. Only the per-agent `env` and the identity-env
+ * args are overlaid.
  *
  * Disposal: the `agent/created` listener is a fiber-scoped effect, so an HMR
  * fiber swap unloads the registering context with every mount it made. Each
@@ -51,6 +57,15 @@ const IDENTITY_ENV_FLAG = '--identity-env'
 /** The package the mount reuses (one string literal; never a static import — optional-by-presence). */
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 
+/** The shipped bundle row id (`bundle/cordis.patch.yml`: `- id: mstar-mcp`). */
+const MSTAR_ROW_ID = 'mstar-mcp'
+
+/** The shipped row's `serverName` — the server identity the bundle declares. */
+const MSTAR_SERVER_NAME = 'mstar'
+
+/** The CLI package the shipped row launches (`npx -y @mstar-harness/cli mcp`). */
+const MSTAR_CLI_PACKAGE = '@mstar-harness/cli'
+
 /**
  * The base config mirroring the shipped bundle's `mstar-mcp` row
  * (bundle/cordis.patch.yml) — the same server command the shipped bundle
@@ -59,10 +74,10 @@ const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
  * per-agent `env` and the identity-env args are overlaid.
  */
 const DEFAULT_ROW_CONFIG: Record<string, unknown> = {
-  serverName: 'mstar',
+  serverName: MSTAR_SERVER_NAME,
   transport: 'stdio',
   command: 'npx',
-  args: ['-y', '@mstar-harness/cli', 'mcp', IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID],
+  args: ['-y', MSTAR_CLI_PACKAGE, 'mcp', IDENTITY_ENV_FLAG, MSTAR_HOST_SESSION_ID],
 }
 
 /**
@@ -146,9 +161,12 @@ export type McpClientModuleProvider = () => Promise<McpClientModuleView | undefi
 /**
  * Minimal structural view of one cordis loader `Entry` the row-config read
  * consumes (`fallbacks-probe.ts` `LoaderEntryView` — the same consumed
- * surface, no loader-plugin dependency).
+ * surface, plus the entry `id` this read needs to identify the MStar row; no
+ * loader-plugin dependency).
  */
 interface LoaderEntryView {
+  /** The entry id inside its tree (`Entry.id` — the bundle row id at the root). */
+  id?: unknown
   options: { name?: unknown; config?: unknown }
   disabled?: unknown
 }
@@ -159,23 +177,46 @@ interface LoaderView {
 }
 
 /**
+ * `true` when the row config carries the MStar server identity the shipped
+ * bundle declares: `serverName: mstar`, or the `@mstar-harness/cli mcp` launch
+ * args of its row. This identifies a deployment row that keeps the MStar
+ * identity under another (or no) id — it never matches an unrelated
+ * `dsh-mcp-client` server's row.
+ */
+function isMstarServerConfig(config: Record<string, unknown>): boolean {
+  if (config.serverName === MSTAR_SERVER_NAME) return true
+  const args = config.args
+  if (!Array.isArray(args)) return false
+  const cli = args.indexOf(MSTAR_CLI_PACKAGE)
+  return cli >= 0 && args[cli + 1] === 'mcp'
+}
+
+/**
  * The deployment's `mstar-mcp` row config when the loader carries a readable
- * entry for the package (present, enabled, object config) — the base the
- * per-agent `env` overlays. Absent/unreadable → `undefined` (the caller uses
- * the shipped-row mirror). Point-in-time read, no cache.
+ * entry for it (present, enabled, object config) — the base the per-agent
+ * `env` overlays. Selection is by the row's OWN identity, never by package
+ * name alone: the bundle row id (`mstar-mcp`) wins outright; absent it, the
+ * first row whose config carries the MStar server identity is used; absent
+ * both, `undefined` (the caller uses the shipped-row mirror). An unrelated
+ * `dsh-mcp-client` row is never selected, however early it sits in the tree.
+ * Point-in-time read, no cache.
  */
 function loaderRowConfig(ctx: Context): Record<string, unknown> | undefined {
   const loader = ctx.get('loader') as LoaderView | undefined
   if (loader === undefined || typeof loader.entries !== 'function') return undefined
+  let identityMatch: Record<string, unknown> | undefined
   for (const entry of loader.entries()) {
     const options = entry?.options
     if (options === undefined || options.name !== MCP_CLIENT_PACKAGE) continue
     if (entry.disabled === true) continue
     const config = options.config
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) return undefined
-    return { ...(config as Record<string, unknown>) }
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) continue
+    const row = config as Record<string, unknown>
+    // The row's own id is authoritative — the shipped bundle declares it.
+    if (entry.id === MSTAR_ROW_ID) return { ...row }
+    if (identityMatch === undefined && isMstarServerConfig(row)) identityMatch = { ...row }
   }
-  return undefined
+  return identityMatch
 }
 
 /* ---------------------------------- the default provider ---------------------------------- */

@@ -91,6 +91,43 @@ const MCP_ROW: LoaderEntryView = {
   fiber: {},
 }
 
+/**
+ * A loader row fixture carrying the entry id (the real cordis `Entry.id` the
+ * row selection reads; the shared `LoaderEntryView` omits it).
+ */
+type RowFixture = LoaderEntryView & { id?: string }
+
+/** The shipped bundle row, as the loader entry exposes it (`- id: mstar-mcp` + its config). */
+const MSTAR_ROW: RowFixture = {
+  id: 'mstar-mcp',
+  options: {
+    name: '@deepseek-ai/dsh-mcp-client',
+    config: { serverName: 'mstar', transport: 'stdio', command: 'npx', args: ['-y', '@mstar-harness/cli', 'mcp'] },
+  },
+  disabled: false,
+  fiber: {},
+}
+
+/**
+ * An unrelated `@deepseek-ai/dsh-mcp-client` row: a different MCP server a
+ * profile may enable — different id, server name, command, args and env.
+ */
+const UNRELATED_ROW: RowFixture = {
+  id: 'other-server-mcp',
+  options: {
+    name: '@deepseek-ai/dsh-mcp-client',
+    config: {
+      serverName: 'other',
+      transport: 'stdio',
+      command: 'uvx',
+      args: ['other-server', '--stdio'],
+      env: { OTHER_MCP_TOKEN: 'unrelated-server-token' },
+    },
+  },
+  disabled: false,
+  fiber: {},
+}
+
 /** The per-agent identity env the mount must derive for one agent id. */
 const envFor = (id: string): Record<string, string> => ({ [MSTAR_HOST_SESSION_ID]: id })
 
@@ -197,6 +234,102 @@ describe('scoped MCP mount — per-agent registration', () => {
       await settle()
 
       expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('an unrelated dsh-mcp-client row ordered BEFORE the mstar-mcp row never becomes the mount base', async () => {
+    const ctx = new Context()
+    const loader = new FakeLoaderRegistry(ctx)
+    // Two rows for the same package: a different server first, the MStar row
+    // second (later layers win per row, so this order is ordinary). Selecting
+    // the first row by package name alone would launch the WRONG server with
+    // the per-agent identity env — the MStar row's own id must win.
+    loader.entriesList = [UNRELATED_ROW, MSTAR_ROW]
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, { provider: fake.provider })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-row'), source: 'fresh' })
+      await settle()
+
+      expect(fake.configs).toHaveLength(1)
+      const config = fake.configs[0]!
+      expect(config.serverName).toBe('mstar')
+      expect(config.transport).toBe('stdio')
+      expect(config.command).toBe('npx')
+      // The identity-env declaration rides the MStar row's args.
+      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      // Only the per-agent env is overlayed — the unrelated row's env never rides along.
+      expect(config.env).toEqual(envFor('agent-row'))
+      // The unrelated server's launch surface appears nowhere in the mount.
+      expect(JSON.stringify(config)).not.toContain('uvx')
+      expect(JSON.stringify(config)).not.toContain('other-server')
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('no identifiable mstar row → the shipped-row mirror is the base, never the unrelated row', async () => {
+    const ctx = new Context()
+    const loader = new FakeLoaderRegistry(ctx)
+    // The MStar row is absent (not enabled, removed by a profile override):
+    // the unrelated `dsh-mcp-client` row must NOT be adopted as the base.
+    loader.entriesList = [UNRELATED_ROW]
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, { provider: fake.provider })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-row'), source: 'fresh' })
+      await settle()
+
+      expect(fake.configs).toHaveLength(1)
+      const config = fake.configs[0]!
+      expect(config.serverName).toBe('mstar')
+      expect(config.transport).toBe('stdio')
+      expect(config.command).toBe('npx')
+      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(config.env).toEqual(envFor('agent-row'))
+      expect(JSON.stringify(config)).not.toContain('uvx')
+      expect(JSON.stringify(config)).not.toContain('other-server')
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('an MStar row id wins even when its config omits the shipped identity fields', async () => {
+    const ctx = new Context()
+    const loader = new FakeLoaderRegistry(ctx)
+    // The row's own id is authoritative on its own: a deployment row keeping
+    // the bundle id but a custom serverName/command is still the MStar row.
+    loader.entriesList = [
+      UNRELATED_ROW,
+      {
+        id: 'mstar-mcp',
+        options: {
+          name: '@deepseek-ai/dsh-mcp-client',
+          config: { serverName: 'mstar-pinned', transport: 'stdio', command: 'bun', args: ['run', 'mcp'] },
+        },
+        disabled: false,
+        fiber: {},
+      },
+    ]
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, { provider: fake.provider })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-row'), source: 'fresh' })
+      await settle()
+
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.serverName).toBe('mstar-pinned')
+      expect(fake.configs[0]!.command).toBe('bun')
       expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
