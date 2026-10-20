@@ -423,7 +423,7 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("the persist family always uses the invocation's server root and publishes no per-call harness", async () => {
+  test("the persist family always uses the invocation's server root and refuses a per-call harness", async () => {
     const fixture = await competingPersistRoots();
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
@@ -458,14 +458,16 @@ describe("MCP harness root", () => {
       expect(pinned).toMatchObject({ status: "ok" });
       expect(persistOrigin(pinned)).toBe("pinned");
 
-      // A client-supplied root is not a capability: an extra `harness` field is
-      // not part of the contract and the server root still decides. The delete
-      // removes the pinned root's document and leaves the cwd's untouched.
+      // A client-supplied root is not a capability: `harness` is not part of
+      // this family's contract, so the transport REFUSES the extra field before
+      // admission rather than stripping it — the store is never reached, and
+      // neither root's document changes.
       const pinnedDocument = path.join(fixture.pinned, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
       const cwdDocument = path.join(fixture.cwdRoot, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
-      const deleted = await toolEnvelope(client, "mstar_persist", withAction("persist.delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot }));
-      expect(deleted).toMatchObject({ status: "ok", data: { deleted: true } });
-      expect(existsSync(pinnedDocument)).toBe(false);
+      const refused = await toolEnvelope(client, "mstar_persist", withAction("persist.delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.cwdRoot }));
+      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect((refused.details as { field?: string }).field).toBe("harness");
+      expect(existsSync(pinnedDocument)).toBe(true);
       expect(existsSync(cwdDocument)).toBe(true);
     } finally {
       await client.close();

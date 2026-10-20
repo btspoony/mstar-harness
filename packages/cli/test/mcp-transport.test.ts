@@ -114,12 +114,17 @@ describe("registered MCP transport consumers", () => {
       expect(diagnostics(refusal)).toContainEqual(expect.objectContaining({ path: "reportFile", expected: "string", received: "undefined" }));
       expect(refusal.details).toMatchObject({ helpRoute: "mstar qc validate-report --help", recovery: expect.stringContaining("mstar qc validate-report --help") });
 
+      // A caller cannot forge an admission: the tool publishes no `success` /
+      // `data` / `definition` field, so those extra keys are refused BEFORE
+      // admission instead of being stripped out of the call. Nothing the caller
+      // supplied reaches the handler, and the refusal names what it took away.
       const forgedAdmission = envelope(await client.callTool({
         name: "mstar_qc",
         arguments: { action: "validate-report", success: true, data: { reportFile: "unvalidated.md" }, definition: { id: "report" } },
       }));
       expect(forgedAdmission).toMatchObject({ command: "qc.validate-report", status: "usage", code: "command.invalid-input" });
-      expect(diagnostics(forgedAdmission)).toContainEqual(expect.objectContaining({ path: "reportFile", received: "undefined" }));
+      expect(diagnostics(forgedAdmission)).toContainEqual(expect.objectContaining({ path: "success", code: "not_allowed", received: "supplied" }));
+      expect(forgedAdmission.data).toBeUndefined();
 
       const reportFile = join(cwd, "invalid-report.md");
       writeFileSync(reportFile, "# Incomplete seat report\n");

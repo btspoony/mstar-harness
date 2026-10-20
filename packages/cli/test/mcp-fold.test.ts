@@ -282,6 +282,60 @@ describe("folded MCP command families", () => {
     });
   });
 
+  /**
+   * A family publishes the UNION of its members' fields, while admission
+   * validates only the SELECTED action's own schema — strip mode, no diagnostic.
+   * A stripped FILTER is the worst case: an unfiltered page returned to a caller
+   * that asked for a filter reads as a filtered page, a wrong result rather than
+   * lost input. The transport therefore refuses a top-level key the selected
+   * action does not accept, and names the fields it does accept.
+   */
+  test("a field the selected action does not accept refuses before admission", async () => {
+    await withClient(async (client) => {
+      // A sibling action's field: `skill` belongs to `host.skill-root`.
+      const sibling = envelope(await call(client, "mstar_host", { action: "detect", skill: "mstar-harness-core" }));
+      expect(sibling).toMatchObject({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2 });
+      expect(sibling.message).toContain('"skill"');
+      expect(sibling.message).toContain("signals");
+      expect(sibling.details?.field).toBe("skill");
+      expect(sibling.details?.acceptedFields).toEqual(["signals"]);
+      // The discovery fact the family schema cannot publish: who does take it.
+      expect(sibling.details?.acceptingActions).toEqual(["skill-root"]);
+      expect(sibling.details?.recovery).toContain("mstar_schema");
+      expect(sibling.details?.helpRoute).toBe("mstar schema --family host");
+
+      // A key NO action declares takes the same arm, with nobody to name.
+      const unknown = envelope(await call(client, "mstar_host", { action: "detect", signals: "question", bogus: 1 }));
+      expect(unknown).toMatchObject({ command: "host.detect", status: "usage" });
+      expect(unknown.details?.field).toBe("bogus");
+      expect(unknown.details?.acceptingActions).toBeUndefined();
+      expect(unknown.details?.recovery).toContain("drop");
+      expect(unknown.details?.recovery).toContain('"host.detect"');
+
+      // The field list is CAPPED; `mstar_schema` is the full answer past it.
+      const capped = envelope(await call(client, "mstar_issue", { action: "add", bogus: 1 }));
+      expect(capped.details?.field).toBe("bogus");
+      expect(capped.message).toContain(", …");
+      expect((capped.details?.acceptedFields ?? []).length).toBeGreaterThan(12);
+    });
+  });
+
+  /**
+   * The other half of the same rule: a key the action DOES accept is admission's
+   * business. `payload` nested contents are never inspected by the field index,
+   * so a malformed payload must surface admission's own diagnostics for the
+   * payload's fields — never a top-level `payload` refusal invented here.
+   */
+  test("an accepted payload key stays admission's business, not the field index's", async () => {
+    await withClient(async (client) => {
+      const refused = envelope(await call(client, "mstar_issue", { action: "add", payload: {} }));
+      expect(refused).toMatchObject({ command: "issue.add", status: "usage", code: "command.invalid-input" });
+      const paths = (refused.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
+      expect(paths).not.toContain("payload");
+      expect(paths.length).toBeGreaterThan(0);
+    });
+  });
+
   test("the whole published surface stays inside the design budget", async () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>

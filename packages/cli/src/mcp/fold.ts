@@ -127,6 +127,19 @@ export type FoldedFamilyTool = Readonly<{
    * does not contain the selected action must be refused before admission.
    */
   selectors: readonly FamilySelector[];
+  /**
+   * The top-level input fields each action accepts, keyed by action, in the
+   * order the member's own input schema publishes them — the SELECTED member's
+   * own field set as admission sees it.
+   *
+   * The published schema is the union of these sets, so it cannot say that a
+   * key belongs to one action and not another. This map is the transport's only
+   * source for that fact: admission validates the selected member's own object
+   * schema (strip mode), so a key the member does not declare disappears
+   * without a diagnostic, and a stripped filter reads exactly like an applied
+   * one.
+   */
+  acceptedFields: ReadonlyMap<string, readonly string[]>;
   /** The published JSON schema: required `action` plus the merged member fields. */
   descriptorView: Readonly<Record<string, unknown>>;
   description: string;
@@ -212,14 +225,20 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
     if (duplicate !== undefined) throw new Error(`${family}: duplicate action ${JSON.stringify(duplicate)}`);
     const properties: Record<string, unknown> = { action: { type: "string", enum: actions } };
     const selectors = new Map<string, string[]>();
+    const acceptedFields = new Map<string, readonly string[]>();
     const requirements: Array<{ name: string; ownership: "caller"; route: "mcp"; help: string }> = [{
       name: "action",
       ownership: "caller",
       route: "mcp",
       help: "the family action to run; every other field belongs to that action",
     }];
-    for (const member of group) {
-      for (const [key, property] of Object.entries(publishedFields(member.input))) {
+    for (const [index, member] of group.entries()) {
+      const fields = publishedFields(member.input);
+      // The member's OWN field set, recorded before the union merge below: the
+      // transport refuses a supplied key outside it instead of letting the
+      // selected action's schema strip the value silently.
+      acceptedFields.set(actions[index]!, Object.keys(fields));
+      for (const [key, property] of Object.entries(fields)) {
         // The family selector owns the name: a member field that shadowed it
         // would be published away silently, so publication refuses instead.
         if (key === "action") {
@@ -253,6 +272,7 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
       actions,
       definitions: group.map((member) => member.definition),
       selectors: [...selectors].map(([key, accepting]) => ({ key, actions: accepting })),
+      acceptedFields,
       descriptorView: {
         type: "object",
         properties,
