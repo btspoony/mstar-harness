@@ -200,13 +200,17 @@ full agent toolset and enters its assigned checkout itself. Record each track's
 prefix on its board task (`write_scopes` is advisory and never a lock), keep
 disjoint seats in disjoint directories, and leave integration to the Lead.
 
-**The Assignment travels in ONE gated call.** `spawn_teammate.prompt`,
+**Every Assignment has EXACTLY one gated carrier.** `spawn_teammate.prompt`,
 `team_task_create.description`, `team_task_update.description` and
-`send_message.message` are all dispatch carriers, so an Assignment-shaped board
-description records a second dispatch for the same work — one that never settles
-and skews the ledger. Put the Assignment header in the `spawn_teammate` prompt
-only and keep the board `description` as coordination text (§
-`references/dsh-agent-teams.md` § One gated carrier per Assignment).
+`send_message.message` are all dispatch carriers. Two carriers for one piece of
+work leave a permanently unresolved duplicate in the ledger; **zero carriers
+leave the work ungated** — a teammate reused on a track is steered by
+`send_message`, so a header-free steer means the field, lease and worktree checks
+never run for that task. The board `description` is therefore always coordination
+text, and each task's Assignment rides its own carrier: the track's first task in
+`spawn_teammate.prompt`, every later task on that track in the `send_message`
+that starts it (§ `references/dsh-agent-teams.md` § Exactly one gated carrier per
+Assignment).
 
 **Seats are budgeted per track, not per task.** The roster is finite and has no
 removal operation, so one durable teammate per writable track (reused via

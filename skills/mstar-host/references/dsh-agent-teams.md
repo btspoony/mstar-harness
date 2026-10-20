@@ -59,22 +59,35 @@ task id.
 | `write_scopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths and `..` segments are refused — a sibling worktree is named in the prompt instead |
 | owner | the teammate target executing the row | assigned by `claim` or Lead-only `reassign` |
 
-### One gated carrier per Assignment
+### Exactly one gated carrier per Assignment — every time
 
 `TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — `spawn_teammate.prompt`,
 `team_task_create.description`, `team_task_update.description` and
 `send_message.message` — and every Assignment-shaped call is recorded as its own
-dispatch. A board task whose `description` repeats the Assignment header
-therefore records a SECOND dispatch for the same work: the spawn settles with its
-member, the board row never settles, and the agent-flow ledger keeps a
-permanently unresolved duplicate that inflates dispatch counts and the panel
-graph.
+dispatch. Both failure directions are real:
 
-**The Assignment travels in exactly one place: `spawn_teammate.prompt`.** The
-board task's `description` carries coordination text only (ids, scope,
-acceptance), and `send_message` steers with a short instruction plus the task id
-— never a pasted `## Assignment` header. That keeps one dispatch row per
-Assignment, matching the plan row one-to-one.
+- **Two carriers** for one piece of work: the board `description` repeats the
+  Assignment header, so the spawn settles with its member while the board row
+  never settles, leaving a permanently unresolved duplicate that inflates
+  dispatch counts and the panel graph.
+- **No carrier** for a later task: a teammate reused on a track is steered with a
+  header-free message, no new spawn happens, and the task's Assignment never
+  reaches a carrier at all — so `gateAssignmentText` never runs its field, lease
+  and worktree checks, and the ledger records nothing. A silently ungated
+  writable dispatch is worse than a duplicate.
+
+**So each task gets exactly one carrier, chosen by its position on the track:**
+
+| Task on the reused track | Carrier |
+|---|---|
+| the track's FIRST task | `spawn_teammate.prompt` (the spawn is the dispatch) |
+| every LATER task on that track | `send_message.message` (the steer IS the dispatch) |
+| never | `team_task_create.description` / `team_task_update.description` — the board row is the coordination record, always non-Assignment text (ids, scope, acceptance) |
+
+A track's later task therefore carries its full `## Assignment` header in the
+`send_message` that starts it. That is the only way its gates run; a short
+"continue with task 3" message is not a delegation and must not be used to
+dispatch writable work.
 
 - **Task ids are Team-local generated values.** The plan id and task number
   live in `subject`, never in the opaque id.
