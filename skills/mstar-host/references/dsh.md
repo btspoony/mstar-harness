@@ -227,21 +227,37 @@ and a retired path is not a lookup. Config / `.mstarc` `soft` are the local
 rollbacks. Hard gates are never a global default.
 
 A composed agent step carries ONE **`<mstar_engine_status>`** catalog
-message when the row is emitted: the iteration phase-gate section when a
-steering compass resolved, and the workspace-state digest section (plan
-registry, open issues from the store rollup, branch/policy anchors, plan row
-scopes — a recorded scope, not a lease — knowledge digest, compass direction)
-when the workspace has harness authority (store.db registry). When no
-lifecycle is selected the row renders `workflow selection: ERROR (<code>)
-<message>` instead of those state lines, and that message names the execution
-authority plus a real recovery (`mstar workflow register` /
-`mstar iteration register`, or picking a registered lifecycle for this
-session) rather than a retired `status.json` path. Emission is
-change-driven per session+workspace: first emission, then only when the
-rendered row or the panel-relevant payload projection changes — the start of
-a turn is not a trigger, so a long unchanged session does not accumulate
-copies, and a workspace with no resolved `{HARNESS_DIR}` composes no row at
-all. The block is a projection of the payload: the version / harness dir /
+message when the row is emitted. The row is a compact DELTA, not a snapshot:
+ONE line carrying the selected `workflow`, its non-Done `plans`, the `branch`
+anchors, and — when a steering compass resolved — the iteration phase `gate`
+verdict with its transition and violation codes. When no lifecycle is selected
+it renders `workflow selection: ERROR (<code>) <message>` in place of that
+line, and that message names the execution authority plus a real recovery
+(`mstar workflow register` / `mstar iteration register`, or picking a
+registered lifecycle for this session) rather than a retired `status.json`
+path.
+
+Everything else the payload carries — the open-issue rollup and its detail
+rows, the branch policy, plan row scopes (a recorded scope, never a lease), the
+knowledge digest, the compass direction and the agent-flow ledger — is
+deliberately NOT in the row. Those facts stay in `MstarEngineStatusPayload`
+(the panel renders them from the persisted emission) and in the engine
+authorities behind it; `mstar status` is the on-demand authority a model reads
+instead of waiting for a row. The row is a projection of the payload, never the
+authority for it: treat the row as a change notice and re-read the authority
+when a decision needs the full state.
+
+Emission is change-driven per session+workspace, and the two sides are gated
+separately. The MODEL row is keyed on its own rendered text: first emission,
+then only when that line changes — so a residual count, a ledger event, a
+knowledge digest or a row scope moving does not append an identical-looking
+row, and a long unchanged session does not accumulate stale copies. The PANEL
+is keyed on the full payload projection: a change to any payload-only fact
+still persists the new payload for the panel (the freshness footer keeps the
+turn the model last saw a row). The start of a turn is neither trigger, and a
+workspace with no resolved `{HARNESS_DIR}` composes no row at all.
+
+The block is a projection of the payload: the version / harness dir /
 enforcement watermark stays in the payload (the panel meta dock renders
 version + harness dir from it) and stays model-visible once in the always-on
 system prompt (`mstar:engine-status` digest + `mstar:harness-rules`), never
@@ -250,12 +266,14 @@ repeated in the row. The one exception is a composition without
 exists, so the row falls back to re-rendering the trio itself (the listener's
 `showWatermark` option, taken from that registration verdict) — the watermark
 is never absent from the model's context. The newest per-session emission
-persists in the control-root `store.db` (`dsh_status_emissions`), so its
-freshness footer `turn` / `at` mean the last emission, not the current turn;
-the row is not periodically re-anchored, so after host-side context compaction
-it may be absent until the next change — the system-prompt digest still
-carries the version, the active workflow and its non-Done plans. The build
-behind it is one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
+persists in the control-root `store.db` (`dsh_status_emissions`); its
+freshness footer `turn` / `at` name the last MODEL-row emission, so a
+panel-only persist updates the payload without claiming the model saw a new
+row. The row is not periodically re-anchored, so after host-side context
+compaction it may be absent until the next rendered change — the system-prompt
+digest still carries the version, the active workflow and its non-Done plans,
+and `mstar status` re-reads everything else on demand. The build behind it is
+one per-workspace TTL cache (`catalogTtlMs`, default 60 s).
 
 ### Execution authority in this host (source state)
 
@@ -408,15 +426,15 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   run without a `localAgent` produces none, so a dispatch may legitimately
   have no link row.
 - **Catalog**: `state.agentFlow` carries the ledger view (`events` ≤ 50,
-  latest-first, + `summary`); the model-facing `<mstar_engine_status>` text
-  renders ONE compact `agent flow: …` line only when events > 0 (role totals
-  top-5 + latest dispatch with HH:MM — the event detail lives in the
-  structured source, never the model text). A ledger record
-  (dispatch/settle/link) invalidates the affected workspace's TTL cache entry
-  IMMEDIATELY (apply-scoped `harnessDir → cache key` reverse map +
-  invalidation closure) → the next pre-step rebuilds and (rendered-text or
-  panel-projection change) re-injects the row — the 60 s TTL no longer bounds ledger-change latency; it
-  still bounds non-ledger staleness.
+  latest-first, + `summary`) for the panel — the compact
+  `<mstar_engine_status>` row does NOT render a ledger line (a ledger event is
+  not a lifecycle delta the model acts on, and it kept spending a full row).
+  A ledger record (dispatch/settle/link) invalidates the affected workspace's
+  TTL cache entry IMMEDIATELY (apply-scoped `harnessDir → cache key` reverse
+  map + invalidation closure) → the next pre-step rebuilds, persists the new
+  payload for the panel and re-injects a row only if a RENDERED fact moved.
+  The 60 s TTL no longer bounds ledger-change latency for the panel; it still
+  bounds non-ledger staleness.
 - **Explicit ledger target (ACTIVE authority)**: each event boundary resolves
   the session's selected native target and validates its current store identity,
   epoch and workflow scope. Missing, stale, revoked, corrupt or mismatched
@@ -425,9 +443,10 @@ tab's `EventLogPage` log page are pure consumers of this evidence.
   whether authority persistence is available.
 - **Maintainer view**: change the ledger shape (event schema, bounds, settle
   seam) and update the projections together — `gates/agent-flow.ts` (record /
-  read / settle / catalog-join listeners), `gates/catalog.ts` (agent-flow line
-  + `source` view) and `client/panel/graph/project-graph.ts` (the ZoneView
-  flow/agents projection) — the panel renders ONLY what the evidence shows.
+  read / settle / catalog-join listeners), `gates/catalog.ts` (the `agentFlow`
+  payload view + the panel-projection emission key) and
+  `client/panel/graph/project-graph.ts` (the ZoneView flow/agents projection) —
+  the panel renders ONLY what the evidence shows.
 
 ## PM dispatch
 
