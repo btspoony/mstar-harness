@@ -72,6 +72,9 @@ export interface McpStdioOptions {
    * channel. Unset means the server reads no ambient identity at all: an MCP
    * connection is process-level, so any same-host process can set a variable;
    * a launcher that mounts a scoped server declares the channel explicitly.
+   * A declared variable that is unset or blank resolves no identity, so the
+   * connection stays generic (a launch-time warning names the cause and the
+   * recovery) instead of locking an identity it does not have.
    */
   identityEnv?: string;
   /**
@@ -92,18 +95,40 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
 }
 
 /**
+ * The one-line cause + recovery for a declared identity channel that resolved
+ * no session id at launch. A declared-but-empty channel cannot lock the
+ * connection — a locked connection with no identity offers no supported way to
+ * establish one — so the connection stays generic and this line names what the
+ * launcher can do about it. Written to `process.stderr`: this module owns no
+ * log sink, and the stdio transport's stdout carries the protocol.
+ */
+function unresolvedIdentityChannelWarning(identityEnv: string): string {
+  return (
+    `[mcp.identity-env-unresolved] --identity-env ${identityEnv} resolved to no session id (the variable is unset or blank), ` +
+    "so this connection stays unlocked and the per-call sessionId selector remains the identity channel. " +
+    `Recovery: set ${identityEnv} to the session id before launch, or drop --identity-env to declare a generic connection explicitly.`
+  );
+}
+
+/**
  * Build the stdio context resolver for one launch. The exported `resolveContext`
  * below is this factory with no options, so the unparameterized server keeps
  * reading no ambient identity and probing `process.cwd()` for its harness root.
  *
- * A declared identity LOCKS the connection: `registerMcpCommands` publishes no
- * session selector on such a connection and strips a caller-supplied selector
- * before admission, so every call runs under the declared identity — a caller
- * can never choose one (`identityLocked` below). A malformed declared value is
+ * A declared identity channel that RESOLVES a non-blank session id LOCKS the
+ * connection: `registerMcpCommands` publishes no session selector on such a
+ * connection and strips a caller-supplied selector before admission, so every
+ * call runs under the declared identity — a caller can never choose one
+ * (`identityLocked` below). The identity is resolved ONCE, when this factory
+ * runs: the lock state is a launch fact, so a variable that appears or
+ * disappears while the connection lives never changes which identity it can
+ * run under. A declared channel that resolves NO id (the variable is unset or
+ * blank) does not lock the connection: it stays the generic connection, warns
+ * once at launch with the cause and the recovery, and keeps the per-call
+ * `sessionId` selector as its identity channel. An UNDECLARED channel is that
+ * same generic connection without a warning. A malformed declared value is
  * not repaired here — it reaches the same safe-session-id guard as any other
- * identity, which refuses loudly. An UNDECLARED channel leaves the connection
- * generic: there the per-call `sessionId` selector stays the documented
- * identity channel.
+ * identity, which refuses loudly.
  *
  * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
  * rebased or discovered, because the mounting process owns the root. The same
@@ -140,8 +165,18 @@ function declaredSessionId(identityEnv: string | undefined): string | undefined 
  * re-discovering a root from the workspace anchor.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
+  // The declared identity is a LAUNCH fact: resolve it once here, so neither
+  // the lock state nor the default identity can change while the connection
+  // lives. A channel that resolves nothing locks nothing — it warns with the
+  // cause and the recovery instead of locking an identity the connection does
+  // not have, which would leave every identity-consuming call unreachable.
+  const declaredIdentity = declaredSessionId(options.identityEnv);
+  const identityLocked = declaredIdentity !== undefined;
+  if (options.identityEnv !== undefined && declaredIdentity === undefined) {
+    process.stderr.write(`${unresolvedIdentityChannelWarning(options.identityEnv)}\n`);
+  }
   const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects, call?: ResolveContextCall) => {
-    const sessionId = declaredSessionId(options.identityEnv);
+    const sessionId = declaredIdentity;
     // The root the ADMITTED CALL named (a non-blank `harness` field,
     // validated by shared admission): the one fact a control-root refusal
     // says is missing, so naming it lifts the refusal for this call.
@@ -177,11 +212,13 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
   };
   // Admission reads these before the handler resolves the context, so a
   // launcher-declared default satisfies a required session selector, fills an
-  // unset root input, and — on a declared channel — strips a caller-supplied
-  // selector before admission (the connection identity is locked). Getters
-  // keep them live reads of the launch options, not construction snapshots.
+  // unset root input, and — on a locked connection — strips a caller-supplied
+  // selector before admission (the connection identity is locked). The harness
+  // getter stays a live read of the launch options; the identity ones report
+  // the launch snapshot, so the lock cannot outlive the identity it locks or
+  // appear after the connection became generic.
   Object.defineProperty(resolver, "defaultSessionId", {
-    get: () => declaredSessionId(options.identityEnv),
+    get: () => declaredIdentity,
     enumerable: true,
   });
   Object.defineProperty(resolver, "defaultHarness", {
@@ -189,7 +226,7 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
     enumerable: true,
   });
   Object.defineProperty(resolver, "identityLocked", {
-    get: () => options.identityEnv !== undefined,
+    get: () => identityLocked,
     enumerable: true,
   });
   return resolver;

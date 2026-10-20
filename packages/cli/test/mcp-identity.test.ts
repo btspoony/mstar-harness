@@ -58,6 +58,33 @@ function fixtureRoot(): string {
   return root;
 }
 
+/** The stderr text a factory call writes, captured so a warning is assertable. */
+function stderrWhile(run: () => void): string {
+  const chunks: string[] = [];
+  const write = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk as Uint8Array));
+    return true;
+  }) as unknown as typeof process.stderr.write;
+  try {
+    run();
+  } finally {
+    process.stderr.write = write;
+  }
+  return chunks.join("");
+}
+
+/**
+ * A resolver created as one launch would create it, plus the stderr its
+ * factory wrote: the launch-time warning is part of the declared channel's
+ * observable behavior, not an implementation detail.
+ */
+function resolverCapturingStderr(identityEnv: string): { resolver: ResolveContext; stderr: string } {
+  let resolver!: ResolveContext;
+  const stderr = stderrWhile(() => { resolver = createContextResolver({ identityEnv }); });
+  return { resolver, stderr };
+}
+
 function writeAttestation(root: string, stoppedSessions: readonly string[] = ["stopped-holder"]): string {
   const attestation: ActivationAttestation = {
     version: ACTIVATION_PROTOCOL_VERSION,
@@ -367,7 +394,9 @@ describe("MCP session identity", () => {
         "session.recover",
         recoveryInput(writeAttestation(root)),
         context(root),
-        createContextResolver({ identityEnv: DECLARED_IDENTITY }),
+        // A blank channel warns at launch; the dedicated blank regression
+        // asserts that line, this one only needs the resolver.
+        resolverCapturingStderr(DECLARED_IDENTITY).resolver,
       );
       expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
       expect(result.details?.helpRoute).toBe("mstar session recover --help");
@@ -377,6 +406,127 @@ describe("MCP session identity", () => {
     }
   });
 
+
+  /**
+   * A declared channel that resolves NO id cannot lock the connection: a
+   * locked connection with no identity publishes no selector and strips the
+   * caller's, so every identity-consuming call would be unreachable. The
+   * connection must stay generic — the per-call selector is then the identity
+   * channel — and the launch must warn once with the cause and the recovery.
+   */
+  test("a declared channel with an UNSET variable stays unlocked and warns with the recovery", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    delete process.env[DECLARED_IDENTITY];
+    try {
+      const fixture = await initializedHarness();
+      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
+      expect(resolver.identityLocked).toBe(false);
+      expect(resolver.defaultSessionId).toBeUndefined();
+      expect(stderr).toContain("[mcp.identity-env-unresolved]");
+      expect(stderr).toContain(`--identity-env ${DECLARED_IDENTITY}`);
+      // The selector is published (the helper asserts it on an unlocked
+      // resolver) and a caller-supplied id reaches the invocation context:
+      // the valid id passes the format gate, so only the workflow lookup can
+      // refuse.
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
+        context(fixture.root),
+        resolver,
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  test("a blank declared value counts as unset: unlocked, selector published, warning names the variable", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "  \t";
+    try {
+      const fixture = await initializedHarness();
+      const { resolver, stderr } = resolverCapturingStderr(DECLARED_IDENTITY);
+      expect(resolver.identityLocked).toBe(false);
+      expect(resolver.defaultSessionId).toBeUndefined();
+      expect(stderr).toContain(`--identity-env ${DECLARED_IDENTITY}`);
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
+        context(fixture.root),
+        resolver,
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  test("a declared channel that resolves an id still locks and strips the per-call selector", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const fixture = await initializedHarness();
+      const resolver = createContextResolver({ identityEnv: DECLARED_IDENTITY });
+      expect(resolver.identityLocked).toBe(true);
+      expect(resolver.defaultSessionId).toBe("declared-mcp-session");
+      // The caller's id is malformed on purpose: if it survived admission, the
+      // shared safe-id guard would refuse `coordination.invalid-session-id`.
+      // Reaching workflow lookup proves the strip kept the declared identity.
+      const result = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "../caller-session" },
+        context(fixture.root),
+        resolver,
+      );
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
+
+  /**
+   * The declared identity is a LAUNCH fact. A connection whose variable is
+   * removed after startup keeps its lock and its identity; one created before
+   * the variable appears never gains a lock. Either drift would leave the
+   * published tool surface (selector or no selector) disagreeing with the
+   * identity the resolver actually hands the invocation.
+   */
+  test("the declared identity is resolved once at launch and never repartitions mid-life", async () => {
+    const previous = process.env[DECLARED_IDENTITY];
+    process.env[DECLARED_IDENTITY] = "declared-mcp-session";
+    try {
+      const fixture = await initializedHarness();
+      const locked = createContextResolver({ identityEnv: DECLARED_IDENTITY });
+      delete process.env[DECLARED_IDENTITY];
+      expect(locked.identityLocked).toBe(true);
+      expect(locked.defaultSessionId).toBe("declared-mcp-session");
+      const lockedResult = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "../caller-session" },
+        context(fixture.root),
+        locked,
+      );
+      expect(lockedResult).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+
+      const { resolver: generic } = resolverCapturingStderr(DECLARED_IDENTITY);
+      process.env[DECLARED_IDENTITY] = "appeared-after-launch";
+      expect(generic.identityLocked).toBe(false);
+      expect(generic.defaultSessionId).toBeUndefined();
+      const genericResult = await registeredMcpCall(
+        "session.recover",
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: "main-session" },
+        context(fixture.root),
+        generic,
+      );
+      expect(genericResult).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    } finally {
+      if (previous === undefined) delete process.env[DECLARED_IDENTITY];
+      else process.env[DECLARED_IDENTITY] = previous;
+    }
+  });
 
   test("invalid identity formats fail specifically at the shared safe-id guard", async () => {
     const fixture = await initializedHarness();
