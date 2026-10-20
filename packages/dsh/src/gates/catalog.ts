@@ -6,14 +6,20 @@
  * messages, change-gated per session+workspace: first emission, then a
  * rendered-text change only. The panel projection is compared separately, so a
  * panel-only change still persists the payload without spending a model row on
- * it. The block is a PROJECTION of the payload — the open-item rollup, the
- * branch policy, plan row scopes, the knowledge digest, the compass direction
- * and the agent-flow ledger stay payload-only (the panel renders them from the
- * persisted emission), and each dropped fact is read on demand from its own
- * authority: `mstar status tech-debt` for the open-issue rollup,
+ * it. The block is a PROJECTION of the payload — the open-item rollup (counts
+ * and detail rows), the branch policy, plan row scopes, the knowledge digest,
+ * the compass direction and the agent-flow ledger stay payload-only (the panel
+ * renders them from the persisted emission), and each dropped fact is read on
+ * demand from its own authority: `mstar status tech-debt` for the open-issue
+ * rollup,
  * `mstar roadmap show` / the compass document for direction and branch policy,
  * `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single
- * `status` command that serves them. The version / harness-dir /
+ * `status` command that serves them. ONE exception keeps a line: when the
+ * issue authority could not be READ at all, the row renders a fixed failure
+ * disclosure (`issues: unavailable (…)`), because "no open issues" and "the
+ * rollup was never read" are different states and the on-demand command cannot
+ * distinguish them for a model that has no reason to run it. Counts never
+ * return: a readable authority renders nothing. The version / harness-dir /
  * enforcement watermark stays in the payload and in the always-on system
  * prompt — never in the row text. A workspace with no resolved
  * `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache
@@ -489,7 +495,11 @@ const DONE_PLAN_STATUS = 'Done'
  * verdict. Residual counts and issue detail rows, the branch policy, plan
  * row scopes, the knowledge digest, the compass direction and the agent-flow
  * ledger all stay in the payload (the panel renders them) and out of the row
- * text. This is a PROJECTION of the payload, not a byte-identical render: the
+ * text. The issue-authority FAILURE is the one disclosure that survives
+ * (`{@link issueAuthorityFailureDisclosure}`): it is failure-only, so a count
+ * bump can never move it, and it is the only way a model distinguishes an
+ * unreadable rollup from an empty one. This is a PROJECTION of the payload, not
+ * a byte-identical render: the
  * version / harness-dir / enforcement watermark stays in the payload (the
  * panel meta dock renders it) and — while the prompt registration is live —
  * stays model-visible once in the always-on system prompt
@@ -497,7 +507,8 @@ const DONE_PLAN_STATUS = 'Done'
  * row does not repeat it.
  *
  * The row is ONE delta line, plus the `workflow warning:` disclosure when the
- * selection carries a warning (and the watermark trio on the
+ * selection carries a warning, plus the `issues: unavailable (` disclosure when
+ * the issue authority could not be read (and the watermark trio on the
  * registration-less fallback) — never more.
  *
  * The row text is also the emission comparison key's model half
@@ -559,10 +570,43 @@ export function renderEngineStatusCatalog(
       if (state.selection.kind === 'active' && state.selection.warning !== undefined) {
         lines.push(`workflow warning: ${state.selection.warning.code} ${state.selection.warning.message}`)
       }
+      const issueAuthorityFailure = issueAuthorityFailureDisclosure(state.storeFacts)
+      if (issueAuthorityFailure !== undefined) lines.push(issueAuthorityFailure)
     }
   }
   lines.push('</mstar_engine_status>')
   return lines.join('\n')
+}
+
+/**
+ * The ONE failure disclosure the row keeps for the issue authority: the fixed
+ * line rendered when the store-backed read could not produce the rollup at all.
+ *
+ * Why this and not the counts: `state.residuals` / `state.residualFindings` are
+ * legitimately panel-only (the rollup is on demand via `mstar status tech-debt`,
+ * and rendering it moved on every count bump, which re-appended an
+ * identical-looking row every step). But dropping the FAILURE too made "no open
+ * issues" and "the authority could not be read" render identically, so a
+ * degraded read silently turned every residual decision into "none" and a
+ * newly filed critical issue stayed invisible until something happened to run
+ * the on-demand command. This line is failure-ONLY: a readable authority
+ * renders nothing and a count bump cannot move it, so it cannot reintroduce the
+ * re-emission storm.
+ *
+ * Exactly `kind === 'unavailable'` triggers it — the state in which the rollup
+ * was not read and `residuals` is `[]` by construction. A readable store can
+ * still carry a `diagnostic` (`projection stale`, `first N of M counted`), and
+ * those are coverage notes over rows the authority DID return: rendering them
+ * here would misstate a readable authority and would move with the issue count.
+ * They stay in the payload, where the panel shows them.
+ * @param facts - the payload's own store facts (`state.storeFacts`).
+ */
+function issueAuthorityFailureDisclosure(facts: StoreFactsView | undefined): string | undefined {
+  if (facts === undefined || facts.kind !== 'unavailable') return undefined
+  // Operator- and tool-controlled text: screened like every other embedded
+  // value, so a `{{…}}` in a path or a driver message can never throw here.
+  const cause = facts.diagnostic === null ? 'no diagnostic recorded' : stripInterpolationHazard(facts.diagnostic)
+  return `issues: unavailable (${cause}) — the open-issue rollup was NOT read; repair the store (mstar store init|upgrade|migrate), then read the live rollup with mstar status tech-debt`
 }
 
 /**

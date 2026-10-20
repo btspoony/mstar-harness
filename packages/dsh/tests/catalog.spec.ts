@@ -671,6 +671,46 @@ describe('compact engine-status delta — the model-row comparison key', () => {
     }
   })
 
+  /**
+   * The issue-authority FAILURE is the one disclosure the row keeps. Counts stay
+   * payload-only — that is what stopped the re-emission storm — but with them
+   * gone, "no open issues" and "the authority could not be read" rendered
+   * identically, so a degraded read silently turned every residual decision into
+   * "none". Both states are pinned here, plus the stability that keeps the line
+   * out of the storm the counts caused.
+   */
+  it('an unreadable issue authority renders ONE failure line, a readable one renders nothing', () => {
+    // READABLE: the delta line only — no failure line, and no rollup counts.
+    const readable = renderEngineStatusCatalog(richPayload())
+    expect(readable).not.toContain('issues:')
+    expect(readable).not.toContain('residuals:')
+
+    const unavailable = copy(richPayload())
+    const facts = unavailable.state?.storeFacts
+    if (facts === undefined) throw new Error('expected store facts')
+    const mutable = facts as { kind: string; projection: unknown; storeRevision: unknown; diagnostic: unknown }
+    mutable.kind = 'unavailable'
+    mutable.projection = null
+    mutable.storeRevision = null
+    mutable.diagnostic = '[store.not-initialized] no store.db under the control root'
+    const text = renderEngineStatusCatalog(unavailable)
+    // ONE fixed-shape line naming the CAUSE and the RECOVERY.
+    expect(text).toContain('issues: unavailable ([store.not-initialized] no store.db under the control root)')
+    expect(text).toContain('NOT read')
+    expect(text).toContain('mstar store init|upgrade|migrate')
+    expect(text).toContain('mstar status tech-debt')
+    expect(text.split('\n').filter((line) => line.includes('issues:'))).toHaveLength(1)
+
+    // STABLE: the rollup's own counts cannot move the line, so an unreadable
+    // authority does not re-emit a fresh row per step.
+    const bumped = copy(unavailable)
+    if (bumped.state !== null) {
+      ;(bumped.state as { residuals: unknown }).residuals = [{ severity: 'critical', count: 7 }]
+      ;(bumped.state as { residualFindings: unknown }).residualFindings = []
+    }
+    expect(renderEngineStatusCatalog(bumped)).toBe(text)
+  })
+
   it('a dropped field changing keeps the row text identical while the panel key moves (the emission-key exclusion)', () => {
     const payload = richPayload()
     const text = renderEngineStatusCatalog(payload)
