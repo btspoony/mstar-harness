@@ -16,11 +16,12 @@ import { validateCommandOutcome } from "./outcome.js";
  * required session selector is satisfied by that declared default. On a
  * GENERIC unbound connection the per-call selector still wins; on a connection
  * whose identity the launcher LOCKED (`identityLocked` — a declared channel
- * whose variable resolved a non-blank session id at launch, the scoped mount),
- * no selector is published and a caller-supplied one is stripped before
- * admission, so the declared identity is the only identity the connection can
- * run under. An invalid default reaches the same safe-id guard as any other
- * identity because the resolver never repairs it.
+ * whose variable resolved a USABLE session id at launch, the engine's single
+ * safe-session-id rule: one safe path component `[A-Za-z0-9._-]+`, at most 128
+ * characters, the scoped mount), no selector is published and a caller-supplied
+ * one is stripped before admission, so the declared identity is the only
+ * identity the connection can run under. An invalid default reaches the same
+ * safe-id guard as any other identity because the resolver never repairs it.
  *
  * `defaultHarness` is the root a launcher pinned for every call (the stdio
  * server's `--harness` channel). Commands that resolve their own root from an
@@ -41,14 +42,16 @@ export type ResolveContext = {
   readonly defaultHarness?: string;
   /**
    * True when the launcher locked this connection's identity: a declared
-   * `--identity-env` channel WHOSE VARIABLE RESOLVED a non-blank session id at
-   * launch (the per-agent scoped mount). A declared channel that resolves
-   * nothing locks nothing — the connection stays generic, names the variable,
-   * the cause and the recoveries at launch, and keeps the per-call selector.
-   * On a locked connection the tools publish no session selector and a
-   * caller-supplied selector is stripped BEFORE admission, so the execution
-   * context uses the connection identity; generic unbound connections keep the
-   * selector.
+   * `--identity-env` channel WHOSE VARIABLE RESOLVED a USABLE session id at
+   * launch (one safe path component `[A-Za-z0-9._-]+`, at most 128 characters,
+   * per the engine's single safe-session-id rule; the per-agent scoped mount).
+   * A declared channel the rule refuses, or one that is unset or blank, locks
+   * nothing — the connection stays generic, names the cause, the rule and the
+   * recoveries at launch without echoing the rejected value, and keeps the
+   * per-call selector. On a locked connection the tools publish no session
+   * selector and a caller-supplied selector is stripped BEFORE admission, so
+   * the execution context uses the connection identity; generic unbound
+   * connections keep the selector.
    */
   readonly identityLocked?: boolean;
 };
@@ -130,10 +133,12 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
   let schema = Object.keys(requiredShape).length === 0 ? extended : extended.safeExtend(requiredShape);
   // The session selector is published ONLY on a generic unbound connection.
   // A locked connection (a declared `--identity-env` channel whose variable
-  // resolved a non-blank session id at launch — the scoped per-agent mount)
-  // publishes no selector: the identity belongs to the connection, and a
-  // published field a handler then strips would invite exactly the override
-  // the lock forbids. A declared channel that resolves nothing keeps the
+  // resolved a USABLE session id at launch — one safe path component
+  // `[A-Za-z0-9._-]+`, at most 128 characters, per the engine's single
+  // safe-session-id rule, the scoped per-agent mount) publishes no selector:
+  // the identity belongs to the connection, and a published field a handler
+  // then strips would invite exactly the override the lock forbids. A declared
+  // channel the rule refuses, or one that is unset or blank, keeps the
   // connection generic and keeps publishing the selector.
   if (selector !== undefined && !identityLocked) {
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
@@ -200,13 +205,15 @@ function normalizedBlankHarness(input: unknown, defaultHarness: string | undefin
 /**
  * Strip a caller-supplied session selector BEFORE admission when the
  * connection identity is locked. A locked connection (a declared
- * `--identity-env` channel whose variable resolved a non-blank session id at
- * launch — the scoped per-agent mount) resolves every execution context from
- * the identity the launcher declared: a caller could otherwise pass a valid
- * foreign session id and have the engine resolve THAT identity's binding and
- * CAS token, mutating within its authority. The selector stays available on
- * generic unbound connections — including a declared channel that resolved
- * nothing, which keeps the connection generic — where it is the documented
+ * `--identity-env` channel whose variable resolved a USABLE session id at
+ * launch per the engine's single safe-session-id rule — one safe path
+ * component `[A-Za-z0-9._-]+`, at most 128 characters, the scoped per-agent
+ * mount) resolves every execution context from the identity the launcher
+ * declared: a caller could otherwise pass a valid foreign session id and have
+ * the engine resolve THAT identity's binding and CAS token, mutating within its
+ * authority. The selector stays available on generic unbound connections —
+ * including a declared channel the rule refuses, or one that is unset or
+ * blank, which keeps the connection generic — where it is the documented
  * per-call identity channel. The caller's object is never mutated: a shallow
  * copy carries the stripped fields.
  */

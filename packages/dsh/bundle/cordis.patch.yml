@@ -28,14 +28,17 @@
 # always uses the invocation's server root (the pin, or the cwd probe when
 # unpinned) and takes no per-call harness. The declared identity is the
 # connection's identity channel; a declared channel whose variable resolves a
-# non-blank session id LOCKS the connection: the tools publish no session
-# selector and a caller-supplied sessionId is stripped before admission (ADR
-# dsh-native-identity-channels), so per-caller identity is a per-mount fact —
-# each caller's row carries its own `--identity-env`. A declared channel that
-# resolves nothing keeps the connection generic and names the variable, the
-# cause and the recoveries at launch, so the per-call sessionId selector
-# remains the identity channel; a connection without the flag is that same
-# generic connection without the launch line. The pin ALSO anchors the
+# USABLE session id LOCKS the connection (usable under the engine's single
+# safe-session-id rule: one safe path component [A-Za-z0-9._-]+, at most 128
+# characters): the tools publish no session selector and a caller-supplied
+# sessionId is stripped before admission (ADR dsh-native-identity-channels), so
+# per-caller identity is a per-mount fact — each caller's row carries its own
+# `--identity-env`. A declared channel the rule refuses, or one that is unset
+# or blank, resolves no identity: it keeps the connection generic and names the
+# cause, the rule and the recoveries at launch without echoing the rejected
+# value, so the per-call sessionId selector remains the identity channel; a
+# connection without the flag is that same generic connection without the
+# launch line. The pin ALSO anchors the
 # invocation workspace at
 # the pinned root's parent, so a command that derives paths from its working
 # directory (e.g. `audit.scaffold` deriving `{REVIEW_DIR}` without
