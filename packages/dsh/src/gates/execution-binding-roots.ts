@@ -1,9 +1,12 @@
 /**
- * The in-process receipt of the harness a native bind adopted into (the
- * round-6 must-fix review finding).
+ * The in-process receipt of the control root that a native `mstar_plan_bind`
+ * call carrying an explicit per-call `harness` adopts its durable execution
+ * binding into. The consumers (the workflow-ledger attribution resolver and
+ * the native `mstar_execution_clear` tool) hold only the carrying session's
+ * `(sessionId, cwd)` and must not re-derive the root from the workspace.
  *
  * A native `mstar_plan_bind` call carrying an explicit per-call `harness`
- * adopts its durable execution binding into THAT control root (I-000765) — a
+ * adopts its durable execution binding into THAT control root — a
  * store the workspace harness's own store knows nothing about. The durable
  * binding itself records `harnessRoot`, but the consumers that must FIND the
  * binding (the workflow-ledger attribution resolver and the native

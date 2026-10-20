@@ -1,18 +1,18 @@
 /**
- * I-000735's assertion clause + PR round-4 finding TEST-01 — the dsh
- * workflow-script pool bound is pinned by a BEHAVIOUR check independent of the
- * host core count. The `mstar-audit-fanout` script in `dsh-workflow-scripts.md`
- * (§ mstar-audit-fanout) is extracted from the published Markdown and EXECUTED
- * in a sandbox that doubles its globals: `agent` records the in-flight child
- * depth while awaiting one macrotask tick, and `parallel` reproduces the real
- * tool's semantics (all thunks concurrent behind one barrier; a throwing thunk
- * resolves to null instead of rejecting the batch). The load-bearing assertion
- * is the property the subagent pool cap (`maxActiveSubagents`, default 8, hard
- * reject) actually depends on: with `args.categories` omitted (the default
- * all-nine path) every category completes AND the maximum observed in-flight
- * depth stays <= 8 on any host. A regression that launches every chunk
- * concurrently while keeping the `CHUNK` constant and the slice expressions
- * now fails the depth assertion instead of passing.
+ * The dsh workflow-script pool bound is pinned by a BEHAVIOUR check
+ * independent of the host core count: the `mstar-audit-fanout` script in
+ * `dsh-workflow-scripts.md` (§ mstar-audit-fanout) is extracted from the
+ * published Markdown and EXECUTED in a sandbox that doubles its globals:
+ * `agent` records the in-flight child depth while awaiting one macrotask tick,
+ * and `parallel` reproduces the real tool's semantics (all thunks concurrent
+ * behind one barrier; a throwing thunk resolves to null instead of rejecting
+ * the batch). The load-bearing assertion is the property the subagent pool cap
+ * (`maxActiveSubagents`, default 8, hard reject) actually depends on: with
+ * `args.categories` omitted (the default all-nine path) every category
+ * completes AND the maximum observed in-flight depth stays <= 8 on any host. A
+ * regression that launches every chunk concurrently while keeping the `CHUNK`
+ * constant and the slice expressions now fails the depth assertion instead of
+ * passing.
  *
  * Run: `bun test scripts/dsh-workflow-script-bounds.test.ts` (repo root).
  */
