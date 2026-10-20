@@ -402,9 +402,17 @@ const DIGEST_PLAN_CAP = 8
  * The plans join is the selected snapshot's non-Done rows
  * (`status !== 'Done'`), in catalog-array order, capped at
  * {@link DIGEST_PLAN_CAP} with a final `+N more` overflow marker when
- * longer; empty after the filter renders `plans: none`. Residuals /
- * leases / direction / harness dir / enforcement / the iteration-gate
- * detail all stay exclusive to the pre-step catalog row.
+ * longer; empty after the filter renders `plans: none`.
+ *
+ * Division of labour with the pre-step catalog row: this always-on digest is
+ * the surface that survives a row-less step (the row is a change-driven DELTA
+ * and is not re-anchored per turn), so it carries the version + active workflow
+ * + its non-Done plans. Residuals / plan row scopes / direction / harness dir /
+ * enforcement / the agent-flow ledger are NOT re-added here — they stay
+ * payload-only (the panel renders them) with `mstar status` as the authority,
+ * and the row keeps only the gate verdict as its own extra delta fact. Do not
+ * restate a dropped row line in this digest: the two surfaces must not
+ * duplicate each other.
  *
  * STRICT-interpolation safety : every operator-
  * controlled value (workflow id, workflow type/status, plan ids, plan

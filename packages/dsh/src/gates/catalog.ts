@@ -2,12 +2,16 @@
  * Engine-status pre-step catalog — the ONE unified `mstar-engine`
  * row appended at `agent/pre-step`. *
  * `preStepCatalogListener` delegates through `next()` and appends the unified
- * catalog message (iteration phase-gate section + workspace-state digest) to
- * the composed step messages, change-gated per session+workspace: first
- * emission, a rendered-text change, or a panel-projection change. The block is
- * a PROJECTION of the payload — the version / harness-dir / enforcement
- * watermark stays in the payload (the panel renders it) and in the always-on
- * system prompt, never in the row text. A workspace with no resolved
+ * catalog message (ONE compact lifecycle delta line) to the composed step
+ * messages, change-gated per session+workspace: first emission, then a
+ * rendered-text change only. The panel projection is compared separately, so a
+ * panel-only change still persists the payload without spending a model row on
+ * it. The block is a PROJECTION of the payload — the open-item rollup, the
+ * branch policy, plan row scopes, the knowledge digest, the compass direction
+ * and the agent-flow ledger stay payload-only (the panel renders them, and
+ * `mstar status` is the authority), while the version / harness-dir /
+ * enforcement watermark stays in the payload and in the always-on system
+ * prompt — never in the row text. A workspace with no resolved
  * `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache
  * (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps
  * the hot path a timestamp compare + Map lookup between refreshes.
@@ -59,7 +63,6 @@ import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/eng
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
-  AgentFlowView,
   HarnessPlanView,
   HarnessRowScopeView,
   HarnessResidualSeverity,
@@ -468,15 +471,32 @@ export interface RenderEngineStatusOptions {
   readonly includeWatermark?: boolean
 }
 
+/** The plan status that keeps a row out of the compact `plans:` join. */
+const DONE_PLAN_STATUS = 'Done'
+
 /**
  * Model-facing rendering of the unified engine-status catalog (the
- * `<mstar_engine_status>` block): the wrapper plus the iteration phase-gate
- * and workspace-state lines. This is a PROJECTION of the payload, not a
- * byte-identical render: the version / harness-dir / enforcement watermark
- * stays in the payload (the panel meta dock renders it) and — while the prompt
- * registration is live — stays model-visible once in the always-on system
- * prompt (`mstar:engine-status` digest + `mstar:harness-rules`), so the
- * steady-state row does not repeat it.
+ * `<mstar_engine_status>` block): the wrapper plus ONE compact delta line.
+ *
+ * The row is a DELTA, not a snapshot: it carries only the lifecycle facts a
+ * step acts on — the selected `workflow`, its non-Done `plans`, the
+ * `branch` anchors, and (when a steering compass resolved) the phase-`gate`
+ * verdict. Residual counts and issue detail rows, the branch policy, plan
+ * row scopes, the knowledge digest, the compass direction and the agent-flow
+ * ledger all stay in the payload (the panel renders them) and out of the row
+ * text. This is a PROJECTION of the payload, not a byte-identical render: the
+ * version / harness-dir / enforcement watermark stays in the payload (the
+ * panel meta dock renders it) and — while the prompt registration is live —
+ * stays model-visible once in the always-on system prompt
+ * (`mstar:engine-status` digest + `mstar:harness-rules`), so the steady-state
+ * row does not repeat it.
+ *
+ * The row text is also the emission comparison key's model half
+ * ({@link preStepCatalogListener}): dropping a field here drops it from the
+ * re-emission trigger too, which is what stops an incidental count change from
+ * appending an identical-looking row. Anything the model must still be able to
+ * notice therefore has to be rendered here — or carried by the always-on
+ * digest (`system-prompt.ts`).
  *
  * `includeWatermark` is the fallback channel while NO `system-prompt`
  * registration is confirmed live (the service absent, the asynchronous
@@ -498,60 +518,29 @@ export function renderEngineStatusCatalog(
     lines.push(`harness dir: ${stripInterpolationHazard(source.harnessDir ?? 'none')}`)
     lines.push(`enforcement: ${enforcement}`)
   }
-  const iteration = source.iteration
-  if (iteration !== undefined) {
-    const gate = iteration.gate
-    const codes = gate.violations.map((v) => v.code).join(', ')
-    lines.push(`iteration: ${iteration.iterationId}`)
-    lines.push(`transition: ${gate.transition}`)
-    lines.push(`all plans done: ${gate.all_plans_done}`)
-    lines.push(`gate: ${gate.ok ? 'PASS' : `FAIL (${codes})`}`)
-  }
   const state = source.state
   if (state !== null) {
     if (state.selection.kind === 'error') {
       // Clear selection error (v1/unmigrated root, no snapshots): the
-      // operator-visible reason replaces the data lines — the aggregates
+      // operator-visible reason replaces the data line — the aggregates
       // are empty by construction and must not read as "no plans".
       lines.push(`workflow selection: ERROR (${state.selection.code}) ${state.selection.message}`)
     } else {
-      lines.push(`workflow: ${state.selection.workflowId} (${state.selection.kind})`)
+      const segments = [`workflow: ${state.selection.workflowId} (${state.selection.kind})`]
+      // Non-Done rows only: a completed plan is not a decision the next step
+      // makes, and the always-on digest (`system-prompt.ts`) renders the same
+      // non-Done filter — the two surfaces never duplicate a Done row.
+      const pending = state.plans.filter((plan) => plan.status !== DONE_PLAN_STATUS)
+      segments.push(`plans: ${pending.length === 0 ? 'none' : joinCapped(pending, CATALOG_STATE_JOIN_LIMIT, ' ', (plan) => `${plan.id}(${plan.status})`)}`)
+      if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
+        segments.push(`branch: ${state.iterationBaseBranch} → ${state.targetBranch}`)
+      }
+      // The iteration section is the phase GATE: the workflow id it names is
+      // already on this line, so only the verdict + transition join it.
+      if (source.iteration !== undefined) segments.push(gateSegment(source.iteration.gate))
+      lines.push(segments.join(' | '))
       if (state.selection.kind === 'active' && state.selection.warning !== undefined) {
         lines.push(`workflow warning: ${state.selection.warning.code} ${state.selection.warning.message}`)
-      }
-      lines.push(`plans: ${state.plans.length === 0 ? 'none registered' : joinCapped(state.plans, CATALOG_STATE_JOIN_LIMIT, ' ', (p) => `${p.id}(${p.status})`)}`)
-      // The open-item rollup renders its authority's verdict, never a bare
-      // empty list: a store that could not be read says so (with the engine's
-      // refusal text), and a stale/unavailable PROJECTION is disclosed on its
-      // own line — the issue rows are read directly and stay authoritative
-      const store = state.storeFacts
-      if (store !== undefined && store.kind === 'unavailable') {
-        lines.push(`residuals: unavailable — ${store.diagnostic ?? 'the issue/catalog authority was not read'}`)
-      } else {
-        lines.push(`residuals: ${state.residuals.length === 0 ? 'none open' : state.residuals.map((r) => `${r.severity} ${r.count}`).join(', ')}`)
-        if (store?.diagnostic != null) lines.push(`store: ${store.diagnostic}`)
-      }
-      if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
-        const integration = state.specIntegrationBranch !== null ? ` (spec integration: ${state.specIntegrationBranch})` : ''
-        lines.push(`branch: ${state.iterationBaseBranch} → ${state.targetBranch}${integration}`)
-      }
-      const policy = [
-        state.pushPolicy !== null ? `push ${state.pushPolicy}` : null,
-        state.worktreeMode !== null ? `worktree ${state.worktreeMode}` : null,
-        state.integrationWorktreePath !== null ? `integration ${state.integrationWorktreePath}` : null,
-      ].filter((part): part is string => part !== null).join('; ')
-      if (policy !== '') lines.push(`policy: ${policy}`)
-      // Row scope: the plan rows' own recorded worktree + branch. This is NOT
-      // an ownership claim — a Todo or Done row keeps its recorded scope — so it
-      // is labelled as scope, never as a lease/holder.
-      lines.push(`row scope: ${state.rowScopes.length === 0 ? 'none recorded' : joinCapped(state.rowScopes, CATALOG_STATE_JOIN_LIMIT, '; ', (s) => `${s.planId} → ${s.workingBranch}${s.worktreePath !== null ? ` (${s.worktreePath})` : ''}`)}`)
-      if (state.knowledge !== null) {
-        lines.push(`knowledge: ${state.knowledge.docCount} doc${state.knowledge.docCount === 1 ? '' : 's'} (${state.knowledge.categories.join(', ')})`)
-      }
-      if (state.direction !== null) lines.push(`direction: ${state.direction}`)
-      const flow = state.agentFlow
-      if (flow !== null && flow.events.length > 0) {
-        lines.push(renderAgentFlowLine(flow))
       }
     }
   }
@@ -560,17 +549,33 @@ export function renderEngineStatusCatalog(
 }
 
 /**
- * The PANEL-relevant projection of one payload, as the emission digest's
- * comparison key: the payload JSON with `state.storeFacts.storeRevision`
- * normalized to `null`.
+ * The compact `gate:` segment: verdict + the phase transition it points at,
+ * plus the violation codes on a FAIL (a bare FAIL would name no cause).
+ * @param gate - the evaluated iteration phase gate.
+ */
+function gateSegment(gate: IterationGateView): string {
+  if (gate.ok) return `gate: PASS (${gate.transition})`
+  const codes = gate.violations.map((violation) => violation.code).join(', ')
+  return codes === '' ? `gate: FAIL (${gate.transition})` : `gate: FAIL (${gate.transition}): ${codes}`
+}
+
+/**
+ * The PANEL-relevant projection of one payload, as the panel side of the
+ * emission digest's comparison: the payload JSON with
+ * `state.storeFacts.storeRevision` normalized to `null`.
  *
  * Why exactly that field: emitting persists the payload (`persistEngineStatusSnapshot`),
  * and that store write advances the shared store revision 1:1 — so comparing
  * raw payloads would read the emission's own side effect as a change and
- * re-emit every step, recreating the per-turn repetition the change-driven
+ * re-persist every step, recreating the per-turn repetition the change-driven
  * cadence removes. Every other payload field is either static or a real fact
  * the panel renders (e.g. `state.residualFindings[].title` changes the panel
- * without changing the row text, so it must still trigger an emit + persist).
+ * without changing the row text, so it must still trigger a persist).
+ *
+ * This is deliberately WIDER than the model row: the row renders a compact
+ * delta, so a projection change that the row cannot show (`state.residuals`,
+ * `state.agentFlow`, `state.knowledge`, `state.rowScopes`, …) still persists the
+ * new payload for the panel — it just does not append a row.
  *
  * Pure: the input payload is never mutated (shallow copies of the payload and
  * its state; `storeFacts` is replaced with a normalized copy).
@@ -584,46 +589,6 @@ export function panelDigestOf(payload: MstarEngineStatusPayload): string {
     ...payload,
     state: { ...state, storeFacts: { ...state.storeFacts, storeRevision: null } },
   })
-}
-
-/**
- * The model-facing agent-flow line (spec §2.2): ONE compact row, emitted only
- * when the ledger has events. Role totals collapse the role × outcome summary
- * (top 5 by count) over DISPATCH/settle ACTIVITY: `subagent-link` rows share
- * their dispatch's role but are IDENTITY records, not activity, so they are
- * excluded from the totals (they stay in the structured `source.agentFlow`
- * summary). `latest` is the newest dispatch's `role→planId#taskId` with the
- * local HH:MM timestamp. The event detail lives in the structured
- * `source.agentFlow` only — the model text must not balloon.
- * @param flow - the ledger view (non-empty events).
- */
-function renderAgentFlowLine(flow: AgentFlowView): string {
-  const byRole = new Map<string, number>()
-  for (const row of flow.summary) {
-    if (row.role === '' || row.outcome === 'subagent-link') continue
-    byRole.set(row.role, (byRole.get(row.role) ?? 0) + row.count)
-  }
-  const top = [...byRole.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
-  const roles = top.length === 0 ? 'none' : top.map(([role, count]) => `${role} ${count}`).join(', ')
-  const latest = flow.events.find((event) => event.kind === 'dispatch')
-  const latestText = latest === undefined
-    ? 'none'
-    : `${[latest.role, [latest.planId, latest.taskId !== null ? `#${latest.taskId}` : null]
-        .filter((part): part is string => part !== null)
-        .join('')].filter((part) => part !== '').join('→')} ${hhmm(latest.ts)}`
-  // Window-full marker : the read window caps at
-  // AGENT_FLOW_DEFAULT_LIMIT (50), so an events array AT the cap reads like
-  // a total — annotate it. The marker is approximate when the ledger holds
-  // exactly `limit` events (the window is full either way; distinguishing
-  // would need an extra full-ledger read the compact line must not do).
-  const windowFull = flow.events.length >= AGENT_FLOW_DEFAULT_LIMIT
-  return `agent flow: ${flow.events.length} events${windowFull ? ` (latest ${AGENT_FLOW_DEFAULT_LIMIT})` : ''}; by role: ${roles}; latest: ${latestText}`
-}
-
-/** Local HH:MM for a timestamp (the agent-flow line's time-of-day). */
-function hhmm(ts: number): string {
-  const date = new Date(ts)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 /**
@@ -752,7 +717,7 @@ function harnessStateSource(
       // Read the selected workflow's native event window through the store.
       // `null` means no authoritative window is available; it is not an empty
       // success and no retired JSONL path is consulted.
-      agentFlow: readAgentFlow(join(harnessDir, selection.dir), selection.workflowId, 50, harnessDir),
+      agentFlow: readAgentFlow(join(harnessDir, selection.dir), selection.workflowId, AGENT_FLOW_DEFAULT_LIMIT, harnessDir),
     }
   } catch {
     // A resolved `{HARNESS_DIR}` ALWAYS answers a section: a build failure is
@@ -1172,15 +1137,21 @@ export interface PreStepCatalogOptions {
  * step — and never replaces the delegated messages) and appends the ONE
  * unified `mstar-engine` catalog message to the composed step
  * messages, so the durable session log carries it (model-visible ⟺ logged,
- * MessageSource form): the `<mstar_engine_status>` block renders the
- * iteration phase-gate section when a steering compass + an ACTIVE execution
- * workflow resolve, plus the workspace-state digest section.
+ * MessageSource form): the `<mstar_engine_status>` block renders ONE compact
+ * delta line — selected workflow, non-Done plans, branch anchors, and the
+ * iteration phase-gate verdict when a steering compass + an ACTIVE execution
+ * workflow resolve.
  *
  * Change-driven re-emission (D2): per session+workspace, the row is appended on
- * first emission, when its rendered text changed, or when the panel-relevant
- * payload projection changed ({@link panelDigestOf} — the panel renders more
- * than the row, e.g. the open-issue detail rows). The start of a new turn is
- * NOT a trigger: an unchanged workspace shows the row once, not once per turn.
+ * first emission and then only when its rendered text changed — the row's own
+ * text IS the model-row comparison key, so the fields the compact row no longer
+ * renders (residual counts and issue detail rows, the agent-flow ledger, the
+ * knowledge digest, plan row scopes, policy, direction) can change without
+ * appending an identical-looking row. The panel projection is compared
+ * separately ({@link panelDigestOf} — the panel renders more than the row, e.g.
+ * the open-issue detail rows): a panel-only change persists the new payload for
+ * the panel and appends nothing. The start of a new turn is NOT a trigger for
+ * either: an unchanged workspace shows the row once, not once per turn.
  * A workspace with no resolved `{HARNESS_DIR}` composes no row at all and
  * records no digest (the projection would be an empty wrapper). The gate keys
  * on the RESOLVED HARNESS DIR, never on a null state: a selection verdict
@@ -1280,39 +1251,52 @@ export async function preStepCatalogListener(
     const panelKey = panelDigestOf(catalogPayload)
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
-    // Change gate (D2): inject the ONE unified row on the first emission, when
-    // its rendered text changed since the last emission, or when the
-    // panel-relevant payload projection changed (the panel renders more than
-    // the row). A new turn alone is NOT a trigger. Per session+workspace, so
+    // TWO independent change decisions (D2), because the model row and the
+    // panel render different facts:
+    //
+    // - The MODEL ROW's comparison key is its rendered text alone. The row is a
+    //   compact delta (`renderEngineStatusCatalog`), so the fields it no longer
+    //   renders — residual counts and issue detail, the agent-flow ledger, the
+    //   knowledge digest, plan row scopes, policy, direction — can change
+    //   without appending an identical-looking row. That is the point: the
+    //   change-driven cadence used to re-emit the whole snapshot on an
+    //   incidental count bump, and those stale copies are never reclaimed.
+    // - The PANEL's comparison key stays the FULL payload projection
+    //   ({@link panelDigestOf}), so a panel-only change still persists the new
+    //   payload for the panel. It just does not spend a model-visible row on it.
+    //
+    // A new turn alone is NOT a trigger for either. Per session+workspace, so
     // different sessions/workspaces keep independent digests.
-    const changed = prior === undefined || prior.text !== text || prior.panelKey !== panelKey
-    if (changed) {
+    const rowChanged = prior === undefined || prior.text !== text
+    const panelChanged = prior === undefined || prior.panelKey !== panelKey
+    if (rowChanged) {
       messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
     }
-    // The EMISSION turn of the row the model last saw: this step's turn on a
-    // first/changed emission, the retained one on an unchanged step. A retried
-    // persist must keep it — the snapshot records WHEN THE MODEL SAW the row,
-    // so relabelling a retry with the retry's own turn would make the panel's
-    // freshness footer and the session evidence disagree.
-    const emittedTurn = changed || prior === undefined ? payload.turn : prior.emittedTurn
+    // The EMISSION turn of the row the model last saw: this step's turn when
+    // the row is (re)appended, the retained one otherwise — a panel-only update
+    // and a retried persist both leave it alone. The snapshot records WHEN THE
+    // MODEL SAW the row, so relabelling it with a step that appended nothing
+    // would make the panel's freshness footer and the session evidence disagree.
+    const emittedTurn = rowChanged || prior === undefined ? payload.turn : prior.emittedTurn
     // The emission TIME has the same obligation: capture it when the row is
-    // appended, retain it on an unchanged step, and repeat it to a retried
-    // persist. The store write is a separate obligation that may land later, so
-    // stamping the write's own clock would report the retry as the freshness
-    // time even though the model saw the row earlier.
-    const emittedAt = changed || prior === undefined ? new Date().toISOString() : prior.emittedAt
-    // The persist is a separate obligation: attempt it on a change AND on an
-    // unchanged step whose last attempt degraded (a transient store failure
-    // must not latch the panel stale until the payload changes again). The
-    // persisted snapshot is written at THIS gate — the only place the composed
-    // payload is known to have reached the model. A later reader (the web-only
-    // host endpoint) therefore serves a record of what was emitted, never a
-    // re-resolution that could disagree with the session log. Keyed by
+    // appended, retain it otherwise, and repeat it to a retried persist. The
+    // store write is a separate obligation that may land later, so stamping the
+    // write's own clock would report the retry as the freshness time even
+    // though the model saw the row earlier.
+    const emittedAt = rowChanged || prior === undefined ? new Date().toISOString() : prior.emittedAt
+    // The persist is a separate obligation with its OWN trigger set: the model
+    // row changed, the panel projection changed (the panel renders more than
+    // the row), or the last attempt degraded (a transient store failure must
+    // not latch the panel stale until the payload changes again). The persisted
+    // snapshot is written at THIS gate — the only place the composed payload is
+    // known to have been composed for this step's readers. A later reader (the
+    // web-only host endpoint) therefore serves a record of a real emission, never
+    // a re-resolution that could disagree with the session log. Keyed by
     // `session.header.id`: a stub without a real id has nothing to key on, so
     // the write is skipped (a reader then answers the explicit unavailable
     // state rather than another session's row) and never retried.
     let persistPending = prior?.persistPending ?? false
-    if (changed || persistPending) {
+    if (rowChanged || panelChanged || persistPending) {
       const persisted = persistEngineStatusSnapshot(
         ctx,
         harnessDir,
@@ -1325,11 +1309,11 @@ export async function preStepCatalogListener(
       )
       persistPending = persisted === 'degraded'
     }
-    if (prior === undefined || changed) {
+    if (rowChanged || panelChanged) {
       digests.set(digestKey, { text, panelKey, emittedTurn, emittedAt, persistPending })
     } else {
-      // Unchanged: only the retry latch moves, so the digest identity (and its
-      // original emission turn and time) stays.
+      // Nothing observable changed: only the retry latch moves, so the digest
+      // identity (and its original emission turn and time) stays.
       prior.persistPending = persistPending
     }
     return { kind: 'enter', messages }
@@ -1363,28 +1347,36 @@ function sessionHintForCatalog(harnessDir: string | null, agent: unknown): Sessi
 }
 
 /**
- * Per session+workspace emission digest: the rendered catalog text and the
- * panel-relevant payload projection ({@link panelDigestOf}) as of the last
- * emission. A digest keys its CHANGE decision on content, not on turns — a new
- * turn is not an emission trigger. It does retain {@link emittedTurn} and
- * {@link emittedAt}, because the persisted snapshot must keep the turn and time
- * the row was actually emitted at, even when a degraded persist is retried on a
- * much later step.
+ * Per session+workspace emission digest: the two comparison keys the gate
+ * decides on — the rendered MODEL-ROW text and the panel-relevant payload
+ * projection ({@link panelDigestOf}) as of the last append/persist. A digest
+ * keys its CHANGE decisions on content, not on turns — a new turn is not an
+ * emission trigger. The two keys are deliberately different widths: the row is
+ * a compact delta, so only a row-text change appends a model message, while the
+ * wider panel projection also persists when a payload-only fact changed.
+ *
+ * It retains {@link emittedTurn} and {@link emittedAt}, because the persisted
+ * snapshot must keep the turn and time the row was actually emitted at — even
+ * when a panel-only update or a degraded persist retry lands on a much later
+ * step.
  */
 export interface EmissionDigest {
+  /** The last model-row text appended for this session+workspace. */
   readonly text: string
+  /** The panel projection ({@link panelDigestOf}) of the last persisted payload. */
   readonly panelKey: string
   /**
-   * The turn the row was EMITTED in (first emission or rendered-text/panel
-   * change). A retried persist reuses it verbatim, so the stored snapshot's
-   * `turn` always names the turn the model last saw the row — never the turn
-   * of whichever step happened to retry the write.
+   * The turn the row was EMITTED in (first emission or rendered-text change). A
+   * panel-only persist and a retried persist reuse it verbatim, so the stored
+   * snapshot's `turn` always names the turn the model last saw the row — never
+   * the turn of a step that appended nothing.
    */
   readonly emittedTurn: number
   /**
-   * The ISO time the row was EMITTED at (captured with the same first/changed
-   * decision as {@link emittedTurn}). A retried persist reuses it verbatim, so
-   * the stored snapshot's freshness time never moves to the retry's clock.
+   * The ISO time the row was EMITTED at (captured with the same append decision
+   * as {@link emittedTurn}). A panel-only persist and a retried persist reuse it
+   * verbatim, so the stored snapshot's freshness time never moves to a write's
+   * own clock.
    */
   readonly emittedAt: string
   /**
@@ -1412,10 +1404,11 @@ function agentDigestKey(agent: unknown, cwd: string | undefined): string {
 }
 
 /**
- * Persist the JUST-EMITTED catalog payload as this session's newest durable
- * emission row in the control-root store (`dsh_status_emissions`), keyed by
- * the session id + its workspace — the edge-safe source a later host endpoint
- * serves. Only the NEWEST emission per session is kept: the shared envelope's
+ * Persist the catalog payload this step composed as this session's newest
+ * durable emission row in the control-root store (`dsh_status_emissions`),
+ * keyed by the session id + its workspace — the edge-safe source a later host
+ * endpoint serves. The payload is persisted on a row change AND on a
+ * panel-only projection change, so the panel never waits for the model row. Only the NEWEST emission per session is kept: the shared envelope's
  * 50-entry mirror, its age rule and its byte ceiling were write-path
  * containment of one file and have no reader.
  *
