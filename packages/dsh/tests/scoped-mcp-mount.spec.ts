@@ -1,17 +1,25 @@
 /**
- * Scoped MCP mount per agent (#528) — every non-leaf `agent/created` gets a
- * scoped `@deepseek-ai/dsh-mcp-client` instance (a cordis `ctx.plugin` child
- * fiber) whose stdio `env` carries that agent's own id as
- * `MSTAR_HOST_SESSION_ID`, so two concurrent agents calling mstar MCP tools
- * are attributed to their own ids. Known leaf seats (the shared leaf-seat
- * contract `isLeafSeatHeader` in `leaf-seat.ts` — ADR
- * `docs/adr/dsh-native-identity-channels.md`: `header.origin === 'subagent'`
- * or `delegationDepth > 0`) can never own a binding and get NO mount — a
- * subagent never inherits the parent's id. The mount is optional-by-presence:
- * with `@deepseek-ai/dsh-mcp-client` not installed it registers nothing, logs
- * ONE debug line and never throws. Disposal: each mount is a child fiber of
- * the registering context, so an HMR fiber swap tears down every scoped
- * instance (and its MCP child process) with the plugin.
+ * Scoped MCP mount per agent (#528) — every `agent/created` gets a scoped
+ * `@deepseek-ai/dsh-mcp-client` instance (a cordis `ctx.plugin` child fiber)
+ * whose stdio `env` carries that agent's own id as `MSTAR_HOST_SESSION_ID`, so
+ * two concurrent agents calling mstar MCP tools are attributed to their own
+ * ids. The launch ALSO carries the server-owned session context: the session
+ * workspace (`cwd` + `--workspace`) and the resolver-selected harness
+ * (`--harness`), so the stdio server resolves roots in the caller's workspace
+ * rather than the host process cwd.
+ *
+ * Known leaf seats (the shared leaf-seat contract `isLeafSeatHeader` in
+ * `leaf-seat.ts` — ADR `docs/adr/dsh-native-identity-channels.md`:
+ * `header.origin === 'subagent'` or `delegationDepth > 0`) can never own a
+ * binding, but they still need the writable subset, so they get a RESTRICTED
+ * mount: the same launch marked `--seat leaf`, whose server refuses the
+ * coordinator-seat commands. A subagent never inherits the parent's id.
+ *
+ * The mount is optional-by-presence: with `@deepseek-ai/dsh-mcp-client` not
+ * installed it registers nothing, logs ONE debug line and never throws.
+ * Disposal: each mount is a child fiber of the registering context, so an HMR
+ * fiber swap tears down every scoped instance (and its MCP child process) with
+ * the plugin.
  *
  * The `dsh-mcp-client` package is not a dependency of this plugin (same
  * posture as `dsh-llm-fallbacks`), so the tests drive the module seam through
@@ -133,6 +141,12 @@ const UNRELATED_ROW: RowFixture = {
 /** The per-agent identity env the mount must derive for one agent id. */
 const envFor = (id: string): Record<string, string> => ({ [MSTAR_HOST_SESSION_ID]: id })
 
+/** The workspace every fixture agent's session header carries. */
+const WS = '/tmp/ws'
+
+/** The launch args after the mount's overlay: identity channel + session workspace. */
+const argsAfter = (...base: string[]): string[] => [...base, '--identity-env', MSTAR_HOST_SESSION_ID, '--workspace', WS]
+
 describe('scoped MCP mount — per-agent registration', () => {
   it('two fixture agents → two scoped registrations with distinct per-agent env (a)', async () => {
     const ctx = new Context()
@@ -170,8 +184,11 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.command).toBe('npx')
       // The identity-env declaration rides the args: without it the CLI's
       // `registerMcpCommand` reads NO ambient identity, so the per-agent env
-      // key would never reach the connection.
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      // key would never reach the connection. The session workspace rides
+      // both the child cwd and the explicit launch arg (a pinned harness would
+      // otherwise relocate the invocation cwd to its parent).
+      expect(config.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
+      expect(config.cwd).toBe(WS)
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
@@ -202,7 +219,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(fake.configs[0]!.command).toBe('bun')
       // A loader-derived row config gets the identity-env declaration too —
       // the per-agent env is only honored when the server is told to read it.
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.args).toEqual(argsAfter('run', 'mcp'))
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -236,7 +253,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       await settle()
 
       expect(fake.configs).toHaveLength(1)
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.args).toEqual(argsAfter('run', 'mcp'))
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -265,7 +282,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.transport).toBe('stdio')
       expect(config.command).toBe('npx')
       // The identity-env declaration rides the MStar row's args.
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(config.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
       // Only the per-agent env is overlayed — the unrelated row's env never rides along.
       expect(config.env).toEqual(envFor('agent-row'))
       // The unrelated server's launch surface appears nowhere in the mount.
@@ -298,7 +315,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(config.serverName).toBe('mstar')
       expect(config.transport).toBe('stdio')
       expect(config.command).toBe('npx')
-      expect(config.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(config.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
       expect(config.env).toEqual(envFor('agent-row'))
       expect(JSON.stringify(config)).not.toContain('uvx')
       expect(JSON.stringify(config)).not.toContain('other-server')
@@ -338,7 +355,7 @@ describe('scoped MCP mount — per-agent registration', () => {
       expect(fake.configs).toHaveLength(1)
       expect(fake.configs[0]!.serverName).toBe('mstar-pinned')
       expect(fake.configs[0]!.command).toBe('bun')
-      expect(fake.configs[0]!.args).toEqual(['run', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID])
+      expect(fake.configs[0]!.args).toEqual(argsAfter('run', 'mcp'))
       expect(fake.configs[0]!.env).toEqual(envFor('agent-row'))
     } finally {
       restore()
@@ -346,7 +363,94 @@ describe('scoped MCP mount — per-agent registration', () => {
     }
   })
 
-  it('a subagent never inherits the parent id: root mounts once, the child (leaf) gets nothing', async () => {
+  it('launches the server with the session workspace and the resolver-selected harness', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    // The host process cwd is deliberately not the session workspace: the
+    // resolver selects repo B's harness for the caller, and the mount must
+    // carry BOTH facts on the child's launch.
+    const agent = { id: 'agent-b', session: { header: { id: 'agent-b', cwd: '/tmp/session-b' } } }
+    const asked: unknown[] = []
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        resolver: { forAgent: (value) => { asked.push(value); return '/tmp/session-b/.mstar' } },
+      })
+      ctx.events.emit('agent/created', { agent, source: 'fresh' })
+      await settle()
+
+      expect(asked).toEqual([agent])
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.cwd).toBe('/tmp/session-b')
+      expect(fake.configs[0]!.args).toEqual([
+        '-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID,
+        '--workspace', '/tmp/session-b', '--harness', '/tmp/session-b/.mstar',
+      ])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a row-declared harness/workspace is normalized to the per-session values', async () => {
+    const ctx = new Context()
+    const loader = new FakeLoaderRegistry(ctx)
+    loader.entriesList = [
+      {
+        options: {
+          name: '@deepseek-ai/dsh-mcp-client',
+          config: {
+            serverName: 'mstar', transport: 'stdio', command: 'bun',
+            args: ['run', 'mcp', '--harness', '/deployment/pin/.mstar', '--workspace', '/deployment/cwd'],
+          },
+        },
+        disabled: false,
+        fiber: {},
+      },
+    ]
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        resolver: { forAgent: () => '/tmp/session-b/.mstar' },
+      })
+      ctx.events.emit('agent/created', { agent: { id: 'agent-b', session: { header: { cwd: '/tmp/session-b' } } }, source: 'fresh' })
+      await settle()
+
+      expect(fake.configs[0]!.args).toEqual([
+        'run', 'mcp', '--harness', '/tmp/session-b/.mstar', '--workspace', '/tmp/session-b',
+        '--identity-env', MSTAR_HOST_SESSION_ID,
+      ])
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a resolver failure costs the harness pin, never the mount', async () => {
+    const ctx = new Context()
+    const fake = new FakeMcpClientModule()
+    const { restore } = captureLogs()
+    try {
+      registerScopedMcpMount(ctx, {
+        provider: fake.provider,
+        resolver: { forAgent: () => { throw new Error('coordination probe failed') } },
+      })
+      ctx.events.emit('agent/created', { agent: rootAgent('agent-a'), source: 'fresh' })
+      await settle()
+
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.args).not.toContain('--harness')
+      expect(fake.configs[0]!.cwd).toBe(WS)
+    } finally {
+      restore()
+      await ctx.fiber.dispose().catch(() => {})
+    }
+  })
+
+  it('a subagent never inherits the parent id: the child gets its own RESTRICTED mount', async () => {
     const ctx = new Context()
     const fake = new FakeMcpClientModule()
     const { restore } = captureLogs()
@@ -356,8 +460,14 @@ describe('scoped MCP mount — per-agent registration', () => {
       ctx.events.emit('agent/created', { agent: subagentLeaf('child-1', 'root-1'), source: 'child' })
       await settle()
 
-      expect(fake.configs).toHaveLength(1)
+      // Two mounts: the coordinating session's unrestricted connection and the
+      // leaf's restricted one. The child's env carries its OWN id — never the
+      // parent's — and its launch is marked `--seat leaf`.
+      expect(fake.configs).toHaveLength(2)
       expect(fake.configs[0]!.env).toEqual(envFor('root-1'))
+      expect(fake.configs[0]!.args).toEqual(argsAfter('-y', '@mstar-harness/cli', 'mcp'))
+      expect(fake.configs[1]!.env).toEqual(envFor('child-1'))
+      expect(fake.configs[1]!.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID, '--seat', 'leaf', '--workspace', WS])
       const envValues = Object.values(fake.configs[0]!.env as Record<string, string>)
       expect(envValues).not.toContain('child-1')
     } finally {
@@ -400,8 +510,8 @@ describe('scoped MCP mount — per-agent registration', () => {
   })
 })
 
-describe('scoped MCP mount — leaf-seat skip list', () => {
-  it('an origin-subagent leaf → no mount (b)', async () => {
+describe('scoped MCP mount — restricted leaf-seat mount', () => {
+  it('an origin-subagent leaf → the same launch marked --seat leaf (b)', async () => {
     const ctx = new Context()
     const fake = new FakeMcpClientModule()
     const { restore } = captureLogs()
@@ -410,14 +520,17 @@ describe('scoped MCP mount — leaf-seat skip list', () => {
       ctx.events.emit('agent/created', { agent: subagentLeaf('leaf-1'), source: 'child' })
       await settle()
 
-      expect(fake.configs).toHaveLength(0)
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.env).toEqual(envFor('leaf-1'))
+      expect(fake.configs[0]!.args).toEqual(['-y', '@mstar-harness/cli', 'mcp', '--identity-env', MSTAR_HOST_SESSION_ID, '--seat', 'leaf', '--workspace', WS])
+      expect(fake.configs[0]!.cwd).toBe(WS)
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
     }
   })
 
-  it('a delegationDepth > 0 leaf (origin unset) → no mount (b)', async () => {
+  it('a delegationDepth > 0 leaf (origin unset) → the same restricted mount (b)', async () => {
     const ctx = new Context()
     const fake = new FakeMcpClientModule()
     const { restore } = captureLogs()
@@ -426,7 +539,8 @@ describe('scoped MCP mount — leaf-seat skip list', () => {
       ctx.events.emit('agent/created', { agent: deepLeaf('leaf-2'), source: 'child' })
       await settle()
 
-      expect(fake.configs).toHaveLength(0)
+      expect(fake.configs).toHaveLength(1)
+      expect(fake.configs[0]!.args).toContain('--seat')
     } finally {
       restore()
       await ctx.fiber.dispose().catch(() => {})
