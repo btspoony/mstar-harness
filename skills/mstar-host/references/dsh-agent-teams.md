@@ -54,10 +54,27 @@ task id.
 | Team task field | Plan-row content | Constraint |
 |---|---|---|
 | `subject` | `<planId> / Task <n> — <role>` | concise title, 200 characters |
-| `description` | the row's `## Assignment` header region plus scope and acceptance | complete details, 16384 characters |
+| `description` | a coordination summary — task id, plan row, files in scope, acceptance criteria | complete details, 16384 characters. **Never the `## Assignment` header region** (see below) |
 | `blocked_by` | task ids mirroring the plan rows this row depends on | ids must exist; a blocked task cannot be claimed or reassigned |
 | `write_scopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths and `..` segments are refused — a sibling worktree is named in the prompt instead |
 | owner | the teammate target executing the row | assigned by `claim` or Lead-only `reassign` |
+
+### One gated carrier per Assignment
+
+`TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — `spawn_teammate.prompt`,
+`team_task_create.description`, `team_task_update.description` and
+`send_message.message` — and every Assignment-shaped call is recorded as its own
+dispatch. A board task whose `description` repeats the Assignment header
+therefore records a SECOND dispatch for the same work: the spawn settles with its
+member, the board row never settles, and the agent-flow ledger keeps a
+permanently unresolved duplicate that inflates dispatch counts and the panel
+graph.
+
+**The Assignment travels in exactly one place: `spawn_teammate.prompt`.** The
+board task's `description` carries coordination text only (ids, scope,
+acceptance), and `send_message` steers with a short instruction plus the task id
+— never a pasted `## Assignment` header. That keeps one dispatch row per
+Assignment, matching the plan row one-to-one.
 
 - **Task ids are Team-local generated values.** The plan id and task number
   live in `subject`, never in the opaque id.
@@ -116,6 +133,33 @@ stays idle until someone messages it.
   team width against both caps; when the roster is full, do not invent a ninth
   member: keep the remaining work inside the existing seats and record the cap
   as the reason the remaining rows are not dispatched.
+
+### Seat budget: one seat per track, never one per task
+
+The roster is **finite and non-recyclable**, so a seat policy of "a fresh
+teammate for every task" exhausts it and then cannot dispatch the remaining work
+— on a Team profile the direct `subagent` rows are disabled, so there is no
+cheap escape once the roster is full.
+
+| Work | Seat | Why |
+|---|---|---|
+| Implementer | **one durable teammate per WRITABLE TRACK**, reused across that track's tasks via `send_message` | the track keeps its checkout, branch, and context; a new seat per task is what exhausts the roster |
+| Task reviewer | **not a roster seat** — a `workflow` single-seat read-only run (or `subagent` when mounted) | review isolation wants a fresh context per task, and fresh-context children outside the roster do not consume the cap |
+| Plan QC tri | `workflow` fan-out | read-only, N≥3, one run |
+
+- **Review isolation and roster economy are not in conflict.** A reviewer needs a
+  fresh CONTEXT, not a durable identity: `workflow` children are fresh one-shot
+  subagents that never join the Team, so each task review is isolated while the
+  roster stays untouched.
+- **Budget the width before the first spawn.** `tracks + reserved recovery ≤
+  maxMembers`; leave at least one free slot so a genuinely failed track can be
+  re-seated. If the plan needs more tracks than that, run them in waves (a second
+  wave reuses freed capacity only after its seats are genuinely idle) and record
+  the waves on the plan row.
+- **When the cap is reached, the recovery is documented, not manual.** Keep the
+  remaining rows on their existing track owners, or run them as `workflow`
+  read-only work, and record the cap as the reason in the plan row — never a
+  ninth spawn attempt, and never a hand-edited roster.
 
 ## Worktree hand-off and write isolation
 

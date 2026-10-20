@@ -200,6 +200,20 @@ full agent toolset and enters its assigned checkout itself. Record each track's
 prefix on its board task (`write_scopes` is advisory and never a lock), keep
 disjoint seats in disjoint directories, and leave integration to the Lead.
 
+**The Assignment travels in ONE gated call.** `spawn_teammate.prompt`,
+`team_task_create.description`, `team_task_update.description` and
+`send_message.message` are all dispatch carriers, so an Assignment-shaped board
+description records a second dispatch for the same work — one that never settles
+and skews the ledger. Put the Assignment header in the `spawn_teammate` prompt
+only and keep the board `description` as coordination text (§
+`references/dsh-agent-teams.md` § One gated carrier per Assignment).
+
+**Seats are budgeted per track, not per task.** The roster is finite and has no
+removal operation, so one durable teammate per writable track (reused via
+`send_message`) is the plan shape; task reviewers are fresh-context `workflow`
+children that never join the roster. Budget, waves, and the at-cap recovery →
+`references/dsh-agent-teams.md` § Capacity.
+
 **Mounting decides the starting channel.** The shipped Agent Teams profile layer
 (`@deepseek-ai/dsh-experimental-agent-team-profile`) inserts the Team rows and
 **disables** the direct `subagent` / `subagent_fork` rows, so that profile
