@@ -29,10 +29,22 @@ function payloadSchema(fields: Readonly<Record<string, { readonly required: bool
 }
 
 
+/**
+ * The `json` kind's out-of-contract record, verbatim from the engine contract
+ * (`PERSIST_PAYLOAD_CONTRACTS.json`): arbitrary JSON has no domain validator,
+ * and the typed alternative is `review`. The same statement is published on
+ * both surfaces a caller reads before writing — the kind's schema description
+ * in `mstar schema --command persist.write` and the document options in
+ * `mstar persist write --help` — so the escape hatch never looks like an
+ * undocumented empty schema.
+ */
+const jsonKindContract = `${payloadContracts.json.reason} ${payloadContracts.json.alternative}`;
 const payloadSchemas = {
   review: { schema: payloadSchema(payloadContracts.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
-  json: { schema: z.unknown(), help: `${payloadContracts.json.reason} ${payloadContracts.json.alternative}` },
+  json: { schema: z.unknown().describe(jsonKindContract), help: jsonKindContract },
 } as const;
+/** One document option's help: which kind is typed, and why `json` is not. */
+const documentHelp = `Document for the addressed kind: review is the typed mstar.review/v1 envelope the engine validates; json is an opaque escape — ${jsonKindContract}`;
 
 function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "persist.ok", exitCode: 0, data };
@@ -141,8 +153,8 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         path: ["persist", "write"], aliases: [], arguments: [{ key: "kind", required: true, variadic: false, choices: kinds }],
         options: [
           { key: "key", flags: "--key <key>", required: true },
-          { key: "input", flags: "--input <json>", required: false },
-          { key: "file", flags: "--file <path>", required: false },
+          { key: "input", flags: "--input <json>", required: false, help: documentHelp },
+          { key: "file", flags: "--file <path>", required: false, help: documentHelp },
           { key: "store", flags: "--store <module>", required: false },
           { key: "schema", flags: "--schema <id>", required: false },
         ],

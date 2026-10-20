@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { synthesizeReview } from "@mstar-harness/engine";
+import { persistPayloadContracts, synthesizeReview } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
@@ -841,5 +841,34 @@ describe("mstar persist coordinated-writer — identity and path boundaries", ()
       expect(read.exitCode).toBe(1);
       expect(envelope(read).code).toBe("coordination.local-store-required");
     });
+  });
+});
+
+/**
+ * AC4 for `persist`: the `json` kind cannot be typed — arbitrary JSON has no
+ * domain validator — so the published surface must carry that record and the
+ * typed alternative instead of presenting an empty schema. The assertions read
+ * the statement from the engine contract, not from this file's prose, so a
+ * dropped publication fails here.
+ */
+describe("mstar persist \u2014 published payload contracts", () => {
+  test("publishes the review fields and the json out-of-contract record", () => {
+    const jsonKind = persistPayloadContracts().json;
+    const schema = runCli(["schema", "--command", "persist.write"]);
+    expect(schema.exitCode, schema.stdout + schema.stderr).toBe(0);
+    const descriptor = (JSON.parse(schema.stdout) as {
+      data: { descriptor: { payloadSchemas: Record<string, { description?: string; properties?: Record<string, unknown> }> } };
+    }).data.descriptor;
+    expect(Object.keys(descriptor.payloadSchemas.review?.properties ?? {}))
+      .toEqual(expect.arrayContaining(["schema", "verdict", "summary_md", "findings"]));
+    const published = descriptor.payloadSchemas.json?.description ?? "";
+    expect(published).toContain(jsonKind.reason);
+    expect(published).toContain(jsonKind.alternative);
+
+    const help = runCli(["persist", "write", "--help"]);
+    expect(help.exitCode, help.stderr).toBe(0);
+    const helpText = help.stdout.replace(/\s+/g, " ");
+    expect(helpText).toContain(jsonKind.reason);
+    expect(helpText).toContain(jsonKind.alternative);
   });
 });
