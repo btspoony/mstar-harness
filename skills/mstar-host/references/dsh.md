@@ -624,9 +624,10 @@ that is expected.
 **One read-only seat is supported when nothing else can carry it.** On a Team
 profile the direct `subagent` rows are disabled, and a task review needs a fresh
 context without taking a roster seat — so a **one-seat `workflow` run** is the
-supported route there. It costs one `workflow-run` node instead of a subagent
-card; that is the price of keeping the reviewer off the finite roster, not an
-unsupported workaround.
+supported route there, with its executable form in
+`references/dsh-workflow-scripts.md` § 4 `mstar-review-single`. It costs one
+`workflow-run` node instead of a subagent card; that is the price of keeping the
+reviewer off the finite roster, not an unsupported workaround.
 
 **Read-only only.** A workflow child is a delegated child (the shipped `spawn`
 provider pins `approval: never` for the whole delegation), and the run has **no

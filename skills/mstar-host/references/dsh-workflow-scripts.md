@@ -42,7 +42,8 @@ return everything in the result payload.
 | Plan QC tri (`Execution mode: sdd`) | § 1 | `mstar-qc-tri` | 3 (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) |
 | `/codebase-audit` large-repo category fan-out | § 2 | `mstar-audit-fanout` | 9 (one per audit category) |
 | `/amazing-pr-review deep` | § 3 | `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
-| Any 1–2 read-only delegation | — | — | keep `subagent` — no script, no `workflow-run` node |
+| SDD task review that must not take a Team roster seat | § 4 | `mstar-review-single` | 1 (one fresh-context reviewer per task) |
+| Any other 1–2 read-only delegation | — | — | prefer `subagent` (or a teammate) — no script, no `workflow-run` node |
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
@@ -452,3 +453,107 @@ const seats = await parallel(thunks)
 // declares it as uncollected under the report notes and never reads it as "no findings".
 return seats
 ```
+
+## 4. `mstar-review-single` — one read-only task-review seat
+
+A single fresh-context reviewer for one SDD task, for the case where a direct delegation cannot carry
+the seat: on a Team profile the direct `subagent` rows are disabled, and a task review must not
+consume a roster slot — a teammate is a DURABLE seat and the roster is finite, so a per-task
+teammate exhausts it. One seat is far below the child pool, so no chunking applies. The run costs one
+`workflow-run` node instead of a subagent card; that is the price of keeping the reviewer off the
+roster, and this template is the executable form of that route — not an improvisation. **Writable
+work never uses this route** (a workflow child has no per-child pre-start veto seam).
+
+**`meta`**
+
+```json
+{
+  "name": "mstar-review-single",
+  "description": "One read-only task-review seat for a single SDD task (fresh context, no roster seat), returning the task review verdict.",
+  "whenToUse": "dsh host: a mandatory SDD task review that must not consume a Team roster seat (the Team profile disables the direct subagent rows).",
+  "phases": [
+    { "title": "task-review", "detail": "One fresh-context task reviewer." }
+  ]
+}
+```
+
+**`args`**
+
+```json
+{
+  "planId": "<plan id>",
+  "taskId": "<task number or id>",
+  "reviewCwd": "<absolute worktree path>",
+  "branch": "<working branch>",
+  "range": "<base>..<head>",
+  "planPath": "<absolute plan path>",
+  "reportPath": "<absolute report path, e.g. {SDD_DIR}/task-<n>-review.md>",
+  "role": "code-reviewer",
+  "reviewerFocus": "<the acceptance surface this one task must satisfy>"
+}
+```
+
+**`script`**
+
+```js
+const a = args ?? {}
+const missing = ['planId', 'taskId', 'reviewCwd', 'branch', 'range', 'planPath', 'reportPath', 'role']
+  .filter((key) => typeof a[key] !== 'string' || a[key].length === 0)
+if (missing.length > 0) {
+  throw new Error('mstar-review-single missing args: ' + missing.join(', '))
+}
+
+const VERDICT = {
+  type: 'object',
+  description: 'One SDD task review verdict.',
+  required: ['verdict', 'summary', 'findings'],
+  properties: {
+    verdict: { type: 'string', enum: ['pass', 'needs-fixes', 'blocked'], description: 'The task review verdict.' },
+    summary: { type: 'string', description: 'Two or three sentences naming what was checked and what remains.' },
+    findings: {
+      type: 'array',
+      description: 'Findings ordered by severity; empty when the task passes.',
+      items: {
+        type: 'object',
+        required: ['title', 'evidence', 'impact', 'fix'],
+        properties: {
+          title: { type: 'string', description: 'Short imperative title.' },
+          evidence: { type: 'string', description: 'path/file.ts:123 — code you opened yourself.' },
+          impact: { type: 'string', description: 'Expected vs observed, and why it matters.' },
+          fix: { type: 'string', description: 'The concrete correction.' }
+        }
+      }
+    }
+  }
+}
+
+phase('task-review')
+
+const seat = await agent(`## Assignment
+
+Execute as: ${a.role}
+Delegation: forbidden
+Task category: audit
+
+plan_id: ${a.planId}
+Task: ${a.taskId}
+Review range: ${a.range}
+Review cwd: ${a.reviewCwd}
+Working branch: ${a.branch}
+Report path: ${a.reportPath}
+
+Review this ONE task against the plan at ${a.planPath}. Focus: ${a.reviewerFocus || 'the task acceptance criteria and directly affected interfaces'}.
+
+Load in order: skill mstar-roles then the role reference for ${a.role} (identity first). Review only changed hunks and directly affected interfaces in the range above. Every finding needs evidence you opened yourself; prefer omission to fabrication. Do not run build or test suites (they are not your evidence channel). Never edit the worktree, never post, never merge, never touch project registers.
+
+Return ONLY the JSON object matching the provided schema (verdict, summary, findings). If your sandbox permits, also write the full report to the report path above — never depend on being able to write.`, { phase: 'task-review', schema: VERDICT, label: 'task-review-1' })
+
+if (seat === null) {
+  throw new Error('mstar-review-single: the review seat returned nothing — dispatch it again rather than recording an unreviewed task')
+}
+
+return { task: a.taskId, seat }
+```
+
+The seat is a fresh one-shot subagent: it never joins the Team roster, so an N-task plan costs N
+review runs and zero roster slots.

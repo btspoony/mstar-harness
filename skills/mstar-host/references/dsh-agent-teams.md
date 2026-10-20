@@ -157,7 +157,7 @@ cheap escape once the roster is full.
 | Work | Seat | Why |
 |---|---|---|
 | Implementer | **one durable teammate per WRITABLE TRACK**, reused across that track's tasks via `send_message` | the track keeps its checkout, branch, and context; a new seat per task is what exhausts the roster |
-| Task reviewer | **not a roster seat** — a `workflow` single-seat read-only run (or `subagent` when mounted) | review isolation wants a fresh context per task, and fresh-context children outside the roster do not consume the cap. The one-seat `workflow` route is a **supported** path when no direct delegation can carry the seat — `dsh.md` § Read-only fan-out |
+| Task reviewer | **not a roster seat** — a `workflow` single-seat read-only run (or `subagent` when mounted) | review isolation wants a fresh context per task, and fresh-context children outside the roster do not consume the cap. The one-seat `workflow` route is a **supported** path when no direct delegation can carry the seat — template `dsh-workflow-scripts.md` § 4 `mstar-review-single`; rules `dsh.md` § Read-only fan-out |
 | Plan QC tri | `workflow` fan-out | read-only, N≥3, one run |
 
 - **Review isolation and roster economy are not in conflict.** A reviewer needs a
