@@ -91,10 +91,11 @@ lands under the pinned harness rather than the launch cwd. `--identity-env`
 declares the connection's identity channel: the named environment variable
 supplies the session id every call on the connection runs under. A declared
 channel whose variable resolves a USABLE session id LOCKS the connection —
-usable under the engine's single safe-session-id rule, one safe path component
-`[A-Za-z0-9._-]+` of at most 128 characters — the tools publish no session
-selector and a caller-supplied `sessionId` is stripped before admission (the
-ADR `dsh-native-identity-channels`), so the declared identity is the only
+usable under the engine's single safe-session-id rule: one safe path component
+`[A-Za-z0-9._-]+`, not `""`, `.`, `..` or a value containing `/` or `\`, of at
+most the engine's `SESSION_ID_MAX_LENGTH` characters — the tools publish no
+session selector and a caller-supplied `sessionId` is stripped before admission
+(the ADR `dsh-native-identity-channels`), so the declared identity is the only
 identity the connection can run under. A declared channel the rule refuses, or
 one that is unset or blank, resolves no identity: it keeps the connection
 generic and names the cause, the rule and the recoveries at launch without

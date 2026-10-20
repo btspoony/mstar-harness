@@ -20,7 +20,7 @@ export function registerMcpCommand(program: Command): void {
     .description("Run the Morning Star MCP server over stdio")
     .option(
       "--identity-env <NAME>",
-      "read the default session id from environment variable NAME and LOCK the connection identity to it: the tools publish no session selector and a caller-supplied sessionId is stripped before admission, so every call runs under the declared identity. Without it no ambient identity is read and a per-call sessionId selects the identity.",
+      "read the default session id from environment variable NAME and LOCK the connection identity to it when the variable resolves a usable id (one safe path component under the engine's safe-session-id rule): the tools publish no session selector and a caller-supplied sessionId is stripped before admission, so every call runs under the declared identity. An unset, blank or unsafe value keeps the connection generic and is warned about at launch, with the recovery to correct the variable or drop --identity-env and relaunch. Without it no ambient identity is read and a per-call sessionId selects the identity.",
     )
     .option(
       "--harness <path>",

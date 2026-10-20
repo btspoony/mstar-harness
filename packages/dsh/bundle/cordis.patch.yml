@@ -29,7 +29,8 @@
 # unpinned) and takes no per-call harness. The declared identity is the
 # connection's identity channel; a declared channel whose variable resolves a
 # USABLE session id LOCKS the connection (usable under the engine's single
-# safe-session-id rule: one safe path component [A-Za-z0-9._-]+, at most 128
+# safe-session-id rule: one safe path component [A-Za-z0-9._-]+, not "", ".",
+# ".." or a value containing "/" or "\", of at most SESSION_ID_MAX_LENGTH
 # characters): the tools publish no session selector and a caller-supplied
 # sessionId is stripped before admission (ADR dsh-native-identity-channels), so
 # per-caller identity is a per-mount fact — each caller's row carries its own

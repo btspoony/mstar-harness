@@ -348,7 +348,7 @@ describe("MCP session identity", () => {
   });
 
   /**
-   * M3: the lock requires a USABLE identity, not merely a non-blank value. A
+   * The lock requires a USABLE identity, not merely a non-blank value. A
    * locked connection publishes no selector and strips the caller's, so a
    * declared value the safe-id rule refuses would leave every
    * identity-consuming call refused at that same guard — a connection nobody

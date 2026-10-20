@@ -20,8 +20,10 @@ import { validateCommandOutcome } from "./outcome.js";
  * safe-session-id rule: one safe path component `[A-Za-z0-9._-]+`, at most 128
  * characters, the scoped mount), no selector is published and a caller-supplied
  * one is stripped before admission, so the declared identity is the only
- * identity the connection can run under. An invalid default reaches the same
- * safe-id guard as any other identity because the resolver never repairs it.
+ * identity the connection can run under. The lock is set only for a value the
+ * engine rule accepts: an invalid declaration is never a default — it is
+ * dropped at launch, so the connection stays generic and the launch warning
+ * states the rule and the recovery.
  *
  * `defaultHarness` is the root a launcher pinned for every call (the stdio
  * server's `--harness` channel). Commands that resolve their own root from an

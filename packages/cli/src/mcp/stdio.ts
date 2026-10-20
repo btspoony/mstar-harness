@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { assertSafeSessionId, resolveProcessHarnessDir } from "@mstar-harness/engine";
+import { SESSION_ID_MAX_LENGTH, assertSafeSessionId, resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { Transport } from "@modelcontextprotocol/server";
 import { withToolCorrection } from "./correction.js";
@@ -128,7 +128,8 @@ function resolveDeclaredIdentity(identityEnv: string | undefined): DeclaredIdent
 function unsafeIdentityChannelWarning(identityEnv: string): string {
   return (
     `[mcp.identity-env-unsafe] --identity-env ${identityEnv} resolved to a value that is not a valid session id ` +
-    "(the rule: one safe path component [A-Za-z0-9._-]+, at most 128 characters; the rejected value is not echoed), " +
+    `(the rule: one safe path component [A-Za-z0-9._-]+ of at most ${SESSION_ID_MAX_LENGTH} characters, ` +
+    'not "", ".", "..", or containing "/" or "\\"; the rejected value is not echoed), ' +
     "so this connection stays unlocked and the per-call sessionId selector remains the identity channel. " +
     `Recovery: correct ${identityEnv} to a valid session id, or drop --identity-env to declare a generic connection explicitly, then relaunch the server (the identity is a launch fact).`
   );
@@ -172,8 +173,9 @@ function unresolvedIdentityChannelWarning(identityEnv: string): string {
  * once at launch with the cause and the recovery, and keeps the per-call
  * `sessionId` selector as its identity channel. An UNDECLARED channel is that
  * same generic connection without a warning. The rejected value is never
- * echoed, and the safe-id rule is not duplicated here — the engine owns it and
- * this module only asks.
+ * echoed, and the rule itself is not reimplemented here — the engine owns it
+ * and this module only asks; the launch line quotes it so a launcher can
+ * correct the value.
  *
  * An explicit `harnessRoot` is used verbatim as `controlRoot`; it is never
  * rebased or discovered, because the mounting process owns the root. The same
