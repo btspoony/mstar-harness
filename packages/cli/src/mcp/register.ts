@@ -1,7 +1,7 @@
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
-import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder, refusalEnvelope } from "@mstar-harness/commands";
+import { admitCommandInput, getCommandSchemas, isPayloadPlaceholder, refusalEnvelope, sanitizeInputScalar } from "@mstar-harness/commands";
 import { z } from "zod";
-import type { CommandAdmission, CommandDefinition, CommandEnvelope, CommandSchemaDescriptor, InvocationContext } from "@mstar-harness/commands";
+import type { CommandAdmission, CommandDefinition, CommandEnvelope, CommandSchemaDescriptor, InvocationContext, RefusalDiagnostic } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
 import { actionOf, definitionForAction, foldFamilyTools, type FoldedFamilyTool } from "./fold.js";
 import { surfaceAssignmentRecovery } from "../command-adapter.js";
@@ -247,6 +247,20 @@ function strippedActionInput(input: unknown): unknown {
 }
 
 /**
+ * Remove already-refused keys before admission so one refusal reports every
+ * problem once: a rejected key stays in `undeclaredFieldRefusal`, and admission
+ * reports only the selected action's declared fields. The caller's object is
+ * never mutated.
+ */
+function withoutFields(input: unknown, fields: readonly string[]): unknown {
+  if (fields.length === 0) return input;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const rest = { ...(input as Record<string, unknown>) };
+  for (const field of fields) delete rest[field];
+  return rest;
+}
+
+/**
  * The refusal a folded tool returns when `action` names no member. It carries
  * the family's real action list plus the supported recovery — the family tool
  * itself and `mstar_schema` for field detail — so the caller can retry without
@@ -345,7 +359,7 @@ function cappedFieldList(fields: readonly string[]): string {
 }
 
 /**
- * The refusal for a top-level input key the SELECTED action does not accept.
+ * The top-level input keys the SELECTED action does not accept.
  *
  * A family publishes the UNION of its members' fields, and admission validates
  * the selected member's own object schema in strip mode: a key the member does
@@ -356,10 +370,8 @@ function cappedFieldList(fields: readonly string[]): string {
  * same rule `undeclaredSelectorRefusal` enforces for the identity selector, so
  * the transport refuses BEFORE admission for every other published key too.
  *
- * The refusal names the fields the action DOES accept (capped; `mstar_schema`
- * is the full answer), and the sibling actions when the key belongs to one of
- * them — a fact the family schema cannot publish. Only the key name is echoed,
- * never its value.
+ * EVERY rejected key is returned, not the first: report-all is the contract
+ * (`packages/cli/AGENTS.md`), and a one-key-per-attempt loop is a defect.
  *
  * The family selector keys and `action` are transport fields, not member
  * inputs: `action` selects the member and the selector is owned by
@@ -372,21 +384,14 @@ function cappedFieldList(fields: readonly string[]): string {
  * top-level miss and refuses; a key INSIDE an accepted payload is validated by
  * the action's own payload schema, which reports its own diagnostics.
  */
-function undeclaredFieldRefusal(
-  family: FoldedFamilyTool,
-  definition: CommandDefinition,
-  input: unknown,
-): CommandEnvelope<never> | undefined {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) return undefined;
+function undeclaredFields(family: FoldedFamilyTool, definition: CommandDefinition, input: unknown): readonly string[] {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
   const record = input as Record<string, unknown>;
-  const action = actionOf(definition.id);
-  const accepted = family.acceptedFields.get(action) ?? [];
-  // Transport fields, never member inputs: `action` selects the member, and a
-  // session selector is owned by `undeclaredSelectorRefusal` on a generic
-  // connection and deliberately stripped on a locked one. Read them from the
-  // family's definitions rather than from `family.selectors`: a locked
-  // connection publishes no selector, so that list is empty there and a
-  // supplied one must still be scraped silently, not refused as a typo.
+  const accepted = family.acceptedFields.get(actionOf(definition.id)) ?? [];
+  // Transport fields, never member inputs: read them from the family's
+  // definitions rather than from `family.selectors`: a locked connection
+  // publishes no selector, so that list is empty there and a supplied one must
+  // still be scraped silently, not refused as a typo.
   const transport = new Set<string>(["action"]);
   for (const member of family.definitions) {
     for (const option of member.cli.options) {
@@ -394,12 +399,37 @@ function undeclaredFieldRefusal(
     }
   }
   const declared = new Set<string>([...accepted, ...transport]);
-  const rejected = Object.keys(record).find((key) => record[key] !== undefined && !declared.has(key));
-  if (rejected === undefined) return undefined;
+  return Object.keys(record).filter((key) => record[key] !== undefined && !declared.has(key));
+}
+
+/**
+ * The ONE refusal for a call carrying undeclared keys: every rejected key plus,
+ * when the selected action's own admission also refuses the remaining input,
+ * admission's diagnostics — one response, every field, one retry.
+ *
+ * The refusal names the fields the action DOES accept (capped; `mstar_schema`
+ * is the full answer), the sibling actions a rejected key belongs to, and never
+ * a caller-supplied key VERBATIM: an object key is caller-controlled text and
+ * can be credential-shaped, so it goes through the shipped input sanitizer
+ * (`sanitizeInputScalar`) in the message, the recovery, the diagnostic path and
+ * `details.fields` alike.
+ */
+function undeclaredFieldRefusal(
+  family: FoldedFamilyTool,
+  definition: CommandDefinition,
+  rejected: readonly string[],
+  admission: Extract<CommandAdmission, { success: false }> | undefined,
+): CommandEnvelope<never> {
+  const action = actionOf(definition.id);
+  const accepted = family.acceptedFields.get(action) ?? [];
+  const acceptedList = cappedFieldList(accepted);
+  const keys = rejected.map(sanitizeInputScalar);
+  const dropped = keys.map((key) => JSON.stringify(key)).join(", ");
   const acceptingActions = [...family.acceptedFields]
-    .filter(([sibling, fields]) => sibling !== action && fields.includes(rejected))
+    .filter(([sibling, fields]) => sibling !== action && fields.some((field) => rejected.includes(field)))
     .map(([sibling]) => sibling);
-  const payloadNote = rejected === "payload"
+  const admissionDiagnostics = (admission?.envelope.details?.diagnostics ?? []) as readonly RefusalDiagnostic[];
+  const payloadNote = rejected.includes("payload")
     ? "; nested payload contents belong to the action's own payload schema, not to this field index"
     : "";
   return refusalEnvelope({
@@ -407,19 +437,22 @@ function undeclaredFieldRefusal(
     status: "usage",
     code: "command.invalid-input",
     exitCode: 2,
-    message: `action ${JSON.stringify(action)} of ${family.toolName} does not accept the field ${JSON.stringify(rejected)}; it accepts: ${cappedFieldList(accepted)}${payloadNote}`,
+    message: `action ${JSON.stringify(action)} of ${family.toolName} does not accept the field${keys.length === 1 ? "" : "s"} ${dropped}; it accepts: ${acceptedList}${payloadNote}`,
     helpRoute: `mstar schema --family ${family.family}`,
-    recovery: `drop ${JSON.stringify(rejected)}${acceptingActions.length === 0 ? "" : ` (the action(s) that accept it: ${acceptingActions.join(", ")})`}, or call mstar_schema {"action":"schema","command":${JSON.stringify(definition.id)}} for this action's real input shape`,
-    diagnostics: [{
-      path: rejected,
-      code: "not_allowed",
-      message: `${rejected} is not an input of ${definition.id}; the fields it accepts: ${cappedFieldList(accepted)}`,
-      expected: cappedFieldList(accepted),
-      received: "supplied",
-    }],
+    recovery: `drop ${dropped}${acceptingActions.length === 0 ? "" : ` (the action(s) that accept it: ${acceptingActions.join(", ")})`}, or call mstar_schema {"action":"schema","command":${JSON.stringify(definition.id)}} for this action's real input shape`,
+    diagnostics: [
+      ...keys.map((key) => ({
+        path: key,
+        code: "not_allowed",
+        message: `${key} is not an input of ${definition.id}; the fields it accepts: ${acceptedList}`,
+        expected: acceptedList,
+        received: "supplied",
+      })),
+      ...admissionDiagnostics,
+    ],
     details: {
       action: definition.id,
-      field: rejected,
+      fields: keys,
       acceptedFields: accepted,
       ...(acceptingActions.length === 0 ? {} : { acceptingActions }),
     },
@@ -484,21 +517,25 @@ export function registerMcpCommands(
           if (selectorRefusal !== undefined) {
             return { issues: [{ message: JSON.stringify(selectorRefusal) }] };
           }
-          const fieldRefusal = undeclaredFieldRefusal(family, definition, input);
-          if (fieldRefusal !== undefined) {
-            return { issues: [{ message: JSON.stringify(fieldRefusal) }] };
-          }
+          // Admission always runs: a rejected key must not defer the selected
+          // action's own missing/invalid diagnostics to a second attempt, so
+          // both land in one refusal. The rejected keys are removed first so
+          // admission reports only declared fields.
+          const rejected = undeclaredFields(family, definition, input);
           const entry = prepared.get(definition.id)!;
           const defaultSessionId = resolveContext.defaultSessionId;
           const defaultHarness = entry.harnessDefault ? resolveContext.defaultHarness : undefined;
           const admitted = admitCommandInput(
             definition,
-            normalizedBlankHarness(strippedSessionInput(definition, strippedActionInput(input), locked), defaultHarness),
+            normalizedBlankHarness(strippedSessionInput(definition, strippedActionInput(withoutFields(input, rejected)), locked), defaultHarness),
             entry.descriptor,
             entry.contract.schema,
             (data) => handlerInput(definition, data, defaultHarness),
             defaultSessionId === undefined ? undefined : { sessionId: defaultSessionId },
           );
+          if (rejected.length > 0) {
+            return { issues: [{ message: JSON.stringify(undeclaredFieldRefusal(family, definition, rejected, admitted.success ? undefined : admitted)) }] };
+          }
           return admitted.success ? { value: { ...admitted, definition } } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },
       },

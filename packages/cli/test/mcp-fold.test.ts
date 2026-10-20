@@ -422,9 +422,10 @@ describe("folded MCP command families", () => {
       // A sibling action's field: `skill` belongs to `host.skill-root`.
       const sibling = envelope(await call(client, "mstar_host", { action: "detect", skill: "mstar-harness-core" }));
       expect(sibling).toMatchObject({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2 });
-      expect(sibling.message).toContain('"skill"');
+      // The refusal aggregates this key with the action's own missing field.
+      expect(sibling.message).toContain("skill");
       expect(sibling.message).toContain("signals");
-      expect(sibling.details?.field).toBe("skill");
+      expect(sibling.details?.fields).toEqual(["skill"]);
       expect(sibling.details?.acceptedFields).toEqual(["signals"]);
       // The discovery fact the family schema cannot publish: who does take it.
       expect(sibling.details?.acceptingActions).toEqual(["skill-root"]);
@@ -434,16 +435,44 @@ describe("folded MCP command families", () => {
       // A key NO action declares takes the same arm, with nobody to name.
       const unknown = envelope(await call(client, "mstar_host", { action: "detect", signals: "question", bogus: 1 }));
       expect(unknown).toMatchObject({ command: "host.detect", status: "usage" });
-      expect(unknown.details?.field).toBe("bogus");
+      expect(unknown.details?.fields).toEqual(["bogus"]);
       expect(unknown.details?.acceptingActions).toBeUndefined();
       expect(unknown.details?.recovery).toContain("drop");
       expect(unknown.details?.recovery).toContain('"host.detect"');
 
       // The field list is CAPPED; `mstar_schema` is the full answer past it.
       const capped = envelope(await call(client, "mstar_issue", { action: "add", bogus: 1 }));
-      expect(capped.details?.field).toBe("bogus");
-      expect(capped.message).toContain(", ...");
+      expect(capped.details?.fields).toEqual(["bogus"]);
+      const cappedDiagnostic = (capped.details?.diagnostics ?? [])
+        .find((entry) => (entry as { path?: string }).path === "bogus") as { expected?: string } | undefined;
+      expect(cappedDiagnostic?.expected).toContain(", ...");
       expect((capped.details?.acceptedFields ?? []).length).toBeGreaterThan(12);
+    });
+  });
+
+  /**
+   * Report-all is the CLI contract (`packages/cli/AGENTS.md`): every rejected
+   * key AND the selected action's own missing/invalid fields come back in ONE
+   * response, so a typo plus a missing field costs one retry, not one per field.
+   */
+  test("every rejected field and the action's own admission problems share one refusal", async () => {
+    await withClient(async (client) => {
+      const refused = envelope(await call(client, "mstar_host", { action: "detect", bogus: 1, extra: 2 }));
+      expect(refused).toMatchObject({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2 });
+      const paths = (refused.details?.diagnostics ?? []).map((entry) => (entry as { path?: string }).path);
+      expect(paths).toEqual(["bogus", "extra", "signals"]);
+      expect(refused.details?.fields).toEqual(["bogus", "extra"]);
+      expect(refused.message).toContain("bogus");
+      expect(refused.message).toContain("extra");
+      expect(refused.message).toContain("signals");
+
+      // A rejected key is caller-controlled text: a credential-shaped one never
+      // travels with the refusal, and the sanitizer strips it from the path too.
+      const secret = ["sk", "live-fold-field"].join("-");
+      const redacted = envelope(await call(client, "mstar_host", { action: "detect", [secret]: 1 }));
+      expect(redacted).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(JSON.stringify(redacted)).not.toContain(secret);
+      expect(JSON.stringify(redacted)).toContain("[REDACTED]");
     });
   });
 
