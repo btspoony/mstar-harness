@@ -2,7 +2,9 @@
 
 Copy-paste templates for the dsh **`workflow`** tool (`@deepseek-ai/dsh-tool-workflow`, mounted by the
 shipped agent presets; the `ptc` preset disables it). Use them for **read-only** fan-out of **N ≥ 3**
-seats — plan QC tri, large-repo audit categories, `/amazing-pr-review deep` seats. House rules and the
+seats — plan QC tri, large-repo audit categories, `/amazing-pr-review deep` seats — and for a **single
+read-only seat** when no direct delegation can carry it (a Team profile disables `subagent`, and a task
+review must not consume a roster slot). House rules and the
 operator path live in skill **`mstar-host`** → `references/dsh.md` § Read-only fan-out via the `workflow`
 tool; this file holds only the scripts, their `meta`, and their `args`.
 

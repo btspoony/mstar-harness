@@ -156,7 +156,7 @@ or a custom profile).
 |----------|-------------|
 | **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
 | **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
-| **`workflow`** | Read-only N≥3 fan-out — one run, one conversation `workflow-run` node (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
+| **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; scripts → `references/dsh-workflow-scripts.md`) |
 | **`mstar_iteration_gate`** | Evaluate the iteration phase gate in-app (`evaluatePhaseGate` — `mstar iteration gate` parity) |
 | **`mstar_sdd_workspace`** / **`mstar_sdd_task_brief`** | SDD workspace resolve + task brief extraction (`mstar sdd …` parity) |
 | **`mstar_*_validate`** | On-demand seam validators (design-md / audit / compound / roles) |
@@ -189,9 +189,9 @@ rides alongside both as the read-only fan-out surface.
 
 | Channel | Surface | Use when | Not for |
 |---|---|---|---|
-| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; a teammate IS a subagent child carrying the ordinary agent toolset (it can enter an assigned checkout through its own tools), and any root session is the implicit Lead | **the default whenever the layer is mounted** — list the plan's tasks on the board first (one task per Assignment), then spawn one teammate per track: multi-task plans, parallel writable tracks, and any seat that must stay addressable across rounds or be steered by name | read-only N≥3 fan-out while `workflow` is mounted |
-| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | the documented fallback when the Team layer is NOT mounted; also single one-off lookups that need no roster | work that must stay addressable across turns, or read-only N≥3 fan-out while `workflow` is mounted |
-| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width | writable fan-out — it has no per-child pre-start veto seam |
+| **Agent Teams** — `spawn_teammate` + `team_task_create` / `team_task_list` / `team_task_get` / `team_task_update` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; a teammate IS a subagent child carrying the ordinary agent toolset (it can enter an assigned checkout through its own tools), and any root session is the implicit Lead | **the default whenever the layer is mounted** — list the plan's tasks on the board first (one task per Assignment), then spawn one teammate per track: multi-task plans, parallel writable tracks, and any seat that must stay addressable across rounds or be steered by name | read-only fan-out while `workflow` is mounted |
+| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | the documented fallback when the Team layer is NOT mounted; also single one-off lookups that need no roster | work that must stay addressable across turns, or read-only fan-out while `workflow` is mounted |
+| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width; a single read-only seat routes here when no direct delegation can carry it (Team profile, where `subagent` is disabled and a review must not take a roster seat) | writable fan-out — it has no per-child pre-start veto seam |
 
 **Parallel writable tracks are a Team workload, not a Team exclusion.** The
 channel does not create checkouts for you — that stays the repository's worktree
@@ -611,10 +611,18 @@ run is recorded as durable `tool-workflow/*` session events and the stock dsh UI
 node the operator expands by phase and member. Use it for **read-only fan-out of
 N ≥ 3 seats** — plan QC tri, large-repo audit categories, `/amazing-pr-review
 deep` seats — and copy the `script` + `meta` + `args` from this skill →
-`references/dsh-workflow-scripts.md`. For **1–2** seats keep a direct delegation
-— **`subagent`**, or a teammate when the Team layer is mounted — following the
-tool's own guidance: the two-seat default tier of `/amazing-pr-review` shows two
-subagent cards and no `workflow-run` node, and that is expected.
+`references/dsh-workflow-scripts.md`. For **1–2** seats a direct delegation is the
+cheaper default — **`subagent`**, or a teammate when the Team layer is mounted —
+following the tool's own guidance: the two-seat default tier of
+`/amazing-pr-review` shows two subagent cards and no `workflow-run` node, and
+that is expected.
+
+**One read-only seat is supported when nothing else can carry it.** On a Team
+profile the direct `subagent` rows are disabled, and a task review needs a fresh
+context without taking a roster seat — so a **one-seat `workflow` run** is the
+supported route there. It costs one `workflow-run` node instead of a subagent
+card; that is the price of keeping the reviewer off the finite roster, not an
+unsupported workaround.
 
 **Read-only only.** A workflow child is a delegated child (the shipped `spawn`
 provider pins `approval: never` for the whole delegation), and the run has **no
