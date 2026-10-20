@@ -149,7 +149,10 @@ describe("folded MCP command families", () => {
       const memberInputs = family.definitions.map((definition) => getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>);
       for (const input of memberInputs) {
         for (const key of Object.keys((input.properties ?? {}) as Record<string, unknown>)) {
-          expect(properties[key]).toBeDefined();
+          // A field whose declarations conflict is withheld from the family
+          // schema and named per action instead: discoverability moves to the
+          // description, it never disappears.
+          if (properties[key] === undefined) expect(family.description).toContain(key);
         }
       }
     }
@@ -257,6 +260,51 @@ describe("folded MCP command families", () => {
       .toThrow(/family selector/);
   });
 
+  /**
+   * Publication refuses duplicate tool names, duplicate actions and an `action`
+   * shadow — but NOT a shape collision: a key two members declare differently
+   * is withheld from the family schema (never published with one action's
+   * declaration) and named per action in the description. The caller contract
+   * that carries this is the per-action admission test above and the
+   * published-shape test below.
+   */
+  test("a field whose declarations conflict is withheld and named per action", () => {
+    const folded = foldFamilyTools(definitions.map((definition) => ({
+      definition,
+      input: getCommandSchemas([definition])[0]!.input as Readonly<Record<string, unknown>>,
+    })));
+    const issue = folded.find((family) => family.family === "issue")!;
+    const properties = issue.descriptorView.properties as Record<string, unknown>;
+    // `add` enumerates the lifecycle values (including `open`) while every
+    // closure action publishes a single value: neither declaration may speak
+    // for the whole tool, so the field is not published at all.
+    expect(properties.disposition).toBeUndefined();
+    // `payload` is an untyped placeholder on `add` and a typed object on
+    // `close`: publishing either shape advertises a request the other refuses.
+    expect(properties.payload).toBeUndefined();
+    expect(issue.description).toContain("Varies by action: disposition, payload");
+    // A strictness-only difference stays published: both actions accept every
+    // string the index names, so no advertised value is refused.
+    expect(properties.id).toEqual({ type: "string" });
+    for (const family of folded) {
+      const shapes = family.descriptorView.properties as Record<string, unknown>;
+      for (const [key, shape] of Object.entries(shapes)) {
+        if (key === "action") continue;
+        for (const definition of family.definitions) {
+          const own = inputFields(getCommandSchemas([definition])[0]!.input).get(key);
+          if (own === undefined) continue;
+          // A published declaration must not name a value its sibling refuses:
+          // same JSON type, and no enumerated value outside the sibling's enum.
+          expect((shape as { type?: unknown }).type).toEqual((own as { type?: unknown }).type);
+          const declared = (own as { enum?: readonly unknown[] }).enum;
+          for (const value of (shape as { enum?: readonly unknown[] }).enum ?? []) {
+            if (declared !== undefined) expect(declared).toContainEqual(value);
+          }
+        }
+      }
+    }
+  });
+
   test("every family states its purpose, so the tool list stays readable", () => {
     const missing = [...new Set(definitions.map((definition) => familyOf(definition)))].filter((family) => FAMILY_PURPOSE[family] === undefined);
     expect(missing).toEqual([]);
@@ -345,6 +393,32 @@ describe("folded MCP command families", () => {
         }
       }
       expect(driven).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  /**
+   * The `schema` action selects one of three alternative objects, so its ROOT
+   * requires nothing while no call without a selector is accepted. A
+   * `tools/list`-driven caller must learn the exactly-one rule from the compact
+   * per-action line: "no required fields" would advertise `{"action":"schema"}`
+   * and that call is refused. The JSON schema cannot say "exactly one" without
+   * a per-selector branch, so the description carries the rule.
+   */
+  test("the schema selector is published as exactly one requirement", async () => {
+    await withClient(async (client, tools) => {
+      const tool = tools.find((entry) => entry.name === "mstar_schema");
+      if (tool === undefined) throw new Error("unpublished family tool: mstar_schema");
+      expect(tool.description).toContain("- schema: exactly one of command, family, type");
+      expect(tool.description).not.toContain("no required fields");
+      const properties = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
+      for (const selector of ["command", "family", "type"]) expect(properties[selector]).toBeDefined();
+      // The selector-less call is still refused, and the refusal names them all.
+      const refused = envelope(await call(client, "mstar_schema", { action: "schema" }));
+      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      for (const selector of ["command", "family", "type"]) expect(refused.message).toContain(selector);
+      // Following the published requirement succeeds.
+      const accepted = envelope(await call(client, "mstar_schema", { action: "schema", family: "host" }));
+      expect(accepted).toMatchObject({ status: "ok", data: { kind: "family", family: "host" } });
     });
   });
 

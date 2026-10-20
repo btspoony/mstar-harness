@@ -172,16 +172,69 @@ function requiredFields(input: Readonly<Record<string, unknown>>): readonly stri
     : [];
 }
 
-function familyDescription(family: string, members: readonly FoldMember[], actions: readonly string[]): string {
+/**
+ * The selector alternatives of a member input whose ROOT requires nothing:
+ * `mstar_schema` is a union of three strict objects, each requiring exactly one
+ * of `command` / `family` / `type`, so its root `required` is empty while no
+ * call without one of them is accepted. Reading only the root would publish
+ * "no required fields" and invite a request the command refuses.
+ *
+ * Only a genuine choice qualifies (two or more branches that each require a
+ * field); a single-branch union is not a selector. The requirement is published
+ * in the compact per-action line, not as a family-level `anyOf`: `anyOf` would
+ * say "at least one", which admits the two-selector call admission refuses.
+ */
+function selectorAlternatives(input: Readonly<Record<string, unknown>>): readonly string[] {
+  if (requiredFields(input).length > 0) return [];
+  const branches = ["anyOf", "oneOf"]
+    .flatMap((keyword) => Array.isArray(input[keyword]) ? input[keyword] as unknown[] : [])
+    .map((branch) => requiredFields(branch !== null && typeof branch === "object" ? branch as Readonly<Record<string, unknown>> : {}))
+    .filter((fields) => fields.length > 0);
+  return branches.length >= 2 ? branches.flat() : [];
+}
+
+/**
+ * True when two declarations of one shared field name cannot both be published
+ * as one family-level declaration: they disagree on the accepted JSON type, on
+ * the enumerated value set, or on whether a nested structure is declared at
+ * all. Publishing either declaration for every action would advertise a
+ * request the sibling refuses (an `open` disposition for a closure action).
+ *
+ * A difference of STRICTNESS alone (`minLength`, `minItems`, ...) stays
+ * publishable: the first declaration is the union's shape, a stricter sibling
+ * refuses a value at admission naming that field, and no enumerated value is
+ * advertised that the sibling rejects.
+ */
+function conflictingDeclarations(first: Readonly<Record<string, unknown>>, other: Readonly<Record<string, unknown>>): boolean {
+  const same = (key: string) => JSON.stringify(first[key]) === JSON.stringify(other[key]);
+  if (!same("type") || !same("enum") || !same("const")) return true;
+  return Object.hasOwn(first, "properties") !== Object.hasOwn(other, "properties")
+    || Object.hasOwn(first, "required") !== Object.hasOwn(other, "required");
+}
+
+function familyDescription(
+  family: string,
+  members: readonly FoldMember[],
+  actions: readonly string[],
+  perAction: readonly string[],
+): string {
   const lines = [FAMILY_PURPOSE[family] ?? `${family} commands.`];
   members.forEach((member, index) => {
     const required = requiredFields(member.input);
+    const alternatives = selectorAlternatives(member.input);
     // A payload contract is member detail, not a field requirement: naming it
     // here keeps the per-action line honest without repeating the nested shape
     // in every family schema. `mstar_schema` is the discovery path.
     const payload = Object.keys(member.definition.payloads ?? {}).length === 0 ? "" : "; payload via mstar_schema";
-    lines.push(`- ${actions[index]}: ${required.length === 0 ? "no required fields" : required.join(", ")}${payload}`);
+    const requirement = alternatives.length > 0
+      ? `exactly one of ${alternatives.join(", ")}`
+      : required.length === 0 ? "no required fields" : required.join(", ");
+    lines.push(`- ${actions[index]}: ${requirement}${payload}`);
   });
+  // A field the family cannot publish without contradicting one of its actions
+  // is named here instead: the caller still learns it exists, and the per-action
+  // contract stays the `mstar_schema` call the next line points at.
+  if (perAction.length > 0) lines.push(`Varies by action: ${perAction.join(", ")} (mstar_schema).`);
   // The pointer names the id SHAPE, not only one example: the detail command
   // takes `<family>.<action>`, and a reader who needs another action must be
   // able to derive its id. Naming every id would exceed the surface budget, so
@@ -208,16 +261,16 @@ function familyDescription(family: string, members: readonly FoldMember[], actio
  * to one tool name, two members that publish the same action, and a member field
  * named `action` (the family selector owns that name).
  *
- * NOT refused: a key several members declare with different shapes. The first
- * declaration is published and reused for every action, and refusing instead
+ * NOT refused: a key several members declare with different shapes. Refusing
  * would delete real families — `issue.payload` is an untyped placeholder on
- * `add` (every domain payload) and a typed object on `close`, and
- * `issue.disposition` carries an enum on `add` and none on `close`. The known
- * cost is discovery imprecision for the later action: the index may name one
- * action's shape for a key another validates differently, or a narrower enum
- * than a later action accepts. That cost is a refused VALUE at admission, never
- * a wrong result — admission always validates the SELECTED member's own schema.
- * The fold suite pins this first-wins rule with those two real pairs.
+ * `add` and a typed object on `close`, and `issue.disposition` carries an enum
+ * on `add` and a single closure value on `close`. Such a key is therefore
+ * WITHHELD from the family schema (the description names it "varies by
+ * action") instead of publishing one action's declaration to every caller: a
+ * published enum that a sibling refuses is a request the tool advertises and
+ * then rejects. A strictness-only difference (`issue.id`: bare string on `add`,
+ * `minLength(1)` on `show`) is still published once, because it enumerates no
+ * value the sibling rejects.
  */
 export function foldFamilyTools(members: readonly FoldMember[]): readonly FoldedFamilyTool[] {
   const groups = new Map<string, FoldMember[]>();
@@ -242,6 +295,7 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
     const properties: Record<string, unknown> = { action: { type: "string", enum: actions } };
     const selectors = new Map<string, string[]>();
     const acceptedFields = new Map<string, readonly string[]>();
+    const perAction = new Set<string>();
     const requirements: Array<{ name: string; ownership: "caller"; route: "mcp"; help: string }> = [{
       name: "action",
       ownership: "caller",
@@ -260,7 +314,11 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
         if (key === "action") {
           throw new Error(`${family}: ${member.definition.id} declares an "action" input, which the family selector owns`);
         }
-        if (properties[key] === undefined) properties[key] = property;
+        const published = properties[key];
+        if (published === undefined) properties[key] = property;
+        else if (conflictingDeclarations(published as Readonly<Record<string, unknown>>, property as Readonly<Record<string, unknown>>)) {
+          perAction.add(key);
+        }
       }
       // A member's identity selector is a transport field of the whole
       // connection, so the family publishes it once, with the member's own
@@ -282,6 +340,10 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
         });
       }
     }
+    // A field the family cannot publish for every action is withheld from the
+    // union schema rather than published with one action's declaration: the
+    // description names it and `mstar_schema` carries the per-action shape.
+    for (const key of perAction) delete properties[key];
     tools.push({
       family,
       toolName,
@@ -295,7 +357,7 @@ export function foldFamilyTools(members: readonly FoldMember[]): readonly Folded
         required: ["action"],
         "x-mstar-requirements": requirements,
       },
-      description: familyDescription(family, group, actions),
+      description: familyDescription(family, group, actions, [...perAction]),
     });
   }
   return tools;
