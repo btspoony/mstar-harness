@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/cli",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "description": "Morning Star harness CLI — installer bootstrap, canonical command adapter, and stdio MCP server.",
   "repository": {
     "type": "git",
